@@ -112,6 +112,7 @@ struct FuncSym : Sym {
   int funcIdx = -1;
   bool inferRet = false;     // return type inferred from body
   bool hasDefaults = false;  // has default-valued params (hidden argc parameter)
+  bool inheritCtor = false;  // synthesized constructor forwarding to the parent constructor
   struct Scope* defScope = nullptr;  // lexical scope of the definition
 };
 

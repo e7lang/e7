@@ -607,6 +607,19 @@ void Gen::genFunctionOnce(FuncSym* f) {
   Loc start = f->declStmt ? f->declStmt->loc : f->arrow ? f->arrow->loc : f->body ? f->body->loc : Loc();
   line(start);
   prologue(f);
+  if (f->isCtor && f->inheritCtor) {
+    // implicit constructor: super(...args) then own field initializers
+    FuncSym* pc = f->cls->parent->ctor;
+    std::vector<uint16_t> args;
+    args.push_back(varReg[f->thisVar]);
+    for (VarSym* v : f->paramSyms) args.push_back(varReg[v]);
+    if (f->hasDefaults) args.push_back(argcReg);
+    emit(OP_CALL, kNoReg, (uint16_t)pc->funcIdx, (uint16_t)args.size());
+    emitRegList(args);
+    genCtorFieldInits();
+    emit(OP_RET_V);
+    return;
+  }
   if (f->isCtor && (!f->cls->parent)) genCtorFieldInits();
   if (f->exprBody) {
     Kind rk = kindOf(f->type->ret);

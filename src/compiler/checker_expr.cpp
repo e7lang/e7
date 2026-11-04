@@ -659,9 +659,10 @@ Type* Checker::checkAssign(Expr* e) {
   if (op == "??=" || op == "||=" || op == "&&=") {
     if (op != "??=") return errT(e->loc, "'" + op + "' is not supported");
     if (lt->t != TT::Optional) return errT(e->loc, "'??=' requires a nullable target");
-    check(e->b, lt->elem);
+    Type* rt = check(e->b, lt->elem);
     coerce(e->b, lt);
     invalidatePath(key);
+    if (rt->t != TT::Optional && !isNullish(rt)) setNarrow(key, lt->elem);  // non-null afterwards
     return lt;
   }
   // compound: lt op rhs

@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: gcc-release, cc: gcc, cxx: g++, type: Release, flags: "" }
+          - { name: clang-release, cc: clang, cxx: clang++, type: Release, flags: "" }
+          - { name: gcc-asan-ubsan, cc: gcc, cxx: g++, type: Debug, flags: "-DE7_SANITIZE=ON" }
+          - { name: gcc-switch-dispatch, cc: gcc, cxx: g++, type: Release, flags: "-DE7_NO_COMPUTED_GOTO=ON" }
+          - { name: gcc-shared, cc: gcc, cxx: g++, type: Release, flags: "-DE7_BUILD_SHARED=ON" }
+    name: linux-${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.type }} -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} ${{ matrix.flags }}
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  linux-32bit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build gcc-multilib g++-multilib
+      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32 -DCMAKE_EXE_LINKER_FLAGS=-m32
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+
+  jni:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_JNI=ON -DE7_BUILD_TESTS=OFF
+      - run: cmake --build build --target e7vm_jni
+      - run: |
+          mkdir -p classes
+          javac -d classes platform/java/org/e7vm/*.java platform/java/test/E7VMTest.java
+          java -Djava.library.path=build -cp classes E7VMTest
+
+  typescript:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: npm install -g typescript@5.6
+      - run: tests/tsc/check.sh
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build -j
+      - run: ctest --test-dir build --output-on-failure
+
+  ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: platform/ios/build_xcframework.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: e7vm.xcframework, path: build-ios/e7vm.xcframework }
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - run: ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME platform/android/build_android.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: android-jniLibs, path: build-android/jniLibs }
+
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        toolset: [msvc, clangcl]
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Configure
+        shell: pwsh
+        run: |
+          $t = @()
+          if ("${{ matrix.toolset }}" -eq "clangcl") { $t = @("-T", "ClangCL") }
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 @t
+      - run: cmake --build build --config Release
+      - run: ctest --test-dir build -C Release --output-on-failure

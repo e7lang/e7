@@ -705,6 +705,14 @@ void Checker::resolveClass(ClassSym* c) {
   ctor->thisVar = newVar("this", c->type, true, d->loc);
   ctor->thisVar->isThis = true;
   ctor->thisVar->owner = ctor;
+  if (!ctorDecl && c->parent) {
+    // implicit `constructor(...args) { super(...args); }`
+    resolveSig(c->parent->ctor);
+    ctor->inheritCtor = true;
+    ctor->sigResolved = true;
+    ctor->hasDefaults = c->parent->ctor->hasDefaults;
+    ctor->type = c->parent->ctor->type;
+  }
 
   auto addField = [&](const std::string& name, Type* t, Expr* init, bool optional, Loc l) {
     if (c->fieldIdx.count(name) || c->methodIdx.count(name)) {

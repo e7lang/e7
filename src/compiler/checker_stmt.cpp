@@ -174,6 +174,15 @@ void Checker::checkBody(FuncSym* f) {
   }
   // parameters
   f->paramSyms.clear();
+  if (f->inheritCtor) {
+    for (size_t i = 0; i < f->type->params.size(); i++) {
+      VarSym* v = newVar("$arg" + std::to_string(i), f->type->params[i], false, f->loc);
+      v->isParam = true;
+      v->paramIndex = (int)i;
+      v->owner = f;
+      f->paramSyms.push_back(v);
+    }
+  }
   if (f->params) {
     for (size_t i = 0; i < f->params->size(); i++) {
       Param& p = (*f->params)[i];
@@ -209,7 +218,7 @@ void Checker::checkBody(FuncSym* f) {
         Stmt* s0 = f->body->stmts[0];
         if (s0->k == SK::Expr && s0->expr->k == EK::Call && s0->expr->a->k == EK::Super) firstIsSuper = true;
       }
-      if (f->body && !firstIsSuper) err(f->body->loc, "derived class constructor must call super(...) as its first statement");
+      if (f->body && !firstIsSuper && !f->inheritCtor) err(f->body->loc, "derived class constructor must call super(...) as its first statement");
     }
   }
   if (f->exprBody) {

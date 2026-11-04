@@ -4,7 +4,10 @@ add_test(NAME capi_test COMMAND capi_test)
 
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
-  add_test(NAME language_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_tests.py --e7 $<TARGET_FILE:e7>)
+  find_program(NODE_EXECUTABLE node)
+  if(NODE_EXECUTABLE AND TARGET e7)
+    add_test(NAME language_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_tests.py --e7 $<TARGET_FILE:e7> --node ${NODE_EXECUTABLE})
+  endif()
 endif()
 
 add_executable(fuzz_load fuzz_load.cpp)
