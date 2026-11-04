@@ -29,8 +29,16 @@ struct FuncDesc {
   std::vector<uint8_t> upvalKinds;  // Kind of each captured cell's content
   std::vector<uint32_t> icNames;    // string-constant index per inline-cache slot
   std::vector<uint64_t> code;
-  std::vector<uint32_t> lines;      // pairs (pc, line), sorted by pc
+  std::vector<uint32_t> lines;      // pairs (pc, line), sorted by pc; optional extension below
 };
+
+// Line-table extension (backward compatible: readers that stop at the first pc greater than the
+// current one never look at it). After the (pc, line) pairs a function may carry
+//   (kLineExtMarker, kLineExtFiles) followed by (kLineExtMarker, pc), (kLineExtMarker, strIndex)...
+// meaning: code from `pc` on comes from the source file named by string constant `strIndex`
+// (relative to the entry file). Without segments, all code is from the module's entry file.
+constexpr uint32_t kLineExtMarker = 0xFFFFFFFFu;
+constexpr uint32_t kLineExtFiles = 0x53454C46u;  // "FLES"
 
 struct NativeImport {
   std::string name;

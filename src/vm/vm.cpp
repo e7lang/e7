@@ -62,6 +62,7 @@ VM::VM(const VMConfig& cfg) : cfg_(cfg) {
   registerJsonNatives(*this);
   registerCryptoNatives(*this);
   registerDateNatives(*this);
+  registerTestNatives(*this);
   applyNativeCosts(*this);
 }
 
@@ -185,33 +186,95 @@ void VM::errorCode(int code, const char* fmt, ...) {
   raise(code, buf);
 }
 
-static uint32_t lineFor(const FuncRT* f, const uint64_t* ip) {
+// Source position of the instruction before `ip` in function f: line number and file name (the
+// module name unless the line-table extension names another source file).
+static uint32_t lineFor(const FuncRT* f, const uint64_t* ip, std::string* file) {
+  if (file) *file = f && f->mod ? f->mod->m.name : std::string();
   if (!f || !ip || !f->d) return 0;
   ptrdiff_t pc = ip - f->code - 1;
   if (pc < 0) pc = 0;
   uint32_t line = 0;
   const auto& L = f->d->lines;
-  for (size_t i = 0; i + 1 < L.size(); i += 2) {
-    if ((ptrdiff_t)L[i] > pc) break;
+  size_t i = 0;
+  for (; i + 1 < L.size(); i += 2) {
+    if (L[i] == kLineExtMarker) break;
+    if ((ptrdiff_t)L[i] > pc) {
+      while (i + 1 < L.size() && L[i] != kLineExtMarker) i += 2;
+      break;
+    }
     line = L[i + 1];
+  }
+  if (file && i + 1 < L.size() && L[i] == kLineExtMarker && L[i + 1] == kLineExtFiles) {
+    const auto& strs = f->mod->m.strs;
+    for (size_t j = i + 2; j + 3 < L.size(); j += 4) {
+      if (L[j] != kLineExtMarker || L[j + 2] != kLineExtMarker) break;
+      if ((ptrdiff_t)L[j + 1] > pc) break;
+      if (L[j + 3] < strs.size()) *file = utf16ToUtf8(strs[L[j + 3]]);
+    }
   }
   return line;
 }
 
 std::string VM::stackTrace() const {
-  std::string out;
-  size_t n = frames_.size();
-  size_t shown = 0;
-  for (size_t i = n; i-- > 0;) {
+  // one entry per frame, innermost first; natives that called back into script appear between
+  // the callback frame and the frame that called the native
+  struct Entry { std::string name, where; };
+  std::vector<Entry> es;
+  // (e7:test assertion natives are left out: their message already says what failed)
+  if (curNative_ && curNative_->name.rfind("test.", 0) != 0) es.push_back(Entry{curNative_->name, "native"});
+  size_t cb = callbackNatives_.size();
+  for (size_t i = frames_.size(); i-- > 0;) {
     const Frame& fr = frames_[i];
-    if (shown == 16) { out += "    ...\n"; break; }
-    char buf[300];
-    snprintf(buf, sizeof buf, "    at %s (%s:%u)\n", fr.fn->name.c_str(), fr.fn->mod->m.name.c_str(),
-             lineFor(fr.fn, fr.ip));
-    out += buf;
-    shown++;
+    std::string file;
+    uint32_t line = lineFor(fr.fn, fr.ip, &file);
+    es.push_back(Entry{fr.fn->name, file + ":" + std::to_string(line)});
+    while (cb > 0 && callbackNatives_[cb - 1].first == i) {
+      cb--;
+      if (callbackNatives_[cb].second) es.push_back(Entry{callbackNatives_[cb].second->name, "native"});
+    }
   }
-  if (!out.empty()) out.pop_back();
+  // collapse repeated cycles (recursion): print one cycle, then a summary line
+  std::vector<std::string> lines;
+  auto same = [&](size_t a, size_t b) { return es[a].name == es[b].name && es[a].where == es[b].where; };
+  for (size_t i = 0; i < es.size();) {
+    size_t bestP = 0, bestReps = 1;
+    for (size_t p = 1; p <= 8 && i + 2 * p <= es.size(); p++) {
+      size_t reps = 1;
+      while (i + (reps + 1) * p <= es.size()) {
+        bool eq = true;
+        for (size_t k = 0; k < p && eq; k++) eq = same(i + k, i + reps * p + k);
+        if (!eq) break;
+        reps++;
+      }
+      if (reps >= 3 && reps * p > bestReps * (bestP ? bestP : 1)) { bestP = p; bestReps = reps; }
+    }
+    if (!bestP) {
+      lines.push_back("    at " + es[i].name + " (" + es[i].where + ")");
+      i++;
+      continue;
+    }
+    for (size_t k = 0; k < bestP; k++) lines.push_back("    at " + es[i + k].name + " (" + es[i + k].where + ")");
+    size_t more = (bestReps - 1) * bestP;
+    std::string names;
+    for (size_t k = 0; k < bestP; k++) {
+      bool dup = false;
+      for (size_t q = 0; q < k; q++) dup = dup || es[i + q].name == es[i + k].name;
+      if (!dup) names += (names.empty() ? "" : ", ") + es[i + k].name;
+    }
+    lines.push_back("    ... " + std::to_string(more) + " more frame" + (more == 1 ? "" : "s") + " of " + names + " (recursion)");
+    i += bestReps * bestP;
+  }
+  // very deep (non-repetitive) stacks: keep the innermost and outermost frames
+  const size_t kHead = 20, kTail = 5;
+  if (lines.size() > kHead + kTail + 1) {
+    size_t omitted = lines.size() - kHead - kTail;
+    std::vector<std::string> cut(lines.begin(), lines.begin() + kHead);
+    cut.push_back("    ... " + std::to_string(omitted) + " more lines");
+    cut.insert(cut.end(), lines.end() - kTail, lines.end());
+    lines.swap(cut);
+  }
+  std::string out;
+  for (auto& l : lines) out += (out.empty() ? "" : "\n") + l;
   return out;
 }
 
@@ -615,6 +678,8 @@ int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
     gcInhibit_ = 0;
     tempRoots_.clear();
     suspended_ = false;
+    curNative_ = nullptr;
+    callbackNatives_.clear();
     throw;
   }
 }
@@ -631,6 +696,8 @@ int VM::resume() {
     frames_.clear();
     nativeDepth_ = 0;
     tempRoots_.clear();
+    curNative_ = nullptr;
+    callbackNatives_.clear();
     throw;
   }
 }
@@ -641,6 +708,8 @@ void VM::resetExecution() {
   suspended_ = false;
   nativeDepth_ = 0;
   tempRoots_.clear();
+  curNative_ = nullptr;
+  callbackNatives_.clear();
 }
 
 Slot VM::callClosure(CloObj* c, const Slot* args, uint32_t nargs) {
@@ -657,9 +726,39 @@ Slot VM::callClosure(CloObj* c, const Slot* args, uint32_t nargs) {
   for (uint16_t r : f->refInit) R[r].r = nullptr;
   size_t depth = frames_.size();
   frames_.push_back(Frame{f, f->code, c, base, kNoReg, true});
+  // remember which native called back into script (for stack traces); while the callback runs,
+  // no native is current
+  callbackNatives_.push_back({depth, curNative_});
+  const NativeBinding* saved = curNative_;
+  curNative_ = nullptr;
   int st = execute(depth);
   (void)st;
+  curNative_ = saved;
+  callbackNatives_.pop_back();
   return result_;
+}
+
+bool VM::callClosureCatching(CloObj* c, std::string& errorMessage) {
+  size_t depth = frames_.size();
+  uint32_t nd = nativeDepth_;
+  const NativeBinding* cn = curNative_;
+  size_t cbs = callbackNatives_.size();
+  size_t roots = tempRoots_.size();
+  int inhibit = gcInhibit_;
+  try {
+    callClosure(c, nullptr, 0);
+    return true;
+  } catch (E7Error& e) {
+    if (e.code != ERR_RUNTIME) throw;
+    frames_.erase(frames_.begin() + (std::ptrdiff_t)depth, frames_.end());
+    nativeDepth_ = nd;
+    curNative_ = cn;
+    callbackNatives_.resize(cbs);
+    tempRoots_.resize(roots);
+    gcInhibit_ = inhibit;
+    errorMessage = e.msg;
+    return false;
+  }
 }
 
 }  // namespace e7

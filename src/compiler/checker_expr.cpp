@@ -3,6 +3,7 @@
 
 #include "checker.h"
 #include "intrinsics.h"
+#include "suggest.h"
 
 namespace e7 {
 
@@ -168,7 +169,7 @@ Type* Checker::checkTemplate(Expr* e) {
 // ------------------------------------------------------------------ identifiers
 Type* Checker::checkIdent(Expr* e) {
   Sym* s = lookup(e->raw);
-  if (!s) return errT(e->loc, "cannot find name '" + e->raw + "'");
+  if (!s) return errT(e->loc, "cannot find name '" + e->raw + "'" + suggestName(e->raw, false));
   switch (s->k) {
     case SymK::Var: {
       VarSym* v = static_cast<VarSym*>(s);
@@ -493,7 +494,7 @@ bool Checker::checkLValue(Expr* e) {
         return true;
       }
       if (s) { err(x->loc, "cannot assign to '" + x->raw + "'"); return false; }
-      err(x->loc, "cannot find name '" + x->raw + "'");
+      err(x->loc, "cannot find name '" + x->raw + "'" + suggestName(x->raw, false));
       return false;
     }
     case EK::Member:
@@ -933,7 +934,9 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
           else { e->intrinsic = IN_CONST_NUM; e->num = m.num; }
           return en->type;
         }
-      return errT(e->loc, "enum '" + en->name + "' has no member '" + name + "'");
+      std::vector<std::string> names;
+      for (auto& m : en->members) names.push_back(m.name);
+      return errT(e->loc, "enum '" + en->name + "' has no member '" + name + "'" + didYouMean(name, names));
     }
     if (s && s->k == SymK::Class) {
       ClassSym* c = static_cast<ClassSym*>(s);
@@ -972,13 +975,13 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
         break;
       }
       if (c->methodIdx.count(name)) return errT(e->loc, "method '" + name + "' cannot be used as a value; use an arrow function");
-      return errT(e->loc, "property '" + name + "' does not exist on type '" + c->name + "'");
+      return errT(e->loc, "property '" + name + "' does not exist on type '" + c->name + "'" + suggestMember(bt, name));
     }
     case TT::Object: {
       const ObjShape::Prop* p = bt->shape->findProp(name);
       if (!p) {
         if (bt->shape->findMethod(name)) return errT(e->loc, "method '" + name + "' cannot be used as a value");
-        return errT(e->loc, "property '" + name + "' does not exist on type '" + typeName(bt) + "'");
+        return errT(e->loc, "property '" + name + "' does not exist on type '" + typeName(bt) + "'" + suggestMember(bt, name));
       }
       result = p->type;
       break;

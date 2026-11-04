@@ -103,7 +103,10 @@ Slot VM::invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32
   Slot ret;
   ret.u = 0;
   nativeDepth_++;
+  const NativeBinding* prevNative = curNative_;
+  curNative_ = &nb;
   nb.fn(*this, args.data(), argc, &ret, nb.ud);
+  curNative_ = prevNative;
   nativeDepth_--;
   if (nb.cost != NC_NONE) chargeNative(nb, args.data(), argc, ret);
   return ret;
@@ -470,7 +473,10 @@ dispatch:
       for (uint32_t k = 0; k < argc; k++) args[k] = R[argReg(aw, k)];
       ret.u = 0;
       nativeDepth_++;
+      const NativeBinding* prevNative = curNative_;
+      curNative_ = &nb;
       nb.fn(*this, args, argc, &ret, nb.ud);
+      curNative_ = prevNative;
       nativeDepth_--;
       if (E7_UNLIKELY(nb.cost != NC_NONE)) chargeNative(nb, args, argc, ret);
     } else {

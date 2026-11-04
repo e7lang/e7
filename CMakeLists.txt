@@ -66,6 +66,7 @@ set(E7_VM_SRC
   src/vm/vm.cpp src/vm/interp.cpp
   src/stdlib/core.cpp src/stdlib/string.cpp src/stdlib/array.cpp src/stdlib/map.cpp src/stdlib/math.cpp
   src/stdlib/bytes.cpp src/stdlib/bigint.cpp src/stdlib/json.cpp src/stdlib/encoding.cpp src/stdlib/date.cpp
+  src/stdlib/test.cpp
   src/crypto/crypto.cpp src/crypto/keccak.cpp src/crypto/sign.cpp
   src/capi/capi.cpp)
 set(E7_COMPILER_SRC
@@ -125,7 +126,7 @@ endif()
 
 # ---------------------------------------------------------------- tools
 if(E7_BUILD_TOOLS)
-  add_executable(e7 tools/e7.cpp)
+  add_executable(e7 tools/e7.cpp tools/e7_test.cpp)
   target_link_libraries(e7 PRIVATE e7vm_static)
   target_include_directories(e7 PRIVATE src)
   add_executable(e7c tools/e7c.cpp)

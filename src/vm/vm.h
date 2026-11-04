@@ -143,6 +143,10 @@ class VM {
 
   // Re-entrant call from native code (cannot suspend).
   Slot callClosure(CloObj* c, const Slot* args, uint32_t nargs);
+  // Calls a parameterless closure from native code; a runtime error (throw, abort, ...) raised by
+  // it is caught: returns false with the error message. Other errors (budget, memory, stack)
+  // propagate.
+  bool callClosureCatching(CloObj* c, std::string& errorMessage);
 
   // ---- errors ----
   [[noreturn]] void error(const char* fmt, ...);
@@ -273,6 +277,10 @@ class VM {
   std::vector<Frame> frames_;
   int64_t budget_ = INT64_MAX;
   uint32_t nativeDepth_ = 0;
+  // native currently executing (nullptr while script code runs) and, for each callback from a
+  // native into script, the frame index of the callback and the calling native (stack traces)
+  const NativeBinding* curNative_ = nullptr;
+  std::vector<std::pair<size_t, const NativeBinding*>> callbackNatives_;
   bool suspended_ = false;
   Slot result_{};
   char resultKind_ = 'V';
@@ -305,6 +313,7 @@ void registerBigIntNatives(VM& vm);
 void registerJsonNatives(VM& vm);
 void registerCryptoNatives(VM& vm);
 void registerDateNatives(VM& vm);
+void registerTestNatives(VM& vm);
 void applyNativeCosts(VM& vm);  // core.cpp
 
 }  // namespace e7

@@ -638,7 +638,7 @@ class Parser {
       }
       if (w == "function") return parseFunction();
       if (w == "async") {
-        if (peek().k == TK::Ident && peek().text == "function") fail("async functions are not supported yet (reserved for coroutines)");
+        if (peek().k == TK::Ident && peek().text == "function") fail("async functions are not supported yet (reserved for coroutines); use a synchronous function (the host can run long work in slices with an instruction budget)");
       }
       if (w == "abstract" && peek().k == TK::Ident && peek().text == "class") fail("abstract classes are not supported");
       if (w == "class") return parseClass();
@@ -693,7 +693,7 @@ class Parser {
         semi();
         return s;
       }
-      if (w == "try") fail("try/catch is not supported in E7 (no exceptions); return error values instead");
+      if (w == "try") fail("try/catch is not supported in E7 (errors cannot be caught); return an error value instead, e.g. a result object or null, and validate input before using it");
       if (w == "switch") return parseSwitch();
       if (w == "with") fail("'with' is not supported");
       if (w == "debugger") { i++; semi(); return A.stmt(SK::Empty, l); }
@@ -854,8 +854,8 @@ class Parser {
         }
       }
       if (isKw("abstract")) fail("abstract members are not supported");
-      if ((isKw("get") || isKw("set")) && peek().k == TK::Ident) fail("getters and setters are not supported yet");
-      if (isKw("async")) fail("async methods are not supported yet");
+      if ((isKw("get") || isKw("set")) && peek().k == TK::Ident) fail("getters and setters are not supported yet; use a plain field or methods such as getValue() / setValue(v)");
+      if (isKw("async")) fail("async methods are not supported yet (reserved for coroutines); use a synchronous method (the host can run long work in slices with an instruction budget)");
       if (isP("*")) fail("generator methods are not supported");
       if (isP("[")) fail("computed members / index signatures are not supported");
       if (isKw("static") && peek().k == TK::Punct && peek().text == "{") fail("static blocks are not supported");
@@ -878,7 +878,7 @@ class Parser {
       if (eatP("!")) {}
       if (isP("(") || isP("<")) {
         m.kind = ClassMember::Method;
-        if (isP("<")) fail("generic methods are not supported yet");
+        if (isP("<")) fail("generic methods are not supported yet; write one method per concrete type");
         parseParams(m.params, false);
         if (eatP(":")) m.retType = parseType();
         if (!isP("{")) fail("method overloads are not supported");
@@ -1018,7 +1018,7 @@ class Parser {
       if (isKw("of") || isKw("in")) {
         bool isIn = isKw("in");
         i++;
-        if (isIn) fail("for...in is not supported; use for...of with Object-free data (Map / arrays)");
+        if (isIn) fail("for...in is not supported; use for...of over an array, a Map (for (const [k, v] of map)) or Object.keys(obj)");
         Stmt* s = A.stmt(SK::ForOf, l);
         s->isConst = isConst;
         s->decls.push_back(d);
@@ -1098,7 +1098,7 @@ class Parser {
       size_t save = i;
       i++;
       Expr* e = tryArrow();
-      if (e) fail("async functions are not supported yet (reserved for coroutines)");
+      if (e) fail("async functions are not supported yet (reserved for coroutines); use a synchronous function (the host can run long work in slices with an instruction budget)");
       i = save;
       return nullptr;
     }
@@ -1116,7 +1116,7 @@ class Parser {
       size_t save = i;
       try {
         Expr* f = A.expr(EK::Arrow, l);
-        if (isP("<")) fail("generic arrow functions are not supported");
+        if (isP("<")) fail("generic arrow functions are not supported; write one function per concrete type");
         parseParams(f->params, false);
         if (eatP(":")) f->retType = parseType();
         if (!isP("=>") || cur().nl) { i = save; return nullptr; }
@@ -1307,7 +1307,7 @@ class Parser {
       }
       if (w == "void") fail("the 'void' operator is not supported");
       if (w == "delete") fail("'delete' is not supported; use Map for dynamic keys");
-      if (w == "await") fail("'await' is not supported yet (reserved for coroutines)");
+      if (w == "await") fail("'await' is not supported yet (reserved for coroutines); use a synchronous function (the host can run long work in slices with an instruction budget)");
     }
     return parsePostfix();
   }
@@ -1592,7 +1592,7 @@ class Parser {
               continue;
             }
             if (isP("[")) fail("computed property names are not supported");
-            if ((isKw("get") || isKw("set") || isKw("async")) && peek().k == TK::Ident) fail("accessor / async properties are not supported");
+            if ((isKw("get") || isKw("set") || isKw("async")) && peek().k == TK::Ident) fail("accessor / async properties are not supported; use a plain property or a method");
             bool wasIdent = cur().k == TK::Ident;
             pr.key = propName();
             if (isP("(")) fail("method shorthand in object literals is not supported; use 'name: (args) => ...'");
@@ -1612,7 +1612,7 @@ class Parser {
           expectP("}");
           return e;
         }
-        if (tk.text == "/" || tk.text == "/=") fail("regular expressions are not supported");
+        if (tk.text == "/" || tk.text == "/=") fail("regular expressions are not supported; use string methods such as indexOf, includes, startsWith, split or replaceAll");
         break;
       }
       default:

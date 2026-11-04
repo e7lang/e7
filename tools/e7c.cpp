@@ -3,6 +3,7 @@
 #include <random>
 
 #include "common.h"
+#include "diag.h"
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
@@ -14,7 +15,7 @@
 static int usage() {
   fprintf(stderr,
           "usage:\n"
-          "  e7c <entry.ts|.e7> [-o out.e7b] [--sign <seed-hex-file>] [--disasm] [--check]\n"
+          "  e7c <entry.ts|.e7> [-o out.e7b] [--sign <seed-hex-file>] [--disasm] [--check] [--no-excerpt]\n"
           "      (default output: <entry>.e7b; with --disasm, a file is written only if -o is given)\n"
           "  e7c --keygen <name>        writes <name>.seed (secret) and <name>.pub (public key, hex)\n"
           "  e7c --disasm-file <file.e7b>\n"
@@ -29,7 +30,7 @@ int main(int argc, char** argv) {
 #endif
   if (argc < 2) return usage();
   std::string input, output, signFile;
-  bool disasm = false, checkOnly = false;
+  bool disasm = false, checkOnly = false, excerpt = true;
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
     if (a == "--version" || a == "-v") { printf("e7c %s\n", E7_VERSION); return 0; }
@@ -37,6 +38,7 @@ int main(int argc, char** argv) {
     else if (a == "--sign" && i + 1 < argc) signFile = argv[++i];
     else if (a == "--disasm") disasm = true;
     else if (a == "--check") checkOnly = true;
+    else if (a == "--no-excerpt") excerpt = false;
     else if (a == "--keygen" && i + 1 < argc) {
       std::string name = argv[++i];
       std::random_device rd;
@@ -66,7 +68,7 @@ int main(int argc, char** argv) {
   if (input.empty()) return usage();
   e7::CompileOutput co = e7::compileProgram(input, e7::readFileFromDisk);
   if (!co.ok) {
-    fprintf(stderr, "%s", co.errorText().c_str());
+    fprintf(stderr, "%s", formatCompileErrors(co, excerpt).c_str());
     return 1;
   }
   if (checkOnly) return 0;

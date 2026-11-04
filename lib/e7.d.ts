@@ -117,3 +117,24 @@ declare module "e7:crypto" {
   /** private key: PKCS#1 or PKCS#8 DER. */
   export function rsaSign(hash: HashName, privateKey: Uint8Array, message: Uint8Array, padding?: string | null): Uint8Array;
 }
+
+/** Assertion helpers for `e7 test` (usable in any E7 program). A failed assertion is a runtime
+ *  error: it stops the test (or script) with a message and a stack trace. */
+declare module "e7:test" {
+  /** Fails unless `condition` is true. */
+  export function assert(condition: boolean, message?: string | null): void;
+  /** Fails unless `actual` and `expected` are structurally equal: primitives by value (NaN equals
+   *  NaN), strings / bigints / Uint8Arrays by content, arrays element-wise, objects and class
+   *  instances field by field, Maps and Sets by entries. Both arguments must have the same type. */
+  export function assertEqual<T>(actual: T, expected: T, message?: string | null): void;
+  /** Fails if `actual` and `expected` are structurally equal (see assertEqual). */
+  export function assertNotEqual<T>(actual: T, expected: T, message?: string | null): void;
+  /** Fails unless |actual - expected| <= tolerance (default 1e-9). */
+  export function assertClose(actual: number, expected: number, tolerance?: number, message?: string | null): void;
+  /** Fails unless calling `fn` raises a runtime error (throw, abort, failed assertion, index out
+   *  of range, ...) whose message contains `expectedMessage` (when given). Budget, memory and stack
+   *  exhaustion are not caught. */
+  export function assertThrows(fn: () => void, expectedMessage?: string | null): void;
+  /** Fails the test unconditionally. */
+  export function fail(message?: string | null): never;
+}

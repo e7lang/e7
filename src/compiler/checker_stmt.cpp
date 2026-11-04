@@ -255,7 +255,7 @@ void Checker::checkBody(FuncSym* f) {
 void Checker::hoistFunctions(std::vector<Stmt*>& stmts) {
   for (Stmt* s : stmts) {
     if (s->k != SK::Func || s->fn) continue;
-    if (!s->typeParams.empty()) err(s->loc, "generic functions are not supported yet");
+    if (!s->typeParams.empty()) err(s->loc, "generic functions are not supported yet; write one function per concrete type (builtins such as Array<T>, Map<K, V> and Set<T> are generic)");
     FuncSym* f = newFunc(s->name, &s->params, s->retType, s->body, nullptr);
     f->declStmt = s;
     f->parent = curFn;

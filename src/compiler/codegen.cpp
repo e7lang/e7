@@ -107,8 +107,60 @@ struct Gen {
 
   // ---------------------------------------------------------------- emission
   size_t pc() const { return D->code.size(); }
+  // Source-file segments of the current function (pc, string-constant index of the file name).
+  // Only recorded when code comes from a file other than the entry (multi-file programs), so that
+  // stack traces can name the right file; appended to the line table as a backward-compatible
+  // extension (see kLineExtMarker in core/module.h).
+  std::vector<std::pair<uint32_t, uint32_t>> fileSegs;
+  std::string segFileRaw, segFileDisp;
+  void resetFileSegs() {
+    fileSegs.clear();
+    segFileRaw.clear();
+    segFileDisp = M.name;
+  }
+  std::string displayPath(const std::string& path) {
+    auto split = [](const std::string& p) {
+      std::vector<std::string> parts;
+      std::string cur;
+      for (char c : p) {
+        if (c == '/' || c == '\\') { if (!cur.empty()) parts.push_back(cur); cur.clear(); }
+        else cur += c;
+      }
+      if (!cur.empty()) parts.push_back(cur);
+      return parts;
+    };
+    std::vector<std::string> from = split(P.files.empty() ? std::string() : P.files.back()->path), to = split(path);
+    if (!from.empty()) from.pop_back();  // directory of the entry file
+    size_t common = 0;
+    while (common < from.size() && common < to.size() && from[common] == to[common]) common++;
+    std::string out;
+    for (size_t i = common; i < from.size(); i++) out += "../";
+    for (size_t i = common; i < to.size(); i++) out += to[i] + (i + 1 < to.size() ? "/" : "");
+    return out;
+  }
+  void appendFileSegs() {
+    if (fileSegs.empty()) return;
+    D->lines.push_back(kLineExtMarker);
+    D->lines.push_back(kLineExtFiles);
+    for (auto& s : fileSegs) {
+      D->lines.push_back(kLineExtMarker);
+      D->lines.push_back(s.first);
+      D->lines.push_back(kLineExtMarker);
+      D->lines.push_back(s.second);
+    }
+  }
   void line(Loc l) {
-    if (l.line && l.line != curLine) {
+    if (!l.line) return;
+    if (curFile != segFileRaw) {
+      segFileRaw = curFile;
+      std::string d = displayPath(curFile);
+      if (d != segFileDisp) {
+        fileSegs.push_back({(uint32_t)pc(), kStr(utf8ToUtf16(d))});
+        segFileDisp = d;
+      }
+      curLine = 0;
+    }
+    if (l.line != curLine) {
       curLine = l.line;
       D->lines.push_back((uint32_t)pc());
       D->lines.push_back(l.line);
@@ -197,6 +249,7 @@ struct Gen {
     }
     code.insert(code.begin(), prefix.begin(), prefix.end());
     for (size_t i = 0; i + 1 < D->lines.size(); i += 2) D->lines[i] += (uint32_t)k;
+    for (auto& fs : fileSegs) fs.first += (uint32_t)k;
   }
 
   // ---------------------------------------------------------------- registers
@@ -465,6 +518,7 @@ void Gen::genInit() {
     genInitOnce();
   }
   finishConstants();
+  appendFileSegs();
 }
 
 void Gen::genInitOnce() {
@@ -475,6 +529,7 @@ void Gen::genInitOnce() {
   fn = f;
   D = &M.funcs[f->funcIdx];
   D->name = "<init>";
+  resetFileSegs();
   D->sig = sig(">V");
   D->nparams = 0;
   for (auto& fl : freeRegs) fl.clear();
@@ -583,6 +638,7 @@ void Gen::genFunction(FuncSym* f) {
     genFunctionOnce(f);
   }
   finishConstants();
+  appendFileSegs();
 }
 
 void Gen::genFunctionOnce(FuncSym* f) {
@@ -592,6 +648,7 @@ void Gen::genFunctionOnce(FuncSym* f) {
   fn = f;
   D = &M.funcs[f->funcIdx];
   D->name = f->qualName.empty() ? f->name : f->qualName;
+  resetFileSegs();
   D->sig = sig(sigOf(f));
   for (auto& fl : freeRegs) fl.clear();
   temps.clear();

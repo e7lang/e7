@@ -3,6 +3,7 @@
 
 #include "checker.h"
 #include "intrinsics.h"
+#include "suggest.h"
 
 namespace e7 {
 
@@ -49,12 +50,18 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
   };
   auto N = [&](double v) { return mkNum(P, T, v, l); };
   auto bad = [&]() -> Type* {
+    std::string hint = suggestNamespaceMember(ns->module, name);
+    if (!hint.empty()) return errT(l, "'" + ns->name + "." + name + "' does not exist" + hint);
     return errT(l, "'" + ns->name + "." + name + "' is not supported" + (isCall ? "" : " as a value"));
   };
   if (!ns->builtin) {
     // file module namespace
     auto it = ns->members.find(name);
-    if (it == ns->members.end()) return errT(l, "module '" + ns->name + "' has no exported member '" + name + "'");
+    if (it == ns->members.end()) {
+      std::vector<std::string> names;
+      for (auto& kv : ns->members) names.push_back(kv.first);
+      return errT(l, "module '" + ns->name + "' has no exported member '" + name + "'" + didYouMean(name, names));
+    }
     Sym* s = it->second;
     if (s->k == SymK::Func) {
       FuncSym* f = static_cast<FuncSym*>(s);
@@ -320,9 +327,12 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
     }
     return bad();
   }
-  if (M == "e7:crypto" || M == "e7:encoding") {
+  if (M == "e7:crypto" || M == "e7:encoding" || M == "e7:test") {
     BuiltinSym tmp;
     std::string id = M + "." + name;
+    const auto& names = builtinModuleExports(M);
+    if (std::find(names.begin(), names.end(), name) == names.end())
+      return errT(l, "module '" + M + "' has no exported member '" + name + "'" + didYouMean(name, names));
     if (!isCall) return errT(l, "'" + name + "' cannot be used as a value");
     return checkBuiltinCall(e, id, expected);
   }
@@ -473,6 +483,77 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
   }
   if (id == "Array()" || id == "Map()" || id == "Set()" || id == "Uint8Array()" || id == "Error()")
     return errT(l, "'" + id.substr(0, id.size() - 2) + "' must be called with 'new'");
+  // ------------------------------------------------------------ e7:test
+  if (id.rfind("e7:test.", 0) == 0) {
+    std::string n = id.substr(8);
+    Type* optStr = T.optional(str, true, false);
+    for (Expr* a : args)
+      if (a->k == EK::Spread) return errT(a->loc, "spread arguments are not supported for '" + n + "'");
+    auto msgArg = [&](size_t idx) {
+      if (args.size() == idx) args.push_back(mkNull(P, T, l));
+    };
+    if (n == "assert") {
+      msgArg(1);
+      if (!argsMatch(e, args, {boo, optStr}, 2, "assert")) return T.unknown();
+      nat("test.assert");
+      return T.voidT();
+    }
+    if (n == "fail") {
+      msgArg(0);
+      if (!argsMatch(e, args, {optStr}, 1, "fail")) return T.unknown();
+      nat("test.fail");
+      return T.never();
+    }
+    if (n == "assertClose") {
+      if (args.size() < 2 || args.size() > 4)
+        return errT(l, "'assertClose' expects 2-4 argument(s), got " + std::to_string(args.size()));
+      if (args.size() == 2) args.push_back(N(1e-9));
+      msgArg(3);
+      if (!argsMatch(e, args, {num, num, num, optStr}, 4, "assertClose")) return T.unknown();
+      nat("test.close");
+      return T.voidT();
+    }
+    if (n == "assertThrows") {
+      if (args.empty() || args.size() > 2)
+        return errT(l, "'assertThrows' expects 1-2 argument(s), got " + std::to_string(args.size()));
+      Type* ft = check(args[0], T.func({}, T.voidT()));
+      if (ft->t == TT::Unknown) return T.unknown();
+      if (ft->t != TT::Func || !ft->params.empty())
+        return errT(args[0]->loc, "'assertThrows' expects a function without parameters, e.g. () => parse(input)");
+      msgArg(1);
+      if (!argsMatch(e, args, {ft, optStr}, 2, "assertThrows")) return T.unknown();
+      nat("test.throws");
+      return T.voidT();
+    }
+    if (n == "assertEqual" || n == "assertNotEqual") {
+      if (args.size() < 2 || args.size() > 3)
+        return errT(l, "'" + n + "' expects 2-3 argument(s), got " + std::to_string(args.size()));
+      // the type of the comparison comes from the first operand, unless it is a literal whose type
+      // depends on context (integer literal, null, undefined, empty array): then from the second
+      auto contextual = [&](Expr* x) {
+        while (x->k == EK::Paren) x = x->a;
+        return isIntLiteralExpr(x) || x->k == EK::Null || (x->k == EK::Ident && x->raw == "undefined") ||
+               (x->k == EK::Array && x->list.empty());
+      };
+      size_t anchor = contextual(args[0]) && !contextual(args[1]) ? 1 : 0;
+      Type* t = check(args[anchor], nullptr);
+      if (t->t == TT::Unknown) return T.unknown();
+      if (t->t == TT::Void || t->t == TT::Never) return errT(args[anchor]->loc, "'" + n + "' cannot compare void values");
+      if (t->t == TT::Null || t->t == TT::Undefined)
+        return errT(args[anchor]->loc, "'" + n + "' needs a typed operand (e.g. a variable), not only null/undefined");
+      Type* t2 = check(args[1 - anchor], t);
+      if (t2->t == TT::Unknown) return T.unknown();
+      if (!coerce(args[1 - anchor], t)) return T.unknown();
+      msgArg(2);
+      Type* tm = check(args[2], optStr);
+      if (tm->t == TT::Unknown) return T.unknown();
+      if (!coerce(args[2], optStr)) return T.unknown();
+      args.insert(args.begin() + 2, N((double)(vtOf(t) + (n == "assertNotEqual" ? 32 : 0))));
+      nat("test.equal" + kindSuffix(t));
+      return T.voidT();
+    }
+    return errT(l, "module 'e7:test' has no function '" + n + "'" + didYouMean(n, builtinModuleExports("e7:test")));
+  }
   // ------------------------------------------------------------ e7:encoding
   if (id.rfind("e7:encoding.", 0) == 0) {
     std::string n = id.substr(12);
@@ -513,7 +594,7 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
       nat("encoding.bytesEqual");
       return boo;
     }
-    return errT(l, "module 'e7:encoding' has no function '" + n + "'");
+    return errT(l, "module 'e7:encoding' has no function '" + n + "'" + didYouMean(n, builtinModuleExports("e7:encoding")));
   }
   // ------------------------------------------------------------ e7:crypto
   if (id.rfind("e7:crypto.", 0) == 0) {
@@ -634,7 +715,7 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
       nat("crypto.rsaSign");
       return bytes;
     }
-    return errT(l, "module 'e7:crypto' has no function '" + n + "'");
+    return errT(l, "module 'e7:crypto' has no function '" + n + "'" + didYouMean(n, builtinModuleExports("e7:crypto")));
   }
   return errT(l, "unknown builtin '" + id + "'");
 }

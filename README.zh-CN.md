@@ -163,6 +163,53 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 把 [`lib/e7.d.ts`](lib/e7.d.ts) 加入 `tsconfig.json` 的 `files`，VS Code 里就有补全和类型报错。
 对脚本运行 `tsc --strict`，得到的诊断与 `e7c` 一致。
 
+## 测试你的脚本
+
+把测试写在 `*.test.ts` 文件里，导出名字以 `test` 开头的函数，并使用内置模块 `e7:test` 提供的断言
+（示例见 [`examples/tests/`](examples/tests/)）：
+
+```ts
+import { assert, assertEqual, assertThrows } from "e7:test";
+import { totalOf, discountPercent } from "./pricing.ts";
+
+export function testDiscountCodes(): void {
+  assertEqual(discountPercent(" welcome10 "), 10);
+  assertEqual(totalOf([{ sku: "pen", unitCents: 199, qty: 3 }], null).total, 597);
+}
+
+export function testUnknownCodeIsRejected(): void {
+  assertThrows(() => { discountPercent("FREE"); }, "unknown discount code");
+}
+```
+
+```bash
+build/e7 test                    # 运行当前目录下所有 **/*.test.ts
+build/e7 test examples/tests --filter Discount
+```
+
+```
+✓ examples/tests/pricing.test.ts › testDiscountCodesAreCaseInsensitive (0.2 ms)
+
+1 passed, 0 failed (1 file, 2 ms)
+```
+
+- 每个测试都在**全新的 VM** 中运行，拥有独立的指令预算（`--budget`，默认 10^9）和内存上限（`--mem`，默认 128 MiB），
+  测试之间互不影响；死循环会失败而不会卡住。
+- 测试函数正常返回即通过（返回类型为 `boolean` 时需返回 `true`）。断言失败、`throw`、运行时错误、预算或内存耗尽都会使其失败；
+  运行器会打印错误信息、调用栈以及该测试的输出。
+- 断言：`assert`、`assertEqual` / `assertNotEqual`（对任意类型做结构相等比较：数组、对象、Map、`Uint8Array` 等）、
+  `assertClose`、`assertThrows`、`fail`（见 [SPEC §7.1](docs/SPEC.md#71-e7test-assertions)）。
+- `--json` 输出机器可读的结果；有测试失败时退出码为 1。
+- 测试文件就是普通的 TypeScript：配合 `lib/e7.d.ts` 可通过 `tsc --strict` 类型检查。
+
+编译错误会指出出错的代码并给出修改建议：
+
+```
+cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
+ 4 | console.log(totl + tax);
+   |             ^
+```
+
 ## 特性
 
 - **语言。**
@@ -231,6 +278,7 @@ sanitizer 和模糊测试，所有发现的问题都已修复并配有回归测�
 python3 tests/run_tests.py     # 语言/库测试：与 Node.js 输出逐字节比对，外加错误用例
 ctest --test-dir build         # 全部测试套件：C API、重入、恶意模块、模糊测试、区域设置
 tests/tsc/check.sh             # 所有测试和示例都能通过 tsc --strict
+build/e7 test examples/tests   # 用 e7:test 编写的单元测试
 ```
 
 每次推送，CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）运行 15 个任务：
