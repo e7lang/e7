@@ -43,7 +43,12 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 
 ## Architecture
 
-<p align="center"><img src="docs/architecture.png" alt="e7vm architecture" width="760"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.png">
+    <img src="docs/architecture-light.png" alt="e7vm architecture" width="780">
+  </picture>
+</p>
 
 | Layer | Where | What it does |
 |---|---|---|
