@@ -1,13 +1,15 @@
-# e7vm — E7 语言与虚拟机
+# e7vm — the E7 language and virtual machine
 
-**E7** 是一门 **严格静态类型的 TypeScript 子集**（每个合法的 E7 程序同时也是合法的 TypeScript 程序），
-**e7vm** 是用 C++17 实现的嵌入式字节码虚拟机，面向 **Android / iOS / Windows / macOS / Linux**，
-主要用于在 App 内安全、高效地执行**可由服务器下发的签名 / 验签等算法脚本**。
+**English** | [简体中文](README.zh-CN.md)
 
-> 名字来源：`everettjf` = **e** + `verettj`（7 个字母）+ **f** → **e7f**，语言取名 **E7**。
+**E7** is a **strictly, statically typed subset of TypeScript**: every valid E7 program is also a valid
+TypeScript program. **e7vm** is a small embeddable bytecode VM written in C++17 for
+**Android, iOS, Windows, macOS and Linux**. It runs **server-delivered scripts** inside your app, mainly
+**request signing and signature verification**, plus general math and string algorithms. Scripts are
+sandboxed, signed and fast.
 
 ```ts
-// sign.ts —— 在 VS Code 里有完整的类型检查与补全（配合 lib/e7.d.ts）
+// sign.ts: full type checking and completion in VS Code (via lib/e7.d.ts)
 import { hmac } from "e7:crypto";
 import { hexEncode } from "e7:encoding";
 import type { KeyHandle } from "e7:crypto";
@@ -19,131 +21,279 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 }
 ```
 
-## 特性
+> The name: `everettjf` = **e** + `verettj` (7 letters) + **f** → **e7f**, so the language is **E7**.
 
-- **语言**：严格 TS 子集 —— `let/const`、函数/箭头函数/闭包、类（单继承、`super`、静态成员、参数属性）、
-  接口、类型别名、枚举、元组、解构、可选链 `?.`、`??`/`??=`、模板字符串、`for...of`、`switch`、标签语句、
-  多文件模块 `import/export`、类型收窄（`=== null`、真值、`instanceof`、提前 return）。
-- **严格静态类型**：没有 `any`；`T | null | undefined` 可空类型；编译期完成全部名字解析与类型检查。
-- **数值语义与 JS 完全一致**：不标注时为 `number`（f64）；需要时显式使用定宽整数
-  `i8/u8/i16/u16/i32/u32/i64/u64`（真正的机器整数，回绕溢出），以及 `rotl32/clz32/bswap32/mulhi64` 等单指令内建函数。
-- **标准库**：`Math`、`Number`、`String`、`Array`（含 `map/filter/reduce/sort` 等）、`Map`、`Set`、`JSON`
-  （`JSON.parse(text) as T` 会按类型**校验**）、`bigint`、`Uint8Array`/`ArrayBuffer`/`DataView`、
-  `TextEncoder/Decoder`、`encodeURIComponent` 等，行为与 JavaScript 一致（与 Node.js 做差分测试）。
-- **`e7:crypto`**（BearSSL + Monocypher，原生实现）：MD5/SHA-1/SHA-2/SHA-3/Keccak、HMAC、HKDF、PBKDF2、
-  AES-GCM/CBC/CTR、ChaCha20-Poly1305、Ed25519、X25519、ECDSA（P-256/384/521）、RSA（PKCS#1 v1.5 / PSS）、
-  CRC32、安全随机数；**KeyHandle** 让密钥只存在于宿主（Keychain/Keystore），脚本拿不到明文。
-- **`e7:encoding`**：hex、base64、base64url、base32、UTF-8、PEM、字节拼接/比较。
-- **字节码**：寄存器式 VM、64 位定长指令、类型化寄存器；`.e7b` 文件带 CRC32，可附加 **Ed25519 签名**。
-- **安全**：加载时**字节码验证器**保证内存安全（即使字节码被篡改）；签名校验；指令预算、内存上限、调用深度上限；
-  脚本只能调用宿主显式注册的函数；无 JIT（符合 iOS 要求）。
-- **可挂起执行**：预算用完时可挂起，`e7_resume()` 继续 —— 长算法分片执行不阻塞 UI（为协程预留的基础）。
-- **端上编译器**（可选）：手机上也可以直接编译源码；生产环境建议服务器编译 + 签名、端上只加载 `.e7b`。
-- **绑定**：C API（`include/e7/e7.h`）、Java/Kotlin（JNI，已在 JVM 上测试）、Swift、C#。
+## Why e7vm
 
-## 快速开始
+- **Ship algorithm updates without an app release.** Compile and sign on your server, deliver `.e7b` bytecode, and the app verifies and runs it.
+- **Safe by construction.**
+  - Ed25519 module signatures.
+  - A bytecode verifier that guarantees memory safety even for tampered bytecode.
+  - An instruction budget, memory limit and call-depth limit.
+  - No JIT, which App Store rules require.
+  - Scripts can only call the host functions you register.
+- **Secrets stay in the host.** A `KeyHandle` lets scripts use a key held in the Keychain or Keystore without ever seeing the key bytes.
+- **TypeScript you already know.** The same JS semantics, checked by `tsc --strict`, and differential-tested against Node.js.
+- **Small and fast.**
+  - About 470 KB for the runtime only, or about 920 KB with the on-device compiler.
+  - Interpreter speed comparable to or faster than V8's interpreter (`--jitless`).
+  - Standard crypto runs as native code.
 
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-build/e7 examples/jwt.ts                    # 编译并运行
-build/e7c examples/jwt.ts -o jwt.e7b        # 编译为字节码
-build/e7c --keygen release                  # 生成 release.seed（私钥）和 release.pub
-build/e7c app.ts -o app.e7b --sign release.seed
-build/e7 --trust release.pub app.e7b        # 只接受该公钥签名的模块
-build/e7c --disasm app.ts                   # 查看字节码
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph DEV["Development / build server"]
+    TS["app.ts<br/>(TypeScript subset)"] --> C["e7c compiler<br/>parse → type-check → codegen"]
+    DTS["lib/e7.d.ts<br/>(IDE + tsc types)"] -.-> TS
+    C --> E7B["app.e7b<br/>bytecode + CRC"]
+    KEY["release.seed<br/>(Ed25519 private key)"] --> SIGN["sign"]
+    E7B --> SIGN --> SE7B["signed app.e7b"]
+  end
+
+  SE7B -- "CDN / API" --> LOAD
+
+  subgraph APP["Your app (Android / iOS / Windows / macOS / Linux)"]
+    HOST["Host code<br/>Kotlin · Swift · C# · C/C++"] --> API["C API  e7.h"]
+    API --> LOAD
+    subgraph VM["e7vm"]
+      LOAD["1 · verify signature<br/>(trusted public keys)"] --> VER["2 · decode + bytecode verifier<br/>(memory safety)"]
+      VER --> LINK["3 · link natives<br/>(signature-checked)"]
+      LINK --> INT["4 · interpreter<br/>register VM · GC · budget"]
+      INT <--> STD["stdlib<br/>String Array Map JSON BigInt Date …"]
+      INT <--> CRY["e7:crypto / e7:encoding<br/>BearSSL · Monocypher"]
+    end
+    INT <--> NAT["host functions<br/>(registered by the app)"]
+    CRY <--> KP["key provider<br/>Keychain / Keystore / DPAPI"]
+  end
 ```
 
-在宿主中嵌入（C）：
+| Layer | Where | What it does |
+|---|---|---|
+| Compiler | `src/compiler/` | Lexer and parser, strict type checker (narrowing, closures, classes, modules), register-allocating code generator |
+| Bytecode | `src/core/` | `.e7b` format with CRC32, optional Ed25519 signature trailer, verifier, disassembler |
+| VM | `src/vm/` | Register-based interpreter with 64-bit instructions, typed registers, inline caches, precise mark-sweep GC, budget/suspend |
+| Standard library | `src/stdlib/`, `src/crypto/` | JS-compatible built-ins; crypto and encoding run as native code |
+| Embedding | `src/capi/`, `platform/` | C API; Java/Kotlin (JNI), Swift, and C# bindings |
+
+## Quick start
+
+### 1. Build
+
+Prerequisites: CMake ≥ 3.16 and a C++17 compiler (GCC, Clang, MSVC). Ninja is optional.
+
+```bash
+git clone https://github.com/everettjf/e7fvm.git && cd e7fvm
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+This produces `build/e7` (run scripts), `build/e7c` (compile, sign and disassemble) and `build/libe7vm_static.a`.
+
+### 2. Write and run a script
+
+[`examples/embed/sign.ts`](examples/embed/sign.ts):
+
+```ts
+import { hmac } from "e7:crypto";
+import { hexEncode } from "e7:encoding";
+
+// Called by the host app: returns hex(HMAC-SHA256(secret, message))
+export function sign(message: string, secret: string): string {
+  const enc = new TextEncoder();
+  return hexEncode(hmac("sha256", enc.encode(secret), enc.encode(message)));
+}
+
+export function main(): string {
+  return sign("amount=100&currency=CNY", "s3cr3t");
+}
+```
+
+```bash
+cd examples/embed
+../../build/e7 sign.ts
+# 0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6
+```
+
+`e7` compiles the file in memory and calls the exported `main` (or the function named by `--call`).
+
+### 3. Compile and sign for delivery
+
+```bash
+../../build/e7c --keygen release                  # release.seed (keep secret) + release.pub
+../../build/e7c sign.ts -o sign.e7b --sign release.seed
+../../build/e7 --trust release.pub sign.e7b       # runs only if signed by this key
+../../build/e7c --disasm sign.ts                  # optional: inspect the bytecode
+```
+
+On a real deployment, `release.seed` lives only on your build server (or HSM), and `release.pub` is
+compiled into the app.
+
+### 4. Run it from your app
+
+[`examples/embed/host.c`](examples/embed/host.c), trimmed:
 
 ```c
 #include "e7/e7.h"
 
-e7_config cfg; e7_config_init(&cfg);
-cfg.require_signature = 1; cfg.trusted_keys = server_pubkey; cfg.num_trusted_keys = 1;
+e7_config cfg;
+e7_config_init(&cfg);
+cfg.require_signature = 1;            /* only run modules signed by our key */
+cfg.trusted_keys = pub;               /* 32-byte Ed25519 public key(s) baked into the app */
+cfg.num_trusted_keys = 1;
+cfg.memory_limit = 32u << 20;
 e7_vm* vm = e7_vm_new(&cfg);
-e7_set_key_provider(vm, my_keychain_lookup, NULL);
-e7_module* m;
-if (e7_load(vm, bytecode, len, &m) != E7_OK) { puts(e7_last_error(vm)); }
-e7_value args[2] = { {.type = E7_STRING, .v.str = {"a=1&b=2", 7}}, {.type = E7_HANDLE, .v.handle = 1} };
+
+e7_module* mod;
+if (e7_load(vm, code, len, &mod) != E7_OK) { puts(e7_last_error(vm)); return 1; }
+
+e7_value args[2];
+args[0].type = E7_STRING; args[0].v.str.ptr = "amount=100&currency=CNY"; args[0].v.str.len = 23;
+args[1].type = E7_STRING; args[1].v.str.ptr = "s3cr3t";                  args[1].v.str.len = 6;
 e7_value ret;
-e7_set_budget(vm, 10000000);                    // 防止死循环
-if (e7_call(vm, m, "sign", args, 2, &ret) == E7_OK) printf("%.*s\n", (int)ret.v.str.len, ret.v.str.ptr);
+e7_set_budget(vm, 10000000);          /* stop runaway scripts */
+if (e7_call(vm, mod, "sign", args, 2, &ret) == E7_OK)
+  printf("%.*s\n", (int)ret.v.str.len, ret.v.str.ptr);
 e7_vm_free(vm);
 ```
 
-更多见 [docs/EMBEDDING.md](docs/EMBEDDING.md)（Android/iOS/Windows 集成、宿主函数、密钥句柄、挂起/恢复）。
+```bash
+cc -std=c11 host.c -I../../include ../../build/libe7vm_static.a \
+   ../../build/libe7_bearssl.a ../../build/libe7_monocypher.a -lstdc++ -lm -o host
+./host
+# 0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6
+```
 
-## 平台构建
+Kotlin, Swift and C# use the same flow: create the VM with the trusted key, call `load(bytes)`, then
+`call("sign", ...)`. See [docs/EMBEDDING.md](docs/EMBEDDING.md) for each platform, plus host functions,
+`KeyHandle`, budgets and time-slicing.
 
-| 平台 | 方式 |
+### 5. Editor setup
+
+Add [`lib/e7.d.ts`](lib/e7.d.ts) to your `tsconfig.json` `files` to get completion and type errors in
+VS Code. Running `tsc --strict` on your scripts gives the same diagnostics as `e7c`.
+
+## Features
+
+- **Language.**
+  - Declarations and functions: `let`/`const`, functions, arrow functions and closures.
+  - Classes: single inheritance, `super`, static members and parameter properties.
+  - Types: interfaces, type aliases, enums and tuples.
+  - Syntax: destructuring, object spread, `?.`, `??`/`??=`, template strings, `for...of`, `switch` and labels.
+  - Multi-file `import`/`export`, and type narrowing.
+- **Strict types.**
+  - There is no `any`; nullable types use `T | null | undefined`.
+  - All names and types are resolved at compile time.
+- **Numbers like JavaScript.**
+  - `number` is a 64-bit float.
+  - Opt-in fixed-width integers `i8 … u64` wrap on overflow and run as real machine integers.
+  - Single-instruction intrinsics such as `rotl32`, `clz32` and `mulhi64`.
+- **Standard library.**
+  - `Math`, `Number`, `String`, `Array` (`map`/`filter`/`reduce`/`sort` …), `Map`, `Set`, `bigint`, `Date` (UTC).
+  - `JSON`: `JSON.parse(text) as T` **validates** the result against the type `T`.
+  - `Uint8Array`/`ArrayBuffer`/`DataView`, `TextEncoder`/`TextDecoder`, `encodeURIComponent`.
+- **`e7:crypto`.**
+  - Hashes: MD5, SHA-1, SHA-2, SHA-3, Keccak.
+  - Key derivation and MACs: HMAC, HKDF, PBKDF2.
+  - Ciphers: AES-GCM/CBC/CTR, ChaCha20-Poly1305.
+  - Signatures and key exchange: Ed25519, X25519, ECDSA P-256/384/521 (raw or strict DER), RSA PKCS#1 v1.5 and PSS.
+  - Also CRC32, secure random bytes, and `KeyHandle`.
+- **`e7:encoding`.** hex, base64, base64url, base32, UTF-8, PEM, plus byte concat and compare.
+- **Execution control.**
+  - The instruction budget also covers heavy native calls.
+  - Optional suspend/resume (`e7_resume`) for time-slicing on the UI thread.
+- **Bindings.** C API ([`include/e7/e7.h`](include/e7/e7.h)), Java/Kotlin (JNI), Swift, C#.
+
+The full language reference is in [docs/SPEC.md](docs/SPEC.md).
+
+## Platforms
+
+| Platform | Build | Bindings |
+|---|---|---|
+| Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
+| Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so` | Java/Kotlin: `platform/java/org/e7vm` |
+| iOS | `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `platform/ios/E7VM/E7VM.swift` |
+| Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]` (VS 2022) | C/C++, C#: `platform/windows/E7VM.cs` |
+
+CMake options:
+
+| Option | Effect |
 |---|---|
-| Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` |
-| Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so`，Java/Kotlin API 在 `platform/java/org/e7vm` |
-| iOS | `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework`，Swift 封装 `platform/ios/E7VM/E7VM.swift` |
-| Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]`（VS 2022）；C# 封装 `platform/windows/E7VM.cs` |
+| `E7_WITH_COMPILER` | On-device compiler (default ON) |
+| `E7_BUILD_SHARED` | Build the shared library, which exports only the `e7_*` C API |
+| `E7_BUILD_JNI` | Build the JNI library |
+| `E7_SANITIZE` | ASan + UBSan |
+| `E7_NO_COMPUTED_GOTO` | Use switch dispatch |
 
-CMake 选项：`E7_WITH_COMPILER`（端上编译器，默认 ON）、`E7_BUILD_SHARED`、`E7_BUILD_JNI`、`E7_SANITIZE`、
-`E7_NO_COMPUTED_GOTO`。动态库只导出 `e7_*` C API 符号。
+## Security and production readiness
 
-## 测试
+e7vm is built for running code that comes over the network. Before release it went through four
+independent security reviews, differential testing against Node.js/OpenSSL, sanitizers, and fuzzing,
+and every finding was fixed with a regression test. The evidence is in
+[docs/PRODUCTION.md](docs/PRODUCTION.md). The host must:
+
+1. **Turn on signature checking** (`require_signature` plus the public key built into the app) and keep the private key on the build server.
+2. **Set an instruction budget and a memory limit** (for example 16–64 MiB).
+3. **Pass secrets as `KeyHandle`s**, never as string or byte arguments.
+
+## Testing
 
 ```bash
-python3 tests/run_tests.py        # 语言/库测试：与 Node.js 输出逐字节比对（差分测试）+ 预期输出 + 错误用例
-build/tests/capi_test             # C API：参数编解码、宿主函数、密钥句柄、签名、预算挂起、内存/栈上限
-build/tests/fuzz_load 3000        # 字节码变异模糊测试：被篡改的模块必须被拒绝或安全执行，绝不崩溃
-tests/tsc/check.sh                # 用官方 tsc（strict）验证所有测试与示例都是合法 TypeScript
+python3 tests/run_tests.py     # language/library tests, byte-for-byte against Node.js + error cases
+ctest --test-dir build         # all suites: C API, re-entrancy, malicious modules, fuzzers, locale
+tests/tsc/check.sh             # every test and example type-checks with tsc --strict
 ```
 
-已验证的配置：GCC 13 / Clang 15–18 / Apple Clang（macOS arm64）、Debug + ASan/UBSan、32 位（i386，对应 armeabi-v7a 的 32 位指针）、
-switch 分派（MSVC 路径）、MinGW-w64 Windows 版（Wine 下全部通过）、动态库、JNI（OpenJDK 21）。
-CI 配置见 `.github/workflows/ci.yml`（另含 macOS、iOS、Android NDK、MSVC、clang-cl）。
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs 15 jobs on every push:
 
-> 分派方式：解释器默认使用 computed goto。LLVM 15–17（Clang 15–17、Xcode 15/16 的 Apple Clang、NDK r26 及更早）的
-> CodeGenPrepare「地址模式下沉」会把 computed goto 版本的解释器循环编译错（后续指令字的读取地址错误；已用
-> `-opt-bisect-limit` 定位到该 pass）。CMake 构建会对这些编译器的 `interp.cpp` 自动加
-> `-mllvm -addr-sink-using-gep=false` 规避；不经过 CMake 的构建则自动退回 switch 分派（结果相同，略慢）。
-> 也可用 `-DE7_NO_COMPUTED_GOTO=ON` 强制使用 switch。
+- **Linux:** GCC, Clang 18, Clang 16, ASan+UBSan, switch dispatch, shared library, 32-bit.
+- **macOS:** Release and ASan.
+- **Mobile:** iOS, Android NDK, JNI.
+- **Windows:** MSVC and clang-cl.
+- **TypeScript:** `tsc` strict check.
 
-## 性能
+## Performance
 
-x86-64，Release，单位 ms（`bench/`）。与 Node.js 22 对比：V8 解释器（`--jitless`，与 e7vm 同为纯解释执行，
-iOS 上也只能如此）和完整 JIT。
+These numbers are from x86-64, Release build, in milliseconds (scripts in `bench/`). They compare
+against Node.js 22, both V8's interpreter (`--jitless`, which is pure interpretation like e7vm and the
+only option on iOS) and the full JIT.
 
-| 基准 | e7vm | V8 --jitless | V8 JIT |
+| Benchmark | e7vm | V8 --jitless | V8 JIT |
 |---|---:|---:|---:|
-| fib(30) 递归调用 | 58 | 70 | 10 |
-| 3000 万次循环（顶层全局变量） | 369 | 518 | 45 |
-| 埃氏筛 500 万 | 298 | 465 | 91 |
-| 400 万次对象分配 + 200 万次方法调用 | 395 | 739 | 38 |
-| 纯脚本 SHA-256（u32）1 MiB | 168 | 1159 | 41 |
-| 字符串拼接/拆分/Map | 384 | 293 | 243 |
+| fib(30), recursive calls | 58 | 70 | 10 |
+| 30M-iteration loop (top-level globals) | 369 | 518 | 45 |
+| Sieve of Eratosthenes, 5M | 298 | 465 | 91 |
+| 4M allocations + 2M method calls | 395 | 739 | 38 |
+| SHA-256 in pure script (u32), 1 MiB | 168 | 1159 | 41 |
+| String concat/split/Map | 384 | 293 | 243 |
 
-签名类脚本的标准算法（HMAC、RSA、ECDSA 等）由原生代码执行，脚本只做参数组装，单次调用通常在亚毫秒级。
+In signing scripts, standard algorithms (HMAC, RSA, ECDSA, …) run natively, so a typical call takes
+well under a millisecond.
 
-库体积（x86-64，`MinSizeRel`，剥离符号，含全部加密算法）：仅运行时约 470 KB，含端上编译器约 920 KB。
-
-## 目录
+## Repository layout
 
 ```
-include/e7/e7.h        C API
-src/core/              字节码格式、序列化、验证器、反汇编、数字格式化（JS 兼容）
-src/compiler/          词法/语法分析、类型检查、代码生成
-src/vm/                解释器、对象模型、GC
-src/stdlib/            标准库原生实现      src/crypto/   e7:crypto、Ed25519 模块签名、SHA-3
-src/capi/              C API              tools/        e7、e7c 命令行
-lib/e7.d.ts            IDE / tsc 类型声明  platform/     Android(JNI)/Java、iOS(Swift)、Windows(C#)
-tests/ bench/ examples/ docs/          third_party/  BearSSL (MIT)、Monocypher (BSD-2/CC0)
+include/e7/e7.h     C API                      lib/e7.d.ts      types for IDEs / tsc
+src/compiler/       parser, type checker, codegen
+src/core/           bytecode format, serializer, verifier, disassembler, JS number formatting
+src/vm/             interpreter, object model, GC
+src/stdlib/         built-ins                  src/crypto/      e7:crypto, module signatures
+src/capi/           C API                      tools/           e7, e7c command-line tools
+platform/           Android (JNI) / Java, iOS (Swift), Windows (C#)
+examples/           sample scripts + embedding example (examples/embed)
+tests/ bench/ docs/                            third_party/     BearSSL (MIT), Monocypher (BSD-2/CC0)
 ```
 
-## 文档
+## Documentation
 
-- [docs/SPEC.md](docs/SPEC.md) —— 语言规范（支持的语法、类型系统、数值语义、标准库、与 TS 的差异）
-- [docs/EMBEDDING.md](docs/EMBEDDING.md) —— C API 与各平台集成、安全建议
-- [docs/BYTECODE.md](docs/BYTECODE.md) —— `.e7b` 格式、指令集、验证规则、签名格式
-- [docs/DESIGN.md](docs/DESIGN.md) —— 设计方案与决策记录
-- [docs/PRODUCTION.md](docs/PRODUCTION.md) —— 生产就绪检查清单（验证项与证据）
+- [docs/SPEC.md](docs/SPEC.md): language specification (syntax, types, numeric semantics, standard library, differences from TS)
+- [docs/EMBEDDING.md](docs/EMBEDDING.md): C API, Android/iOS/Windows integration, security guidance
+- [docs/BYTECODE.md](docs/BYTECODE.md): `.e7b` format, instruction set, verification rules, signature format
+- [docs/DESIGN.md](docs/DESIGN.md): design and decision record
+- [docs/PRODUCTION.md](docs/PRODUCTION.md): production-readiness checklist with evidence
 
-## 许可
+The detailed docs are currently written in Chinese.
 
-本项目采用仓库根目录 LICENSE。第三方：BearSSL（MIT）、Monocypher（BSD-2-Clause / CC0），见 `third_party/`。
+## License
+
+See [LICENSE](LICENSE). Third-party code: BearSSL (MIT) and Monocypher (BSD-2-Clause / CC0), in `third_party/`.
