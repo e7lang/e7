@@ -245,7 +245,8 @@ final class E7VMTests: XCTestCase {
     let strict = try E7VM(trustedKeys: [pub])
     XCTAssertEqual(try strict.call(strict.load(signed), "sign", args[0], args[1]), .string(expectedMac))
     XCTAssertEqual(expectE7Error(try strict.load(code))?.status, status(E7_ERR_SIGNATURE))
-    XCTAssertEqual(expectE7Error(try strict.loadSource(signSource))?.status, status(E7_ERR_SIGNATURE))
+    // source compiled by the host itself is trusted (e7_load_source skips the signature check)
+    XCTAssertNoThrow(try strict.loadSource(signSource))
 
     // several trusted keys
     let multi = try E7VM(trustedKeys: [try E7VM.publicKey(seed: seed(100)), pub])
