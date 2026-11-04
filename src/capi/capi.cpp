@@ -73,8 +73,10 @@ e7_vm* e7_vm_new(const e7_config* cfg) {
   e7_config def;
   e7_config_init(&def);
   if (!cfg) cfg = &def;
+  std::unique_ptr<e7_vm> owner;
   try {
-    auto* v = new e7_vm();
+    owner.reset(new e7_vm());
+    e7_vm* v = owner.get();
     VMConfig vc;
     vc.memoryLimit = cfg->memory_limit ? cfg->memory_limit : def.memory_limit;
     vc.stackSlots = cfg->stack_slots ? cfg->stack_slots : def.stack_slots;
@@ -84,8 +86,8 @@ e7_vm* e7_vm_new(const e7_config* cfg) {
     v->requireSignature = cfg->require_signature != 0;
     if (cfg->trusted_keys && cfg->num_trusted_keys)
       v->trustedKeys.assign(cfg->trusted_keys, cfg->trusted_keys + 32 * cfg->num_trusted_keys);
-    return v;
-  } catch (...) {
+    return owner.release();
+  } catch (...) {  // owner frees the partially constructed VM
     return nullptr;
   }
 }
@@ -206,6 +208,11 @@ int e7_has_function(e7_module* mod, const char* function) { return mod && functi
 
 static bool toSlot(e7_vm* v, char code, const e7_value& a, Slot& out, std::string& err) {
   VM& vm = *v->vm;
+  // reject out-of-range type tags before reading them as the enum (host bug, but must not be UB)
+  int tag;
+  static_assert(sizeof(tag) == sizeof(a.type), "e7_type is int-sized");
+  memcpy(&tag, &a.type, sizeof tag);
+  if (tag < E7_VOID || tag > E7_NULL) { err = "invalid e7_value type"; return false; }
   switch (code) {
     case 'n':
       if (a.type == E7_NUMBER) out.f = a.v.num;
@@ -239,10 +246,12 @@ static bool toSlot(e7_vm* v, char code, const e7_value& a, Slot& out, std::strin
     }
     case 's':
       if (a.type != E7_STRING) { err = "expected a string"; return false; }
-      out.r = vm.newStringUtf8(std::string(a.v.str.ptr ? a.v.str.ptr : "", a.v.str.len));
+      if (!a.v.str.ptr && a.v.str.len) { err = "string pointer is NULL"; return false; }
+      out.r = vm.newStringUtf8(a.v.str.len ? std::string(a.v.str.ptr, a.v.str.len) : std::string());
       return true;
     case 'y':
       if (a.type != E7_BYTES) { err = "expected bytes"; return false; }
+      if (!a.v.bytes.ptr && a.v.bytes.len) { err = "bytes pointer is NULL"; return false; }
       out.r = vm.newBytesFrom(a.v.bytes.ptr, a.v.bytes.len);
       return true;
     case 'h':

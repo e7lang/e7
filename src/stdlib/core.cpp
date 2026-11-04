@@ -531,4 +531,48 @@ void registerCoreNatives(VM& vm) {
   vm.registerNative("Text.decode", "R>R", n_textDecode);
 }
 
+
+// Budget cost models for natives whose work grows with their inputs (see NativeCost in vm.h).
+void applyNativeCosts(VM& vm) {
+  static const char* scan[] = {
+      "Array.indexOfI", "Array.indexOfF", "Array.indexOfR", "Array.lastIndexOfI", "Array.lastIndexOfF",
+      "Array.lastIndexOfR", "Array.includesI", "Array.includesF", "Array.includesR", "Array.join", "Array.reverse",
+      "Array.fillI", "Array.fillF", "Array.fillR", "Bytes.fromArray", "Bytes.copy", "Bytes.toArray", "Bytes.set",
+      "Bytes.fill", "Bytes.indexOf", "Bytes.lastIndexOf", "Bytes.includes", "Bytes.join", "Bytes.reverse",
+      "Value.toString", "console.log", "console.error", "Global.Number", "Global.parseFloat", "Global.parseInt",
+      "Global.encodeURIComponent", "Global.decodeURIComponent", "Global.encodeURI", "Global.decodeURI",
+      "Text.encode", "Text.decode", "Date.fromString", "Date.parse", "encoding.hexEncode", "encoding.hexDecode",
+      "encoding.base64Encode", "encoding.base64Decode", "encoding.base64UrlEncode", "encoding.base64UrlDecode",
+      "encoding.base32Encode", "encoding.base32Decode", "encoding.utf8Encode", "encoding.utf8Decode",
+      "encoding.pemDecode", "encoding.pemEncode", "encoding.concatBytes", "encoding.bytesEqual", "JSON.stringify",
+      "JSON.stringifyIndent", "JSON.stringifyIndentStr", "JSON.parse", "Map.fromEntries", "Set.fromArray",
+      "Map.copy", "Math.minArray", "Math.maxArray", "Math.hypotArray", "String.indexOf", "String.lastIndexOf",
+      "String.includes", "String.startsWith", "String.endsWith", "String.toUpperCase", "String.toLowerCase",
+      "String.trim", "String.trimStart", "String.trimEnd", "String.split", "String.replace", "String.replaceAll",
+      "String.localeCompare", "String.fromCharCodes", "String.fromCodePoints", "String.chars",
+      "BigInt.fromString", "BigInt.parseLiteral", "BigInt.toNumber", "BigInt.fromNumber", "crypto.timingSafeEqual",
+  };
+  static const char* out[] = {
+      "Array.slice", "Array.splice", "Array.concat", "Array.newLen", "Array.setLength", "Bytes.new", "Bytes.slice",
+      "Buffer.new", "Buffer.slice", "Map.keys", "Map.values", "Map.entries", "Object.keys", "String.slice",
+      "String.substring", "String.substr", "String.padStart", "String.padEnd", "String.repeat",
+      "crypto.randomBytes", "crypto.hkdf",
+  };
+  static const char* hash[] = {
+      "crypto.hash", "crypto.hmac", "crypto.hmacKey", "crypto.crc32", "crypto.aesGcmEncrypt", "crypto.aesGcmDecrypt",
+      "crypto.chacha20Poly1305Encrypt", "crypto.chacha20Poly1305Decrypt", "crypto.aesCbcEncrypt",
+      "crypto.aesCbcDecrypt", "crypto.aesCtr", "crypto.ed25519Sign", "crypto.ed25519Verify", "crypto.ecdsaSign",
+      "crypto.ecdsaVerify", "crypto.rsaVerify", "crypto.rsaSign",
+  };
+  static const char* bigq[] = {"BigInt.mul", "BigInt.div", "BigInt.mod", "BigInt.pow", "BigInt.toString"};
+  for (const char* n : scan) vm.setNativeCost(n, NC_SCAN);
+  for (const char* n : out) vm.setNativeCost(n, NC_OUT);
+  for (const char* n : hash) vm.setNativeCost(n, NC_HASH);
+  for (const char* n : bigq) vm.setNativeCost(n, NC_BIGQ);
+  vm.setNativeCost("Array.sort", NC_SORT);
+  static const char* hashes[] = {"md5", "sha1", "sha224", "sha256", "sha384", "sha512",
+                                 "sha3_224", "sha3_256", "sha3_384", "sha3_512", "keccak256"};
+  for (const char* h : hashes) vm.setNativeCost(std::string("crypto.hash.") + h, NC_HASH);
+}
+
 }  // namespace e7

@@ -90,16 +90,17 @@ int main(int argc, char** argv) {
   std::vector<uint8_t> bytes;
   if (endsWith(file, ".e7b")) {
     std::string data;
-    if (!readAll(file, data)) { fprintf(stderr, "e7: cannot read %s\n", file.c_str()); return 1; }
+    if (!readAll(file, data)) { fprintf(stderr, "e7: cannot read %s\n", file.c_str()); e7_vm_free(vm); return 1; }
     bytes.assign(data.begin(), data.end());
   } else {
     e7::CompileOutput co = e7::compileProgram(file, e7::readFileFromDisk);
     if (!co.ok) {
       fprintf(stderr, "%s", co.errorText().c_str());
+      e7_vm_free(vm);
       return 1;
     }
     bytes = e7::serializeModule(co.module);
-    if (!trust.empty()) { fprintf(stderr, "e7: --trust requires a signed .e7b file\n"); return 1; }
+    if (!trust.empty()) { fprintf(stderr, "e7: --trust requires a signed .e7b file\n"); e7_vm_free(vm); return 1; }
   }
   auto t0 = std::chrono::steady_clock::now();
   if (budget) e7_set_budget(vm, budget);

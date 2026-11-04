@@ -6,7 +6,7 @@
 
 | 项目 | 方法 | 结果 |
 |---|---|---|
-| 语言/标准库语义 | `tests/run_tests.py`：72 个用例，与 Node.js 22 输出**逐字节**比对（差分测试）+ 预期输出 + 编译错误用例 | 全部通过 |
+| 语言/标准库语义 | `tests/run_tests.py`：82 个用例，与 Node.js 22 输出**逐字节**比对（差分测试）+ 预期输出 + 编译错误用例 | 全部通过 |
 | TS 兼容性 | `tests/tsc/check.sh`：tsc 5.6 `--strict` 检查所有用例与示例 | 全部通过 |
 | C API | `tests/capi_test.cpp`：参数编解码、宿主函数、KeyHandle、签名、预算挂起/恢复、内存/栈上限、错误后复用 | 通过 |
 | 区域设置无关 | `tests/locale_test.cpp`（de_DE 下数字解析/格式化） | 通过 |
@@ -84,6 +84,21 @@ float-cast-overflow UBSan 下运行，零报告。
 认证、CBC 填充、CTR 计数器回绕、HKDF/PBKDF2/HMAC/全部哈希、各编码与 Node 一致、KeyHandle 不泄漏、随机数来源、
 模块签名覆盖范围。回归测试：`crypto_ecdsa_der.ts`（OpenSSL 生成的 72 组 DER/raw 签名）、`crypto_ecdsa_strict_der.ts`、
 `crypto_ed25519_strict.ts`、`rt_x25519_low_order.ts`、`rt_ec_scalar_zero.ts`、`rt_rsa_huge_e.ts`。
+
+### 3.4 独立生产就绪签核（fresh build，复核全部结论）
+
+签核代理从当前提交全新构建 Release 与 ASan+UBSan，重跑全部测试（ctest 7/7，语言测试 82/82 与 Node 一致）、三轮审查的
+全部攻击样本（均被干净拒绝）、模糊测试（`fuzz_load` 2.8 万次、`fuzz_compile` 3.6 万次、结构化 .e7b 边界变异 2315 个）、
+模块签名攻击（剥离/移植/篡改尾部、错误公钥等全部拒绝）、460 项加密差分（含 RSA e=3 Bleichenbacher'06 伪造被拒，
+无"e7 接受而 Node 拒绝"的情况），结论 **READY WITH CAVEATS**，两项保留意见已修复：
+
+| 问题 | 修复 |
+|---|---|
+| 指令预算不计原生函数的工作量：循环调用重型原生函数可绕过预算（如 26 万位 BigInt `toString` 循环约 47 小时） | 原生函数按成本模型（扫描/输出/哈希/排序/BigInt 二次）按输入/输出规模计入预算；调用后结算，下次检查时挂起或终止。四个 DoS 用例在 10M 预算下 0.1–0.5 秒内终止，示例脚本不受影响 |
+| `max_frames = 0xFFFFFFFF` 时 `reserve(max+1)` 溢出为 0，回调中帧栈重分配导致 UAF | 64 位计算并限制 `max_frames ≤ 200000`、`stack_slots ≤ 4M` |
+| 低危：构造失败泄漏 VM、key provider 返回 NULL 空密钥、宿主传 NULL 指针 + 非零长度、非法 `e7_type` 枚举值、CLI 早退未释放 | 全部改为干净处理 |
+
+回归测试：`capi_reentry_test` 增加原生循环预算与 `max_frames` 用例。
 
 **宿主侧必须做的配置**（见 EMBEDDING.md §6）：开启签名校验、设置指令预算与内存上限。命令行工具 `e7` 仅用于开发，
 默认不设预算。

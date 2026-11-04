@@ -16,10 +16,21 @@ struct ModuleRT;
 
 using NativeFn = void (*)(VM& vm, Slot* args, uint32_t nargs, Slot* ret, void* ud);
 
+// How a native's work is charged to the instruction budget (natives cannot be interrupted, so the
+// cost is charged after the call; the next budget check then suspends or stops the script).
+enum NativeCost : uint8_t {
+  NC_NONE,  // O(1) or tiny
+  NC_SCAN,  // linear in the sizes of the reference arguments and the result
+  NC_OUT,   // linear in the size of the result
+  NC_HASH,  // byte-oriented crypto: ~1 tick per byte of input/output
+  NC_SORT,  // n log n in the array length
+  NC_BIGQ,  // quadratic in BigInt limb counts
+};
 struct NativeEntry {
   std::string sig;
   NativeFn fn = nullptr;
   void* ud = nullptr;
+  uint8_t cost = NC_NONE;
 };
 
 struct InlineCache {
@@ -48,6 +59,8 @@ struct NativeBinding {
   void* ud;
   char retKind;
   std::string name;
+  uint8_t cost = NC_NONE;
+  uint64_t refArgs = 0;  // bit k set: argument k is a reference
 };
 
 struct ModuleRT {
@@ -197,6 +210,16 @@ class VM {
   const VMConfig& config() const { return cfg_; }
   ModuleRT* currentModule() const { return frames_.empty() ? nullptr : frames_.back().fn->mod; }
   uint32_t nativeDepth() const { return nativeDepth_; }
+  void setNativeCost(const std::string& name, uint8_t cost) {
+    auto it = natives_.find(name);
+    if (it != natives_.end()) it->second.cost = cost;
+  }
+  // ticks for a completed native call (see NativeCost)
+  uint64_t nativeCost(const NativeBinding& nb, const Slot* args, uint32_t argc, Slot ret) const;
+  void chargeNative(const NativeBinding& nb, const Slot* args, uint32_t argc, Slot ret) {
+    uint64_t t = nativeCost(nb, args, argc, ret);
+    budget_ -= (int64_t)(t > (1ull << 40) ? (1ull << 40) : t);  // may go negative: checked at the next tick
+  }
   // Natives building large temporary (non-heap) buffers call this so that transient memory is also
   // bounded by the configured memory limit.
   void checkTemp(size_t bytes) {
@@ -282,5 +305,6 @@ void registerBigIntNatives(VM& vm);
 void registerJsonNatives(VM& vm);
 void registerCryptoNatives(VM& vm);
 void registerDateNatives(VM& vm);
+void applyNativeCosts(VM& vm);  // core.cpp
 
 }  // namespace e7

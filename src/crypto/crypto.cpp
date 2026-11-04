@@ -326,7 +326,8 @@ E7_NATIVE(c_hmacKey) {
   if (!vm.hostKeyFn || vm.hostKeyFn(vm.hostKeyUd, id, &key, &klen) != 0 || (!key && klen))
     vm.error("key handle %lld is not available", (long long)id);
   BytesObj* d = B(vm, a[2]);
-  Hmac m(h, key, klen);
+  static const uint8_t kEmpty[1] = {0};
+  Hmac m(h, key ? key : kEmpty, klen);  // a provider may return NULL for an empty key
   uint8_t out[64];
   m.mac1(d->ptr(), d->len, out);
   r->r = outBytes(vm, out, h.outLen);

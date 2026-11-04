@@ -39,11 +39,19 @@ std::string strUtf8(const StrObj* s) { return utf16ToUtf8(s->chars(), s->len); }
 VM::VM(const VMConfig& cfg) : cfg_(cfg) {
   if (cfg_.stackSlots < 1024) cfg_.stackSlots = 1024;
   if (cfg_.maxFrames < 16) cfg_.maxFrames = 16;
-  stack_ = static_cast<Slot*>(calloc(cfg_.stackSlots, sizeof(Slot)));
-  if (!stack_) throw std::bad_alloc();
-  frames_.reserve(cfg_.maxFrames + 1);
+  // frames_ must never reallocate while executing (the interpreter holds pointers into it), so its
+  // capacity is reserved up front; clamp absurd values ("unlimited" sentinels) to a sane maximum.
+  if (cfg_.maxFrames > 200000) cfg_.maxFrames = 200000;
+  if (cfg_.stackSlots > (1u << 22)) cfg_.stackSlots = 1u << 22;  // 32 MiB of registers
+  if (cfg_.memoryLimit < (1u << 20)) cfg_.memoryLimit = 1u << 20;
+  frames_.reserve((size_t)cfg_.maxFrames + 1);
   undef_ = static_cast<Obj*>(allocRaw(OT::Undefined, sizeof(Obj)));
   pin(undef_);
+  stack_ = static_cast<Slot*>(calloc(cfg_.stackSlots, sizeof(Slot)));
+  if (!stack_) {
+    free(undef_);  // the destructor does not run when a constructor throws
+    throw std::bad_alloc();
+  }
   registerCoreNatives(*this);
   registerStringNatives(*this);
   registerArrayNatives(*this);
@@ -54,6 +62,7 @@ VM::VM(const VMConfig& cfg) : cfg_(cfg) {
   registerJsonNatives(*this);
   registerCryptoNatives(*this);
   registerDateNatives(*this);
+  applyNativeCosts(*this);
 }
 
 VM::~VM() {
@@ -66,8 +75,51 @@ VM::~VM() {
   free(stack_);
 }
 
+static uint64_t objUnits(const Obj* o, uint64_t& limbs) {
+  if (!o) return 0;
+  switch (o->type) {
+    case OT::String: return static_cast<const StrObj*>(o)->len;
+    case OT::Bytes: return static_cast<const BytesObj*>(o)->len;
+    case OT::Array: return (uint64_t)static_cast<const ArrObj*>(o)->len * 4;
+    case OT::Map: return (uint64_t)static_cast<const MapObj*>(o)->count * 8;
+    case OT::BigInt: {
+      uint64_t n = static_cast<const BigObj*>(o)->mag.size();
+      limbs = std::max(limbs, n);
+      return n * 4;
+    }
+    default: return 0;
+  }
+}
+uint64_t VM::nativeCost(const NativeBinding& nb, const Slot* args, uint32_t argc, Slot ret) const {
+  uint64_t in = 0, maxLimbs = 0, secondLimbs = 0;
+  for (uint32_t k = 0; k < argc && k < 64; k++) {
+    if (!(nb.refArgs >> k & 1)) continue;
+    uint64_t l = 0;
+    in += objUnits(args[k].r, l);
+    if (l > maxLimbs) { secondLimbs = maxLimbs; maxLimbs = l; }
+    else if (l > secondLimbs) secondLimbs = l;
+  }
+  uint64_t outLimbs = 0;
+  uint64_t out = nb.retKind == 'R' ? objUnits(ret.r, outLimbs) : 0;
+  switch (nb.cost) {
+    case NC_SCAN: return (in + out) / 8;
+    case NC_OUT: return out / 8;
+    case NC_HASH: return in + out;
+    case NC_SORT: {
+      uint64_t n = in / 4, lg = 1;
+      while ((1ull << lg) < n) lg++;
+      return n * lg * 4;
+    }
+    case NC_BIGQ: {
+      uint64_t a = std::max(maxLimbs, outLimbs), b = secondLimbs ? secondLimbs : a;
+      return a * b / 4 + (in + out) / 8;
+    }
+    default: return 0;
+  }
+}
+
 void VM::registerNative(const std::string& name, const std::string& sig, NativeFn fn, void* ud) {
-  natives_[name] = NativeEntry{sig, fn, ud};
+  natives_[name] = NativeEntry{sig, fn, ud, NC_NONE};
 }
 const NativeEntry* VM::findNative(const std::string& name) const {
   auto it = natives_.find(name);
@@ -475,7 +527,12 @@ ModuleRT* VM::loadModule(Module&& mod) {
     if (ne->sig != m.sigs[ni.sig])
       errorCode(ERR_LOAD, "native '%s' signature mismatch (module %s, host %s)", ni.name.c_str(),
                 m.sigs[ni.sig].c_str(), ne->sig.c_str());
-    M->natives.push_back(NativeBinding{ne->fn, ne->ud, sigRet(ne->sig), ni.name});
+    NativeBinding nb{ne->fn, ne->ud, sigRet(ne->sig), ni.name};
+    nb.cost = ne->cost;
+    std::string ps = sigParams(ne->sig);
+    for (size_t k = 0; k < ps.size() && k < 64; k++)
+      if (ps[k] == 'R') nb.refArgs |= 1ull << k;
+    M->natives.push_back(std::move(nb));
   }
   // functions
   M->funcs.resize(m.funcs.size());

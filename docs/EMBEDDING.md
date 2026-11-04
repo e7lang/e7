@@ -87,7 +87,8 @@ while (st == E7_SUSPENDED) {                     // 例如每帧继续一片，U
   st = e7_resume(vm, &ret);
 }
 ```
-不开启挂起时，预算耗尽返回 `E7_ERR_BUDGET`，用于防止死循环。挂起期间不能发起新的 `e7_call`（`E7_ERR_STATE`），
+不开启挂起时，预算耗尽返回 `E7_ERR_BUDGET`，用于防止死循环。字符串/数组/编码/JSON/哈希/BigInt 等原生函数按处理的数据量计入预算
+（调用结束后结算），因此预算同时限制了脚本调用重型原生函数的总耗时。挂起期间不能发起新的 `e7_call`（`E7_ERR_STATE`），
 可用 `e7_abort_suspended` 放弃。
 
 ### 2.4 线程

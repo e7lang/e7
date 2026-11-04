@@ -105,6 +105,7 @@ Slot VM::invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32
   nativeDepth_++;
   nb.fn(*this, args.data(), argc, &ret, nb.ud);
   nativeDepth_--;
+  if (nb.cost != NC_NONE) chargeNative(nb, args.data(), argc, ret);
   return ret;
 }
 
@@ -471,6 +472,7 @@ dispatch:
       nativeDepth_++;
       nb.fn(*this, args, argc, &ret, nb.ud);
       nativeDepth_--;
+      if (E7_UNLIKELY(nb.cost != NC_NONE)) chargeNative(nb, args, argc, ret);
     } else {
       ret = invokeNativeMany(nb, R, aw, argc);
     }

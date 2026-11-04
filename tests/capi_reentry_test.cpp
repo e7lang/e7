@@ -51,6 +51,12 @@ export function sortGc(): number {
 let keep: string[] = [];
 export function fill(n: number): number { keep.push("x".repeat(n)); return keep.length; }
 export function two(a: string, b: string): number { return a.length + b.length + a.charCodeAt(0); }
+export function nativeLoop(): number {
+  const s = "a".repeat(4000000);
+  let n = 0;
+  for (let i = 0; i < 100000000; i++) n += s.indexOf("b");
+  return n;
+}
 )";
 
 static e7_vm* setup(int m, size_t limit) {
@@ -102,6 +108,27 @@ int main() {
     e7_vm* vm = setup(4, 0);
     e7_status st = e7_call(vm, gmod, "num", nullptr, 0, &r);
     CHECK(st == E7_OK && r.v.num == 42.5);
+    e7_vm_free(vm);
+  }
+  {
+    // natives are charged to the instruction budget by input size: a loop of large scans must stop
+    e7_vm* vm = setup(0, 64u << 20);
+    e7_set_budget(vm, 10000000);
+    e7_status st = e7_call(vm, gmod, "nativeLoop", nullptr, 0, &r);
+    CHECK(st == E7_ERR_BUDGET);
+    e7_vm_free(vm);
+  }
+  {
+    // an "unlimited" max_frames must not break the frame stack (natives calling back into script)
+    mode = 2;
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.max_frames = 0xFFFFFFFFu;
+    e7_vm* vm = e7_vm_new(&cfg);
+    CHECK(vm != nullptr);
+    e7_register_native(vm, "host", ">n", hostN, nullptr);
+    CHECK(e7_load_source(vm, src, strlen(src), "reentry.ts", &gmod) == E7_OK);
+    CHECK(e7_call(vm, gmod, "sortGc", nullptr, 0, &r) == E7_OK);
     e7_vm_free(vm);
   }
   if (failures) return 1;
