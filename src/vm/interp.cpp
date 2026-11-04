@@ -5,7 +5,19 @@
 #include "../core/numfmt.h"
 #include "vm.h"
 
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(E7_NO_COMPUTED_GOTO)
+// Computed-goto dispatch. Clang 15-17 (Apple clang 15/16, i.e. Xcode 15/16, and NDK r26 and older)
+// miscompile this interpreter loop with computed goto at -O2/-O3 (e.g. trailing instruction words
+// were loaded from the wrong address), so those compilers use the switch loop, which is correct
+// everywhere. Verified: GCC 13, clang 18 (computed goto); clang 15/16/17 (switch).
+#if defined(E7_NO_COMPUTED_GOTO)
+#define E7_COMPUTED_GOTO 0
+#elif defined(__clang__)
+#if defined(__apple_build_version__)
+#define E7_COMPUTED_GOTO (__clang_major__ >= 17)
+#else
+#define E7_COMPUTED_GOTO (__clang_major__ >= 18)
+#endif
+#elif defined(__GNUC__)
 #define E7_COMPUTED_GOTO 1
 #else
 #define E7_COMPUTED_GOTO 0
@@ -208,9 +220,10 @@ dispatch:
   CASE(MOD_F) {
     double x = R[B].f, y = R[C].f;
     // fast path: both operands are integers that fit in 32 bits
-    int32_t xi = (int32_t)x, yi = (int32_t)y;
-    if (E7_LIKELY(x >= -2147483648.0 && x <= 2147483647.0 && y >= -2147483648.0 && y <= 2147483647.0 &&
-                  (double)xi == x && (double)yi == y && yi > 0)) {
+    // (range checks come first: converting an out-of-range double to int is undefined behaviour)
+    if (E7_LIKELY(x >= -2147483648.0 && x <= 2147483647.0 && y >= 1.0 && y <= 2147483647.0 &&
+                  (double)(int32_t)x == x && (double)(int32_t)y == y)) {
+      int32_t xi = (int32_t)x, yi = (int32_t)y;
       int32_t r = xi % yi;
       R[A].f = (r == 0 && (xi < 0 || (xi == 0 && std::signbit(x)))) ? -0.0 : (double)r;
     } else if (std::isinf(y) && std::isfinite(x)) {

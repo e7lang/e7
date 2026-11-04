@@ -95,9 +95,13 @@ build/tests/fuzz_load 3000        # 字节码变异模糊测试：被篡改的�
 tests/tsc/check.sh                # 用官方 tsc（strict）验证所有测试与示例都是合法 TypeScript
 ```
 
-已验证的配置：GCC 13 / Clang 18、Debug + ASan/UBSan、32 位（i386，对应 armeabi-v7a 的 32 位指针）、
+已验证的配置：GCC 13 / Clang 15–18 / Apple Clang（macOS arm64）、Debug + ASan/UBSan、32 位（i386，对应 armeabi-v7a 的 32 位指针）、
 switch 分派（MSVC 路径）、MinGW-w64 Windows 版（Wine 下全部通过）、动态库、JNI（OpenJDK 21）。
 CI 配置见 `.github/workflows/ci.yml`（另含 macOS、iOS、Android NDK、MSVC、clang-cl）。
+
+> 分派方式：GCC、Clang ≥ 18、Apple Clang ≥ 17 使用 computed goto；Clang 15–17（含 Xcode 15/16 的 Apple Clang、
+> NDK r26 及更早）在 -O2/-O3 下会错误编译 computed goto 版本的解释器循环，因此自动改用 switch 分派（结果完全一致，
+> 速度略慢）。也可用 `-DE7_NO_COMPUTED_GOTO=ON` 强制 switch。
 
 ## 性能
 

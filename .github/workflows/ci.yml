@@ -13,6 +13,7 @@ jobs:
         include:
           - { name: gcc-release, cc: gcc, cxx: g++, type: Release, flags: "" }
           - { name: clang-release, cc: clang, cxx: clang++, type: Release, flags: "" }
+          - { name: clang16-release, cc: clang-16, cxx: clang++-16, type: Release, flags: "" }
           - { name: gcc-asan-ubsan, cc: gcc, cxx: g++, type: Debug, flags: "-DE7_SANITIZE=ON" }
           - { name: gcc-switch-dispatch, cc: gcc, cxx: g++, type: Release, flags: "-DE7_NO_COMPUTED_GOTO=ON" }
           - { name: gcc-shared, cc: gcc, cxx: g++, type: Release, flags: "-DE7_BUILD_SHARED=ON" }
@@ -22,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
-      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build ${{ matrix.cc == 'clang-16' && 'clang-16' || '' }}
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.type }} -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} ${{ matrix.flags }}
       - name: Build
@@ -72,7 +73,6 @@ jobs:
         include:
           - { name: release, flags: "-DCMAKE_BUILD_TYPE=Release" }
           - { name: debug-asan, flags: "-DCMAKE_BUILD_TYPE=Debug -DE7_SANITIZE=ON" }
-          - { name: release-switch, flags: "-DCMAKE_BUILD_TYPE=Release -DE7_NO_COMPUTED_GOTO=ON" }
     name: macos (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +80,6 @@ jobs:
         with: { node-version: "22" }
       - run: cmake -S . -B build ${{ matrix.flags }}
       - run: cmake --build build -j
-      - run: build/e7 tests/cases/lang/functions.ts || true
       - run: ctest --test-dir build --output-on-failure
 
   ios:
