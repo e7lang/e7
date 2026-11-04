@@ -156,6 +156,19 @@ cc -std=c11 host.c -I../../include ../../build/libe7vm_static.a \
 ```
 
 Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥），调用 `load(bytes)`，再 `call("sign", ...)`。
+Swift 项目可直接通过 Swift Package Manager 引入：
+
+```swift
+// Package.swift：.package(url: "https://github.com/e7lang/e7.git", from: "1.0.1")
+//                .product(name: "E7VM", package: "e7")
+import E7VM
+
+let vm = try E7VM()
+let module = try vm.load(bytecode)  // sign.e7b 的内容
+let mac = try vm.call(module, "sign", .string("amount=100&currency=CNY"), .string("s3cr3t"))
+// .string("0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6")
+```
+
 各平台的具体写法，以及宿主函数、`KeyHandle`、预算与分片执行，见 [docs/EMBEDDING.md](docs/EMBEDDING.md)。
 
 ### 6. 编辑器配置
@@ -202,7 +215,7 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 |---|---|---|
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
 | Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so` | Java/Kotlin：`platform/java/org/e7vm` |
-| iOS | `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`platform/ios/E7VM/E7VM.swift` |
+| iOS / macOS（Swift） | Swift Package Manager：`.package(url: "https://github.com/e7lang/e7.git", from: "1.0.1")`，或 `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`.product(name: "E7VM", package: "e7")`（`platform/ios/E7VM/E7VM.swift`） |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]`（VS 2022） | C/C++、C#：`platform/windows/E7VM.cs` |
 
 CMake 选项：

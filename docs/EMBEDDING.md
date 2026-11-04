@@ -128,10 +128,27 @@ The JNI binding is tested on a desktop JVM (OpenJDK 21) with `platform/java/test
 
 ## 4. iOS (Swift)
 
-Build: `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework`; add it together with `platform/ios/E7VM/E7VM.swift`
-to the app target.
+**Swift Package Manager (recommended, iOS 13+ / macOS 11+).** The package builds the VM, the compiler and the
+crypto libraries from source; no prebuilt binary is involved. In Xcode use *File → Add Package Dependencies…* with
+`https://github.com/e7lang/e7.git`, or in `Package.swift`:
 
 ```swift
+dependencies: [
+  .package(url: "https://github.com/e7lang/e7.git", from: "1.0.1"),
+],
+targets: [
+  .target(name: "App", dependencies: [.product(name: "E7VM", package: "e7")]),
+]
+```
+
+Then `import E7VM`. The C API is also available as `import CE7VM` (e.g. for the `E7_ERR_*` status codes).
+
+**XCFramework (manual integration).** `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` (CMake + Xcode);
+add it together with `platform/ios/E7VM/E7VM.swift` to the app target.
+
+```swift
+import E7VM
+
 let vm = try E7VM(memoryLimit: 32 << 20, trustedKeys: [serverPublicKey])
 vm.keyProvider = { id in Keychain.key(for: id) }
 try vm.registerNative("deviceId", signature: ">s") { _ in .string(UIDevice.current.identifierForVendor!.uuidString) }
@@ -139,6 +156,12 @@ let module = try vm.load(bytecode)
 vm.setBudget(10_000_000)
 if case let .string(sig) = try vm.call(module, "sign", .string("a=1&b=2"), .handle(KeyHandle(1))) { print(sig) }
 ```
+
+Values are `E7Value` cases: `.number(Double)`, `.int(Int64)`, `.uint(UInt64)`, `.bool`, `.string`, `.bytes(Data)`,
+`.handle(KeyHandle)` and `.void`. Errors are `E7Error(status, message)` (`isSuspended` for time-slicing with `resume()`).
+`E7VM.compile(_:)`, `E7VM.sign(_:seed:)` and `E7VM.publicKey(seed:)` compile and sign modules (e.g. in tests or tooling).
+The wrapper is tested in CI by `Tests/E7VMTests` (`swift test` on macOS and on an iOS simulator).
+
 e7vm uses no JIT and allocates no executable memory, which meets the App Store requirements for interpreted code (delivered scripts should not change the app's primary purpose).
 
 ## 5. Windows (C / C++ / C#)

@@ -27,6 +27,7 @@ let package = Package(
     .target(
       name: "CE7VM",
       path: ".",
+      exclude: ["third_party/bearssl/src/codec/pemdec.t0"],
       sources: coreSources + vmSources + compilerSources + [
         "third_party/bearssl/src",
         "third_party/monocypher/monocypher.c",
