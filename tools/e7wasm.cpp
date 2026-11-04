@@ -15,6 +15,7 @@
 
 #include "compiler/compiler.h"
 #include "core/module.h"
+#include "core/numfmt.h"
 #include "e7/e7.h"
 
 #ifdef __EMSCRIPTEN__
@@ -39,14 +40,7 @@ void onPrint(void* user, const char* text, size_t len) {
 std::string render(const e7_value& v) {
   char b[64];
   switch (v.type) {
-    case E7_NUMBER: {
-      // shortest round-trip form, like JavaScript's Number#toString for common values
-      for (int p = 1; p <= 17; p++) {
-        snprintf(b, sizeof b, "%.*g", p, v.v.num);
-        if (strtod(b, nullptr) == v.v.num) break;
-      }
-      return b;
-    }
+    case E7_NUMBER: return e7::numberToString(v.v.num);  // same text as String(x) in a script
     case E7_BOOL: return v.v.boolean ? "true" : "false";
     case E7_INT: snprintf(b, sizeof b, "%lld", (long long)v.v.i); return b;
     case E7_UINT: snprintf(b, sizeof b, "%llu", (unsigned long long)v.v.u); return b;
