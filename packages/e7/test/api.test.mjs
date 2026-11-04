@@ -193,7 +193,7 @@ test("run: instruction budget", async () => {
   // a budget large enough for the work succeeds; 0 = unlimited
   assert.equal((await run(SIGN, { budget: 1e7 })).result, HMAC);
   assert.equal((await run(SIGN, { budget: 0 })).result, HMAC);
-  assert.equal((await run(SIGN, { budget: 10 })).status, "budget_exceeded");
+  assert.equal((await run("let n = 0; for (let i = 0; i < 1000; i++) n += i;", { budget: 100 })).status, "budget_exceeded");
 });
 
 test("run: memory limit", async () => {
