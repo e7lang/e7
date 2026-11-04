@@ -1,0 +1,10 @@
+**
+!dist/extension.js
+!dist/e7wasm.wasm
+!syntaxes/**
+!language-configuration.json
+!images/icon.png
+!README.md
+!CHANGELOG.md
+!LICENSE
+!package.json

@@ -1,0 +1,113 @@
+{
+  "name": "e7",
+  "displayName": "E7 Language",
+  "description": "E7 (strict TypeScript subset) diagnostics, run and bytecode commands, powered by the E7 compiler and VM on WebAssembly",
+  "version": "1.0.1",
+  "publisher": "e7lang",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "homepage": "https://e7lang.github.io",
+  "bugs": { "url": "https://github.com/e7lang/e7/issues" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/e7lang/e7.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Programming Languages", "Linters"],
+  "keywords": ["e7", "typescript", "sandbox", "bytecode", "vm"],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:e7",
+    "onLanguage:typescript",
+    "workspaceContains:**/*.e7"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": true },
+    "virtualWorkspaces": true
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "e7",
+        "aliases": ["E7", "e7"],
+        "extensions": [".e7"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "e7",
+        "scopeName": "source.e7",
+        "path": "./syntaxes/e7.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      { "command": "e7.runFile", "title": "Run File", "category": "E7", "icon": "$(play)" },
+      { "command": "e7.compileFile", "title": "Compile to Bytecode", "category": "E7" },
+      { "command": "e7.showBytecode", "title": "Show Bytecode", "category": "E7" }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "e7.runFile", "when": "e7.isE7File" },
+        { "command": "e7.compileFile", "when": "e7.isE7File" },
+        { "command": "e7.showBytecode", "when": "e7.isE7File" }
+      ],
+      "editor/title/run": [
+        { "command": "e7.runFile", "when": "e7.isE7File", "group": "navigation" }
+      ],
+      "editor/context": [
+        { "command": "e7.runFile", "when": "e7.isE7File", "group": "e7@1" },
+        { "command": "e7.showBytecode", "when": "e7.isE7File", "group": "e7@2" }
+      ]
+    },
+    "configuration": {
+      "title": "E7",
+      "properties": {
+        "e7.files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "Glob patterns of `.ts` files to treat as E7 (e.g. `**/scripts/**/*.ts`). `.e7` files and `.ts` files that import from `\"e7:...\"` are always E7 files."
+        },
+        "e7.diagnostics.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Report E7 compiler errors as you type."
+        },
+        "e7.diagnostics.debounce": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "description": "Delay in milliseconds before re-checking a changed document."
+        },
+        "e7.run.budget": {
+          "type": "number",
+          "default": 100000000,
+          "minimum": 0,
+          "description": "Instruction budget for E7: Run File (0 = unlimited)."
+        },
+        "e7.run.memoryLimit": {
+          "type": "number",
+          "default": 67108864,
+          "minimum": 0,
+          "description": "VM heap limit in bytes for E7: Run File."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs && node test/runTest.js",
+    "package": "node scripts/build.mjs && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "2.5.2",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.25.10",
+    "mocha": "10.8.2",
+    "ovsx": "0.10.6"
+  }
+}

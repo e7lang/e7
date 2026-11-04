@@ -1,0 +1,46 @@
+{
+  "name": "@e7lang/e7",
+  "version": "1.0.1",
+  "description": "E7 (strict TypeScript subset) compiler and sandboxed VM on WebAssembly, for Node.js and browsers",
+  "keywords": ["e7", "typescript", "sandbox", "vm", "bytecode", "webassembly", "scripting"],
+  "homepage": "https://e7lang.github.io",
+  "bugs": "https://github.com/e7lang/e7/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/e7lang/e7.git",
+    "directory": "packages/e7"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./e7wasm.wasm": "./wasm/e7wasm.wasm",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "e7-js": "bin/e7-js.js"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "bin/e7-js.js",
+    "wasm/e7wasm.js",
+    "wasm/e7wasm.wasm",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "prepack": "node scripts/check-wasm.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node test/browser.mjs"
+  }
+}

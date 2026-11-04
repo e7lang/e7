@@ -143,8 +143,9 @@ if(EMSCRIPTEN)
   target_link_options(e7wasm PRIVATE
     -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createE7 -sENVIRONMENT=web,worker,node
     -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=32MB -sSTACK_SIZE=4MB
-    -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString
-    -sEXPORTED_FUNCTIONS=_e7w_run,_e7w_output,_e7w_result,_e7w_error,_e7w_bytecode_size,_e7w_version,_e7w_disasm,_malloc,_free)
+    -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8
+    # playground API, then the structured API used by the npm package (packages/e7)
+    -sEXPORTED_FUNCTIONS=_e7w_run,_e7w_output,_e7w_result,_e7w_error,_e7w_bytecode_size,_e7w_version,_e7w_disasm,_malloc,_free,_e7w_files_clear,_e7w_file_add,_e7w_compile,_e7w_diagnostics,_e7w_bytes_ptr,_e7w_bytes_len,_e7w_disasm_bytes,_e7w_exports,_e7w_args_clear,_e7w_arg_number,_e7w_arg_bool,_e7w_arg_null,_e7w_arg_string,_e7w_arg_bytes,_e7w_arg_int,_e7w_exec,_e7w_output_json,_e7w_result_json)
   set_target_properties(e7wasm PROPERTIES SUFFIX ".js")
 endif()
 

@@ -1,0 +1,1 @@
+const greeting: string = "héllo 世界 👋"; let x: number = 'a';
