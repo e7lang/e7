@@ -355,6 +355,7 @@ void VM::freeObj(Obj* o) {
     }
     case OT::BigInt: {
       auto* b = static_cast<BigObj*>(o);
+      bytes_ -= b->mag.capacity() * sizeof(uint32_t);
       b->~BigObj();
       break;
     }

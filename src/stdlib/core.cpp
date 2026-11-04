@@ -26,6 +26,21 @@ Slot boxValue(VM& vm, Slot v, uint8_t vt) {
   return slotR(vm.newBox(vt, v));
 }
 
+// arrays currently being converted (JS Array.prototype.join skips cyclic references)
+static thread_local std::vector<const Obj*> tlJoinStack;
+struct JoinGuard {
+  explicit JoinGuard(VM& vm, const Obj* o) {
+    if (tlJoinStack.size() >= 256) vm.error("RangeError: array nesting is too deep to convert to a string");
+    tlJoinStack.push_back(o);
+  }
+  ~JoinGuard() { tlJoinStack.pop_back(); }
+};
+static bool joining(const Obj* o) {
+  for (const Obj* x : tlJoinStack)
+    if (x == o) return true;
+  return false;
+}
+
 std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
   if (vt == VT_NUMBER) return ascii(numberToString(v.f));
   if (vt != VT_REF) return intToU16(v.i, vt);
@@ -42,12 +57,15 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::BigInt: return ascii(bigToString(static_cast<BigObj*>(o), 10));
     case OT::Array: {
       auto* a = static_cast<ArrObj*>(o);
+      if (joining(o)) return u"";
+      JoinGuard g(vm, o);
       std::u16string out;
       for (uint32_t i = 0; i < a->len; i++) {
         if (i) out += u',';
         Slot e = a->data[i];
         if (a->vt == VT_REF && (!e.r || e.r == vm.undef())) continue;
         out += valueToString(vm, e, a->vt);
+        vm.checkTemp(out.size() * 2);
       }
       return out;
     }
@@ -64,12 +82,15 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Instance: {
       auto* in = static_cast<InstObj*>(o);
       if (!in->cls->isTuple) return u"[object Object]";
+      if (joining(o)) return u"";
+      JoinGuard g(vm, o);
       std::u16string out;
       for (uint32_t i = 0; i < in->cls->nfields; i++) {
         if (i) out += u',';
         Slot e = in->fields()[i];
         if (in->cls->fieldVT[i] == VT_REF && (!e.r || e.r == vm.undef())) continue;
         out += valueToString(vm, e, in->cls->fieldVT[i]);
+        vm.checkTemp(out.size() * 2);
       }
       return out;
     }
@@ -400,7 +421,7 @@ E7_NATIVE(n_toExponential) {
   if (fd == fd) {
     double t = toInteger(fd);
     if (std::isfinite(x) && (t < 0 || t > 100)) vm.error("RangeError: toExponential() argument must be between 0 and 100");
-    f = (int)t;
+    f = t >= 0 && t <= 100 ? (int)t : 0;  // non-finite x ignores the digits argument
   }
   r->r = vm.newStringAscii(numberToExponential(x, f).c_str());
 }

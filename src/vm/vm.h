@@ -115,6 +115,16 @@ class VM {
   Slot result() const { return result_; }
   char resultKind() const { return resultKind_; }
   void setBudget(int64_t ticks) { budget_ = ticks <= 0 ? INT64_MAX : ticks; }
+  // Natives doing work proportional to a script-chosen parameter charge it against the instruction
+  // budget up front (a native cannot be suspended halfway), so the budget also bounds them.
+  void chargeWork(uint64_t ticks) {
+    if (budget_ == INT64_MAX) return;
+    if (ticks > (uint64_t)budget_) {
+      budget_ = 0;
+      errorCode(ERR_BUDGET, "instruction budget exhausted");
+    }
+    budget_ -= (int64_t)ticks;
+  }
   void setSuspendOnBudget(bool b) { cfg_.suspendOnBudget = b; }
   void resetExecution();  // abandon a suspended call
 
@@ -187,6 +197,18 @@ class VM {
   const VMConfig& config() const { return cfg_; }
   ModuleRT* currentModule() const { return frames_.empty() ? nullptr : frames_.back().fn->mod; }
   uint32_t nativeDepth() const { return nativeDepth_; }
+  // Natives building large temporary (non-heap) buffers call this so that transient memory is also
+  // bounded by the configured memory limit.
+  void checkTemp(size_t bytes) {
+    if (bytes > cfg_.memoryLimit || bytes_ + bytes > cfg_.memoryLimit)
+      errorCode(ERR_MEMORY, "out of memory (limit %zu bytes)", cfg_.memoryLimit);
+  }
+  // RAII: no collection while host code holds fresh objects only in C++ locals
+  struct GCPause {
+    VM& v;
+    explicit GCPause(VM& vm) : v(vm) { v.gcInhibit_++; }
+    ~GCPause() { v.gcInhibit_--; }
+  };
 
   std::vector<std::unique_ptr<ModuleRT>> modules;
 

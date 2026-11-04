@@ -336,6 +336,58 @@ struct Builder {
   [[noreturn]] void fail(const std::string& path, const char* what) {
     vm.error("JSON.parse: %s at %s", what, path.empty() ? "$" : path.c_str());
   }
+  // The descriptor comes from bytecode, so it is validated once up front (grammar, bounds, depth);
+  // build() and skip() rely on it being well-formed.
+  [[noreturn]] void bad() { vm.error("bad JSON descriptor"); }
+  size_t number(size_t p, char term) {  // 1..9 digits followed by `term`; returns index after `term`
+    size_t q = p;
+    while (q < d.size() && d[q] >= '0' && d[q] <= '9' && q - p < 9) q++;
+    if (q == p || q >= d.size() || d[q] != term) bad();
+    return q + 1;
+  }
+  size_t validate(size_t p, int depth) {
+    if (depth > 300 || p >= d.size()) bad();
+    switch (d[p]) {
+      case 'n': case 'b': case 's': return p + 1;
+      case 'i': {
+        if (p + 1 >= d.size()) bad();
+        int vt = d[p + 1] - '0';
+        if (vt < VT_I8 || vt > VT_U64) bad();
+        return p + 2;
+      }
+      case '?': {
+        size_t q = p + 1;
+        if (q < d.size() && d[q] == '~') q++;
+        if (q >= d.size() || d[q] == '?' || d[q] == '~') bad();
+        return validate(q, depth + 1);
+      }
+      case '~':
+        if (p + 1 >= d.size() || d[p + 1] == '?' || d[p + 1] == '~') bad();
+        return validate(p + 1, depth + 1);
+      case '[': case 'M': return validate(p + 1, depth + 1);
+      case '{': case 't': {
+        size_t q = number(p + 1, ':');
+        size_t cnt = (size_t)atoi(d.c_str() + q);
+        q = number(q, ':');
+        if (cnt > d.size()) bad();
+        for (size_t k = 0; k < cnt; k++) {
+          if (d[p] == '{') {
+            while (q < d.size() && d[q] != '=') {
+              if (d[q] == '\\') q++;
+              q++;
+            }
+            if (q >= d.size()) bad();
+            q++;  // '='
+          }
+          q = validate(q, depth + 1);
+          if (q >= d.size() || d[q] != ';') bad();
+          q++;
+        }
+        return q;
+      }
+      default: bad();
+    }
+  }
   // skip one descriptor starting at p, return end position
   size_t skip(size_t p) {
     if (p >= d.size()) vm.error("bad JSON descriptor");
@@ -387,7 +439,8 @@ struct Builder {
       case '?': {
         if (v && v->t == JNode::Null) { out.r = nullptr; return out; }
         Slot inner = build(v, p + 1, path);
-        return boxValue(vm, inner, vtOfDesc(p + 1 + (d[p + 1] == '~' ? 1 : 0)));
+        if (d[p + 1] == '~') return inner;  // already boxed (or undefined) by the '~' layer
+        return boxValue(vm, inner, vtOfDesc(p + 1));
       }
       case '~': {
         if (!v) { out.r = vm.undef(); return out; }
@@ -508,6 +561,7 @@ E7_NATIVE(j_parse) {
   JParser p{vm, text->chars(), text->len};
   JNode root = p.parse();
   Builder b{vm, currentModule(vm), desc};
+  if (b.validate(0, 0) != desc.size()) vm.error("bad JSON descriptor");
   Slot v = b.build(&root, 0, "$");
   r->r = boxValue(vm, v, b.vtOfDesc(0) != VT_REF && desc[0] != '?' && desc[0] != '~' ? b.vtOfDesc(0) : (uint8_t)VT_REF).r;
 }

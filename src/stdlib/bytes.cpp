@@ -103,7 +103,8 @@ E7_NATIVE(b_lastIndexOf) {
   E7_UNUSED;
   BytesObj* s = B(vm, a[0]);
   double fd = toInteger(a[2].f);
-  int64_t from = fd < 0 ? (int64_t)(fd + s->len) : (fd >= s->len ? (int64_t)s->len - 1 : (int64_t)fd);
+  double fr = fd < 0 ? fd + s->len : (fd >= s->len ? (double)s->len - 1 : fd);
+  int64_t from = fr < 0 ? -1 : (int64_t)fr;
   r->f = findByte(s, a[1].f, from, true);
 }
 E7_NATIVE(b_join) {

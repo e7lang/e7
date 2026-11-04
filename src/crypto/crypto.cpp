@@ -204,7 +204,47 @@ static uint32_t bitLen(const std::vector<uint8_t>& v) {
   while (top) { b++; top >>= 1; }
   return b;
 }
+// big-endian magnitude product (operands are at most a few hundred bytes)
+static std::vector<uint8_t> mulBE(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+  std::vector<uint32_t> acc(a.size() + b.size(), 0);
+  for (size_t i = 0; i < a.size(); i++) {
+    uint32_t carry = 0;
+    size_t ai = a.size() - 1 - i;
+    for (size_t j = 0; j < b.size(); j++) {
+      size_t k = i + j;
+      uint32_t t = acc[k] + (uint32_t)a[ai] * b[b.size() - 1 - j] + carry;
+      acc[k] = t & 0xFF;
+      carry = t >> 8;
+    }
+    for (size_t k = i + b.size(); carry; k++) {
+      uint32_t t = acc[k] + carry;
+      acc[k] = t & 0xFF;
+      carry = t >> 8;
+    }
+  }
+  std::vector<uint8_t> out;
+  size_t top = acc.size();
+  while (top > 0 && acc[top - 1] == 0) top--;
+  for (size_t k = top; k-- > 0;) out.push_back((uint8_t)acc[k]);
+  return out;
+}
+static std::vector<uint8_t> stripZeros(const std::vector<uint8_t>& v) {
+  size_t i = 0;
+  while (i < v.size() && v[i] == 0) i++;
+  return std::vector<uint8_t>(v.begin() + (long)i, v.end());
+}
+static bool parseRsaPrivInner(const uint8_t* p, size_t len, RsaPriv& out, int depth);
+// Parses and validates an RSA private key. The CRT engine trusts that n == p*q (it sizes buffers from
+// n's length), so a malformed key with an unrelated n must be rejected here.
 static bool parseRsaPriv(const uint8_t* p, size_t len, RsaPriv& out) {
+  if (!parseRsaPrivInner(p, len, out, 0)) return false;
+  if (out.bits < 512 || out.bits > 4096) return false;
+  std::vector<uint8_t> pp = stripZeros(out.p), qq = stripZeros(out.q);
+  if (pp.empty() || qq.empty() || pp.size() + qq.size() > 520) return false;
+  return mulBE(pp, qq) == stripZeros(out.n);
+}
+static bool parseRsaPrivInner(const uint8_t* p, size_t len, RsaPriv& out, int depth) {
+  if (depth > 2) return false;
   Der d{p, len};
   size_t l;
   const uint8_t* seq = d.read(0x30, l);
@@ -220,7 +260,7 @@ static bool parseRsaPriv(const uint8_t* p, size_t len, RsaPriv& out) {
     size_t ol;
     const uint8_t* oct = s.read(0x04, ol);
     if (!oct) return false;
-    return parseRsaPriv(oct, ol, out);
+    return parseRsaPrivInner(oct, ol, out, depth + 1);
   }
   std::vector<uint8_t>* fields[] = {&out.n, &out.e, &out.d, &out.p, &out.q, &out.dp, &out.dq, &out.iq};
   for (auto* f : fields) {
@@ -311,6 +351,7 @@ E7_NATIVE(c_pbkdf2) {
   double it = toInteger(a[3].f), L = toInteger(a[4].f);
   if (it < 1 || it > 1e8) vm.error("pbkdf2: invalid iteration count");
   if (L < 0 || L > (1 << 20)) vm.error("pbkdf2: invalid key length");
+  vm.chargeWork((uint64_t)it * (((uint64_t)L + h.outLen - 1) / h.outLen));  // one tick per HMAC
   Hmac m(h, pw->ptr(), pw->len);
   std::vector<uint8_t> out;
   uint8_t u[64], t[64];

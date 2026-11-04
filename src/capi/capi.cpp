@@ -36,6 +36,7 @@ struct e7_vm {
   std::vector<uint8_t> trustedKeys;
   bool requireSignature = false;
   char pendingRet = 'v';
+  int active = 0;  // >0 while e7_load/e7_call/e7_resume is executing script code
   void (*printFn)(void*, const char*, size_t) = nullptr;
   void* printUd = nullptr;
   // per-native-call argument storage
@@ -93,7 +94,19 @@ void e7_vm_free(e7_vm* v) { delete v; }
 
 void e7_free(void* p) { free(p); }
 
+// The VM is not re-entrant: a host native must not call back into e7_load/e7_call/e7_resume or
+// mutate execution state (abort, collect) while script code is running.
+struct ActiveGuard {
+  e7_vm* v;
+  explicit ActiveGuard(e7_vm* vm) : v(vm) { v->active++; }
+  ~ActiveGuard() { v->active--; }
+};
+static const char* kReentry = "the VM is running (e7 API called from inside a host function)";
+
 static e7_status loadBytes(e7_vm* v, const uint8_t* data, size_t len, e7_module** out) {
+  if (out) *out = nullptr;
+  if (v->active) return fail(v, E7_ERR_STATE, kReentry);
+  ActiveGuard active_(v);
   if (out) *out = nullptr;
   if (!data) return fail(v, E7_ERR_LOAD, "no data");
   size_t payload = len;
@@ -282,6 +295,7 @@ static e7_status finishCall(e7_vm* v, int st, e7_value* ret) {
 e7_status e7_call(e7_vm* v, e7_module* mod, const char* function, const e7_value* args, size_t nargs, e7_value* ret) {
   if (ret) memset(ret, 0, sizeof *ret);
   if (!v || !mod || !function) return E7_ERR_ARGS;
+  if (v->active) return fail(v, E7_ERR_STATE, kReentry);
   if (v->vm->suspended()) return fail(v, E7_ERR_STATE, "VM is suspended; call e7_resume() or e7_abort_suspended()");
   const ExportDesc* ex = findExport(mod, function);
   if (!ex) return fail(v, E7_ERR_NOT_FOUND, std::string("no exported function '") + function + "'");
@@ -293,12 +307,17 @@ e7_status e7_call(e7_vm* v, e7_module* mod, const char* function, const e7_value
   if (params.size() != nargs)
     return fail(v, E7_ERR_ARGS, std::string("'") + function + "' expects " + std::to_string(params.size()) + " argument(s), got " +
                                     std::to_string(nargs));
+  ActiveGuard active_(v);
   try {
     std::vector<Slot> slots(nargs);
-    for (size_t i = 0; i < nargs; i++) {
-      std::string err;
-      if (!toSlot(v, params[i], args[i], slots[i], err))
-        return fail(v, E7_ERR_ARGS, "argument " + std::to_string(i + 1) + " of '" + function + "': " + err);
+    {
+      // converted arguments live only in `slots` until callEntry roots them
+      VM::GCPause pause(*v->vm);
+      for (size_t i = 0; i < nargs; i++) {
+        std::string err;
+        if (!toSlot(v, params[i], args[i], slots[i], err))
+          return fail(v, E7_ERR_ARGS, "argument " + std::to_string(i + 1) + " of '" + function + "': " + err);
+      }
     }
     v->pendingRet = rc;
     FuncRT* f = &mod->rt->funcs[ex->func];
@@ -314,6 +333,8 @@ e7_status e7_call(e7_vm* v, e7_module* mod, const char* function, const e7_value
 
 e7_status e7_resume(e7_vm* v, e7_value* ret) {
   if (ret) memset(ret, 0, sizeof *ret);
+  if (v->active) return fail(v, E7_ERR_STATE, kReentry);
+  ActiveGuard active_(v);
   try {
     int st = v->vm->resume();
     return finishCall(v, st, ret);
@@ -325,7 +346,9 @@ e7_status e7_resume(e7_vm* v, e7_value* ret) {
   }
 }
 
-void e7_abort_suspended(e7_vm* v) { v->vm->resetExecution(); }
+void e7_abort_suspended(e7_vm* v) {
+  if (!v->active) v->vm->resetExecution();
+}
 void e7_set_budget(e7_vm* v, int64_t ticks) { v->vm->setBudget(ticks); }
 const char* e7_last_error(e7_vm* v) { return v->lastError.c_str(); }
 
@@ -431,7 +454,7 @@ void e7_set_key_provider(e7_vm* v, int (*fn)(void*, int64_t, const uint8_t**, si
 void e7_seed_random(e7_vm* v, uint64_t seed) { v->vm->seedRandom(seed); }
 size_t e7_memory_used(e7_vm* v) { return v->vm->bytesAllocated(); }
 void e7_collect_garbage(e7_vm* v) {
-  if (!v->vm->suspended()) v->vm->collectGarbage();
+  if (!v->active && !v->vm->suspended()) v->vm->collectGarbage();
 }
 
 e7_status e7_sign_module(const uint8_t* e7b, size_t len, const uint8_t seed[32], uint8_t** out, size_t* out_len) {

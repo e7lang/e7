@@ -10,13 +10,43 @@ static StrObj* sub(VM& vm, StrObj* s, int64_t b, int64_t e) {
   return vm.newString(s->chars() + b, (size_t)(e - b));
 }
 
+// Substring search in O(n + m) (Knuth-Morris-Pratt), so adversarial inputs cannot make it quadratic.
+// With rev, finds the last match starting at or before `from` by searching the reversed strings.
+static int64_t kmpFind(const char16_t* h, int64_t hl, const char16_t* nd, int64_t nl, int64_t from, bool rev) {
+  auto H = [&](int64_t i) { return rev ? h[hl - 1 - i] : h[i]; };
+  auto N = [&](int64_t j) { return rev ? nd[nl - 1 - j] : nd[j]; };
+  int64_t start = rev ? hl - from - nl : from;
+  if (start < 0) start = 0;
+  if (nl <= 4) {  // short needles: direct comparison is O(4n)
+    for (int64_t i = start; i + nl <= hl; i++) {
+      int64_t j = 0;
+      while (j < nl && H(i + j) == N(j)) j++;
+      if (j == nl) return rev ? hl - i - nl : i;
+    }
+    return -1;
+  }
+  std::vector<int32_t> fail((size_t)nl, 0);
+  for (int64_t i = 1, k = 0; i < nl; i++) {
+    while (k > 0 && N(i) != N(k)) k = fail[(size_t)k - 1];
+    if (N(i) == N(k)) k++;
+    fail[(size_t)i] = (int32_t)k;
+  }
+  for (int64_t i = start, k = 0; i < hl; i++) {
+    while (k > 0 && H(i) != N(k)) k = fail[(size_t)k - 1];
+    if (H(i) == N(k)) k++;
+    if (k == nl) {
+      int64_t at = i - nl + 1;
+      return rev ? hl - at - nl : at;
+    }
+  }
+  return -1;
+}
 static int64_t findStr(const StrObj* h, const StrObj* nd, int64_t from) {
   int64_t hl = h->len, nl = nd->len;
   if (from < 0) from = 0;
   if (nl == 0) return from <= hl ? from : hl;
-  for (int64_t i = from; i + nl <= hl; i++)
-    if (memcmp(h->chars() + i, nd->chars(), (size_t)nl * 2) == 0) return i;
-  return -1;
+  if (from + nl > hl) return -1;
+  return kmpFind(h->chars(), hl, nd->chars(), nl, from, false);
 }
 
 E7_NATIVE(s_charAt) {
@@ -76,9 +106,9 @@ E7_NATIVE(s_lastIndexOf) {
   double fd = a[2].f;
   int64_t from = fd != fd ? s->len : clampIndex(fd, s->len);
   int64_t start = std::min<int64_t>(from, (int64_t)s->len - (int64_t)t->len);
-  for (int64_t i = start; i >= 0; i--)
-    if (memcmp(s->chars() + i, t->chars(), (size_t)t->len * 2) == 0) { r->f = (double)i; return; }
-  r->f = -1;
+  if (start < 0) { r->f = -1; return; }
+  if (t->len == 0) { r->f = (double)start; return; }
+  r->f = (double)kmpFind(s->chars(), s->len, t->chars(), t->len, start, true);
 }
 E7_NATIVE(s_includes) {
   E7_UNUSED;
@@ -240,8 +270,10 @@ E7_NATIVE(s_split) {
 }
 
 // GetSubstitution for string patterns ($$, $&, $`, $')
-static void appendReplacement(std::u16string& out, const StrObj* s, const StrObj* rep, int64_t pos, int64_t mlen) {
+static void appendReplacement(VM& vm, std::u16string& out, const StrObj* s, const StrObj* rep, int64_t pos, int64_t mlen) {
   const char16_t* rc = rep->chars();
+  // the result can grow quadratically ($` / $'), so bound it by the memory limit as it grows
+  vm.checkTemp((out.size() + rep->len + s->len) * 2);
   for (uint32_t i = 0; i < rep->len; i++) {
     if (rc[i] == '$' && i + 1 < rep->len) {
       char16_t n = rc[i + 1];
@@ -260,11 +292,11 @@ static void replaceImpl(VM& vm, Slot* a, Slot* r, bool all) {
   std::u16string out;
   if (pat->len == 0) {
     if (!all) {
-      appendReplacement(out, s, rep, 0, 0);
+      appendReplacement(vm, out, s, rep, 0, 0);
       out.append(s->chars(), s->len);
     } else {
       for (uint32_t i = 0; i <= s->len; i++) {
-        appendReplacement(out, s, rep, i, 0);
+        appendReplacement(vm, out, s, rep, i, 0);
         if (i < s->len) out += s->chars()[i];
       }
     }
@@ -276,7 +308,7 @@ static void replaceImpl(VM& vm, Slot* a, Slot* r, bool all) {
   if (q < 0) { r->r = s; return; }
   while (q >= 0) {
     out.append(s->chars() + p, (size_t)(q - p));
-    appendReplacement(out, s, rep, q, pat->len);
+    appendReplacement(vm, out, s, rep, q, pat->len);
     p = q + pat->len;
     if (!all) break;
     q = findStr(s, pat, p);
@@ -294,6 +326,7 @@ E7_NATIVE(s_localeCompare) {
 E7_NATIVE(s_fromCharCodes) {
   E7_UNUSED;
   ArrObj* arr = A(vm, a[0]);
+  if (arr->vt != VT_NUMBER) vm.error("expected number[]");
   StrObj* s = vm.allocString(arr->len);
   for (uint32_t i = 0; i < arr->len; i++) s->chars()[i] = (char16_t)(uint16_t)(uint64_t)doubleToInt64Bits(arr->data[i].f);
   r->r = s;
@@ -301,6 +334,7 @@ E7_NATIVE(s_fromCharCodes) {
 E7_NATIVE(s_fromCodePoints) {
   E7_UNUSED;
   ArrObj* arr = A(vm, a[0]);
+  if (arr->vt != VT_NUMBER) vm.error("expected number[]");
   std::u16string out;
   for (uint32_t i = 0; i < arr->len; i++) {
     double d = arr->data[i].f;

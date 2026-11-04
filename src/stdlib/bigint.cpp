@@ -7,6 +7,12 @@ namespace e7 {
 
 using Mag = std::vector<uint32_t>;
 
+// Maximum BigInt magnitude: 8192 limbs = 262144 bits (far beyond any cryptographic use). Keeping it
+// bounded keeps the quadratic algorithms (multiply, divide, toString, parse) well under a second.
+static constexpr size_t kMaxLimbs = 1u << 13;
+static constexpr uint64_t kMaxBits = (uint64_t)kMaxLimbs * 32;
+[[noreturn]] static void tooBig(VM& vm) { vm.error("RangeError: Maximum BigInt size exceeded"); }
+
 static void trim(Mag& m) {
   while (!m.empty() && m.back() == 0) m.pop_back();
 }
@@ -130,10 +136,12 @@ static void divMod(const Mag& a, const Mag& b, Mag& q, Mag& r) {
 
 static BigObj* mk(VM& vm, Mag m, bool neg) {
   trim(m);
+  if (m.size() > kMaxLimbs) tooBig(vm);
+  m.shrink_to_fit();
   BigObj* b = vm.newBig();
+  vm.accountExternal((int64_t)(m.capacity() * sizeof(uint32_t)));  // limbs count toward the heap limit
   b->mag = std::move(m);
   b->neg = neg && !b->mag.empty();
-  if (b->mag.size() > (1u << 20)) vm.error("RangeError: Maximum BigInt size exceeded");
   return b;
 }
 
@@ -220,13 +228,32 @@ BigObj* bigParse(VM& vm, const std::string& in, bool literal) {
     i = 1;
   }
   if (i >= s.size()) return nullptr;
+  for (size_t k = i; k < s.size(); k++) {
+    char c = s[k];
+    int d = isdigit((unsigned char)c) ? c - '0' : isalpha((unsigned char)c) ? tolower(c) - 'a' + 10 : 99;
+    if (d >= radix) return nullptr;
+  }
+  // reject oversized input before doing quadratic work (leading zeros are rare; be generous)
+  size_t sig = i;
+  while (sig + 1 < s.size() && s[sig] == '0') sig++;
+  uint64_t nd = s.size() - sig;
+  uint64_t estBits = radix == 2 ? nd : radix == 8 ? nd * 3 : radix == 16 ? nd * 4 : nd * 33219 / 10000;  // log2(10) ~ 3.3219
+  if (estBits > kMaxBits + 4) tooBig(vm);
+  // accumulate several digits per multiply
+  uint32_t chunkMul = 1, chunkVal = 0;
   Mag m;
   for (; i < s.size(); i++) {
     char c = s[i];
-    int d = isdigit((unsigned char)c) ? c - '0' : isalpha((unsigned char)c) ? tolower(c) - 'a' + 10 : 99;
-    if (d >= radix) return nullptr;
-    m = mulSmallAdd(m, (uint32_t)radix, (uint32_t)d);
+    uint32_t d = (uint32_t)(isdigit((unsigned char)c) ? c - '0' : tolower(c) - 'a' + 10);
+    chunkMul *= (uint32_t)radix;
+    chunkVal = chunkVal * (uint32_t)radix + d;
+    if ((uint64_t)chunkMul * (uint32_t)radix > 0xFFFFFFFFu) {
+      m = mulSmallAdd(m, chunkMul, chunkVal);
+      chunkMul = 1;
+      chunkVal = 0;
+    }
   }
+  if (chunkMul > 1) m = mulSmallAdd(m, chunkMul, chunkVal);
   return mk(vm, m, neg);
 }
 
@@ -272,7 +299,7 @@ E7_NATIVE(bi_sub) { E7_UNUSED; r->r = addSigned(vm, Big(vm, a[0]), Big(vm, a[1])
 E7_NATIVE(bi_mul) {
   E7_UNUSED;
   BigObj *x = Big(vm, a[0]), *y = Big(vm, a[1]);
-  if (x->mag.size() + y->mag.size() > (1u << 20)) vm.error("RangeError: Maximum BigInt size exceeded");
+  if (x->mag.size() + y->mag.size() > kMaxLimbs + 1) tooBig(vm);
   r->r = mk(vm, mulMag(x->mag, y->mag), x->neg != y->neg);
 }
 E7_NATIVE(bi_div) {
@@ -302,8 +329,11 @@ E7_NATIVE(bi_pow) {
   }
   uint32_t e = y->mag.empty() ? 0 : y->mag[0];
   Mag result{1}, base = x->mag;
-  if ((uint64_t)x->mag.size() * e > (1u << 20) && x->mag.size() > 0 && !(x->mag.size() == 1 && x->mag[0] <= 1))
-    vm.error("RangeError: Maximum BigInt size exceeded");
+  if (x->mag.size() > 0 && !(x->mag.size() == 1 && x->mag[0] <= 1)) {
+    uint64_t xbits = (uint64_t)(x->mag.size() - 1) * 32;
+    for (uint32_t top = x->mag.back(); top; top >>= 1) xbits++;
+    if ((xbits - 1) * e >= kMaxBits) tooBig(vm);  // result has more than (xbits-1)*e bits
+  }
   uint32_t ee = e;
   while (ee) {
     if (ee & 1) result = mulMag(result, base);
@@ -337,7 +367,7 @@ E7_NATIVE(bi_or) { E7_UNUSED; bitwise(vm, a, r, 1); }
 E7_NATIVE(bi_xor) { E7_UNUSED; bitwise(vm, a, r, 2); }
 static BigObj* shiftLeft(VM& vm, const BigObj* x, uint64_t s) {
   if (x->mag.empty()) return mk(vm, {}, false);
-  if (s > (1u << 25)) vm.error("RangeError: Maximum BigInt size exceeded");
+  if (s > kMaxBits) tooBig(vm);
   size_t words = (size_t)(s / 32);
   int bits = (int)(s % 32);
   Mag r(words, 0);
@@ -444,9 +474,9 @@ static void asN(VM& vm, Slot* a, Slot* r, bool isSigned) {
   uint64_t bits = (uint64_t)bd;
   BigObj* x = Big(vm, a[1]);
   if (bits == 0) { r->r = mk(vm, {}, false); return; }
-  if (bits > (1u << 25)) {
+  if (bits > kMaxBits) {
     if (!x->neg && x->mag.size() * 32 < bits) { r->r = x; return; }
-    vm.error("RangeError: Maximum BigInt size exceeded");
+    tooBig(vm);
   }
   size_t n = (size_t)((bits + 31) / 32) + 1;
   Mag t = toTwos(x, std::max(n, x->mag.size() + 1));

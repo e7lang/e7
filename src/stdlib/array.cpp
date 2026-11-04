@@ -131,7 +131,8 @@ static void a_lastIndexOf(VM& vm, Slot* a, uint32_t, Slot* r, void*) {
   ArrObj* arr = A(vm, a[0]);
   if (kindOfVT(arr->vt) != K) vm.error("array element type mismatch");
   double fd = toInteger(a[2].f);
-  int64_t from = fd < 0 ? (int64_t)(fd + arr->len) : (fd >= arr->len ? (int64_t)arr->len - 1 : (int64_t)fd);
+  double fr = fd < 0 ? fd + arr->len : (fd >= arr->len ? (double)arr->len - 1 : fd);
+  int64_t from = fr < 0 ? -1 : (int64_t)fr;  // (no conversion of out-of-range doubles)
   for (int64_t i = from; i >= 0; i--)
     if (strictEquals(vm, arr->data[i], a[1], arr->vt)) { r->f = (double)i; return; }
   r->f = -1;

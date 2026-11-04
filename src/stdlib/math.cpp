@@ -75,6 +75,7 @@ E7_NATIVE(m_max) { E7_UNUSED; r->f = jsMax(a[0].f, a[1].f); }
 E7_NATIVE(m_minArray) {
   E7_UNUSED;
   ArrObj* arr = A(vm, a[0]);
+  if (arr->vt != VT_NUMBER) vm.error("expected number[]");
   double v = INFINITY;
   for (uint32_t i = 0; i < arr->len; i++) v = jsMin(v, arr->data[i].f);
   r->f = v;
@@ -82,6 +83,7 @@ E7_NATIVE(m_minArray) {
 E7_NATIVE(m_maxArray) {
   E7_UNUSED;
   ArrObj* arr = A(vm, a[0]);
+  if (arr->vt != VT_NUMBER) vm.error("expected number[]");
   double v = -INFINITY;
   for (uint32_t i = 0; i < arr->len; i++) v = jsMax(v, arr->data[i].f);
   r->f = v;
@@ -89,6 +91,7 @@ E7_NATIVE(m_maxArray) {
 E7_NATIVE(m_hypotArray) {
   E7_UNUSED;
   ArrObj* arr = A(vm, a[0]);
+  if (arr->vt != VT_NUMBER) vm.error("expected number[]");
   bool inf = false, nan = false;
   double mx = 0;
   for (uint32_t i = 0; i < arr->len; i++) {

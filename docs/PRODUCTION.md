@@ -50,6 +50,24 @@ GCC UBSan（含 `float-cast-overflow`）。
 反序列化边界与整数溢出、寄存器/常量/索引范围、跳转目标（不能跳入参数字）、调用参数与元数据、闭包捕获、
 类继承布局、运行时类型检查、栈/帧上限、GC 根。
 
+### 3.2 第二轮独立审查（标准库/加密原生函数、GC、C API）
+
+| # | 问题 | 修复 |
+|---|---|---|
+| 1 | `rsaSign`：私钥中的 n 与 p·q 不一致时 BearSSL 栈缓冲区越界**写**（可由普通 TS + 恶意密钥触发） | 解析时校验 n == p·q、512 ≤ bits ≤ 4096；PKCS#8 嵌套深度上限 |
+| 2 | `e7_call` 转换宿主参数时可能触发 GC，回收已转换的参数（UAF） | 参数转换期间暂停 GC（`VM::GCPause`） |
+| 3/4 | 宿主函数内重入 `e7_call/e7_resume/e7_load`，或调用 `e7_collect_garbage`/`e7_abort_suspended` 破坏执行状态 | C API 运行中拒绝重入（`E7_ERR_STATE`），回收/中止调用在运行中被忽略 |
+| 5 | 循环/超深数组 `String(x)`/`join` 无限递归 | 循环引用按 JS 输出空串，嵌套深度上限 256，输出大小受内存上限约束 |
+| 6/7 | `JSON.parse` 类型描述符（来自字节码）递归无界、越界读、`?~` 组合泄漏指针 | 描述符先做严格语法校验（边界、深度、包装层规则） |
+| 8 | BigInt 大小不计入内存上限；超大 BigInt 的二次算法无视指令预算 | 上限 262144 位，limb 计入堆；按块解析；`**` 精确判断位数 |
+| 9 | `replace` 的 `$\``/`$'` 二次膨胀；子串搜索 O(n·m)；PBKDF2 迭代不计预算 | 临时缓冲受内存上限约束（`checkTemp`）；KMP 搜索 O(n+m)；PBKDF2 按 HMAC 次数预先扣预算 |
+| 其他 | `lastIndexOf`/`toExponential` 的 double→int UB；数值数组原生函数未检查元素类型（信息泄漏） | 先检查范围；检查 `vt` |
+
+回归测试：`tests/capi_reentry_test.cpp`、`tests/malicious/`（新增 JSON 描述符与循环 join 样本）、
+`tests/cases/errors/rt_rsa_bad_key.ts`、`rt_bigint_size.ts`、`rt_replace_oom.ts`、`tests/cases/lib/string_search.ts`
+（与 Node 的随机差分测试）。另用 660 个"边界数值 × 内建函数"脚本（±Infinity/NaN/±1e300/-0/±2^53…）在
+float-cast-overflow UBSan 下运行，零报告。
+
 **宿主侧必须做的配置**（见 EMBEDDING.md §6）：开启签名校验、设置指令预算与内存上限。命令行工具 `e7` 仅用于开发，
 默认不设预算。
 
