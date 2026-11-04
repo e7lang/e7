@@ -175,6 +175,9 @@ Type* Checker::checkCall(Expr* e, Type* expected) {
 Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
   Expr* obj = strip(m->a);
   const std::string& name = m->raw;
+  // `x.m?.()`: methods always exist, so the call-level '?.' only matters for optional function fields
+  bool callOptional = e->optional;
+  e->optional = false;
   if (obj->k == EK::Ident) {
     Sym* s = lookup(obj->raw);
     if (s && s->k == SymK::Namespace) return checkNamespaceMember(e, static_cast<NamespaceSym*>(s), name, true, expected);
@@ -254,6 +257,17 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
       auto fit = c->fieldIdx.find(name);
       if (fit != c->fieldIdx.end()) {
         Type* ft = c->fields[fit->second].type;
+        if (callOptional && ft->t == TT::Optional && ft->elem->t == TT::Func && !m->optional) {
+          // this.callback?.(...)
+          check(m, nullptr);
+          m->type = ft;  // keep the nullable storage type; the call checks for null at run time
+          Type* fnT = ft->elem;
+          checkArgs(e, fnT, e->list);
+          e->intrinsic = IN_CLOSURE_CALL;
+          e->optional = true;
+          e->innerType = fnT->ret;
+          return fnT->ret->t == TT::Void ? T.voidT() : T.optional(fnT->ret, false, true);
+        }
         if (ft->t != TT::Func) return errT(e->loc, "property '" + name + "' is not callable");
         m->field = fit->second;
         m->cls = c;
@@ -275,6 +289,16 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
         break;
       }
       const ObjShape::Prop* p = bt->shape->findProp(name);
+      if (p && callOptional && p->type->t == TT::Optional && p->type->elem->t == TT::Func && !m->optional) {
+        check(m, nullptr);
+        m->type = p->type;
+        Type* fnT = p->type->elem;
+        checkArgs(e, fnT, e->list);
+        e->intrinsic = IN_CLOSURE_CALL;
+        e->optional = true;
+        e->innerType = fnT->ret;
+        return fnT->ret->t == TT::Void ? T.voidT() : T.optional(fnT->ret, false, true);
+      }
       if (p && p->type->t == TT::Func) {
         m->type = p->type;
         checkArgs(e, p->type, e->list);

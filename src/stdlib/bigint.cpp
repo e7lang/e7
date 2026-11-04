@@ -182,7 +182,7 @@ std::string bigToString(const BigObj* b, int radix) {
 
 double bigToDouble(const BigObj* b) {
   std::string s = bigToString(b, 10);
-  return strtod(s.c_str(), nullptr);  // correctly rounded
+  return parseDoubleC(s);  // correctly rounded
 }
 
 static Mag mulSmallAdd(const Mag& m, uint32_t mul, uint32_t add) {

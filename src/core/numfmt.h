@@ -24,6 +24,9 @@ std::string int64ToString(int64_t v, int radix = 10);
 std::string uint64ToString(uint64_t v, int radix = 10);
 // ToInt32-style modular conversion of a double to 64-bit two's complement bits.
 int64_t doubleToInt64Bits(double d);
+// Locale-independent conversions ('.' decimal point regardless of setlocale()).
+double parseDoubleC(const std::string& s);           // strtod in the "C" locale
+std::string formatDoubleC(const char* fmt, int prec, double v);  // snprintf(fmt, prec, v) in the "C" locale
 // JS whitespace (for trim)
 bool isJSWhitespace(char16_t c);
 }  // namespace e7

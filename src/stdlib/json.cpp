@@ -78,7 +78,7 @@ struct Stringifier {
       default: break;
     }
     if (stack.count(o)) vm.error("TypeError: Converting circular structure to JSON");
-    if (++depth > 2000) vm.error("RangeError: Maximum call stack size exceeded (JSON.stringify)");
+    if (++depth > 256) vm.error("RangeError: JSON.stringify: nesting deeper than 256 levels");
     stack.insert(o);
     std::u16string inner = indent + gap;
     if (o->type == OT::Array) {
@@ -243,7 +243,7 @@ struct JParser {
     return out;
   }
   JNode value() {
-    if (++depth > 512) fail("nesting too deep");
+    if (++depth > 256) fail("nesting deeper than 256 levels");
     JNode v;
     if (i >= n) fail("unexpected end of input");
     char16_t c = s[i];
@@ -310,7 +310,7 @@ struct JParser {
       std::string num;
       for (size_t k = st; k < i; k++) num.push_back((char)s[k]);
       v.t = JNode::Num;
-      v.num = strtod(num.c_str(), nullptr);
+      v.num = parseDoubleC(num);
     } else {
       fail("unexpected token");
     }

@@ -421,6 +421,10 @@ Type* Checker::globalVarType(VarSym* v) {
       err(d.loc, "cannot infer type of '" + v->name + "' from null/undefined; add a type annotation");
       t = T.unknown();
     }
+    if (t->t == TT::Void || t->t == TT::Never) {
+      err(d.loc, "an expression of type 'void' cannot be assigned to a variable");
+      t = T.unknown();
+    }
     v->type = t;
     d.sym = v;
     v->checked = true;  // initializer already checked
@@ -498,6 +502,10 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
       else {
         if (t->t == TT::Null || t->t == TT::Undefined) {
           err(d.loc, "cannot infer type of '" + d.name + "' from null/undefined; add a type annotation");
+          t = T.unknown();
+        }
+        if (t->t == TT::Void || t->t == TT::Never) {
+          err(d.loc, "an expression of type 'void' cannot be assigned to a variable");
           t = T.unknown();
         }
         declared = t;

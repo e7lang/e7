@@ -3,9 +3,42 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <clocale>
 #include <cstring>
 
 namespace e7 {
+
+// The C library's number conversions follow LC_NUMERIC; hosts may call setlocale() (e.g. a locale whose
+// decimal separator is ','). Adapt to the current decimal point so results are always JS-compatible.
+static std::string decimalPoint() {
+  const struct lconv* lc = localeconv();
+  const char* dp = lc ? lc->decimal_point : nullptr;
+  return (dp && *dp) ? std::string(dp) : std::string(".");
+}
+
+double parseDoubleC(const std::string& s) {
+  std::string dp = decimalPoint();
+  if (dp == ".") return strtod(s.c_str(), nullptr);
+  std::string t;
+  t.reserve(s.size() + 4);
+  for (char c : s) {
+    if (c == '.') t += dp;
+    else t += c;
+  }
+  return strtod(t.c_str(), nullptr);
+}
+
+std::string formatDoubleC(const char* fmt, int prec, double v) {
+  std::string buf(1200, '\0');
+  int n = snprintf(&buf[0], buf.size(), fmt, prec, v);
+  buf.resize(n > 0 ? (size_t)n : 0);
+  std::string dp = decimalPoint();
+  if (dp != ".") {
+    size_t p = buf.find(dp);
+    if (p != std::string::npos) buf.replace(p, dp.size(), ".");
+  }
+  return buf;
+}
 
 int64_t doubleToInt64Bits(double d) {
   if (!(d == d) || std::isinf(d)) return 0;
@@ -23,17 +56,15 @@ int64_t doubleToInt64Bits(double d) {
 // Shortest round-trip decimal digits of a positive finite double.
 // Produces digits (no leading zeros) and decimal exponent n such that value = 0.d1d2... * 10^n.
 static void shortestDigits(double v, std::string& digits, int& n) {
-  char buf[64];
+  std::string sbuf;
   for (int p = 1; p <= 17; p++) {
-    snprintf(buf, sizeof buf, "%.*e", p - 1, v);
-    // Normalize decimal point (locale independence)
-    for (char* c = buf; *c; c++) if (*c == ',') *c = '.';
-    double back = strtod(buf, nullptr);
+    sbuf = formatDoubleC("%.*e", p - 1, v);
+    double back = parseDoubleC(sbuf);
     if (back == v || p == 17) break;
   }
-  // buf like "d.ddde+XX"
+  // sbuf like "d.ddde+XX"
   digits.clear();
-  const char* c = buf;
+  const char* c = sbuf.c_str();
   while (*c && *c != 'e' && *c != 'E') {
     if (*c >= '0' && *c <= '9') digits.push_back(*c);
     c++;
@@ -52,9 +83,7 @@ std::string numberToString(double d) {
   if (d < 0) { out = "-"; d = -d; }
   // Fast path for integers
   if (d < 1e21 && d == std::floor(d) && d < 9007199254740992.0) {
-    char b[32];
-    snprintf(b, sizeof b, "%.0f", d);
-    return out + b;
+    return out + uint64ToString((uint64_t)d);
   }
   std::string s;
   int n;
@@ -147,13 +176,7 @@ std::string numberToStringRadix(double d, int radix) {
 }
 
 // Exact decimal expansion of |d| using printf("%.Nf") (exact in glibc, Apple, bionic, UCRT).
-static std::string exactFixed(double d, int frac) {
-  std::string buf(1200, '\0');
-  int n = snprintf(&buf[0], buf.size(), "%.*f", frac, d);
-  buf.resize(n > 0 ? (size_t)n : 0);
-  for (auto& c : buf) if (c == ',') c = '.';
-  return buf;
-}
+static std::string exactFixed(double d, int frac) { return formatDoubleC("%.*f", frac, d); }
 
 // Round a decimal digit string (integer part "ip", fraction "fp") to f fraction digits, half-up.
 std::string numberToFixed(double x, int f) {
@@ -306,7 +329,7 @@ static double parseDecimalPrefix(const std::string& t, size_t& used) {
   }
   std::string num = t.substr(start, i - start);
   used = i;
-  double v = strtod(num.c_str(), nullptr);
+  double v = parseDoubleC(num);
   return neg ? -v : v;
 }
 
@@ -378,7 +401,7 @@ double parseIntJS(const std::u16string& s, int radix) {
   if (i == start) return NAN;
   double v;
   if (radix == 10) {
-    v = strtod(digits.c_str(), nullptr);  // correctly rounded
+    v = parseDoubleC(digits);  // correctly rounded
   } else {
     v = 0;
     for (char c : digits) {

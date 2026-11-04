@@ -1,6 +1,8 @@
 // Lexer and recursive-descent parser for the E7 language (strict TypeScript subset).
 #include "parser.h"
 
+#include "../core/numfmt.h"
+
 #include <cmath>
 #include <cstdlib>
 #include <unordered_set>
@@ -181,7 +183,7 @@ class Lexer {
     }
     if (p < s.size() && isIdPart(s[p])) fail("identifier directly after number");
     if (txt.empty() || txt == ".") fail("invalid number");
-    t.num = strtod(txt.c_str(), nullptr);
+    t.num = parseDoubleC(txt);
     t.isInt = isInt;
     t.text = s.substr(b, p - b);
     // normalized digits without separators
@@ -347,6 +349,16 @@ class Parser {
   std::vector<Tok> t;
   size_t i = 0;
   int noIn = 0;
+  int depth = 0;
+  // Bounds recursion so that hostile input cannot exhaust the native stack (mobile threads are small).
+  struct Nest {
+    Parser& p;
+    explicit Nest(Parser& pp) : p(pp) {
+      if (++p.depth > kMaxNesting) p.fail("program is nested too deeply");
+    }
+    ~Nest() { p.depth--; }
+  };
+  static constexpr int kMaxNesting = 160;
 
   const Tok& cur() const { return t[i]; }
   const Tok& peek(size_t k = 1) const { return t[i + k < t.size() ? i + k : t.size() - 1]; }
@@ -403,6 +415,7 @@ class Parser {
 
   // ---------------------------------------------------------------- types
   TypeNode* parseType() {
+    Nest guard(*this);
     Loc l = loc();
     eatP("|");
     TypeNode* first = parseTypeNoUnion();
@@ -566,6 +579,7 @@ class Parser {
   }
 
   Stmt* parseStatement(bool topLevel) {
+    Nest guard(*this);
     Loc l = loc();
     if (cur().k == TK::Punct) {
       if (isP("{")) return parseBlock();
@@ -1159,6 +1173,7 @@ class Parser {
   }
 
   Expr* parseAssign() {
+    Nest guard(*this);
     if (Expr* arrow = tryArrow()) return arrow;
     if (isKw("yield")) fail("'yield' is not supported yet (reserved for coroutines)");
     Loc l = loc();
@@ -1261,6 +1276,7 @@ class Parser {
   }
 
   Expr* parseUnary() {
+    Nest guard(*this);
     Loc l = loc();
     if (cur().k == TK::Punct) {
       const std::string& o = cur().text;
@@ -1608,13 +1624,59 @@ class Parser {
 
 }  // namespace
 
+// Iteratively measures AST depth (the checker and code generator recurse over the tree).
+static bool checkDepth(SourceFile& file, std::vector<CompileError>& errs) {
+  const int kMax = 400;
+  struct Item { const void* node; bool isStmt; int d; };
+  std::vector<Item> st;
+  for (Stmt* s : file.body) st.push_back({s, true, 1});
+  while (!st.empty()) {
+    Item it = st.back();
+    st.pop_back();
+    if (!it.node) continue;
+    if (it.d > kMax) {
+      Loc l = it.isStmt ? static_cast<const Stmt*>(it.node)->loc : static_cast<const Expr*>(it.node)->loc;
+      errs.push_back(CompileError{file.path, l, "expression or statement nesting is too deep (limit 400)"});
+      return false;
+    }
+    int d = it.d + 1;
+    if (it.isStmt) {
+      const Stmt* s = static_cast<const Stmt*>(it.node);
+      for (const Stmt* x : s->stmts) st.push_back({x, true, d});
+      for (const Stmt* x : {s->body, s->then, s->els, s->init}) st.push_back({x, true, d});
+      st.push_back({s->expr, false, d});
+      st.push_back({s->update, false, d});
+      for (auto& v : s->decls) st.push_back({v.init, false, d});
+      for (auto& p : s->params) st.push_back({p.init, false, d});
+      for (auto& c : s->cases) {
+        st.push_back({c.test, false, d});
+        for (const Stmt* x : c.body) st.push_back({x, true, d});
+      }
+      for (auto& m : s->members) {
+        st.push_back({m.init, false, d});
+        st.push_back({m.body, true, d});
+        for (auto& p : m.params) st.push_back({p.init, false, d});
+      }
+      for (auto& em : s->enumMembers) st.push_back({em.init, false, d});
+    } else {
+      const Expr* e = static_cast<const Expr*>(it.node);
+      for (const Expr* x : {e->a, e->b, e->c, e->exprBody}) st.push_back({x, false, d});
+      for (const Expr* x : e->list) st.push_back({x, false, d});
+      for (auto& p : e->props) st.push_back({p.value, false, d});
+      for (auto& p : e->params) st.push_back({p.init, false, d});
+      st.push_back({e->body, true, d});
+    }
+  }
+  return true;
+}
+
 bool parseSource(SourceFile& file, Arena& arena, std::vector<CompileError>& errs) {
   try {
     Lexer lx(file.text);
     std::vector<Tok> toks = lx.run();
     Parser p(file, arena, std::move(toks));
     p.parseProgram();
-    return true;
+    return checkDepth(file, errs);
   } catch (ParseError& e) {
     errs.push_back(CompileError{file.path, e.loc, e.msg});
     return false;

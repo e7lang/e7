@@ -586,6 +586,8 @@ void VM::resetExecution() {
 
 Slot VM::callClosure(CloObj* c, const Slot* args, uint32_t nargs) {
   FuncRT* f = c->fn;
+  // each re-entry uses native stack; bound it independently of the script frame limit
+  if (nativeDepth_ > 64) errorCode(ERR_STACK, "too many nested native callbacks");
   if (nargs != f->nparams) error("callback expects %u arguments, got %u", f->nparams, nargs);
   uint32_t base = 0;
   if (!frames_.empty()) base = frames_.back().base + frames_.back().fn->nregs;
