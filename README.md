@@ -6,7 +6,7 @@
 TypeScript program. **e7vm** is a small embeddable bytecode VM written in C++17 for
 **Android, iOS, Windows, macOS and Linux**. It runs **server-delivered scripts** inside your app, mainly
 **request signing and signature verification**, plus general math and string algorithms. Scripts are
-sandboxed, signed and fast.
+sandboxed and fast; modules can optionally be signed.
 
 ```ts
 // sign.ts: full type checking and completion in VS Code (via lib/e7.d.ts)
@@ -25,9 +25,9 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 
 ## Why e7vm
 
-- **Ship algorithm updates without an app release.** Compile and sign on your server, deliver `.e7b` bytecode, and the app verifies and runs it.
+- **Ship algorithm updates without an app release.** Compile on your server, deliver `.e7b` bytecode, and the app verifies and runs it.
 - **Safe by construction.**
-  - Ed25519 module signatures.
+  - Optional Ed25519 module signatures, for when scripts travel over a network you don't control.
   - A bytecode verifier that guarantees memory safety even for tampered bytecode.
   - An instruction budget, memory limit and call-depth limit.
   - No JIT, which App Store rules require.
@@ -63,7 +63,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-This produces `build/e7` (run scripts), `build/e7c` (compile, sign and disassemble) and `build/libe7vm_static.a`.
+This produces `build/e7` (run scripts), `build/e7c` (compile, disassemble, optionally sign) and `build/libe7vm_static.a`.
 
 ### 2. Write and run a script
 
@@ -92,19 +92,31 @@ cd examples/embed
 
 `e7` compiles the file in memory and calls the exported `main` (or the function named by `--call`).
 
-### 3. Compile and sign for delivery
+### 3. Compile to bytecode
+
+```bash
+../../build/e7c sign.ts -o sign.e7b               # portable bytecode: same file on every platform
+../../build/e7 sign.e7b                           # run it
+../../build/e7c --disasm sign.ts                  # optional: inspect the bytecode
+```
+
+A `.e7b` file runs anywhere e7vm runs, so you can hand it to someone else or ship it to your app.
+
+### 4. Optional: sign your modules
+
+Signing is off by default and only matters when scripts travel over a channel you don't fully trust
+(for example, downloaded by an app at runtime). It lets the receiver refuse anything that wasn't
+produced by you:
 
 ```bash
 ../../build/e7c --keygen release                  # release.seed (keep secret) + release.pub
 ../../build/e7c sign.ts -o sign.e7b --sign release.seed
 ../../build/e7 --trust release.pub sign.e7b       # runs only if signed by this key
-../../build/e7c --disasm sign.ts                  # optional: inspect the bytecode
 ```
 
-On a real deployment, `release.seed` lives only on your build server (or HSM), and `release.pub` is
-compiled into the app.
+Without `--trust` (or trusted keys in the app), a signed module simply runs like an unsigned one.
 
-### 4. Run it from your app
+### 5. Run it from your app
 
 [`examples/embed/host.c`](examples/embed/host.c), trimmed:
 
@@ -113,10 +125,9 @@ compiled into the app.
 
 e7_config cfg;
 e7_config_init(&cfg);
-cfg.require_signature = 1;            /* only run modules signed by our key */
-cfg.trusted_keys = pub;               /* 32-byte Ed25519 public key(s) baked into the app */
-cfg.num_trusted_keys = 1;
 cfg.memory_limit = 32u << 20;
+/* optional: only run modules signed by your key
+   cfg.require_signature = 1; cfg.trusted_keys = pub; cfg.num_trusted_keys = 1; */
 e7_vm* vm = e7_vm_new(&cfg);
 
 e7_module* mod;
@@ -139,11 +150,11 @@ cc -std=c11 host.c -I../../include ../../build/libe7vm_static.a \
 # 0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6
 ```
 
-Kotlin, Swift and C# use the same flow: create the VM with the trusted key, call `load(bytes)`, then
-`call("sign", ...)`. See [docs/EMBEDDING.md](docs/EMBEDDING.md) for each platform, plus host functions,
+Kotlin, Swift and C# use the same flow: create the VM (optionally with a trusted key), call `load(bytes)`,
+then `call("sign", ...)`. See [docs/EMBEDDING.md](docs/EMBEDDING.md) for each platform, plus host functions,
 `KeyHandle`, budgets and time-slicing.
 
-### 5. Editor setup
+### 6. Editor setup
 
 Add [`lib/e7.d.ts`](lib/e7.d.ts) to your `tsconfig.json` `files` to get completion and type errors in
 VS Code. Running `tsc --strict` on your scripts gives the same diagnostics as `e7c`.
@@ -205,9 +216,9 @@ CMake options:
 e7vm is built for running code that comes over the network. Before release it went through four
 independent security reviews, differential testing against Node.js/OpenSSL, sanitizers, and fuzzing,
 and every finding was fixed with a regression test. The evidence is in
-[docs/PRODUCTION.md](docs/PRODUCTION.md). The host must:
+[docs/PRODUCTION.md](docs/PRODUCTION.md). Recommendations for apps:
 
-1. **Turn on signature checking** (`require_signature` plus the public key built into the app) and keep the private key on the build server.
+1. **If scripts are downloaded at runtime, turn on signature checking** (`require_signature` plus the public key built into the app) and keep the private key on the build server.
 2. **Set an instruction budget and a memory limit** (for example 16–64 MiB).
 3. **Pass secrets as `KeyHandle`s**, never as string or byte arguments.
 

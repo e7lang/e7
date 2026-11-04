@@ -113,7 +113,11 @@ static e7_status loadBytes(e7_vm* v, const uint8_t* data, size_t len, e7_module*
   if (!data) return fail(v, E7_ERR_LOAD, "no data");
   size_t payload = len;
   int sig = checkModuleSignature(data, len, v->trustedKeys.data(), v->trustedKeys.size() / 32, &payload);
-  if (sig < 0) return fail(v, E7_ERR_SIGNATURE, "module signature is invalid or the signing key is not trusted");
+  // Signing is opt-in on the receiving side: with no trusted keys configured (and require_signature
+  // off) a signed module loads like an unsigned one (its trailer is ignored; the CRC still applies).
+  // Once the host configures trusted keys, a signature must verify against one of them.
+  bool verifying = v->requireSignature || !v->trustedKeys.empty();
+  if (sig < 0 && verifying) return fail(v, E7_ERR_SIGNATURE, "module signature is invalid or the signing key is not trusted");
   if (sig == 0 && v->requireSignature) return fail(v, E7_ERR_SIGNATURE, "module is not signed");
   Module m;
   std::string err;

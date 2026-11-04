@@ -9,6 +9,16 @@ Delivery: CDN / API response returns app.e7b (optionally wrapped in TLS)
 App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + verifies bytecode → e7_call()
 ```
 
+- **Signing is optional.** A plain `e7c app.ts -o app.e7b` module runs anywhere. Signing only adds a
+  guarantee that the module came from you, which matters when it is downloaded at runtime. The rules:
+
+  | Receiver configuration | Unsigned module | Signed module |
+  |---|---|---|
+  | default (no trusted keys) | runs | runs (signature ignored) |
+  | `trusted_keys` set | runs | runs only if the signature verifies against a trusted key |
+  | `require_signature = 1` + `trusted_keys` | rejected | runs only if the signature verifies against a trusted key |
+
+  On the command line, `e7 --trust release.pub app.e7b` is the equivalent of the last row.
 - Generate keys: `e7c --keygen release` produces `release.seed` (32-byte private key seed, hex, **keep secret**) and `release.pub` (public key, built into the app).
 - Multiple public keys are supported (key rotation): pass N×32 bytes in `trusted_keys`.
 - `.e7b` carries a format version; the VM rejects versions it does not recognize. The server can deliver the matching build for each client VM version.
@@ -146,7 +156,7 @@ var sig = (string)vm.Call(module, "sign", "a=1&b=2", new E7.KeyHandle(1));
 
 ## 6. Security recommendations
 
-1. **Always enable signature checking** (`require_signature` + built-in public key); keep the private key only on the build server or an HSM.
+1. **When scripts are downloaded at runtime, enable signature checking** (`require_signature` + built-in public key); keep the private key only on the build server or an HSM.
 2. Set `memory_limit` (e.g. 16–64 MiB) and an instruction budget; for scripts driven by external input, set a smaller `max_frames`.
 3. Provide keys through `KeyHandle`; do not pass them to scripts as string/byte arguments.
 4. Register only the host functions you need, and validate their arguments on the host side.

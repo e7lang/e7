@@ -14,23 +14,27 @@ static unsigned char* read_file(const char* path, size_t* len) {
 }
 
 int main(void) {
-  /* the public key that is baked into the app (here: parsed from release.pub, 64 hex chars) */
-  size_t hexlen; unsigned char* hex = read_file("release.pub", &hexlen);
-  uint8_t pub[32];
-  for (int i = 0; hex && i < 32; i++) sscanf((const char*)hex + 2 * i, "%2hhx", &pub[i]);
-  free(hex);
-
   e7_config cfg;
   e7_config_init(&cfg);
-  cfg.require_signature = 1;          /* only run modules signed by our server key */
-  cfg.trusted_keys = pub;
-  cfg.num_trusted_keys = 1;
   cfg.memory_limit = 32u << 20;
+
+  /* Optional: if release.pub exists, only run modules signed by that key (see README, "Optional:
+     sign your modules"). Without it, any valid .e7b runs. */
+  uint8_t pub[32];
+  size_t hexlen;
+  unsigned char* hex = read_file("release.pub", &hexlen);
+  if (hex && hexlen >= 64) {
+    for (int i = 0; i < 32; i++) sscanf((const char*)hex + 2 * i, "%2hhx", &pub[i]);
+    cfg.require_signature = 1;
+    cfg.trusted_keys = pub;
+    cfg.num_trusted_keys = 1;
+  }
+  free(hex);
   e7_vm* vm = e7_vm_new(&cfg);
 
   size_t len; unsigned char* code = read_file("sign.e7b", &len);
   e7_module* mod;
-  if (!code || e7_load(vm, code, len, &mod) != E7_OK) { fprintf(stderr, "load: %s\n", e7_last_error(vm)); return 1; }
+  if (!code || e7_load(vm, code, len, &mod) != E7_OK) { fprintf(stderr, "load: %s\n", code ? e7_last_error(vm) : "cannot read sign.e7b"); return 1; }
   free(code);
 
   e7_value args[2];

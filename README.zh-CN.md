@@ -5,7 +5,7 @@
 **E7** 是一门**严格静态类型的 TypeScript 子集**：每个合法的 E7 程序同时也是合法的 TypeScript 程序。
 **e7vm** 是用 C++17 实现的轻量嵌入式字节码虚拟机，支持 **Android、iOS、Windows、macOS、Linux**，
 用于在 App 内执行**由服务器下发的脚本**：主要是**签名 / 验签**，也包括常规的数学与字符串算法。
-脚本运行在沙箱里，带签名，而且速度快。
+脚本运行在沙箱里，速度快；需要时还可以给模块加签名。
 
 ```ts
 // sign.ts：在 VS Code 里有完整的类型检查与补全（配合 lib/e7.d.ts）
@@ -24,9 +24,9 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 
 ## 为什么用 e7vm
 
-- **算法更新不必发版。** 服务器编译并签名，下发 `.e7b` 字节码，App 校验后执行。
+- **算法更新不必发版。** 服务器编译，下发 `.e7b` 字节码，App 校验后执行。
 - **从设计上保证安全。**
-  - Ed25519 模块签名。
+  - 可选的 Ed25519 模块签名，用于脚本经过不可信网络传输的场景。
   - 字节码验证器保证内存安全，字节码被篡改也一样。
   - 指令预算、内存上限、调用深度上限。
   - 无 JIT，符合 App Store 的要求。
@@ -62,7 +62,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-构建产物：`build/e7`（运行脚本）、`build/e7c`（编译、签名、反汇编）、`build/libe7vm_static.a`。
+构建产物：`build/e7`（运行脚本）、`build/e7c`（编译、反汇编，可选签名）、`build/libe7vm_static.a`。
 
 ### 2. 编写并运行脚本
 
@@ -91,18 +91,30 @@ cd examples/embed
 
 `e7` 在内存中编译该文件，并调用导出的 `main`（或用 `--call` 指定的函数）。
 
-### 3. 编译并签名，准备下发
+### 3. 编译为字节码
+
+```bash
+../../build/e7c sign.ts -o sign.e7b               # 跨平台字节码：所有平台通用同一个文件
+../../build/e7 sign.e7b                           # 运行
+../../build/e7c --disasm sign.ts                  # 可选：查看字节码
+```
+
+`.e7b` 文件在任何能运行 e7vm 的地方都能跑，可以直接发给别人，或者下发给 App。
+
+### 4. 可选：给模块签名
+
+签名默认关闭。只有脚本经过你不完全信任的渠道传输时（比如 App 运行时从网络下载）才需要：
+接收方可以借此拒绝一切不是你生成的模块。
 
 ```bash
 ../../build/e7c --keygen release                  # 生成 release.seed（私钥，保密）和 release.pub
 ../../build/e7c sign.ts -o sign.e7b --sign release.seed
 ../../build/e7 --trust release.pub sign.e7b       # 只运行该公钥签名的模块
-../../build/e7c --disasm sign.ts                  # 可选：查看字节码
 ```
 
-正式部署时，`release.seed` 只放在构建服务器（或 HSM）上，`release.pub` 编译进 App。
+不加 `--trust`（或 App 里没有配置受信公钥）时，签过名的模块和未签名的一样直接运行。
 
-### 4. 在 App 中运行
+### 5. 在 App 中运行
 
 [`examples/embed/host.c`](examples/embed/host.c)（节选）：
 
@@ -111,10 +123,9 @@ cd examples/embed
 
 e7_config cfg;
 e7_config_init(&cfg);
-cfg.require_signature = 1;            /* 只运行我们签名的模块 */
-cfg.trusted_keys = pub;               /* 内置在 App 中的 32 字节 Ed25519 公钥 */
-cfg.num_trusted_keys = 1;
 cfg.memory_limit = 32u << 20;
+/* 可选：只运行你签名的模块
+   cfg.require_signature = 1; cfg.trusted_keys = pub; cfg.num_trusted_keys = 1; */
 e7_vm* vm = e7_vm_new(&cfg);
 
 e7_module* mod;
@@ -137,10 +148,10 @@ cc -std=c11 host.c -I../../include ../../build/libe7vm_static.a \
 # 0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6
 ```
 
-Kotlin、Swift、C# 的流程相同：用受信公钥创建 VM，调用 `load(bytes)`，再 `call("sign", ...)`。
+Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥），调用 `load(bytes)`，再 `call("sign", ...)`。
 各平台的具体写法，以及宿主函数、`KeyHandle`、预算与分片执行，见 [docs/EMBEDDING.md](docs/EMBEDDING.md)。
 
-### 5. 编辑器配置
+### 6. 编辑器配置
 
 把 [`lib/e7.d.ts`](lib/e7.d.ts) 加入 `tsconfig.json` 的 `files`，VS Code 里就有补全和类型报错。
 对脚本运行 `tsc --strict`，得到的诊断与 `e7c` 一致。
@@ -201,9 +212,9 @@ CMake 选项：
 
 e7vm 就是为运行从网络下发的代码而设计的。发布前经过了 4 轮独立安全审查、与 Node.js/OpenSSL 的差分测试、
 sanitizer 和模糊测试，所有发现的问题都已修复并配有回归测试。证据见 [docs/PRODUCTION.md](docs/PRODUCTION.md)。
-宿主方必须：
+对 App 的建议：
 
-1. **开启签名校验**（`require_signature` + 内置在 App 里的公钥），私钥只放在构建服务器上。
+1. **如果脚本是在运行时从网络下载的，开启签名校验**（`require_signature` + 内置在 App 里的公钥），私钥只放在构建服务器上。
 2. **设置指令预算和内存上限**（例如 16–64 MiB）。
 3. **用 `KeyHandle` 传递密钥**，不要以字符串或字节参数的形式传给脚本。
 

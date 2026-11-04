@@ -208,10 +208,25 @@ int main() {
     vm = e7_vm_new(&cfg);
     CHECK(e7_load(vm, signedBc, signedLen, &m) == E7_ERR_SIGNATURE);
     e7_vm_free(vm);
-    // without require_signature, a signed module from an unknown key is rejected; unsigned accepted
+    // signing is opt-in: with no trusted keys and no require_signature, unsigned and signed modules
+    // both load (the signature trailer is ignored)
     e7_config_init(&cfg);
     vm = e7_vm_new(&cfg);
     CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    CHECK(e7_load(vm, signedBc, signedLen, &m) == E7_OK);
+    CHECK(e7_load(vm, tampered.data(), tampered.size(), &m) == E7_ERR_LOAD);  // CRC still applies
+    e7_vm_free(vm);
+    // trusted keys without require_signature: unsigned accepted, signatures must verify if present
+    e7_config_init(&cfg);
+    cfg.trusted_keys = pk;
+    cfg.num_trusted_keys = 1;
+    vm = e7_vm_new(&cfg);
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    CHECK(e7_load(vm, signedBc, signedLen, &m) == E7_OK);
+    e7_vm_free(vm);
+    cfg.trusted_keys = otherPk;
+    vm = e7_vm_new(&cfg);
+    CHECK(e7_load(vm, signedBc, signedLen, &m) == E7_ERR_SIGNATURE);
     e7_vm_free(vm);
     e7_free(signedBc);
   }
