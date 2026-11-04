@@ -1,0 +1,44 @@
+name: Fuzzing (ClusterFuzzLite)
+
+# Continuous fuzzing of the bytecode loader/verifier/interpreter and the compiler with libFuzzer +
+# AddressSanitizer / UndefinedBehaviorSanitizer. PRs get a short run on changed code; a nightly batch
+# run grows the corpus. Crashes are reported in the run's logs and as artifacts.
+on:
+  pull_request:
+    paths: ["src/**", "fuzz/**", "include/**", "third_party/**", "CMakeLists.txt", ".clusterfuzzlite/**"]
+  push:
+    branches: [main, feat/lead]
+    paths: ["fuzz/**", ".clusterfuzzlite/**", ".github/workflows/cflite.yml"]
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, undefined]
+    concurrency:
+      group: cflite-${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Build fuzzers (${{ matrix.sanitizer }})
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: c++
+          sanitizer: ${{ matrix.sanitizer }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run fuzzers (${{ matrix.sanitizer }})
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: ${{ github.event_name == 'pull_request' && 300 || 1200 }}
+          mode: ${{ github.event_name == 'pull_request' && 'code-change' || 'batch' }}
+          sanitizer: ${{ matrix.sanitizer }}
+          output-sarif: true

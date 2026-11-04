@@ -40,6 +40,14 @@ jobs:
               cmake: '-G "Visual Studio 17 2022" -A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded' }
     name: build (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
+    env:
+      # Optional code signing; each step below is skipped when its secrets are not configured.
+      # macOS: APPLE_CERT_P12 (base64 Developer ID Application .p12), APPLE_CERT_PASSWORD,
+      #        APPLE_SIGNING_IDENTITY ("Developer ID Application: Name (TEAMID)"),
+      #        APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD (app-specific password, for notarization)
+      # Windows: WINDOWS_CERT_PFX (base64 .pfx), WINDOWS_CERT_PASSWORD
+      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+      WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
     defaults:
       run:
         shell: bash
@@ -68,6 +76,47 @@ jobs:
         run: cmake --build build --config Release -j 4
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Sign and notarize (macOS)
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12 != ''
+        env:
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          kc="$RUNNER_TEMP/sign.keychain-db"; kcpw="$(uuidgen)"
+          echo "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$kc"
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc" >/dev/null
+          for b in build/e7 build/e7c; do
+            codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$b"
+            codesign --verify --strict --verbose=2 "$b"
+          done
+          ditto -c -k --keepParent build/e7 "$RUNNER_TEMP/e7.zip"
+          ditto -c -k --keepParent build/e7c "$RUNNER_TEMP/e7c.zip"
+          for z in e7 e7c; do
+            xcrun notarytool submit "$RUNNER_TEMP/$z.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD" --wait
+          done
+          rm -f "$RUNNER_TEMP/cert.p12"
+      - name: Sign (Windows)
+        if: runner.os == 'Windows' && env.WINDOWS_CERT_PFX != ''
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          echo "$WINDOWS_CERT_PFX" | base64 --decode > "$RUNNER_TEMP/cert.pfx"
+          signtool="$(ls "/c/Program Files (x86)/Windows Kits/10/bin/"*/x64/signtool.exe | sort -V | tail -1)"
+          for b in build/Release/e7.exe build/Release/e7c.exe; do
+            "$signtool" sign //fd SHA256 //tr http://timestamp.digicert.com //td SHA256 \
+              //f "$RUNNER_TEMP/cert.pfx" //p "$WINDOWS_CERT_PASSWORD" "$b"
+            "$signtool" verify //pa //v "$b"
+          done
+          rm -f "$RUNNER_TEMP/cert.pfx"
       - name: Package
         id: pkg
         run: echo "archive=$(scripts/package.sh build ${{ steps.ver.outputs.version }} ${{ matrix.platform }})" >> "$GITHUB_OUTPUT"
@@ -104,9 +153,16 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
     runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
+      - name: Homebrew formula and Scoop manifest
+        run: python3 scripts/gen-packaging.py "${{ steps.tag.outputs.tag }}" dist dist
       - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -133,3 +189,56 @@ jobs:
             # creates the tag at the built commit when it does not exist yet (manual publish)
             gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "E7 $TAG" --notes-file notes.md -R "$GITHUB_REPOSITORY"
           fi
+      - name: Update the Homebrew tap (e7lang/homebrew-tap)
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then echo "::notice::HOMEBREW_TAP_TOKEN not set; formula attached to the release only"; exit 0; fi
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/e7lang/homebrew-tap.git" tap
+          mkdir -p tap/Formula && cp dist/e7.rb tap/Formula/e7.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/e7.rb
+          git diff --cached --quiet || { git commit -m "e7 ${{ steps.tag.outputs.tag }}"; git push; }
+
+  # Install the published release the way users will, and run it.
+  verify-homebrew:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: brew install from the release's formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          gh release download "${{ needs.publish.outputs.tag }}" -p e7.rb -R "$GITHUB_REPOSITORY"
+          brew tap-new --no-git e7lang/verify
+          cp e7.rb "$(brew --repository e7lang/verify)/Formula/e7.rb"
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install e7lang/verify/e7
+          brew test e7lang/verify/e7
+          e7 --version
+          printf 'export function main(): number { return 6 * 7; }\n' > t.ts && e7 t.ts
+
+  verify-scoop:
+    needs: publish
+    runs-on: windows-2022
+    steps:
+      - name: scoop install from the release's manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ needs.publish.outputs.tag }}" -p e7.json -R "$env:GITHUB_REPOSITORY"
+          iex "& {$(irm get.scoop.sh)} -RunAsAdmin"
+          $env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"
+          scoop install .\e7.json
+          e7 --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          'export function main(): number { return 6 * 7; }' | Set-Content -Encoding utf8NoBOM t.ts
+          $out = (e7 t.ts | Out-String).Trim()
+          if ($out -ne '42') { throw "unexpected output: $out" }

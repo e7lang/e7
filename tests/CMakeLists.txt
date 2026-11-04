@@ -44,3 +44,13 @@ target_link_libraries(capi_reentry_test PRIVATE e7vm_static)
 if(E7_WITH_COMPILER)
   add_test(NAME capi_reentry_test COMMAND capi_reentry_test)
 endif()
+
+# replay the libFuzzer targets (fuzz/) over the test corpora with the regular toolchain, so the fuzz
+# entry points are exercised on every platform and under the sanitizer jobs
+foreach(t load compile)
+  add_executable(e7_fuzz_${t}_replay ${CMAKE_SOURCE_DIR}/fuzz/fuzz_${t}.cpp ${CMAKE_SOURCE_DIR}/fuzz/replay_main.cpp)
+  target_link_libraries(e7_fuzz_${t}_replay PRIVATE e7vm_static)
+  target_include_directories(e7_fuzz_${t}_replay PRIVATE ${CMAKE_SOURCE_DIR}/src)
+endforeach()
+add_test(NAME fuzz_compile_replay COMMAND e7_fuzz_compile_replay ${CMAKE_CURRENT_SOURCE_DIR}/cases ${CMAKE_SOURCE_DIR}/examples)
+add_test(NAME fuzz_load_replay COMMAND e7_fuzz_load_replay ${CMAKE_CURRENT_SOURCE_DIR}/malicious)

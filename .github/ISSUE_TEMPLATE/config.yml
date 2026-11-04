@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/e7lang/e7/security/advisories/new
+    about: Please report vulnerabilities privately.
+  - name: Documentation and playground
+    url: https://e7lang.github.io
+    about: Guides, language reference and the in-browser playground.

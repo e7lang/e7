@@ -1,0 +1,46 @@
+name: tmp lead checks
+on:
+  push:
+    branches: [feat/lead]
+jobs:
+  gen:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          mkdir sha && cd sha && gh release download v1.0.0 -p '*.sha256' -R "$GITHUB_REPOSITORY" && cd ..
+          python3 scripts/gen-packaging.py 1.0.0 sha out
+      - uses: actions/upload-artifact@v4
+        with: { name: pkg, path: out }
+  brew:
+    needs: gen
+    strategy: { fail-fast: false, matrix: { os: [macos-14, ubuntu-24.04] } }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: pkg }
+      - run: |
+          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew tap-new --no-git e7lang/verify
+          cp e7.rb "$(brew --repository e7lang/verify)/Formula/e7.rb"
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install e7lang/verify/e7
+          brew test e7lang/verify/e7
+          e7 --version
+          printf 'export function main(): number { return 6 * 7; }\n' > t.ts && e7 t.ts
+  scoop:
+    needs: gen
+    runs-on: windows-2022
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: pkg }
+      - shell: pwsh
+        run: |
+          iex "& {$(irm get.scoop.sh)} -RunAsAdmin"
+          $env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"
+          scoop install .\e7.json
+          e7 --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          'export function main(): number { return 6 * 7; }' | Set-Content -Encoding utf8NoBOM t.ts
+          $out = (e7 t.ts | Out-String).Trim()
+          if ($out -ne '42') { throw "unexpected output: $out" }

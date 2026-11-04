@@ -1,0 +1,44 @@
+name: Bug report
+description: Something does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! **Security vulnerabilities must be reported privately** — see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest E7 script (or host code) that shows the problem. If it is a difference from Node.js, show both outputs.
+      render: ts
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `e7 --version`, or the package version (npm / NuGet / Maven / SwiftPM).
+    validations: { required: true }
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options: [Linux, macOS, Windows, Android, iOS, Browser / WebAssembly, Other]
+    validations: { required: true }
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Language / type checker, Compiler (e7c), VM / runtime, Standard library, Crypto / encoding, C API, Bindings (Kotlin/Java, Swift, C#), npm package / playground, VS Code extension, Tooling / releases, Docs]
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Logs, stack traces, compiler output.

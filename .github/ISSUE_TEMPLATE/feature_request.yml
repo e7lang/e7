@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest a language feature, library function or tooling improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the use case (e.g. the algorithm you want to ship as a script).
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: |
+        What should it look like? Remember that every E7 program must stay valid TypeScript and behave
+        the same on Node.js.
+      render: ts
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
