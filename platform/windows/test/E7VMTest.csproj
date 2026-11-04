@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Test for platform/windows/E7VM.cs. Needs the e7vm shared library next to the binary or on the
-       library path:  dotnet run --project platform/windows/test -- <dir-with-e7vm-library> -->
+  <!-- Test for platform/windows/E7VM.cs against the e7vm shared library. Run:
+       dotnet run (project platform/windows/test) with the directory holding the library as argument;
+       see the csharp job in .github/workflows/ci.yml. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
