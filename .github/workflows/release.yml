@@ -1,12 +1,20 @@
 name: Release
 
 # Builds prebuilt e7 / e7c binaries + static libraries for every desktop platform and
-# publishes them as a GitHub Release when a version tag (v1.2.3) is pushed.
+# attaches them to a GitHub Release. Start it either way:
+#   - push a version tag:  git tag v1.0.0 && git push origin v1.0.0
+#   - or on GitHub: Releases -> Draft a new release -> new tag v1.0.0 -> Publish
 # Run it manually (workflow_dispatch) to build the archives without publishing.
 on:
   push:
     tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
