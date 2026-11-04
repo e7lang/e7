@@ -16,12 +16,23 @@ option(E7_NO_COMPUTED_GOTO "Use switch dispatch instead of computed goto" OFF)
 option(E7_BUILD_SHARED "Build e7vm as a shared library" OFF)
 option(E7_BUILD_JNI "Build the JNI binding (libe7vm_jni) for Android / JVM" OFF)
 
+if(EMSCRIPTEN)
+  # WebAssembly build (browser playground): no indirect goto in wasm, no CLI tools / tests.
+  set(E7_NO_COMPUTED_GOTO ON CACHE BOOL "" FORCE)
+  set(E7_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+  set(E7_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+endif()
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
 if(MSVC)
   add_compile_options(/W3 /EHsc /utf-8 /D_CRT_SECURE_NO_WARNINGS)
+elseif(EMSCRIPTEN)
+  # native WebAssembly exception handling (all current browsers and Node 17+)
+  add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-trigraphs -fwasm-exceptions)
+  add_link_options(-fwasm-exceptions)
 else()
   add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-trigraphs -fexceptions)
 endif()
@@ -122,6 +133,19 @@ if(E7_BUILD_TOOLS)
   target_include_directories(e7c PRIVATE src)
   target_compile_definitions(e7 PRIVATE E7_VERSION="${PROJECT_VERSION}")
   target_compile_definitions(e7c PRIVATE E7_VERSION="${PROJECT_VERSION}")
+endif()
+
+if(EMSCRIPTEN)
+  # e7wasm.js + e7wasm.wasm: ES module exporting createE7() (see tools/e7wasm.cpp)
+  add_executable(e7wasm tools/e7wasm.cpp)
+  target_link_libraries(e7wasm PRIVATE e7vm_static)
+  target_include_directories(e7wasm PRIVATE src)
+  target_link_options(e7wasm PRIVATE
+    -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createE7 -sENVIRONMENT=web,worker,node
+    -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=32MB -sSTACK_SIZE=4MB
+    -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString
+    -sEXPORTED_FUNCTIONS=_e7w_run,_e7w_output,_e7w_result,_e7w_error,_e7w_bytecode_size,_e7w_version,_e7w_disasm,_malloc,_free)
+  set_target_properties(e7wasm PROPERTIES SUFFIX ".js")
 endif()
 
 if(E7_BUILD_JNI)

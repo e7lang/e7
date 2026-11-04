@@ -99,6 +99,21 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: android-jniLibs, path: build-android/jniLibs }
 
+  wasm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - uses: mymindstorm/setup-emsdk@v14
+        with: { version: "4.0.10" }
+      - run: emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build-wasm -j 4
+      - run: ls -l build-wasm/e7wasm.*
+      - run: node tests/wasm/smoke.mjs build-wasm/e7wasm.js
+      - uses: actions/upload-artifact@v4
+        with: { name: e7-wasm, path: "build-wasm/e7wasm.*" }
+
   windows:
     strategy:
       fail-fast: false
