@@ -24,7 +24,15 @@ val syncJavaSources = tasks.register<Sync>("syncE7JavaSources") {
 android {
   namespace = "org.e7vm"
   compileSdk = 36
-  System.getenv("E7_NDK_PATH")?.takeIf { it.isNotBlank() }?.let { ndkPath = it } ?: run { ndkVersion = "28.2.13676358" }
+  // AGP requires ndkVersion to match the NDK at ndkPath, so read it from its source.properties.
+  val customNdk = System.getenv("E7_NDK_PATH")?.takeIf { it.isNotBlank() }?.let { File(it) }
+  if (customNdk != null) {
+    ndkPath = customNdk.absolutePath
+    ndkVersion = Regex("""Pkg\.Revision\s*=\s*([0-9.]+)""")
+      .find(customNdk.resolve("source.properties").readText())!!.groupValues[1]
+  } else {
+    ndkVersion = "28.2.13676358"
+  }
 
   defaultConfig {
     minSdk = 21
