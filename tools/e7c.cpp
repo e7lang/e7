@@ -15,6 +15,7 @@ static int usage() {
   fprintf(stderr,
           "usage:\n"
           "  e7c <entry.ts|.e7> [-o out.e7b] [--sign <seed-hex-file>] [--disasm] [--check]\n"
+          "      (default output: <entry>.e7b; with --disasm, a file is written only if -o is given)\n"
           "  e7c --keygen <name>        writes <name>.seed (secret) and <name>.pub (public key, hex)\n"
           "  e7c --disasm-file <file.e7b>\n");
   return 2;
@@ -67,7 +68,12 @@ int main(int argc, char** argv) {
     return 1;
   }
   if (checkOnly) return 0;
-  if (disasm) printf("%s", e7::disassemble(co.module).c_str());
+  if (disasm) {
+    printf("%s", e7::disassemble(co.module).c_str());
+    // --disasm only inspects; write a module only when -o is given explicitly (so it never
+    // overwrites a previously signed <name>.e7b with an unsigned build)
+    if (output.empty()) return 0;
+  }
   std::vector<uint8_t> bytes = e7::serializeModule(co.module);
   if (!signFile.empty()) {
     std::string hex;

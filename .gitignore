@@ -4,3 +4,8 @@ build*/
 .vscode/
 .idea/
 *.seed
+
+# quick-start outputs (examples/embed)
+examples/embed/host
+examples/embed/host.exe
+examples/embed/*.pub
