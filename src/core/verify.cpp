@@ -240,6 +240,12 @@ bool verifyModule(const Module& m, std::string& err) {
               break;
             case 'n': case 's': case 'e':
               break;
+            case 'j': {
+              int64_t t = (int64_t)pc + 1 + (int16_t)x;
+              if (t < 0 || t >= (int64_t)n) return F("function %zu pc %zu: jump out of range", fi, pc);
+              jumps.push_back((uint32_t)t);
+              break;
+            }
             case 'c':
               if (x >= m.classes.size()) return F("function %zu pc %zu: bad class", fi, pc);
               break;

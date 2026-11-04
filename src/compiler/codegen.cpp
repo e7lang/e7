@@ -17,7 +17,8 @@ Expr* strip(Expr* e) {
 }
 
 struct Label {
-  std::vector<size_t> patches;
+  std::vector<size_t> patches;     // bx absolute targets
+  std::vector<size_t> relPatches;  // 16-bit relative targets (fused branches)
   int64_t target = -1;
 };
 
@@ -136,7 +137,65 @@ struct Gen {
   void place(Label* l) {
     l->target = (int64_t)pc();
     for (size_t p : l->patches) D->code[p] = (D->code[p] & 0xFFFFFFFFull) | ((uint64_t)(uint32_t)l->target << 32);
+    for (size_t p : l->relPatches) {
+      int64_t off = l->target - (int64_t)(p + 1);
+      if (off < INT16_MIN || off > INT16_MAX) relOverflow = true;
+      D->code[p] = (D->code[p] & 0x0000FFFFFFFFFFFFull) | ((uint64_t)(uint16_t)(int16_t)off << 48);
+    }
     l->patches.clear();
+    l->relPatches.clear();
+  }
+  // fused compare-and-branch: if (cond(a, b)) goto l
+  void jumpRel(uint16_t op, uint16_t a, uint16_t b, Label* l) {
+    if (l->target >= 0) {
+      int64_t off = l->target - (int64_t)(pc() + 1);
+      if (off < INT16_MIN || off > INT16_MAX) relOverflow = true;
+      emit(op, a, b, (uint16_t)(int16_t)off);
+    } else {
+      l->relPatches.push_back(pc());
+      emit(op, a, b, 0);
+    }
+  }
+  bool relOverflow = false;
+  bool allowFused = true;
+  std::map<uint64_t, uint16_t> constRegs;  // hoisted number constants
+  uint16_t numConst(double v) {
+    uint64_t b;
+    memcpy(&b, &v, 8);
+    auto it = constRegs.find(b);
+    if (it != constRegs.end()) return it->second;
+    uint16_t r = newReg(K_F);
+    constRegs[b] = r;
+    return r;
+  }
+  // Prepend constant loads to the function and relocate jump targets / line info.
+  void finishConstants() {
+    if (constRegs.empty()) return;
+    std::vector<uint64_t> prefix;
+    for (auto& kv : constRegs) {
+      double d;
+      memcpy(&d, &kv.first, 8);
+      prefix.push_back(encodeBx(OP_LOADK_F, kv.second, kNum(d)));
+    }
+    size_t k = prefix.size();
+    std::vector<uint64_t>& code = D->code;
+    size_t pcI = 0;
+    while (pcI < code.size()) {
+      uint64_t w = code[pcI];
+      uint16_t op = insOp(w);
+      const OpInfo& oi = kOpInfo[op];
+      size_t next = pcI + 1;
+      if (oi.fmt[0] == '*') {
+        uint16_t c = insC(w);
+        bool meta = op == OP_CALLV || op == OP_CALLM || op == OP_CALLI;
+        next += (meta ? 1 : 0) + (c + 3) / 4;
+      } else if (oi.fmt[2] == '*' && oi.fmt[1] == 'J') {
+        code[pcI] = (w & 0xFFFFFFFFull) | ((uint64_t)(insBx(w) + (uint32_t)k) << 32);
+      }
+      pcI = next;
+    }
+    code.insert(code.begin(), prefix.begin(), prefix.end());
+    for (size_t i = 0; i + 1 < D->lines.size(); i += 2) D->lines[i] += (uint32_t)k;
   }
 
   // ---------------------------------------------------------------- registers
@@ -241,7 +300,9 @@ struct Gen {
 
   // ---------------------------------------------------------------- program
   void genFunction(FuncSym* f);
+  void genFunctionOnce(FuncSym* f);
   void genInit();
+  void genInitOnce();
   void prologue(FuncSym* f);
   void genCtorFieldInits();
 
@@ -397,6 +458,20 @@ static std::string sigOf(FuncSym* f) {
 }
 
 void Gen::genInit() {
+  allowFused = true;
+  genInitOnce();
+  if (relOverflow) {
+    allowFused = false;
+    M.funcs[P.init->funcIdx] = FuncDesc();
+    genInitOnce();
+  }
+  finishConstants();
+}
+
+void Gen::genInitOnce() {
+  relOverflow = false;
+  constRegs.clear();
+  labels.clear();
   FuncSym* f = P.init;
   fn = f;
   D = &M.funcs[f->funcIdx];
@@ -501,6 +576,20 @@ void Gen::genCtorFieldInits() {
 }
 
 void Gen::genFunction(FuncSym* f) {
+  allowFused = true;
+  genFunctionOnce(f);
+  if (relOverflow) {
+    allowFused = false;
+    M.funcs[f->funcIdx] = FuncDesc();
+    genFunctionOnce(f);
+  }
+  finishConstants();
+}
+
+void Gen::genFunctionOnce(FuncSym* f) {
+  relOverflow = false;
+  constRegs.clear();
+  labels.clear();
   fn = f;
   D = &M.funcs[f->funcIdx];
   D->name = f->qualName.empty() ? f->name : f->qualName;
@@ -763,16 +852,18 @@ void Gen::genStmt(Stmt* s) {
     }
     case SK::While: {
       Label* top = newLabel();
+      Label* cond = newLabel();
       Label* end = newLabel();
+      jump(OP_JMP, 0, cond);
       place(top);
-      size_t m0 = mark();
-      condJump(s->expr, false, end);
-      release(m0);
-      loops.push_back({pendingLabel, end, top, true});
+      loops.push_back({pendingLabel, end, cond, true});
       pendingLabel.clear();
       genStmt(s->body);
       loops.pop_back();
-      jump(OP_JMP, 0, top);
+      place(cond);
+      size_t m0 = mark();
+      condJump(s->expr, true, top);
+      release(m0);
       place(end);
       break;
     }
@@ -809,13 +900,10 @@ void Gen::genStmt(Stmt* s) {
       }
       Label* top = newLabel();
       Label* cont = newLabel();
+      Label* cond = newLabel();
       Label* end = newLabel();
+      if (s->expr) jump(OP_JMP, 0, cond);
       place(top);
-      if (s->expr) {
-        size_t m0 = mark();
-        condJump(s->expr, false, end);
-        release(m0);
-      }
       loops.push_back({label, end, cont, true});
       genStmt(s->body);
       loops.pop_back();
@@ -835,7 +923,14 @@ void Gen::genStmt(Stmt* s) {
         genDiscard(s->update);
         release(m0);
       }
-      jump(OP_JMP, 0, top);
+      if (s->expr) {
+        place(cond);
+        size_t m0 = mark();
+        condJump(s->expr, true, top);
+        release(m0);
+      } else {
+        jump(OP_JMP, 0, top);
+      }
       place(end);
       for (VarSym* v : loopVars) {
         auto it = varReg.find(v);
@@ -1189,6 +1284,8 @@ void Gen::genClosure(FuncSym* f, uint16_t dst) {
 // ======================================================================= expressions
 uint16_t Gen::gen(Expr* e) {
   Expr* x = strip(e);
+  if (x->k == EK::Num && x->type && x->type->t == TT::Number) return numConst(x->num);
+  if (x->k == EK::Ident && x->intrinsic == IN_CONST_NUM && x->type && x->type->t == TT::Number) return numConst(x->num);
   if (x->k == EK::Ident && x->var && !x->var->isGlobal && x->intrinsic == 0 && !x->var->captured) {
     auto it = varReg.find(x->var);
     if (it != varReg.end() && (!isBoxedOptional(x->var->type) || x->type == x->var->type)) return it->second;
@@ -1294,6 +1391,32 @@ void Gen::condJump(Expr* e, bool jumpIf, Label* target) {
   if (x->k == EK::Bool) {
     if (x->bval == jumpIf) jump(OP_JMP, 0, target);
     return;
+  }
+  if (allowFused && x->k == EK::Binary && x->a->type && x->b->type) {
+    const std::string& op = x->raw;
+    Type* lt = x->a->type;
+    Type* rt = x->b->type;
+    bool isF = (lt->t == TT::Number || (lt->t == TT::Enum && !lt->en->isString)) &&
+               (rt->t == TT::Number || (rt->t == TT::Enum && !rt->en->isString));
+    bool isI = lt->t == TT::Int && lt == rt && (isSignedInt(lt) || intBits(lt) < 64);
+    bool isB = lt->t == TT::Bool && rt->t == TT::Bool;
+    if ((isF || isI || (isB && (op == "===" || op == "!=="))) &&
+        (op == "<" || op == ">" || op == "<=" || op == ">=" || op == "===" || op == "!==")) {
+      size_t m0 = mark();
+      uint16_t a = gen(x->a);
+      uint16_t b = gen(x->b);
+      bool fl = isF;
+      uint16_t opc = 0;
+      bool swap = op == ">" || op == ">=";
+      if (op == "<" || op == ">") opc = jumpIf ? (fl ? OP_JLT_F : OP_JLT_I) : (fl ? OP_JNLT_F : OP_JNLT_I);
+      else if (op == "<=" || op == ">=") opc = jumpIf ? (fl ? OP_JLE_F : OP_JLE_I) : (fl ? OP_JNLE_F : OP_JNLE_I);
+      else if (op == "===") opc = jumpIf ? (fl ? OP_JEQ_F : OP_JEQ_I) : (fl ? OP_JNE_F : OP_JNE_I);
+      else opc = jumpIf ? (fl ? OP_JNE_F : OP_JNE_I) : (fl ? OP_JEQ_F : OP_JEQ_I);
+      if (swap) jumpRel(opc, b, a, target);
+      else jumpRel(opc, a, b, target);
+      release(m0);
+      return;
+    }
   }
   size_t m0 = mark();
   uint16_t r = genTruthy(x);
@@ -1460,8 +1583,7 @@ void Gen::genInto(Expr* e, uint16_t dst) {
           callNative("BigInt.parseLiteral", {s1}, one, 'R');
           callNative(e->raw == "++" ? "BigInt.add" : "BigInt.sub", {r, one}, r, 'R');
         } else {
-          uint16_t one = temp(K_F);
-          loadNum(one, 1);
+          uint16_t one = numConst(1);
           emit(e->raw == "++" ? OP_ADD_F : OP_SUB_F, r, r, one);
         }
         if (dst != kNoReg && e->prefix) mov(dst, r, K(t));
@@ -1837,6 +1959,21 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
   // compound assignment: evaluate the target location once
   std::string bop = op.substr(0, op.size() - 1);
   Kind k = K(lt);
+  if (target->k == EK::Ident && target->var && !target->var->isGlobal && !target->var->captured &&
+      varReg.count(target->var) && target->var->type == lt) {
+    uint16_t vr = varReg[target->var];
+    if (bop == "+" && (lt->t == TT::String || (lt->t == TT::Enum && lt->en->isString))) {
+      uint16_t r = gen(e->b);
+      uint16_t sr = toStringReg(r, e->b->type);
+      emit(OP_SCAT, vr, vr, sr);
+    } else {
+      uint16_t r = gen(e->b);
+      binaryOp(bop, lt, e->b->type, vr, vr, r, e->loc);
+    }
+    if (dst != kNoReg) mov(dst, vr, k);
+    release(m0);
+    return;
+  }
   uint16_t cur = temp(k);
   uint16_t obj = kNoReg, idx = kNoReg;
   Expr* readExpr = e->a;

@@ -207,8 +207,17 @@ dispatch:
   CASE(DIV_F) R[A].f = R[B].f / R[C].f; DISPATCH();
   CASE(MOD_F) {
     double x = R[B].f, y = R[C].f;
-    if (std::isinf(y) && std::isfinite(x)) R[A].f = x;
-    else R[A].f = std::fmod(x, y);
+    // fast path: both operands are integers that fit in 32 bits
+    int32_t xi = (int32_t)x, yi = (int32_t)y;
+    if (E7_LIKELY(x >= -2147483648.0 && x <= 2147483647.0 && y >= -2147483648.0 && y <= 2147483647.0 &&
+                  (double)xi == x && (double)yi == y && yi > 0)) {
+      int32_t r = xi % yi;
+      R[A].f = (r == 0 && (xi < 0 || (xi == 0 && std::signbit(x)))) ? -0.0 : (double)r;
+    } else if (std::isinf(y) && std::isfinite(x)) {
+      R[A].f = x;
+    } else {
+      R[A].f = std::fmod(x, y);
+    }
     DISPATCH();
   }
   CASE(POW_F) R[A].f = jsPow(R[B].f, R[C].f); DISPATCH();
@@ -313,6 +322,27 @@ dispatch:
   CASE(JMP) JUMP_TO(BX); DISPATCH();
   CASE(JT) if (R[A].i) JUMP_TO(BX); DISPATCH();
   CASE(JF) if (!R[A].i) JUMP_TO(BX); DISPATCH();
+#define FJUMP(cond)                     \
+  do {                                  \
+    if (cond) {                         \
+      int16_t off_ = (int16_t)C;        \
+      ip += off_;                       \
+      if (off_ < 0) TICK(-off_);        \
+    }                                   \
+    DISPATCH();                         \
+  } while (0)
+  CASE(JLT_F) FJUMP(R[A].f < R[B].f);
+  CASE(JNLT_F) FJUMP(!(R[A].f < R[B].f));
+  CASE(JLE_F) FJUMP(R[A].f <= R[B].f);
+  CASE(JNLE_F) FJUMP(!(R[A].f <= R[B].f));
+  CASE(JEQ_F) FJUMP(R[A].f == R[B].f);
+  CASE(JNE_F) FJUMP(R[A].f != R[B].f);
+  CASE(JLT_I) FJUMP(R[A].i < R[B].i);
+  CASE(JNLT_I) FJUMP(!(R[A].i < R[B].i));
+  CASE(JLE_I) FJUMP(R[A].i <= R[B].i);
+  CASE(JNLE_I) FJUMP(!(R[A].i <= R[B].i));
+  CASE(JEQ_I) FJUMP(R[A].i == R[B].i);
+  CASE(JNE_I) FJUMP(R[A].i != R[B].i);
   CASE(JNULLISH) { Obj* o = R[A].r; if (!o || o == undef_) JUMP_TO(BX); DISPATCH(); }
   CASE(JNOTNULLISH) { Obj* o = R[A].r; if (o && o != undef_) JUMP_TO(BX); DISPATCH(); }
   CASE(ISNULL) R[A].i = R[B].r == nullptr; DISPATCH();

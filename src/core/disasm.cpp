@@ -48,6 +48,8 @@ std::string disassemble(const Module& m) {
         add("]");
       } else if (oi.fmt[2] == '*') {
         add(" %u, %u", insA(w), insBx(w));
+      } else if (oi.fmt[2] == 'j') {
+        add(" %u, %u -> %lld", insA(w), insB(w), (long long)pc + 1 + (int16_t)insC(w));
       } else {
         add(" %u, %u, %u", insA(w), insB(w), insC(w));
       }

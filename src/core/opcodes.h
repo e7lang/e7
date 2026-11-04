@@ -17,6 +17,7 @@ namespace e7 {
 //   'e'          field index (checked at run time)
 //   'Q'          inline-cache slot of current function
 //   'U'          upvalue index of current function
+//   'j'          relative jump: signed 16-bit offset from the next instruction
 //  bx forms (b and c combined, format[2] == '*'):
 //   'J' jump target   'k' int const   'd' number const   't' string const
 //   'g' global index  'm' signed 32-bit immediate        'p' function index
@@ -54,6 +55,11 @@ namespace e7 {
   X(I2F, "FI_", '-') X(U2F, "FI_", '-') X(F2I, "IF_", '-') X(F2B, "IF_", '-') \
   /* control flow */ \
   X(JMP, "_J*", '-') X(JT, "IJ*", '-') X(JF, "IJ*", '-') \
+  /* fused compare-and-branch; c = signed 16-bit offset relative to the next instruction */ \
+  X(JLT_F, "FFj", '-') X(JNLT_F, "FFj", '-') X(JLE_F, "FFj", '-') X(JNLE_F, "FFj", '-') \
+  X(JEQ_F, "FFj", '-') X(JNE_F, "FFj", '-') \
+  X(JLT_I, "IIj", '-') X(JNLT_I, "IIj", '-') X(JLE_I, "IIj", '-') X(JNLE_I, "IIj", '-') \
+  X(JEQ_I, "IIj", '-') X(JNE_I, "IIj", '-') \
   X(JNULLISH, "RJ*", '-') X(JNOTNULLISH, "RJ*", '-') \
   X(ISNULL, "IR_", '-') X(ISUNDEF, "IR_", '-') X(ISNULLISH, "IR_", '-') \
   X(RET_I, "I__", '-') X(RET_F, "F__", '-') X(RET_R, "R__", '-') X(RET_V, "___", '-') \
