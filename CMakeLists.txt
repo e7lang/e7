@@ -120,6 +120,8 @@ if(E7_BUILD_TOOLS)
   add_executable(e7c tools/e7c.cpp)
   target_link_libraries(e7c PRIVATE e7vm_static)
   target_include_directories(e7c PRIVATE src)
+  target_compile_definitions(e7 PRIVATE E7_VERSION="${PROJECT_VERSION}")
+  target_compile_definitions(e7c PRIVATE E7_VERSION="${PROJECT_VERSION}")
 endif()
 
 if(E7_BUILD_JNI)

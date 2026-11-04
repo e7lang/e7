@@ -1,0 +1,119 @@
+name: Release
+
+# Builds prebuilt e7 / e7c binaries + static libraries for every desktop platform and
+# publishes them as a GitHub Release when a version tag (v1.2.3) is pushed.
+# Run it manually (workflow_dispatch) to build the archives without publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64, os: ubuntu-22.04,
+              cmake: '-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"' }
+          - { platform: linux-arm64, os: ubuntu-22.04-arm,
+              cmake: '-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"' }
+          - { platform: macos-universal, os: macos-14,
+              cmake: '-G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0' }
+          - { platform: windows-x64, os: windows-2022,
+              cmake: '-G "Visual Studio 17 2022" -A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded' }
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Install Ninja
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install ninja; else sudo apt-get update && sudo apt-get install -y ninja-build; fi
+      - name: Version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF#refs/tags/v}"; else v="$(sed -n 's/^project(e7vm VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)-dev"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Check tag matches CMake project version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          want="$(sed -n 's/^project(e7vm VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          [ "${{ steps.ver.outputs.version }}" = "$want" ] || { echo "tag v${{ steps.ver.outputs.version }} != CMake version $want" >&2; exit 1; }
+      - name: Configure
+        run: eval cmake -S . -B build ${{ matrix.cmake }}
+      - name: Build
+        run: cmake --build build --config Release -j 4
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package
+        id: pkg
+        run: echo "archive=$(scripts/package.sh build ${{ steps.ver.outputs.version }} ${{ matrix.platform }})" >> "$GITHUB_OUTPUT"
+      - name: Smoke test the packaged binaries
+        run: |
+          d="dist/e7-${{ steps.ver.outputs.version }}-${{ matrix.platform }}"
+          exe=""; [ "$RUNNER_OS" = "Windows" ] && exe=".exe"
+          "$d/bin/e7$exe" --version
+          "$d/bin/e7c$exe" --version
+          want=0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6
+          got=$("$d/bin/e7$exe" examples/embed/sign.ts | tr -d '\r')
+          [ "$got" = "$want" ] || { echo "source run: got '$got'" >&2; exit 1; }
+          "$d/bin/e7c$exe" examples/embed/sign.ts -o smoke.e7b
+          got=$("$d/bin/e7$exe" smoke.e7b | tr -d '\r')
+          [ "$got" = "$want" ] || { echo "bytecode run: got '$got'" >&2; exit 1; }
+          if [ "$RUNNER_OS" = "macOS" ]; then lipo -info "$d/bin/e7"; otool -L "$d/bin/e7"; fi
+          if [ "$RUNNER_OS" = "Linux" ]; then ldd "$d/bin/e7" || true; fi
+      - name: SHA-256
+        run: |
+          cd dist
+          f=$(basename "${{ steps.pkg.outputs.archive }}")
+          if command -v sha256sum >/dev/null; then sha256sum "$f" > "$f.sha256"; else shasum -a 256 "$f" > "$f.sha256"; fi
+          cat "$f.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e7-${{ matrix.platform }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l dist
+          cat > notes.md <<NOTES
+          Prebuilt E7 toolchain (\`e7\` runner, \`e7c\` compiler) and static libraries for embedding.
+
+          | Platform | Archive |
+          |---|---|
+          | Linux x64 (glibc 2.35+) | \`e7-${TAG#v}-linux-x64.tar.gz\` |
+          | Linux arm64 (glibc 2.35+) | \`e7-${TAG#v}-linux-arm64.tar.gz\` |
+          | macOS 11+ (Apple Silicon + Intel) | \`e7-${TAG#v}-macos-universal.tar.gz\` |
+          | Windows x64 | \`e7-${TAG#v}-windows-x64.zip\` |
+
+          Each archive contains \`bin/\`, \`include/e7/e7.h\`, \`lib/\`, \`types/e7.d.ts\`, \`examples/\`.
+          Verify downloads with the matching \`.sha256\` file.
+          NOTES
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* --title "E7 $TAG" --notes-file notes.md -R "$GITHUB_REPOSITORY"
+          fi

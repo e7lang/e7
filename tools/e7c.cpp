@@ -17,7 +17,8 @@ static int usage() {
           "  e7c <entry.ts|.e7> [-o out.e7b] [--sign <seed-hex-file>] [--disasm] [--check]\n"
           "      (default output: <entry>.e7b; with --disasm, a file is written only if -o is given)\n"
           "  e7c --keygen <name>        writes <name>.seed (secret) and <name>.pub (public key, hex)\n"
-          "  e7c --disasm-file <file.e7b>\n");
+          "  e7c --disasm-file <file.e7b>\n"
+          "  e7c --version\n");
   return 2;
 }
 
@@ -31,7 +32,8 @@ int main(int argc, char** argv) {
   bool disasm = false, checkOnly = false;
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
-    if (a == "-o" && i + 1 < argc) output = argv[++i];
+    if (a == "--version" || a == "-v") { printf("e7c %s\n", E7_VERSION); return 0; }
+    else if (a == "-o" && i + 1 < argc) output = argv[++i];
     else if (a == "--sign" && i + 1 < argc) signFile = argv[++i];
     else if (a == "--disasm") disasm = true;
     else if (a == "--check") checkOnly = true;

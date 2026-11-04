@@ -21,7 +21,8 @@ static int usage() {
           "  --mem <bytes>      heap limit\n"
           "  --seed <n>         seed for Math.random\n"
           "  --trust <pub-hex-file>  require a module signature from this key\n"
-          "  --time             print execution time\n");
+          "  --time             print execution time\n"
+          "  --version          print the version\n");
   return 2;
 }
 
@@ -65,6 +66,7 @@ int main(int argc, char** argv) {
     else if (a == "--seed" && i + 1 < argc) { seed = strtoull(argv[++i], nullptr, 10); hasSeed = true; }
     else if (a == "--trust" && i + 1 < argc) trust = argv[++i];
     else if (a == "--time") timeIt = true;
+    else if (a == "--version" || a == "-v") { printf("e7 %s\n", E7_VERSION); return 0; }
     else if (a.size() && a[0] == '-') return usage();
     else file = a;
   }

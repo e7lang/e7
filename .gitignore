@@ -9,3 +9,6 @@ build*/
 examples/embed/host
 examples/embed/host.exe
 examples/embed/*.pub
+
+# release packaging output
+dist/
