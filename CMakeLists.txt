@@ -74,6 +74,14 @@ if(E7_WITH_COMPILER)
 endif()
 if(E7_NO_COMPUTED_GOTO)
   target_compile_definitions(e7vm_objs PRIVATE E7_NO_COMPUTED_GOTO=1)
+elseif((CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 18) OR
+       (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 17))
+  # LLVM 15-17 CodeGenPrepare address-mode sinking miscompiles the computed-goto interpreter loop
+  # (loads of trailing instruction words get the wrong address). Disable that transformation for
+  # interp.cpp only; without this flag the source falls back to switch dispatch.
+  set_source_files_properties(src/vm/interp.cpp PROPERTIES
+    COMPILE_OPTIONS "-mllvm;-addr-sink-using-gep=false"
+    COMPILE_DEFINITIONS "E7_LLVM_CGP_WORKAROUND=1")
 endif()
 if(E7_BUILD_SHARED)
   target_compile_definitions(e7vm_objs PUBLIC E7_SHARED PRIVATE E7_BUILDING)

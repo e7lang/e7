@@ -99,9 +99,11 @@ tests/tsc/check.sh                # 用官方 tsc（strict）验证所有测试�
 switch 分派（MSVC 路径）、MinGW-w64 Windows 版（Wine 下全部通过）、动态库、JNI（OpenJDK 21）。
 CI 配置见 `.github/workflows/ci.yml`（另含 macOS、iOS、Android NDK、MSVC、clang-cl）。
 
-> 分派方式：GCC、Clang ≥ 18、Apple Clang ≥ 17 使用 computed goto；Clang 15–17（含 Xcode 15/16 的 Apple Clang、
-> NDK r26 及更早）在 -O2/-O3 下会错误编译 computed goto 版本的解释器循环，因此自动改用 switch 分派（结果完全一致，
-> 速度略慢）。也可用 `-DE7_NO_COMPUTED_GOTO=ON` 强制 switch。
+> 分派方式：解释器默认使用 computed goto。LLVM 15–17（Clang 15–17、Xcode 15/16 的 Apple Clang、NDK r26 及更早）的
+> CodeGenPrepare「地址模式下沉」会把 computed goto 版本的解释器循环编译错（后续指令字的读取地址错误；已用
+> `-opt-bisect-limit` 定位到该 pass）。CMake 构建会对这些编译器的 `interp.cpp` 自动加
+> `-mllvm -addr-sink-using-gep=false` 规避；不经过 CMake 的构建则自动退回 switch 分派（结果相同，略慢）。
+> 也可用 `-DE7_NO_COMPUTED_GOTO=ON` 强制使用 switch。
 
 ## 性能
 

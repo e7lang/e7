@@ -5,14 +5,17 @@
 #include "../core/numfmt.h"
 #include "vm.h"
 
-// Computed-goto dispatch. Clang 15-17 (Apple clang 15/16, i.e. Xcode 15/16, and NDK r26 and older)
-// miscompile this interpreter loop with computed goto at -O2/-O3 (e.g. trailing instruction words
-// were loaded from the wrong address), so those compilers use the switch loop, which is correct
-// everywhere. Verified: GCC 13, clang 18 (computed goto); clang 15/16/17 (switch).
+// Computed-goto dispatch. LLVM 15-17 (clang 15-17, Apple clang 15/16 = Xcode 15/16, NDK r26 and
+// older) miscompile this loop with computed goto: CodeGenPrepare's address-mode sinking gives loads
+// of trailing instruction words the wrong address. Our CMake build disables that transformation
+// for this file (-mllvm -addr-sink-using-gep=false) and defines E7_LLVM_CGP_WORKAROUND; any other
+// build of those compilers falls back to the switch loop, which is correct everywhere.
 #if defined(E7_NO_COMPUTED_GOTO)
 #define E7_COMPUTED_GOTO 0
 #elif defined(__clang__)
-#if defined(__apple_build_version__)
+#if defined(E7_LLVM_CGP_WORKAROUND)
+#define E7_COMPUTED_GOTO 1
+#elif defined(__apple_build_version__)
 #define E7_COMPUTED_GOTO (__clang_major__ >= 17)
 #else
 #define E7_COMPUTED_GOTO (__clang_major__ >= 18)
