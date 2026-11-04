@@ -145,8 +145,21 @@ e7vm uses no JIT and allocates no executable memory, which meets the App Store r
 
 - C/C++: `platform/windows/build_windows.ps1` (VS 2022; `-ClangCl` enables computed goto dispatch, `-Shared` produces `e7vm.dll`),
   link `e7vm_static.lib` (plus `e7_bearssl.lib`, `e7_monocypher.lib`, `advapi32.lib`) or `e7vm.dll`.
-- C#: add `platform/windows/E7VM.cs` to your project (P/Invoke, 64-bit; needs `e7vm.dll`, or `libe7vm.so` / `libe7vm.dylib` with .NET on Linux / macOS).
-  Tested in CI by `platform/windows/test` (`dotnet run --project platform/windows/test -- <dir with the library>`).
+- C# / .NET: install the [`E7VM`](https://www.nuget.org/packages/E7VM) NuGet package. It contains the binding
+  (`platform/windows/E7VM.cs`, P/Invoke, 64-bit processes) and the native library for Windows x64, Linux x64 / arm64
+  and macOS 11+ (universal), which .NET loads automatically from `runtimes/<rid>/native/`:
+
+  ```bash
+  dotnet add package E7VM --version 1.0.1
+  ```
+
+  The package targets `netstandard2.0` and `net8.0` (managed assembly `E7.dll`, namespace `E7`). It is also attached to each GitHub release and published to
+  GitHub Packages (`https://nuget.pkg.github.com/e7lang/index.json`).
+  Without NuGet, add `platform/windows/E7VM.cs` to your project and ship `e7vm.dll` (or `libe7vm.so` / `libe7vm.dylib`)
+  next to your app; build it with `-Shared` or `cmake -DE7_BUILD_SHARED=ON`.
+  Tested in CI by `platform/windows/test`, both against a local build
+  (`dotnet run --project platform/windows/test -- <dir with the library>`) and from the packed `.nupkg` on
+  Linux (x64, arm64), Windows and macOS (`.github/workflows/nuget.yml`).
 
 ```csharp
 using var vm = new E7.E7VM(memoryLimit: 32 << 20, suspendOnBudget: false, serverPublicKey);

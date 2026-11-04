@@ -60,6 +60,7 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 **Prebuilt binaries:** download `e7-<version>-<platform>` for Linux (x64, arm64), macOS (universal) or
 Windows (x64) from the [latest release](https://github.com/e7lang/e7/releases/latest). Each archive has
 `bin/e7`, `bin/e7c`, `include/e7/e7.h`, static libraries in `lib/`, `types/e7.d.ts` and examples.
+**.NET:** `dotnet add package E7VM` (C# binding with native libraries for Windows, Linux and macOS).
 No install at all: the [playground](https://e7lang.github.io/playground) runs the compiler and VM in your browser (WebAssembly).
 
 **From source:**
@@ -208,6 +209,7 @@ The full language reference is in [docs/SPEC.md](docs/SPEC.md).
 | Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so` | Java/Kotlin: `platform/java/org/e7vm` |
 | iOS | `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `platform/ios/E7VM/E7VM.swift` |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]` (VS 2022) | C/C++, C#: `platform/windows/E7VM.cs` |
+| .NET (Windows / Linux / macOS) | `dotnet add package E7VM` | C#: NuGet package [`E7VM`](https://www.nuget.org/packages/E7VM) |
 
 CMake options:
 
