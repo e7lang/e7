@@ -1,0 +1,1 @@
+Source: Ubuntu archive bearssl_0.6+dfsg.1.orig.tar.xz (BearSSL 0.6, MIT). Only primitive directories vendored (no ssl/x509).

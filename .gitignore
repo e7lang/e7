@@ -1,0 +1,6 @@
+build*/
+*.e7b
+!tests/**/*.e7b
+.vscode/
+.idea/
+*.seed

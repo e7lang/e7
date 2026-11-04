@@ -1,0 +1,254 @@
+// e7vm core virtual machine.
+#pragma once
+#include <exception>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "../core/module.h"
+#include "object.h"
+
+namespace e7 {
+
+class VM;
+struct ModuleRT;
+
+using NativeFn = void (*)(VM& vm, Slot* args, uint32_t nargs, Slot* ret, void* ud);
+
+struct NativeEntry {
+  std::string sig;
+  NativeFn fn = nullptr;
+  void* ud = nullptr;
+};
+
+struct InlineCache {
+  ClassRT* cls = nullptr;
+  uint32_t index = 0;  // field index or vtable slot
+  uint32_t name = 0;   // string constant index
+};
+
+struct FuncRT {
+  const FuncDesc* d = nullptr;
+  ModuleRT* mod = nullptr;
+  std::string name;
+  uint32_t nregs = 0;
+  uint32_t nparams = 0;
+  uint32_t sigId = 0;  // VM-global signature id
+  char retKind = 'V';
+  const uint64_t* code = nullptr;
+  size_t codeLen = 0;
+  std::vector<uint16_t> refInit;  // non-param ref registers (null-initialized on entry)
+  std::vector<uint16_t> refRegs;  // all ref registers (GC roots)
+  std::vector<InlineCache> ics;
+};
+
+struct NativeBinding {
+  NativeFn fn;
+  void* ud;
+  char retKind;
+  std::string name;
+};
+
+struct ModuleRT {
+  Module m;
+  std::vector<FuncRT> funcs;
+  std::vector<ClassRT> classes;
+  std::vector<StrObj*> strs;
+  std::vector<Slot> globals;
+  std::vector<NativeBinding> natives;
+  std::vector<uint32_t> sigMap;
+  bool initialized = false;
+};
+
+struct Frame {
+  FuncRT* fn;
+  const uint64_t* ip;
+  CloObj* closure;
+  uint32_t base;
+  uint16_t retDst;
+  bool entry;  // returning from this frame leaves execute()
+};
+
+struct E7Error : std::exception {
+  int code;
+  std::string msg;
+  E7Error(int c, std::string m) : code(c), msg(std::move(m)) {}
+  const char* what() const noexcept override { return msg.c_str(); }
+};
+
+// Error codes (mirror e7.h)
+enum ErrCode {
+  ERR_OK = 0, ERR_SUSPENDED = 1, ERR_RUNTIME = 2, ERR_BUDGET = 3, ERR_MEMORY = 4,
+  ERR_STACK = 5, ERR_LOAD = 6, ERR_VERIFY = 7, ERR_SIGNATURE = 8, ERR_NOT_FOUND = 9,
+  ERR_ARGS = 10, ERR_COMPILE = 11, ERR_STATE = 12
+};
+
+struct VMConfig {
+  size_t memoryLimit = 256u << 20;   // bytes
+  uint32_t stackSlots = 1u << 18;    // register slots
+  uint32_t maxFrames = 20000;
+  bool suspendOnBudget = false;
+};
+
+class VM {
+ public:
+  explicit VM(const VMConfig& cfg = VMConfig());
+  ~VM();
+  VM(const VM&) = delete;
+  VM& operator=(const VM&) = delete;
+
+  // ---- natives ----
+  void registerNative(const std::string& name, const std::string& sig, NativeFn fn, void* ud = nullptr);
+  const NativeEntry* findNative(const std::string& name) const;
+
+  // ---- modules ----
+  // Takes ownership of module; verifies, links natives. Throws E7Error.
+  ModuleRT* loadModule(Module&& m);
+  int runInit(ModuleRT* mod);  // runs module initializer (may suspend)
+
+  // ---- execution ----
+  // Call function (entry from host). Returns ERR_OK / ERR_SUSPENDED or throws E7Error.
+  int callEntry(FuncRT* f, const Slot* args, uint32_t nargs);
+  int resume();
+  bool suspended() const { return suspended_; }
+  Slot result() const { return result_; }
+  char resultKind() const { return resultKind_; }
+  void setBudget(int64_t ticks) { budget_ = ticks <= 0 ? INT64_MAX : ticks; }
+  void setSuspendOnBudget(bool b) { cfg_.suspendOnBudget = b; }
+  void resetExecution();  // abandon a suspended call
+
+  // Re-entrant call from native code (cannot suspend).
+  Slot callClosure(CloObj* c, const Slot* args, uint32_t nargs);
+
+  // ---- errors ----
+  [[noreturn]] void error(const char* fmt, ...);
+  [[noreturn]] void errorCode(int code, const char* fmt, ...);
+  std::string stackTrace() const;
+
+  // ---- heap ----
+  StrObj* newString(const char16_t* s, size_t len);
+  StrObj* newString(const std::u16string& s) { return newString(s.data(), s.size()); }
+  StrObj* newStringUtf8(const std::string& s);
+  StrObj* newStringAscii(const char* s);
+  StrObj* allocString(size_t len);  // uninitialized chars
+  ArrObj* newArray(uint8_t vt, uint32_t cap);
+  void arrayReserve(ArrObj* a, uint32_t cap);
+  void arrayPush(ArrObj* a, Slot v);
+  BufObj* newBuffer(uint32_t len);
+  BytesObj* newBytes(uint32_t len);
+  BytesObj* newBytesView(BufObj* b, uint32_t off, uint32_t len);
+  BytesObj* newBytesFrom(const uint8_t* p, size_t len);
+  InstObj* newInstance(ClassRT* cls);
+  CellObj* newCell(uint8_t vt);
+  BoxObj* newBox(uint8_t vt, Slot v);
+  CloObj* newClosure(FuncRT* fn, uint32_t nup);
+  MapObj* newMap(uint8_t kvt, uint8_t vvt, KeyMode km, bool isSet);
+  BigObj* newBig();
+  HandleObj* newHandle(int64_t id);
+  Obj* undef() const { return undef_; }
+
+  // External buffer accounting
+  void accountExternal(int64_t delta);
+
+  // Rooting for host-held objects
+  void pin(Obj* o);
+  void unpin(Obj* o);
+
+  // Temporary roots for native code that calls back into script.
+  struct TempRoot {
+    VM& vm;
+    size_t n;
+    TempRoot(VM& v, Obj* o) : vm(v), n(v.tempRoots_.size()) { v.tempRoots_.push_back(o); }
+    ~TempRoot() { vm.tempRoots_.resize(n); }
+  };
+
+  void collectGarbage();
+  size_t bytesAllocated() const { return bytes_; }
+  uint64_t gcCount() const { return gcCount_; }
+
+  // Interned string constants: map a signature string to VM-global id
+  uint32_t sigId(const std::string& sig);
+  const std::string& sigString(uint32_t id) const { return sigs_[id]; }
+
+  // Output hook for print/console.log
+  void (*printFn)(void* ud, const char* s, size_t n) = nullptr;
+  void* printUd = nullptr;
+  void print(const std::string& s);
+
+  // Random seed for Math.random (xorshift128+)
+  void seedRandom(uint64_t seed);
+  double randomDouble();
+
+  // Host key lookup hook for crypto handles
+  void* hostKeyUd = nullptr;
+  int (*hostKeyFn)(void* ud, int64_t id, const uint8_t** key, size_t* len) = nullptr;
+
+  const VMConfig& config() const { return cfg_; }
+  ModuleRT* currentModule() const { return frames_.empty() ? nullptr : frames_.back().fn->mod; }
+  uint32_t nativeDepth() const { return nativeDepth_; }
+
+  std::vector<std::unique_ptr<ModuleRT>> modules;
+
+ private:
+  friend struct Interp;
+  int execute(size_t entryDepth);
+  void* allocRaw(OT t, size_t size);
+  void maybeGC();
+  void markRoots();
+  void mark(Obj* o) {
+    if (o && !o->marked) { o->marked = 1; gray_.push_back(o); }
+  }
+  void traceAll();
+  void sweep();
+  void freeObj(Obj* o);
+  [[noreturn]] void raise(int code, const std::string& msg);
+
+  VMConfig cfg_;
+  Obj* objects_ = nullptr;
+  Obj* undef_ = nullptr;
+  size_t bytes_ = 0;
+  size_t nextGC_ = 1u << 20;
+  uint64_t gcCount_ = 0;
+  bool gcRequested_ = false;
+  std::vector<Obj*> gray_;
+  std::vector<Obj*> tempRoots_;
+  std::unordered_map<Obj*, uint32_t> pins_;
+
+  Slot* stack_ = nullptr;
+  std::vector<Frame> frames_;
+  int64_t budget_ = INT64_MAX;
+  uint32_t nativeDepth_ = 0;
+  bool suspended_ = false;
+  Slot result_{};
+  char resultKind_ = 'V';
+
+  std::unordered_map<std::string, NativeEntry> natives_;
+  std::unordered_map<std::string, uint32_t> sigIds_;
+  std::vector<std::string> sigs_;
+  uint64_t rng_[2] = {0x9E3779B97F4A7C15ull, 0xBF58476D1CE4E5B9ull};
+};
+
+// Helpers used by natives
+inline StrObj* asStr(VM& vm, Slot s) {
+  if (E7_UNLIKELY(!s.r || s.r->type != OT::String)) vm.error("expected string, got %s", s.r ? "object" : "null");
+  return static_cast<StrObj*>(s.r);
+}
+uint32_t strHash(StrObj* s);
+bool strEq(const StrObj* a, const StrObj* b);
+int strCmp(const StrObj* a, const StrObj* b);
+std::u16string strU16(const StrObj* s);
+std::string strUtf8(const StrObj* s);
+
+// Registration of builtin native libraries
+void registerCoreNatives(VM& vm);
+void registerStringNatives(VM& vm);
+void registerArrayNatives(VM& vm);
+void registerMapNatives(VM& vm);
+void registerMathNatives(VM& vm);
+void registerBytesNatives(VM& vm);
+void registerBigIntNatives(VM& vm);
+void registerJsonNatives(VM& vm);
+void registerCryptoNatives(VM& vm);
+
+}  // namespace e7

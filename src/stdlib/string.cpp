@@ -1,0 +1,385 @@
+// String natives (UTF-16 semantics, as in JavaScript).
+#include "util.h"
+
+namespace e7 {
+
+static StrObj* sub(VM& vm, StrObj* s, int64_t b, int64_t e) {
+  if (b <= 0 && e >= s->len) return s;
+  if (e <= b) return vm.newString(u"", 0);
+  return vm.newString(s->chars() + b, (size_t)(e - b));
+}
+
+static int64_t findStr(const StrObj* h, const StrObj* nd, int64_t from) {
+  int64_t hl = h->len, nl = nd->len;
+  if (from < 0) from = 0;
+  if (nl == 0) return from <= hl ? from : hl;
+  for (int64_t i = from; i + nl <= hl; i++)
+    if (memcmp(h->chars() + i, nd->chars(), (size_t)nl * 2) == 0) return i;
+  return -1;
+}
+
+E7_NATIVE(s_charAt) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  double i = toInteger(a[1].f);
+  if (i < 0 || i >= s->len) { r->r = vm.newString(u"", 0); return; }
+  r->r = vm.newString(s->chars() + (size_t)i, 1);
+}
+E7_NATIVE(s_charCodeAt) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  double i = toInteger(a[1].f);
+  r->f = (i < 0 || i >= s->len) ? NAN : (double)s->chars()[(size_t)i];
+}
+E7_NATIVE(s_codePointAt) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  double i = toInteger(a[1].f);
+  if (i < 0 || i >= s->len) { r->r = vm.undef(); return; }
+  size_t k = (size_t)i;
+  uint32_t c = s->chars()[k];
+  if (c >= 0xD800 && c <= 0xDBFF && k + 1 < s->len) {
+    uint32_t d = s->chars()[k + 1];
+    if (d >= 0xDC00 && d <= 0xDFFF) c = 0x10000 + ((c - 0xD800) << 10) + (d - 0xDC00);
+  }
+  Slot v;
+  v.f = c;
+  r->r = vm.newBox(VT_NUMBER, v);
+}
+E7_NATIVE(s_at) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  double i = toInteger(a[1].f);
+  if (i < 0) i += s->len;
+  if (i < 0 || i >= s->len) { r->r = vm.undef(); return; }
+  r->r = vm.newString(s->chars() + (size_t)i, 1);
+}
+E7_NATIVE(s_index) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  double d = a[1].f;
+  if (!(d >= 0 && d < s->len) || (double)(uint32_t)d != d)
+    vm.error("string index %s out of range (length %u)", numberToString(d).c_str(), s->len);
+  r->r = vm.newString(s->chars() + (size_t)d, 1);
+}
+E7_NATIVE(s_indexOf) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  StrObj* t = S(vm, a[1]);
+  r->f = (double)findStr(s, t, clampIndex(a[2].f, s->len));
+}
+E7_NATIVE(s_lastIndexOf) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  StrObj* t = S(vm, a[1]);
+  double fd = a[2].f;
+  int64_t from = fd != fd ? s->len : clampIndex(fd, s->len);
+  int64_t start = std::min<int64_t>(from, (int64_t)s->len - (int64_t)t->len);
+  for (int64_t i = start; i >= 0; i--)
+    if (memcmp(s->chars() + i, t->chars(), (size_t)t->len * 2) == 0) { r->f = (double)i; return; }
+  r->f = -1;
+}
+E7_NATIVE(s_includes) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  r->i = findStr(s, S(vm, a[1]), clampIndex(a[2].f, s->len)) >= 0;
+}
+E7_NATIVE(s_startsWith) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  StrObj* t = S(vm, a[1]);
+  int64_t p = clampIndex(a[2].f, s->len);
+  r->i = p + t->len <= s->len && memcmp(s->chars() + p, t->chars(), (size_t)t->len * 2) == 0;
+}
+E7_NATIVE(s_endsWith) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  StrObj* t = S(vm, a[1]);
+  int64_t e = clampIndex(a[2].f, s->len);
+  int64_t b = e - t->len;
+  r->i = b >= 0 && memcmp(s->chars() + b, t->chars(), (size_t)t->len * 2) == 0;
+}
+E7_NATIVE(s_slice) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  r->r = sub(vm, s, relIndex(a[1].f, s->len), relIndex(a[2].f, s->len));
+}
+E7_NATIVE(s_substring) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  int64_t b = clampIndex(a[1].f, s->len), e = clampIndex(a[2].f, s->len);
+  if (b > e) std::swap(b, e);
+  r->r = sub(vm, s, b, e);
+}
+E7_NATIVE(s_substr) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  int64_t b = relIndex(a[1].f, s->len);
+  double l = toInteger(a[2].f);
+  int64_t len = l < 0 ? 0 : (l > (double)s->len ? s->len : (int64_t)l);
+  int64_t e = std::min<int64_t>(b + len, s->len);
+  r->r = sub(vm, s, b, e);
+}
+
+// Case mapping: ASCII, Latin-1, Greek, Cyrillic (simple 1:1 mappings) + German sharp s
+static char16_t upperOf(char16_t c) {
+  if (c >= 'a' && c <= 'z') return c - 32;
+  if (c < 0x80) return c;
+  if ((c >= 0xE0 && c <= 0xFE && c != 0xF7)) return c - 32;
+  if (c == 0xFF) return 0x178;
+  if (c >= 0x100 && c <= 0x17F) {
+    if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) return (c & 1) ? c : c - 1;
+    if (c != 0x131 && c != 0x138 && c != 0x149 && c != 0x17F) return (c & 1) ? c - 1 : c;
+    if (c == 0x131) return 'I';
+    if (c == 0x17F) return 'S';
+    return c;
+  }
+  if (c >= 0x3B1 && c <= 0x3C9 && c != 0x3C2) return c - 32;
+  if (c == 0x3C2) return 0x3A3;
+  if (c >= 0x3AC && c <= 0x3AF) { static const char16_t m[] = {0x386, 0x388, 0x389, 0x38A}; return m[c - 0x3AC]; }
+  if (c >= 0x430 && c <= 0x44F) return c - 32;
+  if (c >= 0x450 && c <= 0x45F) return c - 80;
+  return c;
+}
+static char16_t lowerOf(char16_t c) {
+  if (c >= 'A' && c <= 'Z') return c + 32;
+  if (c < 0x80) return c;
+  if (c >= 0xC0 && c <= 0xDE && c != 0xD7) return c + 32;
+  if (c >= 0x100 && c <= 0x17F) {
+    if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) return (c & 1) ? c + 1 : c;
+    if (c == 0x130) return 'i';
+    if (c != 0x131 && c != 0x138 && c != 0x149 && c != 0x17F) return (c & 1) ? c : c + 1;
+    return c;
+  }
+  if (c == 0x178) return 0xFF;
+  if (c >= 0x391 && c <= 0x3A9 && c != 0x3A2) return c + 32;
+  if (c >= 0x410 && c <= 0x42F) return c + 32;
+  if (c >= 0x400 && c <= 0x40F) return c + 80;
+  return c;
+}
+E7_NATIVE(s_toUpper) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  std::u16string out;
+  out.reserve(s->len);
+  for (uint32_t i = 0; i < s->len; i++) {
+    char16_t c = s->chars()[i];
+    if (c == 0xDF) { out += u"SS"; continue; }
+    out += upperOf(c);
+  }
+  r->r = vm.newString(out);
+}
+E7_NATIVE(s_toLower) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  std::u16string out(s->chars(), s->len);
+  for (auto& c : out) c = lowerOf(c);
+  r->r = vm.newString(out);
+}
+static void trimImpl(VM& vm, Slot* a, Slot* r, bool start, bool end) {
+  StrObj* s = S(vm, a[0]);
+  int64_t b = 0, e = s->len;
+  if (start) while (b < e && isJSWhitespace(s->chars()[b])) b++;
+  if (end) while (e > b && isJSWhitespace(s->chars()[e - 1])) e--;
+  r->r = sub(vm, s, b, e);
+}
+E7_NATIVE(s_trim) { E7_UNUSED; trimImpl(vm, a, r, true, true); }
+E7_NATIVE(s_trimStart) { E7_UNUSED; trimImpl(vm, a, r, true, false); }
+E7_NATIVE(s_trimEnd) { E7_UNUSED; trimImpl(vm, a, r, false, true); }
+
+static void padImpl(VM& vm, Slot* a, Slot* r, bool start) {
+  StrObj* s = S(vm, a[0]);
+  StrObj* f = S(vm, a[2]);
+  double target = toInteger(a[1].f);
+  if (target <= s->len || f->len == 0) { r->r = s; return; }
+  if (target > 0x3FFFFFFF) vm.error("RangeError: invalid string length");
+  size_t fill = (size_t)target - s->len;
+  std::u16string pad;
+  pad.reserve(fill);
+  while (pad.size() < fill) pad.append(f->chars(), std::min<size_t>(f->len, fill - pad.size()));
+  std::u16string out = start ? pad + strU16(s) : strU16(s) + pad;
+  r->r = vm.newString(out);
+}
+E7_NATIVE(s_padStart) { E7_UNUSED; padImpl(vm, a, r, true); }
+E7_NATIVE(s_padEnd) { E7_UNUSED; padImpl(vm, a, r, false); }
+E7_NATIVE(s_repeat) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  double c = toInteger(a[1].f);
+  if (c < 0 || std::isinf(c)) vm.error("RangeError: invalid count value: %s", numberToString(a[1].f).c_str());
+  if (s->len == 0 || c == 0) { r->r = vm.newString(u"", 0); return; }
+  if (c * s->len > 0x3FFFFFFF) vm.error("RangeError: invalid string length");
+  size_t total = (size_t)c * s->len;
+  StrObj* o = vm.allocString(total);
+  for (size_t i = 0; i < (size_t)c; i++) memcpy(o->chars() + i * s->len, s->chars(), (size_t)s->len * 2);
+  r->r = o;
+}
+E7_NATIVE(s_split) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  StrObj* sep = S(vm, a[1]);
+  uint32_t lim = (uint32_t)doubleToInt64Bits(a[2].f);
+  ArrObj* arr = vm.newArray(VT_REF, 0);
+  if (lim == 0) { r->r = arr; return; }
+  if (sep->len == 0) {
+    for (uint32_t i = 0; i < s->len && arr->len < lim; i++) vm.arrayPush(arr, slotR(vm.newString(s->chars() + i, 1)));
+    r->r = arr;
+    return;
+  }
+  int64_t p = 0;
+  while (true) {
+    int64_t q = findStr(s, sep, p);
+    if (q < 0) break;
+    vm.arrayPush(arr, slotR(vm.newString(s->chars() + p, (size_t)(q - p))));
+    if (arr->len >= lim) { r->r = arr; return; }
+    p = q + sep->len;
+  }
+  vm.arrayPush(arr, slotR(vm.newString(s->chars() + p, (size_t)(s->len - p))));
+  r->r = arr;
+}
+
+// GetSubstitution for string patterns ($$, $&, $`, $')
+static void appendReplacement(std::u16string& out, const StrObj* s, const StrObj* rep, int64_t pos, int64_t mlen) {
+  const char16_t* rc = rep->chars();
+  for (uint32_t i = 0; i < rep->len; i++) {
+    if (rc[i] == '$' && i + 1 < rep->len) {
+      char16_t n = rc[i + 1];
+      if (n == '$') { out += u'$'; i++; continue; }
+      if (n == '&') { out.append(s->chars() + pos, (size_t)mlen); i++; continue; }
+      if (n == '`') { out.append(s->chars(), (size_t)pos); i++; continue; }
+      if (n == '\'') { out.append(s->chars() + pos + mlen, (size_t)(s->len - pos - mlen)); i++; continue; }
+    }
+    out += rc[i];
+  }
+}
+static void replaceImpl(VM& vm, Slot* a, Slot* r, bool all) {
+  StrObj* s = S(vm, a[0]);
+  StrObj* pat = S(vm, a[1]);
+  StrObj* rep = S(vm, a[2]);
+  std::u16string out;
+  if (pat->len == 0) {
+    if (!all) {
+      appendReplacement(out, s, rep, 0, 0);
+      out.append(s->chars(), s->len);
+    } else {
+      for (uint32_t i = 0; i <= s->len; i++) {
+        appendReplacement(out, s, rep, i, 0);
+        if (i < s->len) out += s->chars()[i];
+      }
+    }
+    r->r = vm.newString(out);
+    return;
+  }
+  int64_t p = 0;
+  int64_t q = findStr(s, pat, 0);
+  if (q < 0) { r->r = s; return; }
+  while (q >= 0) {
+    out.append(s->chars() + p, (size_t)(q - p));
+    appendReplacement(out, s, rep, q, pat->len);
+    p = q + pat->len;
+    if (!all) break;
+    q = findStr(s, pat, p);
+  }
+  out.append(s->chars() + p, (size_t)(s->len - p));
+  r->r = vm.newString(out);
+}
+E7_NATIVE(s_replace) { E7_UNUSED; replaceImpl(vm, a, r, false); }
+E7_NATIVE(s_replaceAll) { E7_UNUSED; replaceImpl(vm, a, r, true); }
+E7_NATIVE(s_localeCompare) {
+  E7_UNUSED;
+  int c = strCmp(S(vm, a[0]), S(vm, a[1]));
+  r->f = c < 0 ? -1 : c > 0 ? 1 : 0;
+}
+E7_NATIVE(s_fromCharCodes) {
+  E7_UNUSED;
+  ArrObj* arr = A(vm, a[0]);
+  StrObj* s = vm.allocString(arr->len);
+  for (uint32_t i = 0; i < arr->len; i++) s->chars()[i] = (char16_t)(uint16_t)(uint64_t)doubleToInt64Bits(arr->data[i].f);
+  r->r = s;
+}
+E7_NATIVE(s_fromCodePoints) {
+  E7_UNUSED;
+  ArrObj* arr = A(vm, a[0]);
+  std::u16string out;
+  for (uint32_t i = 0; i < arr->len; i++) {
+    double d = arr->data[i].f;
+    if (!(d >= 0 && d <= 0x10FFFF) || std::trunc(d) != d) vm.error("RangeError: invalid code point %s", numberToString(d).c_str());
+    uint32_t cp = (uint32_t)d;
+    if (cp >= 0x10000) {
+      cp -= 0x10000;
+      out += (char16_t)(0xD800 + (cp >> 10));
+      out += (char16_t)(0xDC00 + (cp & 0x3FF));
+    } else {
+      out += (char16_t)cp;
+    }
+  }
+  r->r = vm.newString(out);
+}
+static uint32_t cpLen(const StrObj* s, uint32_t i) {
+  char16_t c = s->chars()[i];
+  if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s->len) {
+    char16_t d = s->chars()[i + 1];
+    if (d >= 0xDC00 && d <= 0xDFFF) return 2;
+  }
+  return 1;
+}
+E7_NATIVE(s_iterNext) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  int64_t i = a[1].i;
+  if (i < 0 || i >= s->len) { r->i = -1; return; }
+  r->i = i + cpLen(s, (uint32_t)i);
+}
+E7_NATIVE(s_codePointStr) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  int64_t i = a[1].i;
+  if (i < 0 || i >= s->len) vm.error("string iterator out of range");
+  r->r = vm.newString(s->chars() + i, cpLen(s, (uint32_t)i));
+}
+E7_NATIVE(s_chars) {
+  E7_UNUSED;
+  StrObj* s = S(vm, a[0]);
+  ArrObj* arr = vm.newArray(VT_REF, 0);
+  for (uint32_t i = 0; i < s->len;) {
+    uint32_t l = cpLen(s, i);
+    vm.arrayPush(arr, slotR(vm.newString(s->chars() + i, l)));
+    i += l;
+  }
+  r->r = arr;
+}
+
+void registerStringNatives(VM& vm) {
+  vm.registerNative("String.charAt", "RF>R", s_charAt);
+  vm.registerNative("String.charCodeAt", "RF>F", s_charCodeAt);
+  vm.registerNative("String.codePointAt", "RF>R", s_codePointAt);
+  vm.registerNative("String.at", "RF>R", s_at);
+  vm.registerNative("String.index", "RF>R", s_index);
+  vm.registerNative("String.indexOf", "RRF>F", s_indexOf);
+  vm.registerNative("String.lastIndexOf", "RRF>F", s_lastIndexOf);
+  vm.registerNative("String.includes", "RRF>I", s_includes);
+  vm.registerNative("String.startsWith", "RRF>I", s_startsWith);
+  vm.registerNative("String.endsWith", "RRF>I", s_endsWith);
+  vm.registerNative("String.slice", "RFF>R", s_slice);
+  vm.registerNative("String.substring", "RFF>R", s_substring);
+  vm.registerNative("String.substr", "RFF>R", s_substr);
+  vm.registerNative("String.toUpperCase", "R>R", s_toUpper);
+  vm.registerNative("String.toLowerCase", "R>R", s_toLower);
+  vm.registerNative("String.trim", "R>R", s_trim);
+  vm.registerNative("String.trimStart", "R>R", s_trimStart);
+  vm.registerNative("String.trimEnd", "R>R", s_trimEnd);
+  vm.registerNative("String.padStart", "RFR>R", s_padStart);
+  vm.registerNative("String.padEnd", "RFR>R", s_padEnd);
+  vm.registerNative("String.repeat", "RF>R", s_repeat);
+  vm.registerNative("String.split", "RRF>R", s_split);
+  vm.registerNative("String.replace", "RRR>R", s_replace);
+  vm.registerNative("String.replaceAll", "RRR>R", s_replaceAll);
+  vm.registerNative("String.localeCompare", "RR>F", s_localeCompare);
+  vm.registerNative("String.fromCharCodes", "R>R", s_fromCharCodes);
+  vm.registerNative("String.fromCodePoints", "R>R", s_fromCodePoints);
+  vm.registerNative("String.iterNext", "RI>I", s_iterNext);
+  vm.registerNative("String.codePointStr", "RI>R", s_codePointStr);
+  vm.registerNative("String.chars", "R>R", s_chars);
+}
+
+}  // namespace e7

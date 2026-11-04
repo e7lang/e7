@@ -1,0 +1,25 @@
+// numbers, strings, booleans, operators
+const a = 7, b = 2;
+console.log(a + b, a - b, a * b, a / b, a % b, a ** b, -a % b);
+console.log(a & b, a | b, a ^ b, ~a, a << 3, -a >> 1, -a >>> 28);
+console.log(0.1 + 0.2, 1 / 3, 2 ** 53, 2 ** 53 + 1, 1e21, 1e-7, 123456789012345680000);
+console.log(5 / 0, -5 / 0, 0 / 0, Math.round(2.5), Math.round(-2.5), Math.round(0.49999999999999994));
+console.log((255).toString(16), (255).toString(2), (0.5).toString(2), (-7.25).toString(8));
+console.log((1.005).toFixed(2), (2.5).toFixed(0), (0.000001234).toPrecision(2), (123.456).toExponential(2));
+console.log((1234.5678).toFixed(1), (-0.0001).toFixed(2), (1e21).toFixed(2), (12345).toPrecision(3));
+let s = "Hello";
+s += ", world";
+console.log(s, s.length, s.toUpperCase(), s.toLowerCase(), s.charAt(4), s.charCodeAt(0));
+console.log("a" < "b", "abc" < "abd", "B" < "a", "x" === "x", "x" !== "y");
+console.log(true && false, true || false, !true, typeof s, typeof a);
+console.log(1 === 1, 1 !== 2, NaN === NaN, 0 === -0, Infinity > 1e308);
+let x = 10;
+x += 5; x -= 3; x *= 2; x /= 4; x %= 4; x **= 3;
+console.log(x);
+let i = 0;
+console.log(i++, i, ++i, i--, --i, i);
+const t = `template ${a} + ${b} = ${a + b} ${s.length > 3 ? "long" : "short"}`;
+console.log(t);
+console.log(parseInt("42px"), parseInt("0x1F"), parseInt("101", 2), parseFloat("3.14abc"), Number("  12  "), Number("1e3"), Number(""), Number("abc"));
+console.log(isNaN(NaN), isFinite(1 / 0), Number.isInteger(5.0), Number.isSafeInteger(2 ** 53), Number.MAX_SAFE_INTEGER, Number.EPSILON);
+console.log(String(123), String(true), String(null), String(undefined), `${1 / 3}`);
