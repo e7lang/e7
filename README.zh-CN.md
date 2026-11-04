@@ -41,7 +41,7 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 ## 架构
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph DEV["开发 / 构建服务器"]
     TS["app.ts<br/>（TypeScript 子集）"] --> C["e7c 编译器<br/>解析 → 类型检查 → 代码生成"]
     DTS["lib/e7.d.ts<br/>（IDE 与 tsc 类型声明）"] -.-> TS

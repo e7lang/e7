@@ -42,7 +42,7 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph DEV["Development / build server"]
     TS["app.ts<br/>(TypeScript subset)"] --> C["e7c compiler<br/>parse → type-check → codegen"]
     DTS["lib/e7.d.ts<br/>(IDE + tsc types)"] -.-> TS
