@@ -99,6 +99,21 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: android-jniLibs, path: build-android/jniLibs }
 
+  csharp:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    name: csharp (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0.x" }
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_SHARED=ON -DE7_BUILD_TESTS=OFF -DE7_BUILD_TOOLS=OFF
+      - run: cmake --build build --config Release --target e7vm
+      - run: dotnet run --project platform/windows/test -c Release -- build
+
   wasm:
     runs-on: ubuntu-24.04
     steps:

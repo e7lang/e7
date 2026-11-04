@@ -109,7 +109,8 @@ jobs:
           | macOS 11+ (Apple Silicon + Intel) | \`e7-${TAG#v}-macos-universal.tar.gz\` |
           | Windows x64 | \`e7-${TAG#v}-windows-x64.zip\` |
 
-          Each archive contains \`bin/\`, \`include/e7/e7.h\`, \`lib/\`, \`types/e7.d.ts\`, \`examples/\`.
+          Each archive contains \`bin/\`, \`include/e7/e7.h\`, \`lib/\`, \`bindings/\` (C#, Swift, Java/Kotlin), \`types/e7.d.ts\`, \`examples/\`.
+          Try the language without installing anything: https://e7lang.github.io/playground
           Verify downloads with the matching \`.sha256\` file.
           NOTES
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

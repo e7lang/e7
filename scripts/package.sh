@@ -6,6 +6,7 @@
 #   include/e7/e7.h          C API header
 #   lib/                     static libraries for embedding
 #   types/e7.d.ts            TypeScript declarations for editors / tsc
+#   bindings/                C# (E7VM.cs), Swift (E7VM.swift), Java/Kotlin (org/e7vm) wrappers
 #   examples/                sample scripts + embedding example
 #   README.md, LICENSE
 set -euo pipefail
@@ -15,7 +16,7 @@ PLATFORM=${3:?platform}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 NAME="e7-${VERSION}-${PLATFORM}"
 STAGE="$ROOT/dist/$NAME"
-rm -rf "$STAGE" && mkdir -p "$STAGE"/{bin,include/e7,lib,types,examples}
+rm -rf "$STAGE" && mkdir -p "$STAGE"/{bin,include/e7,lib,types,examples,bindings/csharp,bindings/swift,bindings/java}
 
 exe=""
 case "$PLATFORM" in windows*) exe=".exe" ;; esac
@@ -38,6 +39,9 @@ done
 cp "$ROOT/include/e7/e7.h" "$STAGE/include/e7/"
 cp "$ROOT/lib/e7.d.ts" "$STAGE/types/"
 cp "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/"
+cp "$ROOT/platform/windows/E7VM.cs" "$STAGE/bindings/csharp/"
+cp "$ROOT/platform/ios/E7VM/E7VM.swift" "$ROOT/platform/ios/module.modulemap" "$STAGE/bindings/swift/"
+cp -R "$ROOT/platform/java/org" "$STAGE/bindings/java/org"
 cp -R "$ROOT/examples/embed" "$STAGE/examples/embed"
 for f in api_signature jwt webhook_verify license_check custom_digest; do
   cp "$ROOT/examples/$f.ts" "$STAGE/examples/"

@@ -145,13 +145,15 @@ e7vm uses no JIT and allocates no executable memory, which meets the App Store r
 
 - C/C++: `platform/windows/build_windows.ps1` (VS 2022; `-ClangCl` enables computed goto dispatch, `-Shared` produces `e7vm.dll`),
   link `e7vm_static.lib` (plus `e7_bearssl.lib`, `e7_monocypher.lib`, `advapi32.lib`) or `e7vm.dll`.
-- C#: `platform/windows/E7VM.cs` (requires `e7vm.dll`, x64).
+- C#: add `platform/windows/E7VM.cs` to your project (P/Invoke, 64-bit; needs `e7vm.dll`, or `libe7vm.so` / `libe7vm.dylib` with .NET on Linux / macOS).
+  Tested in CI by `platform/windows/test` (`dotnet run --project platform/windows/test -- <dir with the library>`).
 
 ```csharp
 using var vm = new E7.E7VM(memoryLimit: 32 << 20, suspendOnBudget: false, serverPublicKey);
 vm.SetKeyProvider(id => ProtectedData.Unprotect(LoadBlob(id), null, DataProtectionScope.CurrentUser));
 var module = vm.Load(File.ReadAllBytes("app.e7b"));
-var sig = (string)vm.Call(module, "sign", "a=1&b=2", new E7.KeyHandle(1));
+vm.SetBudget(10_000_000);
+var sig = (string)vm.Call(module, "sign", "a=1&b=2", new E7.KeyHandle(1))!;
 ```
 
 ## 6. Security recommendations

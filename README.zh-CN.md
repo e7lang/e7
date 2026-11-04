@@ -1,6 +1,6 @@
 # e7vm — E7 语言与虚拟机
 
-[English](README.md) | **简体中文** · 官网：[e7lang.github.io](https://e7lang.github.io)
+[English](README.md) | **简体中文** · 官网：[e7lang.github.io](https://e7lang.github.io) · [**在浏览器里试用**](https://e7lang.github.io/playground) · [下载](https://github.com/e7lang/e7/releases/latest)
 
 **E7** 是一门**严格静态类型的 TypeScript 子集**：每个合法的 E7 程序同时也是合法的 TypeScript 程序。
 **e7vm** 是用 C++17 实现的轻量嵌入式字节码虚拟机，支持 **Android、iOS、Windows、macOS、Linux**，
@@ -52,9 +52,14 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 
 ## 快速上手
 
-### 1. 构建
+### 1. 安装或构建
 
-需要 CMake ≥ 3.16 和支持 C++17 的编译器（GCC、Clang、MSVC）。Ninja 可选。
+**预编译版本：** 从 [最新 Release](https://github.com/e7lang/e7/releases/latest) 下载对应平台的 `e7-<版本>-<平台>`：
+Linux（x64、arm64）、macOS（通用二进制）、Windows（x64）。压缩包内含 `bin/e7`、`bin/e7c`、`include/e7/e7.h`、
+`lib/` 静态库、`types/e7.d.ts` 和示例。
+什么都不想装：[Playground](https://e7lang.github.io/playground) 直接在浏览器里运行编译器和虚拟机（WebAssembly）。
+
+**从源码构建：** 需要 CMake ≥ 3.16 和支持 C++17 的编译器（GCC、Clang、MSVC），Ninja 可选。
 
 ```bash
 git clone https://github.com/e7lang/e7.git && cd e7

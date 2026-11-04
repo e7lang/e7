@@ -1,6 +1,6 @@
 # e7vm — the E7 language and virtual machine
 
-**English** | [简体中文](README.zh-CN.md) · Website: [e7lang.github.io](https://e7lang.github.io)
+**English** | [简体中文](README.zh-CN.md) · Website: [e7lang.github.io](https://e7lang.github.io) · [**Try it in your browser**](https://e7lang.github.io/playground) · [Download](https://github.com/e7lang/e7/releases/latest)
 
 **E7** is a **strictly, statically typed subset of TypeScript**: every valid E7 program is also a valid
 TypeScript program. **e7vm** is a small embeddable bytecode VM written in C++17 for
@@ -53,9 +53,14 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 
 ## Quick start
 
-### 1. Build
+### 1. Install or build
 
-Prerequisites: CMake ≥ 3.16 and a C++17 compiler (GCC, Clang, MSVC). Ninja is optional.
+**Prebuilt binaries:** download `e7-<version>-<platform>` for Linux (x64, arm64), macOS (universal) or
+Windows (x64) from the [latest release](https://github.com/e7lang/e7/releases/latest). Each archive has
+`bin/e7`, `bin/e7c`, `include/e7/e7.h`, static libraries in `lib/`, `types/e7.d.ts` and examples.
+No install at all: the [playground](https://e7lang.github.io/playground) runs the compiler and VM in your browser (WebAssembly).
+
+**From source:**
 
 ```bash
 git clone https://github.com/e7lang/e7.git && cd e7
@@ -63,6 +68,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
+Prerequisites: CMake ≥ 3.16 and a C++17 compiler (GCC, Clang, MSVC); Ninja is optional.
 This produces `build/e7` (run scripts), `build/e7c` (compile, disassemble, optionally sign) and `build/libe7vm_static.a`.
 
 ### 2. Write and run a script
