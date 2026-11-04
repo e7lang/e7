@@ -13,9 +13,12 @@ val abis = (providers.gradleProperty("e7.abis").orNull ?: "arm64-v8a,armeabi-v7a
 
 // The Java sources live next to the desktop test in platform/java; copy just org/e7vm into a
 // generated source folder so that only the library classes end up in the AAR.
-val syncJavaSources by tasks.registering(Sync::class) {
+// (A plain path rather than a task provider: AGP 9 rejects providers in the source set DSL; the task
+// dependencies are wired explicitly below.)
+val generatedJava: File = layout.buildDirectory.dir("generated/e7java").get().asFile
+val syncJavaSources = tasks.register<Sync>("syncE7JavaSources") {
   from(repoRoot.resolve("platform/java")) { include("org/e7vm/**") }
-  into(layout.buildDirectory.dir("generated/e7java"))
+  into(generatedJava)
 }
 
 android {
@@ -57,11 +60,11 @@ android {
 
   sourceSets {
     getByName("main") {
-      java.srcDir(syncJavaSources.map { it.destinationDir })
+      java.directories.add(generatedJava.absolutePath)
     }
     getByName("androidTest") {
-      java.srcDir("../shared-test")
-      resources.srcDir(repoRoot.resolve("examples/embed"))
+      java.directories.add(file("../shared-test").absolutePath)
+      resources.directories.add(repoRoot.resolve("examples/embed").absolutePath)
     }
   }
 
@@ -80,8 +83,12 @@ android {
 }
 
 tasks.named("preBuild") { dependsOn(syncJavaSources) }
-tasks.matching { it.name.contains("SourcesJar") || it.name.contains("Javadoc") || it.name.contains("javaDoc") }
-  .configureEach { dependsOn(syncJavaSources) }
+tasks.configureEach {
+  if (name != syncJavaSources.name && (name.contains("SourcesJar") || name.contains("avadoc") || name.contains("javaDoc") ||
+      name.contains("Lint", ignoreCase = true))) {
+    dependsOn(syncJavaSources)
+  }
+}
 
 dependencies {
   androidTestImplementation("androidx.test:runner:1.7.0")
