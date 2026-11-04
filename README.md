@@ -160,7 +160,19 @@ cc -std=c11 host.c -I../../include ../../build/libe7vm_static.a \
 ```
 
 Kotlin, Swift and C# use the same flow: create the VM (optionally with a trusted key), call `load(bytes)`,
-then `call("sign", ...)`. See [docs/EMBEDDING.md](docs/EMBEDDING.md) for each platform, plus host functions,
+then `call("sign", ...)`. In Swift, add the package with Swift Package Manager and call it directly:
+
+```swift
+// Package.swift: .package(url: "https://github.com/e7lang/e7.git", from: "1.0.1")
+//                .product(name: "E7VM", package: "e7")
+import E7VM
+
+let vm = try E7VM()
+let module = try vm.load(bytecode)  // contents of sign.e7b
+let mac = try vm.call(module, "sign", .string("amount=100&currency=CNY"), .string("s3cr3t"))
+// .string("0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6")
+```
+ See [docs/EMBEDDING.md](docs/EMBEDDING.md) for each platform, plus host functions,
 `KeyHandle`, budgets and time-slicing.
 
 ### 6. Editor setup
@@ -207,7 +219,7 @@ The full language reference is in [docs/SPEC.md](docs/SPEC.md).
 |---|---|---|
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
 | Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so` | Java/Kotlin: `platform/java/org/e7vm` |
-| iOS | `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `platform/ios/E7VM/E7VM.swift` |
+| iOS / macOS (Swift) | Swift Package Manager: `.package(url: "https://github.com/e7lang/e7.git", from: "1.0.1")`, or `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `.product(name: "E7VM", package: "e7")` (`platform/ios/E7VM/E7VM.swift`) |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]` (VS 2022) | C/C++, C#: `platform/windows/E7VM.cs` |
 | .NET (Windows / Linux / macOS) | `dotnet add package E7VM` | C#: NuGet package [`E7VM`](https://www.nuget.org/packages/E7VM) |
 
