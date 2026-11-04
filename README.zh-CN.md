@@ -156,6 +156,17 @@ cc -std=c11 host.c -I../../include ../../build/libe7vm_static.a \
 ```
 
 Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥），调用 `load(bytes)`，再 `call("sign", ...)`。
+Android 直接从 Maven 引入 AAR：
+
+```kotlin
+dependencies {
+    implementation("org.e7vm:e7vm-android:1.0.1")   // 桌面 JVM 用 org.e7vm:e7vm:1.0.1
+}
+```
+
+在发布到 Maven Central 之前，可以添加 GitHub Packages 仓库 `https://maven.pkg.github.com/e7lang/e7`
+（需要带 `read:packages` 权限的 token，见 [docs/EMBEDDING.md](docs/EMBEDDING.md#31-gradle-dependency-recommended)），
+或从 [Release 页面](https://github.com/e7lang/e7/releases/latest) 下载 `.aar`。
 各平台的具体写法，以及宿主函数、`KeyHandle`、预算与分片执行，见 [docs/EMBEDDING.md](docs/EMBEDDING.md)。
 
 ### 6. 编辑器配置
@@ -201,7 +212,8 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 | 平台 | 构建 | 绑定 |
 |---|---|---|
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
-| Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so` | Java/Kotlin：`platform/java/org/e7vm` |
+| Android | Maven `org.e7vm:e7vm-android`（AAR），或 `cd platform/android && ./gradlew :library:assembleRelease`，或 `ANDROID_NDK_HOME=... platform/android/build_android.sh` | Java/Kotlin：`platform/java/org/e7vm` |
+| JVM（桌面） | Maven `org.e7vm:e7vm`（jar 内含 Linux、macOS、Windows 的 JNI 库） | Java/Kotlin：`platform/java/org/e7vm` |
 | iOS | `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`platform/ios/E7VM/E7VM.swift` |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]`（VS 2022） | C/C++、C#：`platform/windows/E7VM.cs` |
 
@@ -240,6 +252,9 @@ tests/tsc/check.sh             # 所有测试和示例都能通过 tsc --strict
 - **移动端：** iOS、Android NDK、JNI。
 - **Windows：** MSVC 与 clang-cl。
 - **TypeScript：** `tsc` 严格检查。
+
+[`.github/workflows/maven.yml`](.github/workflows/maven.yml) 构建 Maven 制品，并在 Linux、macOS、Windows
+和 Android 模拟器上运行 Java 测试套件。
 
 ## 性能
 

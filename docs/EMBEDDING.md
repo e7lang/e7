@@ -106,10 +106,53 @@ use `e7_abort_suspended` to abandon it.
 A VM may be used from only one thread; different VMs share no state and can run in parallel on different threads. For concurrency, create one VM per thread
 (each can load the same `.e7b`).
 
-## 3. Android (Java / Kotlin)
+## 3. Android and JVM (Java / Kotlin)
 
-Build: `ANDROID_NDK_HOME=... platform/android/build_android.sh`, copy `build-android/jniLibs/*` into
-`app/src/main/jniLibs/`, and add `platform/java/org/e7vm/*.java` to the project (usable directly from Kotlin).
+### 3.1 Gradle dependency (recommended)
+
+The binding is published as two Maven artifacts (group `org.e7vm`):
+
+| Artifact | Contents |
+|---|---|
+| `org.e7vm:e7vm-android` (AAR) | Java API + `libe7vm_jni.so` for `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86` (minSdk 21, 16 KB page aligned, compiler included), consumer R8/ProGuard rules |
+| `org.e7vm:e7vm` (JAR) | Java API (Java 8+) + JNI libraries for Linux x86_64/aarch64, macOS (universal) and Windows x86_64 |
+
+```kotlin
+// app/build.gradle.kts
+dependencies {
+    implementation("org.e7vm:e7vm-android:1.0.1")   // Android
+    // implementation("org.e7vm:e7vm:1.0.1")         // desktop / server JVM
+}
+```
+
+Until the artifacts are on Maven Central, use GitHub Packages. It requires a GitHub token with the
+`read:packages` scope, even for public packages:
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven("https://maven.pkg.github.com/e7lang/e7") {
+            credentials {
+                username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
+                password = providers.gradleProperty("gpr.key").orNull ?: System.getenv("GITHUB_TOKEN")
+            }
+        }
+    }
+}
+```
+
+The `.aar` and `.jar` are also attached to each [GitHub release](https://github.com/e7lang/e7/releases);
+a downloaded AAR can be used with `implementation(files("libs/e7vm-android-1.0.1.aar"))`.
+
+On the desktop JVM, `org.e7vm.NativeLoader` loads the library in this order: the path in the system
+property `e7vm.library`, then `System.loadLibrary("e7vm_jni")` (`java.library.path`), then the copy bundled
+in the jar (extracted to a temporary file). On other platforms, build it yourself with
+`cmake -S . -B build -DE7_BUILD_JNI=ON && cmake --build build --target e7vm_jni`.
+
+### 3.2 Usage
 
 ```kotlin
 import org.e7vm.*
@@ -124,7 +167,27 @@ vm.close()
 ```
 Arguments: `Double/Float` → number, `Int/Long` → integer, `Boolean`, `String`, `ByteArray` → Uint8Array, `KeyHandle`.
 Returns: `Double`, `Long`, `Boolean`, `String`, `ByteArray`, or `null`. Errors are `E7Exception(status, message)`.
-The JNI binding is tested on a desktop JVM (OpenJDK 21) with `platform/java/test/E7VMTest.java`.
+
+### 3.3 Building from source
+
+- Gradle (what is published): `cd platform/android && ./gradlew :library:assembleRelease` builds the AAR with
+  the NDK through the repository's `CMakeLists.txt` (set `E7_NDK_PATH` to pick an NDK, `-Pe7.abis=x86_64` to
+  limit ABIs). `./gradlew -Pe7.jvmOnly=true :jvm:build` builds the jar without the Android SDK.
+- Without Gradle: `ANDROID_NDK_HOME=... platform/android/build_android.sh` builds `build-android/jniLibs/<abi>/libe7vm_jni.so`;
+  copy it into `app/src/main/jniLibs/` and add `platform/java/org/e7vm/*.java` to the project.
+
+### 3.4 Tests and publishing
+
+[`.github/workflows/maven.yml`](../.github/workflows/maven.yml) runs the JUnit suite
+`platform/android/shared-test` on desktop JVMs (Linux x64/arm64, macOS, Windows) against the bundled
+libraries, and as an instrumented test on an Android emulator (API 30, x86_64) against the AAR. It checks the
+AAR (all four ABIs, consumer rules, 16 KB alignment) and the jar, and uploads the AAR as the `e7-android-aar`
+build artifact. `platform/java/test/E7VMTest.java` additionally runs in `ci.yml`.
+
+Releases call it with `publish: true`: artifacts go to GitHub Packages, and to Maven Central (Central Portal
+bundle via `scripts/maven-central-bundle.sh`) when the repository has the secrets `MAVEN_CENTRAL_USERNAME`,
+`MAVEN_CENTRAL_PASSWORD` (a Central Portal user token for the verified `org.e7vm` namespace), `SIGNING_KEY`
+(ASCII-armored PGP private key) and `SIGNING_PASSWORD`; otherwise the Central step is skipped with a notice.
 
 ## 4. iOS (Swift)
 

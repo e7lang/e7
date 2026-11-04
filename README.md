@@ -159,7 +159,17 @@ cc -std=c11 host.c -I../../include ../../build/libe7vm_static.a \
 ```
 
 Kotlin, Swift and C# use the same flow: create the VM (optionally with a trusted key), call `load(bytes)`,
-then `call("sign", ...)`. See [docs/EMBEDDING.md](docs/EMBEDDING.md) for each platform, plus host functions,
+then `call("sign", ...)`. On Android, add the AAR from Maven:
+
+```kotlin
+dependencies {
+    implementation("org.e7vm:e7vm-android:1.0.1")   // or org.e7vm:e7vm:1.0.1 for desktop JVMs
+}
+```
+
+Until it is on Maven Central, add the GitHub Packages repository `https://maven.pkg.github.com/e7lang/e7`
+(needs a token with `read:packages`; see [docs/EMBEDDING.md](docs/EMBEDDING.md#31-gradle-dependency-recommended))
+or download the `.aar` from the [release](https://github.com/e7lang/e7/releases/latest). See [docs/EMBEDDING.md](docs/EMBEDDING.md) for each platform, plus host functions,
 `KeyHandle`, budgets and time-slicing.
 
 ### 6. Editor setup
@@ -205,7 +215,8 @@ The full language reference is in [docs/SPEC.md](docs/SPEC.md).
 | Platform | Build | Bindings |
 |---|---|---|
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
-| Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so` | Java/Kotlin: `platform/java/org/e7vm` |
+| Android | Maven `org.e7vm:e7vm-android` (AAR), or `cd platform/android && ./gradlew :library:assembleRelease`, or `ANDROID_NDK_HOME=... platform/android/build_android.sh` | Java/Kotlin: `platform/java/org/e7vm` |
+| JVM (desktop) | Maven `org.e7vm:e7vm` (jar with JNI libraries for Linux, macOS, Windows) | Java/Kotlin: `platform/java/org/e7vm` |
 | iOS | `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `platform/ios/E7VM/E7VM.swift` |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]` (VS 2022) | C/C++, C#: `platform/windows/E7VM.cs` |
 
@@ -245,6 +256,9 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs 15 jobs on ever
 - **Mobile:** iOS, Android NDK, JNI.
 - **Windows:** MSVC and clang-cl.
 - **TypeScript:** `tsc` strict check.
+
+[`.github/workflows/maven.yml`](.github/workflows/maven.yml) builds the Maven artifacts and runs the Java
+test suite on Linux, macOS, Windows and an Android emulator.
 
 ## Performance
 
