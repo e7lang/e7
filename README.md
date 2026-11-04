@@ -142,6 +142,7 @@ tests/ bench/ examples/ docs/          third_party/  BearSSL (MIT)、Monocypher 
 - [docs/EMBEDDING.md](docs/EMBEDDING.md) —— C API 与各平台集成、安全建议
 - [docs/BYTECODE.md](docs/BYTECODE.md) —— `.e7b` 格式、指令集、验证规则、签名格式
 - [docs/DESIGN.md](docs/DESIGN.md) —— 设计方案与决策记录
+- [docs/PRODUCTION.md](docs/PRODUCTION.md) —— 生产就绪检查清单（验证项与证据）
 
 ## 许可
 
