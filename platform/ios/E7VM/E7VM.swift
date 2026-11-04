@@ -1,0 +1,235 @@
+// Swift wrapper around the e7vm C API (iOS / macOS).
+// Link e7vm.xcframework (built by platform/ios/build_xcframework.sh); it exposes the `CE7VM` module.
+//
+//   let vm = try E7VM(trustedKeys: [serverPublicKey])
+//   let module = try vm.load(bytecodeFromServer)
+//   vm.keyProvider = { id in Keychain.loadKey(id) }
+//   let sig = try vm.call(module, "sign", .string(payload), .handle(KeyHandle(1)))
+import CE7VM
+import Foundation
+
+public struct E7Error: Error, CustomStringConvertible {
+  public let status: Int32
+  public let message: String
+  public var description: String { "e7 error \(status): \(message)" }
+  public var isSuspended: Bool { status == Int32(E7_SUSPENDED.rawValue) }
+}
+
+/// Opaque reference to a key held by the app (e.g. Keychain); resolved through `keyProvider`.
+public struct KeyHandle {
+  public let id: Int64
+  public init(_ id: Int64) { self.id = id }
+}
+
+public enum E7Value {
+  case number(Double), int(Int64), uint(UInt64), bool(Bool), string(String), bytes(Data), handle(KeyHandle), void
+}
+
+public final class E7Module {
+  fileprivate let ptr: OpaquePointer
+  fileprivate init(_ p: OpaquePointer) { ptr = p }
+}
+
+/// Owns byte buffers referenced by e7_value structs for the duration of a call.
+private final class ArgBuffers {
+  var buffers: [UnsafeMutablePointer<UInt8>] = []
+  func copy(_ bytes: [UInt8]) -> (UnsafeMutablePointer<UInt8>, Int) {
+    let p = UnsafeMutablePointer<UInt8>.allocate(capacity: max(bytes.count, 1))
+    p.initialize(from: bytes, count: bytes.count)
+    buffers.append(p)
+    return (p, bytes.count)
+  }
+  deinit { buffers.forEach { $0.deallocate() } }
+}
+
+public final class E7VM {
+  private let vm: OpaquePointer
+  private var natives: [NativeBox] = []
+  private var keyBuffer = [UInt8]()
+
+  /// Returns key material for a KeyHandle id (keys never become script values).
+  public var keyProvider: ((Int64) -> Data?)? {
+    didSet {
+      let me = Unmanaged.passUnretained(self).toOpaque()
+      if keyProvider == nil { e7_set_key_provider(vm, nil, nil); return }
+      e7_set_key_provider(vm, { user, id, key, len in
+        let this = Unmanaged<E7VM>.fromOpaque(user!).takeUnretainedValue()
+        guard let d = this.keyProvider?(id) else { return -1 }
+        for i in this.keyBuffer.indices { this.keyBuffer[i] = 0 }
+        this.keyBuffer = [UInt8](d)
+        this.keyBuffer.withUnsafeBufferPointer { b in
+          key!.pointee = b.baseAddress
+          len!.pointee = b.count
+        }
+        return 0
+      }, me)
+    }
+  }
+
+  public var printHandler: ((String) -> Void)? {
+    didSet {
+      let me = Unmanaged.passUnretained(self).toOpaque()
+      if printHandler == nil { e7_set_print(vm, nil, nil); return }
+      e7_set_print(vm, { user, text, len in
+        let this = Unmanaged<E7VM>.fromOpaque(user!).takeUnretainedValue()
+        let raw = UnsafeRawBufferPointer(start: text, count: len)
+        this.printHandler?(String(decoding: raw, as: UTF8.self))
+      }, me)
+    }
+  }
+
+  /// - Parameter trustedKeys: Ed25519 public keys (32 bytes each). When non-empty only signed modules load.
+  public init(memoryLimit: Int = 0, suspendOnBudget: Bool = false, trustedKeys: [Data] = []) throws {
+    var cfg = e7_config()
+    e7_config_init(&cfg)
+    if memoryLimit > 0 { cfg.memory_limit = memoryLimit }
+    cfg.suspend_on_budget = suspendOnBudget ? 1 : 0
+    var keys = [UInt8]()
+    for k in trustedKeys {
+      guard k.count == 32 else {
+        throw E7Error(status: Int32(E7_ERR_ARGS.rawValue), message: "public keys must be 32 bytes")
+      }
+      keys += [UInt8](k)
+    }
+    let created: OpaquePointer? = keys.withUnsafeBufferPointer { kb in
+      var c = cfg
+      if !keys.isEmpty {
+        c.require_signature = 1
+        c.trusted_keys = kb.baseAddress
+        c.num_trusted_keys = keys.count / 32
+      }
+      return e7_vm_new(&c)  // keys are copied by the VM
+    }
+    guard let v = created else { throw E7Error(status: Int32(E7_ERR_MEMORY.rawValue), message: "cannot create VM") }
+    vm = v
+  }
+
+  deinit { e7_vm_free(vm) }
+
+  private func check(_ st: e7_status) throws {
+    if st != E7_OK { throw E7Error(status: Int32(st.rawValue), message: String(cString: e7_last_error(vm))) }
+  }
+
+  public func load(_ bytecode: Data) throws -> E7Module {
+    var m: OpaquePointer?
+    let bytes = [UInt8](bytecode)
+    let st = bytes.withUnsafeBufferPointer { e7_load(vm, $0.baseAddress, $0.count, &m) }
+    try check(st)
+    return E7Module(m!)
+  }
+
+  /// Compiles and loads source (development builds; requires the compiler in the library).
+  public func loadSource(_ source: String, fileName: String = "main.ts") throws -> E7Module {
+    var m: OpaquePointer?
+    let utf8 = [CChar](source.utf8CString)
+    let st = utf8.withUnsafeBufferPointer { e7_load_source(vm, $0.baseAddress, $0.count - 1, fileName, &m) }
+    try check(st)
+    return E7Module(m!)
+  }
+
+  public func setBudget(_ ticks: Int64) { e7_set_budget(vm, ticks) }
+  public func seedRandom(_ seed: UInt64) { e7_seed_random(vm, seed) }
+  public var memoryUsed: Int { e7_memory_used(vm) }
+
+  @discardableResult
+  public func call(_ module: E7Module, _ function: String, _ args: E7Value...) throws -> E7Value {
+    let bufs = ArgBuffers()
+    var vals = args.map { E7VM.toC($0, bufs) }
+    var ret = e7_value()
+    let st = vals.withUnsafeMutableBufferPointer { e7_call(vm, module.ptr, function, $0.baseAddress, $0.count, &ret) }
+    try check(st)
+    return E7VM.fromC(ret)
+  }
+
+  public func resume() throws -> E7Value {
+    var ret = e7_value()
+    try check(e7_resume(vm, &ret))
+    return E7VM.fromC(ret)
+  }
+
+  public func abortSuspended() { e7_abort_suspended(vm) }
+
+  /// signature: parameter codes '>' return code, e.g. "sn>s" (see e7.h). Register before load().
+  public func registerNative(_ name: String, signature: String, _ fn: @escaping ([E7Value]) throws -> E7Value) throws {
+    let box = NativeBox(fn: fn)
+    natives.append(box)
+    let st = e7_register_native(vm, name, signature, { vm, args, n, ret, user in
+      let box = Unmanaged<NativeBox>.fromOpaque(user!).takeUnretainedValue()
+      var vals = [E7Value]()
+      for i in 0..<n { vals.append(E7VM.fromC(args![i])) }
+      do {
+        let r = try box.fn(vals)
+        box.retBuffers = ArgBuffers()  // previous return buffers were already copied by the VM
+        ret!.pointee = E7VM.toC(r, box.retBuffers)
+        return E7_OK
+      } catch {
+        e7_native_error(vm, "\(error)")
+        return E7_ERR_RUNTIME
+      }
+    }, Unmanaged.passUnretained(box).toOpaque())
+    try check(st)
+  }
+
+  public static func compile(_ source: String, fileName: String = "main.ts") throws -> Data {
+    var out: UnsafeMutablePointer<UInt8>?
+    var len = 0
+    var errs: UnsafeMutablePointer<CChar>?
+    let utf8 = [CChar](source.utf8CString)
+    let st = utf8.withUnsafeBufferPointer { e7_compile($0.baseAddress, $0.count - 1, fileName, &out, &len, &errs) }
+    defer {
+      e7_free(out)
+      e7_free(errs)
+    }
+    if st != E7_OK {
+      throw E7Error(status: Int32(st.rawValue), message: errs.map { String(cString: $0) } ?? "compile error")
+    }
+    return Data(bytes: out!, count: len)
+  }
+
+  // MARK: - marshaling
+
+  fileprivate static func toC(_ a: E7Value, _ bufs: ArgBuffers) -> e7_value {
+    var v = e7_value()
+    switch a {
+    case .number(let d): v.type = E7_NUMBER; v.v.num = d
+    case .int(let x): v.type = E7_INT; v.v.i = x
+    case .uint(let x): v.type = E7_UINT; v.v.u = x
+    case .bool(let b): v.type = E7_BOOL; v.v.boolean = b ? 1 : 0
+    case .string(let s):
+      let (p, n) = bufs.copy(Array(s.utf8))
+      v.type = E7_STRING
+      v.v.str.ptr = UnsafeRawPointer(p).assumingMemoryBound(to: CChar.self)
+      v.v.str.len = n
+    case .bytes(let d):
+      let (p, n) = bufs.copy([UInt8](d))
+      v.type = E7_BYTES
+      v.v.bytes.ptr = UnsafePointer(p)
+      v.v.bytes.len = n
+    case .handle(let h): v.type = E7_HANDLE; v.v.handle = h.id
+    case .void: v.type = E7_VOID
+    }
+    return v
+  }
+
+  fileprivate static func fromC(_ v: e7_value) -> E7Value {
+    switch v.type {
+    case E7_NUMBER: return .number(v.v.num)
+    case E7_INT: return .int(v.v.i)
+    case E7_UINT: return .uint(v.v.u)
+    case E7_BOOL: return .bool(v.v.boolean != 0)
+    case E7_STRING:
+      let raw = UnsafeRawBufferPointer(start: v.v.str.ptr, count: v.v.str.len)
+      return .string(String(decoding: raw, as: UTF8.self))
+    case E7_BYTES:
+      return .bytes(v.v.bytes.len == 0 ? Data() : Data(bytes: v.v.bytes.ptr, count: v.v.bytes.len))
+    case E7_HANDLE: return .handle(KeyHandle(v.v.handle))
+    default: return .void
+    }
+  }
+}
+
+private final class NativeBox {
+  let fn: ([E7Value]) throws -> E7Value
+  var retBuffers = ArgBuffers()
+  init(fn: @escaping ([E7Value]) throws -> E7Value) { self.fn = fn }
+}

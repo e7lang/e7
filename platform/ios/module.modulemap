@@ -1,0 +1,4 @@
+module CE7VM {
+  header "e7.h"
+  export *
+}

@@ -1,5 +1,5 @@
 add_executable(capi_test capi_test.cpp)
-target_link_libraries(capi_test PRIVATE e7vm)
+target_link_libraries(capi_test PRIVATE e7vm_static)
 add_test(NAME capi_test COMMAND capi_test)
 
 find_package(Python3 COMPONENTS Interpreter)
@@ -8,6 +8,13 @@ if(Python3_FOUND)
 endif()
 
 add_executable(fuzz_load fuzz_load.cpp)
-target_link_libraries(fuzz_load PRIVATE e7vm)
+target_link_libraries(fuzz_load PRIVATE e7vm_static)
 target_include_directories(fuzz_load PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME fuzz_load COMMAND fuzz_load 3000)
+
+if(E7_BUILD_SHARED)
+  # the C API test also runs against the shared library (exports only the C API)
+  add_executable(capi_test_shared capi_test.cpp)
+  target_link_libraries(capi_test_shared PRIVATE e7vm)
+  add_test(NAME capi_test_shared COMMAND capi_test_shared)
+endif()
