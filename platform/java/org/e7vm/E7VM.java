@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets;
  */
 public final class E7VM implements AutoCloseable {
   static {
-    System.loadLibrary("e7vm_jni");
+    NativeLoader.load();
   }
 
   /** Native function implemented in Java and callable from scripts via `declare function`. */

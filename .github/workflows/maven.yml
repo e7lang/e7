@@ -1,0 +1,306 @@
+name: Maven
+
+# Builds and tests the Maven artifacts (Gradle build in platform/android):
+#   org.e7vm:e7vm-android  AAR: Java API + libe7vm_jni.so (arm64-v8a, armeabi-v7a, x86_64, x86)
+#   org.e7vm:e7vm          JAR: Java API + JNI libraries for linux-x86_64, linux-aarch64, macos (universal), windows-x86_64
+# Tests: the JUnit suite platform/android/shared-test runs on desktop JVMs (Linux x64/arm64, macOS, Windows)
+# against the bundled libraries, and as an instrumented test on an Android emulator against the AAR.
+#
+# Publishing only happens when called from another workflow with publish: true, e.g. from release.yml:
+#   maven:
+#     uses: ./.github/workflows/maven.yml
+#     with: { version: "1.0.1", publish: true }
+#     secrets: inherit
+#     permissions: { contents: write, packages: write }
+# It then publishes to GitHub Packages (always), to Maven Central (only if the MAVEN_CENTRAL_* and SIGNING_*
+# secrets exist) and attaches the .aar / .jar to the GitHub release v<version> (which must exist).
+on:
+  push:
+    branches: [main, "feat/maven"]
+  pull_request:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to build/publish, e.g. 1.0.1 (a leading v is ignored)"
+        type: string
+        required: true
+      publish:
+        description: "Publish to GitHub Packages / Maven Central and upload to the GitHub release"
+        type: boolean
+        default: false
+    secrets:
+      MAVEN_CENTRAL_USERNAME: { required: false }
+      MAVEN_CENTRAL_PASSWORD: { required: false }
+      SIGNING_KEY: { required: false }
+      SIGNING_PASSWORD: { required: false }
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maven-${{ github.ref }}-${{ inputs.publish && 'publish' || 'build' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  E7_VERSION: ${{ inputs.version }}
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
+jobs:
+  jvm-natives:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x86_64, os: ubuntu-22.04,
+              cmake: '-G Ninja -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"' }
+          - { platform: linux-aarch64, os: ubuntu-22.04-arm,
+              cmake: '-G Ninja -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"' }
+          - { platform: macos, os: macos-14,
+              cmake: '-G Ninja "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0' }
+          - { platform: windows-x86_64, os: windows-2022,
+              cmake: '-G "Visual Studio 17 2022" -A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded' }
+    name: jvm natives (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Ninja
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install ninja; else sudo apt-get update && sudo apt-get install -y ninja-build; fi
+      - name: Build libe7vm_jni
+        run: |
+          cmake -S . -B build-jni ${{ matrix.cmake }} -DCMAKE_BUILD_TYPE=Release \
+            -DE7_BUILD_JNI=ON -DE7_BUILD_TESTS=OFF -DE7_BUILD_TOOLS=OFF
+          cmake --build build-jni --config Release --target e7vm_jni -j 4
+          lib="$(find build-jni \( -name libe7vm_jni.so -o -name libe7vm_jni.dylib -o -name e7vm_jni.dll \) -print | head -1)"
+          [ -n "$lib" ] || { echo "libe7vm_jni not found" >&2; exit 1; }
+          mkdir -p "natives/${{ matrix.platform }}"
+          cp "$lib" "natives/${{ matrix.platform }}/"
+          ls -l natives/*/
+          case "$RUNNER_OS" in
+            Linux) ldd "$lib"; objdump -T "$lib" | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1 ;;
+            macOS) lipo -info "$lib"; otool -L "$lib" ;;
+          esac
+      - name: Test (JUnit, library loaded from the bundled resource)
+        working-directory: platform/android
+        run: ./gradlew --console=plain -Pe7.jvmOnly=true "-Pe7.nativesDir=$GITHUB_WORKSPACE/natives" :jvm:test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: natives-${{ matrix.platform }}
+          path: natives/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: jvm-test-report-${{ matrix.platform }}
+          path: platform/android/jvm/build/reports/tests/
+
+  jvm:
+    needs: jvm-natives
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: "natives-*", path: natives, merge-multiple: true }
+      - name: Build, test and stage org.e7vm:e7vm
+        working-directory: platform/android
+        run: |
+          ./gradlew --console=plain -Pe7.jvmOnly=true "-Pe7.nativesDir=$GITHUB_WORKSPACE/natives" \
+            :jvm:build :jvm:publishAllPublicationsToStagingRepository
+      - name: Check the jar
+        run: |
+          jar="$(ls platform/android/jvm/build/libs/e7vm-*.jar | grep -v -e sources -e javadoc)"
+          unzip -l "$jar"
+          for f in org/e7vm/E7VM.class org/e7vm/NativeLoader.class \
+                   org/e7vm/native/linux-x86_64/libe7vm_jni.so org/e7vm/native/linux-aarch64/libe7vm_jni.so \
+                   org/e7vm/native/macos/libe7vm_jni.dylib org/e7vm/native/windows-x86_64/e7vm_jni.dll; do
+            unzip -l "$jar" "$f" > /dev/null || { echo "missing $f in $jar" >&2; exit 1; }
+          done
+          if unzip -l "$jar" | grep -q E7VMTest; then echo "test classes leaked into $jar" >&2; exit 1; fi
+          # Smoke test: the published jar alone, examples/embed/sign.ts
+          mkdir -p smoke && cat > smoke/Smoke.java <<'EOF'
+          import java.nio.file.*;
+          import org.e7vm.*;
+          public class Smoke {
+            public static void main(String[] a) throws Exception {
+              byte[] code = E7VM.compile(new String(Files.readAllBytes(Paths.get(a[0])), "UTF-8"), "sign.ts");
+              try (E7VM vm = new E7VM()) {
+                Object r = vm.call(vm.load(code), "sign", "amount=100&currency=CNY", "s3cr3t");
+                System.out.println(r);
+                if (!"0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6".equals(r)) System.exit(1);
+              }
+            }
+          }
+          EOF
+          java -cp "$jar" smoke/Smoke.java examples/embed/sign.ts
+          # The jar is compiled for Java 8
+          unzip -p "$jar" org/e7vm/E7VM.class | head -c 8 | od -An -tu1 | awk '{ if ($8 != 52) { print "class file major " $8 " != 52"; exit 1 } }'
+          mkdir -p dist && cp platform/android/jvm/build/libs/*.jar dist/
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e7-jvm-jar
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maven-staging-jvm
+          path: platform/android/build/staging-repo/
+          if-no-files-found: error
+
+  android-aar:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build and stage org.e7vm:e7vm-android
+        working-directory: platform/android
+        run: |
+          export E7_NDK_PATH="$ANDROID_NDK_LATEST_HOME"
+          echo "NDK: $E7_NDK_PATH"
+          ./gradlew --console=plain :library:assembleRelease :library:publishAllPublicationsToStagingRepository
+      - name: Check the AAR
+        run: |
+          aar=platform/android/library/build/outputs/aar/library-release.aar
+          unzip -l "$aar"
+          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+            unzip -l "$aar" "jni/$abi/libe7vm_jni.so" > /dev/null || { echo "missing jni/$abi/libe7vm_jni.so" >&2; exit 1; }
+          done
+          unzip -l "$aar" proguard.txt > /dev/null || { echo "missing consumer proguard.txt" >&2; exit 1; }
+          rm -rf aar-x && mkdir aar-x && unzip -q "$aar" -d aar-x
+          unzip -l aar-x/classes.jar
+          unzip -l aar-x/classes.jar org/e7vm/E7VM.class org/e7vm/NativeLoader.class > /dev/null
+          if unzip -l aar-x/classes.jar | grep -q E7VMTest; then echo "test classes leaked into the AAR" >&2; exit 1; fi
+          cat aar-x/proguard.txt
+          # 16 KB page size support (Android 15+): 64-bit libraries need LOAD segments aligned to >= 0x4000
+          readelf="$(find "$ANDROID_NDK_LATEST_HOME" -name llvm-readelf -type f | head -1)"
+          for abi in arm64-v8a x86_64; do
+            "$readelf" -lW "aar-x/jni/$abi/libe7vm_jni.so" | awk -v abi=$abi '/LOAD/ { if (strtonum($NF) < 16384) bad=1 } END { if (bad) { print abi ": LOAD alignment < 16K"; exit 1 } else print abi ": 16K aligned" }'
+          done
+          v="${E7_VERSION#v}"; [ -n "$v" ] || v="$(sed -n 's/^project(e7vm VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)-SNAPSHOT"
+          mkdir -p dist && cp "$aar" "dist/e7vm-android-$v.aar"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e7-android-aar
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maven-staging-android
+          path: platform/android/build/staging-repo/
+          if-no-files-found: error
+
+  android-emulator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [30]
+    name: android emulator (API ${{ matrix.api-level }}, x86_64)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Build test APKs (x86_64 only)
+        working-directory: platform/android
+        run: |
+          echo "E7_NDK_PATH=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          export E7_NDK_PATH="$ANDROID_NDK_LATEST_HOME"
+          ./gradlew --console=plain -Pe7.abis=x86_64 :library:assembleDebugAndroidTest
+      - name: Run instrumented tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          arch: x86_64
+          target: default
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
+          disable-animations: true
+          working-directory: platform/android
+          script: ./gradlew --console=plain -Pe7.abis=x86_64 :library:connectedDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-test-report-api${{ matrix.api-level }}
+          path: |
+            platform/android/library/build/reports/androidTests/
+            platform/android/library/build/outputs/androidTest-results/
+          if-no-files-found: ignore
+
+  publish:
+    if: inputs.publish
+    needs: [jvm, android-aar, android-emulator]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    env:
+      HAS_CENTRAL: ${{ secrets.MAVEN_CENTRAL_USERNAME != '' && secrets.MAVEN_CENTRAL_PASSWORD != '' && secrets.SIGNING_KEY != '' && secrets.SIGNING_PASSWORD != '' }}
+      SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+      SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Version
+        id: ver
+        run: |
+          v="${E7_VERSION#v}"
+          case "$v" in ""|*SNAPSHOT*) echo "publish needs a release version, got '$v'" >&2; exit 1 ;; esac
+          want="$(sed -n 's/^project(e7vm VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          [ "$v" = "$want" ] || echo "::warning::version $v differs from the CMake project version $want"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with: { pattern: "natives-*", path: natives, merge-multiple: true }
+      - uses: actions/download-artifact@v4
+        with: { name: e7-android-aar, path: dist }
+      - uses: actions/download-artifact@v4
+        with: { name: e7-jvm-jar, path: dist }
+      - name: Publish to GitHub Packages
+        working-directory: platform/android
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export E7_NDK_PATH="$ANDROID_NDK_LATEST_HOME"
+          [ -n "$SIGNING_KEY" ] || echo "::notice::SIGNING_KEY not set: artifacts are published unsigned"
+          ./gradlew --console=plain "-Pe7.nativesDir=$GITHUB_WORKSPACE/natives" \
+            publishAllPublicationsToStagingRepository publishAllPublicationsToGitHubPackagesRepository
+      - name: Publish to Maven Central
+        if: env.HAS_CENTRAL == 'true'
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: scripts/maven-central-bundle.sh platform/android/build/staging-repo "e7vm-${{ steps.ver.outputs.version }}-central.zip" --upload
+      - name: Maven Central skipped
+        if: env.HAS_CENTRAL != 'true'
+        run: echo "::notice::Maven Central not configured (needs secrets MAVEN_CENTRAL_USERNAME, MAVEN_CENTRAL_PASSWORD, SIGNING_KEY, SIGNING_PASSWORD); published to GitHub Packages only"
+      - name: Upload to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.ver.outputs.version }}"
+          for i in $(seq 1 20); do gh release view "$tag" > /dev/null 2>&1 && break; echo "waiting for release $tag"; sleep 15; done
+          gh release view "$tag" > /dev/null
+          ls -l dist
+          gh release upload "$tag" dist/e7vm-android-*.aar $(ls dist/e7vm-*.jar | grep -v -e sources -e javadoc) --clobber

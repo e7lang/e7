@@ -12,3 +12,8 @@ examples/embed/*.pub
 
 # release packaging output
 dist/
+
+# Gradle (platform/android)
+.gradle/
+local.properties
+.cxx/
