@@ -8,7 +8,8 @@
     <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
-    <AssemblyName>E7VM</AssemblyName>
+    <!-- not "E7VM": E7VM.dll would collide with the native e7vm.dll on case-insensitive file systems -->
+    <AssemblyName>E7</AssemblyName>
     <RootNamespace>E7</RootNamespace>
     <Version>1.0.1</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

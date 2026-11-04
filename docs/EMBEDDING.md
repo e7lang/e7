@@ -153,7 +153,7 @@ e7vm uses no JIT and allocates no executable memory, which meets the App Store r
   dotnet add package E7VM --version 1.0.1
   ```
 
-  The package targets `netstandard2.0` and `net8.0`. It is also attached to each GitHub release and published to
+  The package targets `netstandard2.0` and `net8.0` (managed assembly `E7.dll`, namespace `E7`). It is also attached to each GitHub release and published to
   GitHub Packages (`https://nuget.pkg.github.com/e7lang/index.json`).
   Without NuGet, add `platform/windows/E7VM.cs` to your project and ship `e7vm.dll` (or `libe7vm.so` / `libe7vm.dylib`)
   next to your app; build it with `-Shared` or `cmake -DE7_BUILD_SHARED=ON`.
