@@ -1,5 +1,7 @@
-# E7 语言与 e7fvm 虚拟机设计方案（草案 v0.2）
+# E7 语言与 e7vm 虚拟机设计方案（草案 v0.3）
 
+> v0.3 变更：定名 **E7 / e7vm**；语法**只采用严格 TypeScript 子集**（取消 Ruby 方案）；整数字面量默认 `int`；**不支持异常**（`try/catch/throw`）；负载定为常规数学/数值算法 + 字符串处理，据此规划标准库与字符串实现。
+>
 > v0.2 变更：根据反馈改为 **严格静态类型**、语法以 **TypeScript 严格子集** 为主；明确 **脚本由服务器下发**、**端上带编译器（可选）**、**为协程预留设计**；新增命名调研。
 > 现阶段只做设计，不开发。
 
@@ -8,7 +10,11 @@
 | 项 | 结论 |
 |---|---|
 | 类型 | 严格静态类型，无 `any` |
-| 语法 | TypeScript 子集（或同等优雅的 Ruby 风格），要求“写得少、表达得多” |
+| 语法 | **严格 TypeScript 子集**（每个 E7 程序都是合法 TS） |
+| 命名 | 语言 **E7**，引擎 **e7vm** |
+| 数值 | 整数字面量默认 `int`(i64)，`number` = f64 |
+| 异常 | **不支持** `try/catch/throw`；运行时错误直接终止脚本并返回宿主 |
+| 负载 | 常规数学/数值算法 + 字符串处理 |
 | 脚本来源 | **服务器下发** → 签名校验 + 字节码验证 + 沙箱是 P0 |
 | 编译器 | 核心是 VM 跑 `.e7b`；编译器也要能在手机上跑（可选模块） |
 | 协程 | v1 不提供语法，但 VM 架构从第一天按“可挂起”设计 |
@@ -20,7 +26,7 @@
 
 ### 1.1 一个发现：`e7f` 就是 `everettjf` 的缩写
 `everettjf` = **e** + `verettj`（7 个字母）+ **f** → **e7f**，与 `i18n`（internationalization）、`k8s`（kubernetes）是同一种数字缩写法（numeronym）。
-仓库名 `e7fvm` 正好可以解读为 **e7f VM = everettjf 的虚拟机**。这个名字和你的 ID 有天然关系，而且有“梗”可讲。
+语言名 **E7** 即取自 e7f，引擎名定为更简洁的 **e7vm**（检索未发现同名项目）。
 
 ### 1.2 候选名
 
@@ -36,9 +42,10 @@
 
 注：“E” 本身已经是一门老语言（1997 年 Electric Communities 的 E），所以用 “E7” 而不是 “E”。
 
-### 1.3 推荐命名体系
-- 语言：**E7**（读作 “E-seven”）
-- 引擎/仓库：**e7fvm**（e7f = everettjf）
+### 1.3 命名体系（已确定）
+- 语言：**E7**（读作 “E-seven”，来自 e7f = everettjf）
+- 引擎：**e7vm**（库 `libe7vm`、可选编译器库 `libe7c`）
+- 仓库：当前为 `e7fvm`，可在 GitHub 设置中改名为 `e7vm`（GitHub 会自动重定向旧地址）
 - 源文件 `.e7`，字节码 `.e7b`，编译器命令 `e7c`，运行器 `e7`
 - 版本演进可以自然地留给 **E8**（例如引入协程/泛型大版本时）
 
@@ -52,11 +59,10 @@
 |---|---|---|
 | **Static TypeScript（微软 MakeCode，MPLR 2019 论文）** | TS 的语法子集，类改为**名义类型**，编译到 ARM 机器码，mark-sweep GC；对象访问密集的基准比 MicroPython/Duktape 快 ≥20 倍，比 V8 慢不到 2 倍 | **最直接的先例**：证明“严格 TS 子集 + 静态编译”可行且很快 |
 | AssemblyScript | TS 语法 + `i32/i64/f64` 等数值类型（通过声明文件让 tsc 认识），编译到 Wasm | 用 `.d.ts` 声明额外数值类型，**IDE 白拿** |
-| Crystal | Ruby 语法 + 静态类型 + 全局类型推断 | Ruby 风格也能静态化，但需要自研全部工具链 |
 | Swift / Kotlin | 现代静态类型语言的表达力标杆 | 借鉴其可空类型 `T?`、表达式风格 |
 | Wasm / JVM | 加载时做字节码类型验证 | 服务器下发字节码的安全模型 |
 
-### 2.2 方案 A：E7 = 严格 TypeScript 子集（推荐）
+### 2.2 E7 = 严格 TypeScript 子集
 
 核心规则：**每一个合法的 E7 程序，同时也是合法的 TypeScript 程序**（反之不成立：E7 更严格）。
 
@@ -93,39 +99,11 @@ export function main(): string { return `total=${total}`; }
 3. **静态类型天然存在**：TS 的类型标注语法成熟（泛型、可空、联合、函数类型），不用自己设计。
 4. 优雅度靠：类型推断、箭头函数、解构、模板字符串、`for...of`、构造函数参数属性、可选链 `?.`、`??`。
 
-代价：花括号和分号让代码比 Ruby 略“重”；TS 的结构化类型、`any`、原型链等必须裁剪掉（见 §3）。
+代价：TS 的结构化类型、`any`、原型链等必须裁剪掉（见 §3）。
 
-### 2.3 方案 B：Ruby 风格静态语言（Crystal 式）
-
-```ruby
-def quicksort(a : Array(Float), lo = 0, hi = a.size - 1)
-  return if lo >= hi
-  p = a[(lo + hi) >> 1]
-  i, j = lo, hi
-  while i <= j
-    i += 1 while a[i] < p
-    j -= 1 while a[j] > p
-    if i <= j
-      a[i], a[j] = a[j], a[i]
-      i += 1; j -= 1
-    end
-  end
-  quicksort(a, lo, j)
-  quicksort(a, i, hi)
-end
-
-class Point(x : Float, y : Float)        # 一行定义类
-  def dist(o : Point) = Math.hypot(x - o.x, y - o.y)
-end
-
-total = pts.map { |p| p.x + p.y }.sum
-```
-
-优点：确实更短更优雅。缺点：没有现成 IDE 支持（要自研 LSP、高亮）、没有现成的“参照实现”做差分测试、学习人群更小、语法设计和类型推断规则全部要自己定，工作量和风险明显更大。
-
-### 2.4 结论
-- **v1 采用方案 A（严格 TS 子集）**，用类型推断和精选语法特性保证简洁。
-- 编译器架构上把“前端”（词法/语法 → 类型化 AST）和“后端”（类型化 IR → 字节码）解耦。如果以后想要 Ruby 风格，可以**再加一个前端**，复用全部后端和 VM，两种语法编译出同一种 `.e7b`。
+### 2.3 结论
+- **只采用严格 TS 子集**，不再考虑 Ruby 风格语法。简洁性靠类型推断和精选语法特性保证。
+- 编译器内部仍保持“前端（语法 → 类型化 AST）/ 后端（类型化 IR → 字节码）”分层，这是常规工程实践，便于测试和优化。
 
 ---
 
@@ -155,10 +133,34 @@ total = pts.map { |p| p.x + p.y }.sum
 - 不开 fast-math，保证三端浮点结果一致（确定性）。
 
 ### 3.3 刻意不支持（相对 TS）
-`any` / `unknown` 的随意转换、`undefined`、`==`（只允许 `===`）、`var`、原型链/`prototype`、`eval`/`Function()`、运行时增删属性、`delete`、getter/setter（v1）、装饰器、`with`、宽松的结构化赋值转换、声明合并。
+`any` / `unknown` 的随意转换、`undefined`、`==`（只允许 `===`）、`var`、原型链/`prototype`、`eval`/`Function()`、运行时增删属性、`delete`、**`try`/`catch`/`finally`/`throw`**、getter/setter（v1）、装饰器、`with`、宽松的结构化赋值转换、声明合并。
 
-### 3.4 预留关键字（为协程准备）
-`function*` / `yield`、`async` / `await` 在 v1 解析器中**识别但报“暂不支持”**，保证未来加入时不破坏已有代码。
+### 3.4 错误处理（无异常）
+- 可预期的失败用返回值表达：`T | null`，或元组 `[T, string | null]`。
+- 运行时错误（数组越界、空引用、整数除零、预算/内存超限、栈溢出）以及脚本调用 `abort(msg)`：**立即终止本次调用**，`e7_call` 返回错误码，`e7_last_error` 给出消息和带源码行号的调用栈。VM 状态保持可用，宿主可以继续调用其它函数。
+- 好处：VM 不需要异常展开表；生成的字节码和验证器都更简单。
+
+### 3.5 预留关键字（为协程准备）
+`function*` / `yield`、`async` / `await` 在 v1 解析器中**识别但报“暂不支持”**，保证未来加入时不破坏已有代码。`try`/`catch`/`throw` 同样识别并报“E7 不支持异常”的明确诊断。
+
+### 3.6 标准库（按负载：数学 + 字符串）
+| 模块 | v1 内容 |
+|---|---|
+| `Math` | TS 全部 `Math.*`（`sqrt` `pow` `exp` `log` `sin`… `floor` `ceil` `round` `trunc` `hypot` `min/max`），`Math.random` 可由宿主注入种子以保证可复现；整数辅助 `idiv` `imod` `gcd` `abs` `clamp` |
+| 数组 | `push pop slice splice concat indexOf includes sort(cmp) reverse fill map filter reduce some every find join`；`Float64Array/Int32Array/Uint8Array` |
+| 字符串 | `length charCodeAt at slice substring indexOf lastIndexOf includes startsWith endsWith split trim toUpperCase toLowerCase padStart padEnd repeat replace/replaceAll(字符串参数)`、模板字符串 |
+| 转换 | `parseInt parseFloat Number() String() toFixed toString(radix)` |
+| 容器 | `Map` `Set`（插入有序，与 JS 一致） |
+| 宿主 | `print`（重定向到宿主日志）、宿主注册的原生函数 |
+
+暂不包含：`RegExp`（v2 视需求加入）、`Date`（由宿主提供时间函数）、`BigInt`、`JSON`（v1.x 优先候选）。
+
+### 3.7 字符串实现
+- 语义与 TS 保持一致：`length`/下标按 **UTF-16 代码单元**计算，保证与 Node 差分测试结果相同。
+- 存储双表示（同 V8）：全 Latin-1 的字符串每字符 1 字节，否则 UTF-16；O(1) 随机访问。
+- 不可变 + 驻留（短字符串/常量），哈希缓存在对象头中。
+- 拼接优化：编译器把循环中的 `s += x` 和模板字符串降级为内部 StringBuilder，避免 O(n²)。
+- 与宿主交互时按 UTF-8 收发（C API 层做转换）。
 
 ---
 
@@ -260,7 +262,7 @@ const char* e7_last_error(e7_vm*);                 // 含源码行号的调用�
 - `e7c`：编译器命令行（`--check` 只做类型检查、`-O2`、`--strip-debug`、`--sign key`）。
 - `e7`：运行器 / 反汇编器（`e7 dis a.e7b`）/ 基准工具。
 - 测试：单元测试 + `.e7` 用例（期望输出）+ **Node.js 差分测试** + fuzz。
-- 基准：fib、nbody、spectral-norm、quicksort、matmul、字符串处理；对照 Lua 5.4、QuickJS。
+- 基准：数值（fib、nbody、spectral-norm、mandelbrot、matmul、sieve、quicksort）+ 字符串（拼接、split/join、查找替换、词频统计 Map<string,int>）；对照 Lua 5.4、QuickJS、Node（解释模式 `--jitless`）。
 
 ## 9. 目录结构（规划）
 ```
@@ -286,14 +288,22 @@ platform/ios android windows
 | M5 字节码与安全 | `.e7b` 序列化、验证器、签名、沙箱、预算挂起/恢复 | fuzz 24h 无崩溃；篡改字节码被拒 |
 | M6 性能 | 常量折叠、融合比较跳转、内联小函数、超级指令 | 基准达到或超过 Lua 5.4 |
 | M7 三端集成 | C API、iOS/Android/Windows 构建与 Demo App、端上编译 | 三端真机运行同一 `.e7b` 结果一致 |
-| E8（v2） | 协程（`yield`/`async`）、增量 GC、getter/setter、可能的 Ruby 风格前端 | — |
+| E8（v2） | 协程（`yield`/`async`）、增量 GC、getter/setter、RegExp | — |
 
-## 11. 还需要确认
-1. 命名：语言叫 **E7**、引擎叫 **e7fvm** 是否 OK？还是更喜欢 E7F / Evr？
-2. 语法：同意 v1 走**严格 TS 子集**（方案 A），把 Ruby 风格留作将来可选的第二前端吗？
-3. 整数默认：整数字面量推断为 `int`（i64）是否 OK？（另一种是全部默认 `number`，更像 JS 但循环更慢）
-4. 异常：v1 是否需要 `try/catch/throw`？（不需要的话，错误直接终止脚本并返回宿主，更简单）
-5. 主要算法负载类型（数值计算 / 字符串 / 图与规则），用来决定标准库和基准的优先级。
+## 11. 决策记录
+| 问题 | 决定 |
+|---|---|
+| 命名 | 语言 E7，引擎 e7vm |
+| 语法 | 只用严格 TS 子集 |
+| 整数默认 | 整数字面量 → `int`(i64) |
+| 异常 | 不支持；运行时错误终止调用并返回宿主 |
+| 负载 | 常规数学/数值算法 + 字符串 |
+
+## 12. 下一步（M0 规范冻结需要产出）
+1. `docs/SPEC.md`：E7 语法子集（EBNF）、类型规则、数值与字符串语义、错误模型。
+2. `docs/BYTECODE.md`：指令集表、编码、`.e7b` 格式、验证规则。
+3. `lib/e7.d.ts`：标准库与 `int` 等类型声明，可直接在 VS Code 中试写 E7 脚本。
+4. `examples/`：10 个左右典型算法脚本（数值 + 字符串），同时作为第一批测试与基准。
 
 ## 参考资料
 - Static TypeScript 论文（MPLR 2019）：https://mmoskal.github.io/pdf/static-typescript.pdf
