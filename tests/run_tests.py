@@ -23,7 +23,7 @@ def main():
     ap.add_argument("filter", nargs="*")
     a = ap.parse_args()
     files = sorted(glob.glob(os.path.join(ROOT, "cases", "**", "*.ts"), recursive=True))
-    files = [f for f in files if not os.path.basename(f).startswith("_")]
+    files = [f for f in files if not any(part.startswith("_") for part in os.path.relpath(f, ROOT).split(os.sep))]
     if a.filter:
         files = [f for f in files if any(x in f for x in a.filter)]
     shim = os.path.join(ROOT, "node_shim", "register.mjs")

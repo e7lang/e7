@@ -1,0 +1,11 @@
+import { TAU, clamp, Accumulator, Level, counted } from "./_lib/math_utils.ts";
+import type { Named } from "./_lib/math_utils.ts";
+import * as S from "./_lib/strings.ts";
+import { shout as yell } from "./_lib/strings.ts";
+console.log(TAU.toFixed(4), clamp(15, 0, 10), clamp(-3, 0, 10));
+const acc = new Accumulator();
+console.log(acc.add(1).add(2).add(3).value());
+console.log(Level.High, Level.Low + 1);
+console.log(S.pad(7, 3), S.shout("hey"), yell("x"));
+const n: Named = { name: "zed" };
+console.log(n.name, counted(), counted(), counted());

@@ -71,6 +71,11 @@ bool Checker::assignable(Type* src, Type* dst) {
     }
     case TT::Class:
       return src->t == TT::Class && isAncestor(dst->cls, src->cls);
+    case TT::Array:
+      // arrays of references are covariant (as in TypeScript); representation is identical
+      return src->t == TT::Array && kindOf(src->elem) == K_R && kindOf(dst->elem) == K_R &&
+             !isBoxedOptional(src->elem) && !isBoxedOptional(dst->elem) && src->elem->t != TT::Func &&
+             dst->elem->t != TT::Func && assignable(src->elem, dst->elem);
     case TT::Object:
       return structurallyAssignable(src, dst);
     case TT::Number:
