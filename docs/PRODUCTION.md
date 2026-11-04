@@ -1,114 +1,114 @@
-# 生产就绪检查清单（v1.0）
+# Production readiness checklist (v1.0)
 
-本文件记录 e7vm 上线前的验证项与证据，便于复核。所有项目在 CI（`.github/workflows/ci.yml`）中持续执行。
+This file records the verification items and evidence for e7vm before release, for review. All items run continuously in CI (`.github/workflows/ci.yml`).
 
-## 1. 正确性
+## 1. Correctness
 
-| 项目 | 方法 | 结果 |
+| Item | Method | Result |
 |---|---|---|
-| 语言/标准库语义 | `tests/run_tests.py`：82 个用例，与 Node.js 22 输出**逐字节**比对（差分测试）+ 预期输出 + 编译错误用例 | 全部通过 |
-| TS 兼容性 | `tests/tsc/check.sh`：tsc 5.6 `--strict` 检查所有用例与示例 | 全部通过 |
-| C API | `tests/capi_test.cpp`：参数编解码、宿主函数、KeyHandle、签名、预算挂起/恢复、内存/栈上限、错误后复用 | 通过 |
-| 区域设置无关 | `tests/locale_test.cpp`（de_DE 下数字解析/格式化） | 通过 |
-| 绑定 | JNI（OpenJDK 21 `E7VMTest`）、iOS xcframework 构建、Android NDK 构建、C#（Windows） | 通过 |
+| Language/standard library semantics | `tests/run_tests.py`: 82 cases, compared **byte-for-byte** against Node.js 22 output (differential testing) + expected output + compile-error cases | All pass |
+| TS compatibility | `tests/tsc/check.sh`: tsc 5.6 `--strict` checks all cases and examples | All pass |
+| C API | `tests/capi_test.cpp`: argument encoding/decoding, host functions, KeyHandle, signatures, budget suspend/resume, memory/stack limits, reuse after errors | Pass |
+| Locale independence | `tests/locale_test.cpp` (number parsing/formatting under de_DE) | Pass |
+| Bindings | JNI (OpenJDK 21 `E7VMTest`), iOS xcframework build, Android NDK build, C# (Windows) | Pass |
 
-## 2. 平台与编译器矩阵（CI）
+## 2. Platform and compiler matrix (CI)
 
-Linux GCC 13 / Clang 18 / Clang 16、32 位 i386、switch 分派、动态库、ASan+UBSan；macOS arm64 Release 与 ASan；
-Windows MSVC 与 clang-cl；iOS；Android NDK；JNI。另在本地验证：Clang 15/17、libc++、aarch64（qemu）、MinGW（Wine）、
-GCC UBSan（含 `float-cast-overflow`）。
+Linux GCC 13 / Clang 18 / Clang 16, 32-bit i386, switch dispatch, shared library, ASan+UBSan; macOS arm64 Release and ASan;
+Windows MSVC and clang-cl; iOS; Android NDK; JNI. Also verified locally: Clang 15/17, libc++, aarch64 (qemu), MinGW (Wine),
+GCC UBSan (including `float-cast-overflow`).
 
-**已知编译器缺陷及处理**：LLVM 15–17 的 CodeGenPrepare 地址模式下沉会错误编译 computed goto 解释器循环
-（用 `-mllvm -opt-bisect-limit` 定位到 `CodeGen Prepare on e7::VM::execute`，再用 `-addr-sink-using-gep=false`
-确认是该变换）。CMake 对这些编译器的 `interp.cpp` 关闭该变换；其他构建方式自动退回 switch 分派。见 README。
+**Known compiler bug and workaround**: in LLVM 15–17, CodeGenPrepare's address-mode sinking miscompiles the computed goto interpreter loop
+(located with `-mllvm -opt-bisect-limit` to `CodeGen Prepare on e7::VM::execute`, then confirmed as that transform with `-addr-sink-using-gep=false`).
+CMake disables the transform for `interp.cpp` on these compilers; other build methods automatically fall back to switch dispatch. See README.
 
-## 3. 安全（不可信输入）
+## 3. Security (untrusted input)
 
-| 威胁 | 防护 | 验证 |
+| Threat | Mitigation | Verification |
 |---|---|---|
-| 篡改/伪造字节码 | Ed25519 签名（`require_signature` + `trusted_keys`），签名校验先于解析 | 错误公钥、未签名、单字节篡改均被拒绝（`e7 --trust`、capi_test） |
-| 恶意字节码破坏内存 | 加载时字节码验证器（寄存器类型/范围、跳转目标、调用元数据、常量索引）+ 运行时对象形状检查 | `fuzz_load`：每次 CI 数千个变异模块，ASan/UBSan 下零崩溃 |
-| 恶意源码（端上编译） | 解析嵌套上限 160、AST 深度上限 400、JSON 嵌套上限 256 | `fuzz_compile`：本轮累计约 6 万次变异，零内部错误、零崩溃 |
-| 死循环 / 资源耗尽 | 指令预算（`e7_set_budget`）、`memory_limit`、`stack_slots`、`max_frames`、原生重入深度 64 | capi_test 覆盖每一项 |
-| 密钥泄露 | `KeyHandle`：密钥只在宿主回调中出现，脚本不可读取/打印 | capi_test、示例 |
-| 越权调用 | 脚本只能调用显式注册的宿主函数，加载时比对签名 | capi_test |
+| Tampered/forged bytecode | Ed25519 signatures (`require_signature` + `trusted_keys`); signature is checked before parsing | Wrong public key, unsigned, and single-byte tampering are all rejected (`e7 --trust`, capi_test) |
+| Malicious bytecode corrupting memory | Load-time bytecode verifier (register types/ranges, jump targets, call metadata, constant indices) + runtime object shape checks | `fuzz_load`: thousands of mutated modules per CI run, zero crashes under ASan/UBSan |
+| Malicious source (on-device compilation) | Parse nesting limit 160, AST depth limit 400, JSON nesting limit 256 | `fuzz_compile`: about 60,000 cumulative mutations this round, zero internal errors, zero crashes |
+| Infinite loops / resource exhaustion | Instruction budget (`e7_set_budget`), `memory_limit`, `stack_slots`, `max_frames`, native re-entry depth 64 | capi_test covers each one |
+| Key leakage | `KeyHandle`: keys appear only in host callbacks; scripts cannot read/print them | capi_test, examples |
+| Unauthorized calls | Scripts can call only explicitly registered host functions; signatures are checked at load time | capi_test |
 
-### 3.1 独立安全审查（字节码加载路径）
+### 3.1 Independent security review (bytecode loading path)
 
-由一个独立的审查代理（只拿到源码和"任意字节序列不得破坏内存"的目标，不知道我们的结论）针对反序列化、验证器、
-加载/链接、解释器以及标准库原生函数做了定向审查，并用手工构造的恶意 `.e7b` 在 ASan 下复现。发现并已修复 4 个问题：
+An independent review agent (given only the source code and the goal "no byte sequence may corrupt memory", without knowledge of our conclusions) performed a targeted review of deserialization, the verifier,
+loading/linking, the interpreter, and the standard library native functions, and reproduced issues under ASan with hand-crafted malicious `.e7b` files. It found 4 issues, all fixed:
 
-| # | 问题 | 修复 |
+| # | Issue | Fix |
 |---|---|---|
-| 1 | 导出函数的宿主签名（`hostSig`）未校验，C API 会按伪造的类型转换参数/返回值（类型混淆、空签名 UB） | 验证器要求 hostSig 格式正确且与函数寄存器类型逐一一致 |
-| 2 | 内联缓存槽被不同类型的指令（GETN_I/F/R、SETN_*、CALLI）共用时，命中路径会按错误类型读字段或越界读 vtable | 验证器要求每个 IC 槽只服务一种用途；CALLI 命中时再做 vtable 边界检查 |
-| 3 | `concatBytes`、`Map.fromEntries`、`console.log` 假设数组元素是引用 | 检查数组元素类型 / 按实际类型格式化 |
-| 4 | `Map.new/Set.new` 的键模式与键类型可不一致（把 double 当指针哈希） | 要求键模式与键类型的寄存器种类一致 |
+| 1 | The host signature of exported functions (`hostSig`) was not validated; the C API would convert arguments/return values using forged types (type confusion, UB on empty signature) | The verifier requires hostSig to be well-formed and to match the function's register types one by one |
+| 2 | When an inline cache slot was shared by instructions of different kinds (GETN_I/F/R, SETN_*, CALLI), the hit path could read fields as the wrong type or read the vtable out of bounds | The verifier requires each IC slot to serve a single purpose; CALLI also bounds-checks the vtable on a hit |
+| 3 | `concatBytes`, `Map.fromEntries`, `console.log` assumed array elements were references | Check array element types / format by the actual type |
+| 4 | The key mode of `Map.new/Set.new` could disagree with the key type (hashing a double as a pointer) | Require the key mode and the key type to have the same register kind |
 
-另外顺带修复：若干原生函数在范围检查前就把字节码给出的 double 转成整数（UB），统一改为先检查（`immIndex`）。
-6 个恶意样本保存在 `tests/malicious/`，由 `malicious_test`（C API，CI 中含 ASan）回归测试。审查确认正确的部分：
-反序列化边界与整数溢出、寄存器/常量/索引范围、跳转目标（不能跳入参数字）、调用参数与元数据、闭包捕获、
-类继承布局、运行时类型检查、栈/帧上限、GC 根。
+Also fixed along the way: several native functions converted bytecode-supplied doubles to integers before the range check (UB); all now check first (`immIndex`).
+6 malicious samples are kept in `tests/malicious/` and regression-tested by `malicious_test` (C API, including ASan in CI). Areas the review confirmed correct:
+deserialization bounds and integer overflow, register/constant/index ranges, jump targets (cannot jump into operand words), call arguments and metadata, closure captures,
+class inheritance layout, runtime type checks, stack/frame limits, GC roots.
 
-### 3.2 第二轮独立审查（标准库/加密原生函数、GC、C API）
+### 3.2 Second independent review (standard library/crypto native functions, GC, C API)
 
-| # | 问题 | 修复 |
+| # | Issue | Fix |
 |---|---|---|
-| 1 | `rsaSign`：私钥中的 n 与 p·q 不一致时 BearSSL 栈缓冲区越界**写**（可由普通 TS + 恶意密钥触发） | 解析时校验 n == p·q、512 ≤ bits ≤ 4096；PKCS#8 嵌套深度上限 |
-| 2 | `e7_call` 转换宿主参数时可能触发 GC，回收已转换的参数（UAF） | 参数转换期间暂停 GC（`VM::GCPause`） |
-| 3/4 | 宿主函数内重入 `e7_call/e7_resume/e7_load`，或调用 `e7_collect_garbage`/`e7_abort_suspended` 破坏执行状态 | C API 运行中拒绝重入（`E7_ERR_STATE`），回收/中止调用在运行中被忽略 |
-| 5 | 循环/超深数组 `String(x)`/`join` 无限递归 | 循环引用按 JS 输出空串，嵌套深度上限 256，输出大小受内存上限约束 |
-| 6/7 | `JSON.parse` 类型描述符（来自字节码）递归无界、越界读、`?~` 组合泄漏指针 | 描述符先做严格语法校验（边界、深度、包装层规则） |
-| 8 | BigInt 大小不计入内存上限；超大 BigInt 的二次算法无视指令预算 | 上限 262144 位，limb 计入堆；按块解析；`**` 精确判断位数 |
-| 9 | `replace` 的 `$\``/`$'` 二次膨胀；子串搜索 O(n·m)；PBKDF2 迭代不计预算 | 临时缓冲受内存上限约束（`checkTemp`）；KMP 搜索 O(n+m)；PBKDF2 按 HMAC 次数预先扣预算 |
-| 其他 | `lastIndexOf`/`toExponential` 的 double→int UB；数值数组原生函数未检查元素类型（信息泄漏） | 先检查范围；检查 `vt` |
+| 1 | `rsaSign`: when n in the private key does not match p·q, BearSSL performs a stack buffer overflow **write** (triggerable by plain TS + a malicious key) | Validate n == p·q and 512 ≤ bits ≤ 4096 at parse time; limit PKCS#8 nesting depth |
+| 2 | Converting host arguments in `e7_call` could trigger GC and collect already-converted arguments (UAF) | Pause GC during argument conversion (`VM::GCPause`) |
+| 3/4 | Re-entering `e7_call/e7_resume/e7_load` from a host function, or calling `e7_collect_garbage`/`e7_abort_suspended`, corrupted execution state | The C API rejects re-entry while running (`E7_ERR_STATE`); collect/abort calls are ignored while running |
+| 5 | Unbounded recursion in `String(x)`/`join` on cyclic/very deep arrays | Cyclic references print an empty string as in JS, nesting depth limit 256, output size bounded by the memory limit |
+| 6/7 | `JSON.parse` type descriptors (from bytecode): unbounded recursion, out-of-bounds read, `?~` combination leaking pointers | Descriptors first undergo strict syntax validation (bounds, depth, wrapper-layer rules) |
+| 8 | BigInt size was not counted toward the memory limit; quadratic algorithms on huge BigInts ignored the instruction budget | Limit of 262144 bits, limbs counted on the heap; parsing in chunks; `**` computes the exact bit count |
+| 9 | Quadratic blow-up from `$\``/`$'` in `replace`; O(n·m) substring search; PBKDF2 iterations not charged to the budget | Temporary buffers bounded by the memory limit (`checkTemp`); KMP search O(n+m); PBKDF2 pre-charges the budget per HMAC count |
+| Other | double→int UB in `lastIndexOf`/`toExponential`; numeric array native functions did not check element types (information leak) | Check range first; check `vt` |
 
-回归测试：`tests/capi_reentry_test.cpp`、`tests/malicious/`（新增 JSON 描述符与循环 join 样本）、
-`tests/cases/errors/rt_rsa_bad_key.ts`、`rt_bigint_size.ts`、`rt_replace_oom.ts`、`tests/cases/lib/string_search.ts`
-（与 Node 的随机差分测试）。另用 660 个"边界数值 × 内建函数"脚本（±Infinity/NaN/±1e300/-0/±2^53…）在
-float-cast-overflow UBSan 下运行，零报告。
+Regression tests: `tests/capi_reentry_test.cpp`, `tests/malicious/` (new JSON descriptor and cyclic join samples),
+`tests/cases/errors/rt_rsa_bad_key.ts`, `rt_bigint_size.ts`, `rt_replace_oom.ts`, `tests/cases/lib/string_search.ts`
+(randomized differential testing against Node). In addition, 660 "edge-case number × built-in function" scripts (±Infinity/NaN/±1e300/-0/±2^53...) were run under
+float-cast-overflow UBSan with zero reports.
 
-### 3.3 第三轮独立审查（加密正确性与编码，含与 Node 的差分对比）
+### 3.3 Third independent review (crypto correctness and encoding, including differential comparison with Node)
 
-| # | 问题 | 修复 |
+| # | Issue | Fix |
 |---|---|---|
-| 1 | `rsaVerify` 公钥解析对嵌套 SPKI 无限递归（栈溢出） | 只允许一层 SPKI，检查 rsaEncryption OID，拒绝尾随数据 |
-| 2 | **合法**的 DER ECDSA 签名在 r/s 都短于曲线长度时被拒（P-521 约 26%） | 自写严格 DER 解码并左补齐；2×长度的输入先按 raw、再按 DER 尝试 |
-| 3 | BearSSL 宽松 ASN.1 导致同一 (r,s) 的多种非 DER 编码都能验证（可塑性） | 严格 DER：最小长度、非负且最小整数编码、无尾随数据 |
-| 4 | RSA 超长公钥指数 e / 超长 dp、dq 使 modpow 绕过指令预算（可达数小时） | e ≤ 64 位（同 OpenSSL）；dp/dq/iq 长度不超过 p/q |
-| 5 | `ecdsaPublicKey` 接受 0 或 ≥ n 的私钥标量 | 统一检查 1 ≤ x < n |
-| 6 | Ed25519 验签（余因子方程）对攻击者给定的小阶公钥接受任意消息的零签名 | 拒绝非规范编码与 8 阶子群点（编码独立计算，与 libsodium 一致） |
-| 7 | X25519 未拒绝低阶公钥（全零共享密钥） | 常量时间检查全零输出并报错（RFC 7748 §6.1） |
+| 1 | `rsaVerify` public key parsing recursed without bound on nested SPKI (stack overflow) | Allow only one SPKI layer, check the rsaEncryption OID, reject trailing data |
+| 2 | **Valid** DER ECDSA signatures were rejected when r/s were both shorter than the curve length (about 26% for P-521) | Custom strict DER decoder with left padding; inputs of 2× length are tried as raw first, then as DER |
+| 3 | BearSSL's lenient ASN.1 let multiple non-DER encodings of the same (r,s) verify (malleability) | Strict DER: minimal length, non-negative and minimal integer encoding, no trailing data |
+| 4 | An overlong RSA public exponent e / overlong dp, dq let modpow bypass the instruction budget (up to hours) | e ≤ 64 bits (same as OpenSSL); dp/dq/iq no longer than p/q |
+| 5 | `ecdsaPublicKey` accepted private scalars of 0 or ≥ n | Uniformly check 1 ≤ x < n |
+| 6 | Ed25519 signature verification (cofactored equation) accepted an all-zero signature on any message for an attacker-chosen small-order public key | Reject non-canonical encodings and points in the order-8 subgroup (encodings computed independently, consistent with libsodium) |
+| 7 | X25519 did not reject low-order public keys (all-zero shared secret) | Constant-time check for all-zero output and report an error (RFC 7748 §6.1) |
 
-已确认正确：RSA PKCS#1 v1.5 完整 DigestInfo 比对、PSS 各边界、ECDSA r/s 为 0 或 ≥ n 拒绝、GCM/ChaCha 常量时间
-认证、CBC 填充、CTR 计数器回绕、HKDF/PBKDF2/HMAC/全部哈希、各编码与 Node 一致、KeyHandle 不泄漏、随机数来源、
-模块签名覆盖范围。回归测试：`crypto_ecdsa_der.ts`（OpenSSL 生成的 72 组 DER/raw 签名）、`crypto_ecdsa_strict_der.ts`、
-`crypto_ed25519_strict.ts`、`rt_x25519_low_order.ts`、`rt_ec_scalar_zero.ts`、`rt_rsa_huge_e.ts`。
+Confirmed correct: full DigestInfo comparison for RSA PKCS#1 v1.5, PSS edge cases, rejection of ECDSA r/s equal to 0 or ≥ n, constant-time GCM/ChaCha
+authentication, CBC padding, CTR counter wraparound, HKDF/PBKDF2/HMAC/all hashes, all encodings consistent with Node, no KeyHandle leakage, random number source,
+module signature coverage. Regression tests: `crypto_ecdsa_der.ts` (72 DER/raw signature sets generated by OpenSSL), `crypto_ecdsa_strict_der.ts`,
+`crypto_ed25519_strict.ts`, `rt_x25519_low_order.ts`, `rt_ec_scalar_zero.ts`, `rt_rsa_huge_e.ts`.
 
-### 3.4 独立生产就绪签核（fresh build，复核全部结论）
+### 3.4 Independent production-readiness sign-off (fresh build, re-verifying all conclusions)
 
-签核代理从当前提交全新构建 Release 与 ASan+UBSan，重跑全部测试（ctest 7/7，语言测试 82/82 与 Node 一致）、三轮审查的
-全部攻击样本（均被干净拒绝）、模糊测试（`fuzz_load` 2.8 万次、`fuzz_compile` 3.6 万次、结构化 .e7b 边界变异 2315 个）、
-模块签名攻击（剥离/移植/篡改尾部、错误公钥等全部拒绝）、460 项加密差分（含 RSA e=3 Bleichenbacher'06 伪造被拒，
-无"e7 接受而 Node 拒绝"的情况），结论 **READY WITH CAVEATS**，两项保留意见已修复：
+The sign-off agent did a fresh Release and ASan+UBSan build from the current commit and re-ran all tests (ctest 7/7, language tests 82/82 matching Node), all attack samples
+from the three reviews (all cleanly rejected), fuzzing (`fuzz_load` 28,000 runs, `fuzz_compile` 36,000 runs, 2315 structured .e7b boundary mutations),
+module signature attacks (stripping/transplanting/tampering with the trailer, wrong public key, etc., all rejected), and 460 crypto differential checks (including rejection of the RSA e=3 Bleichenbacher'06 forgery,
+with no case of "e7 accepts while Node rejects"). Conclusion: **READY WITH CAVEATS**; both caveats have been fixed:
 
-| 问题 | 修复 |
+| Issue | Fix |
 |---|---|
-| 指令预算不计原生函数的工作量：循环调用重型原生函数可绕过预算（如 26 万位 BigInt `toString` 循环约 47 小时） | 原生函数按成本模型（扫描/输出/哈希/排序/BigInt 二次）按输入/输出规模计入预算；调用后结算，下次检查时挂起或终止。四个 DoS 用例在 10M 预算下 0.1–0.5 秒内终止，示例脚本不受影响 |
-| `max_frames = 0xFFFFFFFF` 时 `reserve(max+1)` 溢出为 0，回调中帧栈重分配导致 UAF | 64 位计算并限制 `max_frames ≤ 200000`、`stack_slots ≤ 4M` |
-| 低危：构造失败泄漏 VM、key provider 返回 NULL 空密钥、宿主传 NULL 指针 + 非零长度、非法 `e7_type` 枚举值、CLI 早退未释放 | 全部改为干净处理 |
+| The instruction budget did not count native function work: calling heavy native functions in a loop could bypass the budget (e.g. a loop of `toString` on a 260,000-bit BigInt took about 47 hours) | Native functions charge the budget by input/output size according to a cost model (scan/output/hash/sort/BigInt quadratic); charges are settled after the call, and execution suspends or terminates at the next check. The four DoS cases terminate within 0.1–0.5 seconds under a 10M budget; example scripts are unaffected |
+| With `max_frames = 0xFFFFFFFF`, `reserve(max+1)` overflowed to 0, and frame stack reallocation inside a callback caused a UAF | Compute in 64 bits and limit `max_frames ≤ 200000`, `stack_slots ≤ 4M` |
+| Low severity: VM leaked on construction failure, key provider returning NULL as an empty key, host passing a NULL pointer + non-zero length, invalid `e7_type` enum values, CLI early exit without freeing | All now handled cleanly |
 
-回归测试：`capi_reentry_test` 增加原生循环预算与 `max_frames` 用例。
+Regression tests: `capi_reentry_test` adds native-loop budget and `max_frames` cases.
 
-**宿主侧必须做的配置**（见 EMBEDDING.md §6）：开启签名校验、设置指令预算与内存上限。命令行工具 `e7` 仅用于开发，
-默认不设预算。
+**Configuration the host must apply** (see EMBEDDING.md §6): enable signature checking, set an instruction budget and a memory limit. The command-line tool `e7` is for development only
+and sets no budget by default.
 
-## 4. 性能（x86-64，Release）
+## 4. Performance (x86-64, Release)
 
-见 README 基准表；与 V8 `--jitless` 相当或更快。Clang 15–17 构建在规避措施下保持 computed goto（埃氏筛 ~330 ms，
-GCC 290 ms，switch 回退 ~380 ms）。
+See the README benchmark table; comparable to or faster than V8 `--jitless`. Clang 15–17 builds keep computed goto under the workaround (Sieve of Eratosthenes ~330 ms,
+GCC 290 ms, switch fallback ~380 ms).
 
-## 5. 已知限制（非缺陷，按设计）
+## 5. Known limitations (by design, not defects)
 
-见 SPEC.md「不支持」列表：无 `try/catch`（`throw` 终止脚本）、无用户泛型、无正则、无 `any`；越界数组读取是运行时
-错误；Date 为 UTC 语义；对象展开后可选属性的键顺序在编译期确定。
+See the "Not supported" list in SPEC.md: no `try/catch` (`throw` terminates the script), no user generics, no regular expressions, no `any`; out-of-bounds array reads are runtime
+errors; Date has UTC semantics; the key order of optional properties after object spread is fixed at compile time.
