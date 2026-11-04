@@ -2485,7 +2485,7 @@ BR_TARGETS_X86_UP
 BR_TARGETS_X86_DOWN
 #endif
 
-#if BR_MSC
+#if BR_MSC && !(BR_GCC || BR_CLANG)  /* e7vm: clang-cl uses the clang path above */
 #include <stdlib.h>
 #include <intrin.h>
 #include <immintrin.h>

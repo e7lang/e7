@@ -66,12 +66,21 @@ jobs:
 
   macos:
     runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: release, flags: "-DCMAKE_BUILD_TYPE=Release" }
+          - { name: debug-asan, flags: "-DCMAKE_BUILD_TYPE=Debug -DE7_SANITIZE=ON" }
+          - { name: release-switch, flags: "-DCMAKE_BUILD_TYPE=Release -DE7_NO_COMPUTED_GOTO=ON" }
+    name: macos (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake -S . -B build ${{ matrix.flags }}
       - run: cmake --build build -j
+      - run: build/e7 tests/cases/lang/functions.ts || true
       - run: ctest --test-dir build --output-on-failure
 
   ios:

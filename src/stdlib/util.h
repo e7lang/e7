@@ -82,4 +82,5 @@ int32_t mapFind(VM& vm, MapObj* m, Slot k);
 // current module of the executing script function
 ModuleRT* currentModule(VM& vm);
 
+void jsonMapSet(VM& vm, MapObj* m, Slot k, Slot v);  // map.cpp
 }  // namespace e7

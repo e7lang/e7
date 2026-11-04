@@ -438,7 +438,6 @@ struct Builder {
           k.r = vm.newString(kv.first);
           Slot val = build(&kv.second, p + 1, path + "." + utf16ToUtf8(kv.first));
           // reuse native map insertion via Map.set semantics
-          extern void jsonMapSet(VM&, MapObj*, Slot, Slot);
           jsonMapSet(vm, m, k, val);
         }
         out.r = m;
