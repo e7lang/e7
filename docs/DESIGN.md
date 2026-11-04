@@ -1,5 +1,7 @@
-# E7 语言与 e7vm 虚拟机设计方案（草案 v0.3）
+# E7 语言与 e7vm 虚拟机设计方案（草案 v0.4）
 
+> v0.4 变更：明确主要负载是 **签名 / 验签算法**。新增 §3.8（面向签名场景的设计）：定宽整数类型与位运算、字节处理、原生 `e7:crypto` 模块、`bigint`、密钥句柄；**建议修订**整数字面量默认类型（见 §3.2）；安全章节新增可选的字节码加固。
+>
 > v0.3 变更：定名 **E7 / e7vm**；语法**只采用严格 TypeScript 子集**（取消 Ruby 方案）；整数字面量默认 `int`；**不支持异常**（`try/catch/throw`）；负载定为常规数学/数值算法 + 字符串处理，据此规划标准库与字符串实现。
 >
 > v0.2 变更：根据反馈改为 **严格静态类型**、语法以 **TypeScript 严格子集** 为主；明确 **脚本由服务器下发**、**端上带编译器（可选）**、**为协程预留设计**；新增命名调研。
@@ -14,7 +16,7 @@
 | 命名 | 语言 **E7**，引擎 **e7vm** |
 | 数值 | 整数字面量默认 `int`(i64)，`number` = f64 |
 | 异常 | **不支持** `try/catch/throw`；运行时错误直接终止脚本并返回宿主 |
-| 负载 | 常规数学/数值算法 + 字符串处理 |
+| 负载 | **以签名/验签算法为主**，兼顾常规数学算法与字符串处理 |
 | 脚本来源 | **服务器下发** → 签名校验 + 字节码验证 + 沙箱是 P0 |
 | 编译器 | 核心是 VM 跑 `.e7b`；编译器也要能在手机上跑（可选模块） |
 | 协程 | v1 不提供语法，但 VM 架构从第一天按“可挂起”设计 |
@@ -112,8 +114,9 @@ export function main(): string { return `total=${total}`; }
 ### 3.1 类型系统
 | 类别 | 内容 | 说明 |
 |---|---|---|
-| 基本类型 | `boolean` `int` `number` `string` | `number` = f64（与 TS 一致）；`int` = i64，在 `e7.d.ts` 中声明为 `type int = number`，所以 tsc 也认识 |
-| 存储类型 | `i32` `u8` `f32` 等 | 仅用于数组元素/字段以节省内存 |
+| 基本类型 | `boolean` `number` `string` `bigint` | 与 TS 语义一致；`number` = f64 |
+| 定宽整数（E7 扩展） | `i8 u8 i16 u16 i32 u32 i64 u64`，`int` = `i64` 的别名 | 真正的机器整数：回绕溢出、按位宽做位运算（见 §3.8.1）。在 `e7.d.ts` 中声明为 `number`/`bigint` 的别名，IDE 照常工作 |
+| 字节 | `Uint8Array`、`DataView` | 字节串的标准表示，签名数据的输入输出都用它 |
 | 数组 | `T[]`、`Float64Array`、`Int32Array` … | 静态类型下 `number[]` **本身就是连续 f64 存储**，无装箱 |
 | 容器 | `Map<K,V>` `Set<T>` | 内置泛型 |
 | 类 | `class`（单继承、`implements`） | **名义类型**，字段布局编译期固定，方法走 vtable |
@@ -122,14 +125,23 @@ export function main(): string { return `total=${total}`; }
 | 可空 | `T \| null`、`?.`、`??`、`!` | 只有 `null`，**没有 `undefined`** |
 | 枚举 | `enum`、字符串字面量联合 `"a" \| "b"` | 编译为整数 |
 | 函数 | 函数类型、箭头函数、闭包、默认参数、元组返回 `[int, string]` | |
-| 泛型 | 泛型函数和类 | 按“值类别”单态化（int/number/引用各生成一份） |
+| 泛型 | 泛型函数和类 | 按“值类别”单态化（各整数宽度/number/引用各生成一份） |
 | 模块 | `import` / `export` | 编译期链接 |
 
-### 3.2 数值语义（算法执行器的关键）
-- 整数字面量推断为 `int`，带小数点的推断为 `number`。
-- `int` 可隐式提升为 `number`；`number → int` 必须显式（`Math.floor` / `Math.trunc` / `toInt`）。
-- `int + - * % 位运算` 结果仍是 `int`；**`int / int` 结果是 `number`**，与 JS 一致；整除用 `Math.floor(a / b)` 或 `idiv(a, b)`（编译器识别为单条整除指令）。
-- `int` 是 64 位、溢出回绕。在 ±2^53 以内与 JS 结果完全一致（差分测试覆盖此范围）。
+### 3.2 数值语义（v0.4 建议修订，待确认）
+v0.3 定的是“整数字面量默认 `int`(i64)”。在明确负载是签名算法之后，建议改为：
+
+- **不写类型时，完全遵循 TS/JS 语义**：整数字面量是 `number`(f64)；`& | ^ << >> >>>` 按 JS 规则先转 int32 再运算；`Math.imul`、`x >>> 0`、`(a + b) | 0` 等写法结果与 Node 完全一致。
+- **标注了定宽整数类型时，采用机器整数语义**：`let h: u32 = 0x6a09e667`，加减乘回绕、位运算按 32 位、`>>` 对有符号是算术右移、对无符号是逻辑右移。
+
+修订理由：
+1. 现有大量 JS/TS 签名代码（哈希、HMAC、自定义混淆算法）大量依赖 `|0`、`>>>0` 这类 JS 位运算语义。如果整数字面量默认是 i64，这类代码在 E7 里**能编译通过但结果悄悄变了**（例如 JS 中 `1 << 31` 是负数，i64 下是正数；`x | 0` 在 i64 下不会截断）。对签名算法来说这是最危险的一类 bug。
+2. 修订后：从 JS 移植过来的代码不改也能得到相同结果；需要性能时，把关键变量标注成 `u32`/`u64` 即可走快速路径。
+3. 性能影响很小：解释器里 f64 加减与整数加减开销相当，瓶颈在指令分派；真正需要快的位运算代码会显式用定宽类型。
+
+其它规则不变：
+- 定宽整数与 `number` 之间必须显式转换（`u32(x)`、`Number(h)`），不同宽度之间也必须显式转换，杜绝隐式截断。
+- 整数除零是运行时错误；`number` 除零按 IEEE 得到 Infinity/NaN（与 JS 一致）。
 - 不开 fast-math，保证三端浮点结果一致（确定性）。
 
 ### 3.3 刻意不支持（相对 TS）
@@ -153,7 +165,9 @@ export function main(): string { return `total=${total}`; }
 | 容器 | `Map` `Set`（插入有序，与 JS 一致） |
 | 宿主 | `print`（重定向到宿主日志）、宿主注册的原生函数 |
 
-暂不包含：`RegExp`（v2 视需求加入）、`Date`（由宿主提供时间函数）、`BigInt`、`JSON`（v1.x 优先候选）。
+另见 §3.8 的字节、编码与 `e7:crypto` 模块。
+
+暂不包含：`RegExp`（v2 视需求加入）、`Date`（由宿主提供时间函数）。`bigint` 与 `JSON` 因签名场景需要已提前到 v1（见 §3.8）。
 
 ### 3.7 字符串实现
 - 语义与 TS 保持一致：`length`/下标按 **UTF-16 代码单元**计算，保证与 Node 差分测试结果相同。
@@ -163,6 +177,63 @@ export function main(): string { return `total=${total}`; }
 - 与宿主交互时按 UTF-8 收发（C API 层做转换）。
 
 ---
+
+### 3.8 面向签名 / 验签的设计
+
+签名类脚本通常分两层，E7 对两层分别优化：
+
+| 层 | 典型内容 | 放在哪里执行 |
+|---|---|---|
+| **协议/业务层** | 参数排序与拼接、规范化 JSON、URL 编码、时间戳/随机数、Base64/Hex、选用哪个算法、组装签名头 | **E7 脚本**（可随服务器下发灵活更新） |
+| **密码学原语层** | SHA-1/2/3、MD5、HMAC、HKDF/PBKDF2、AES、RSA、ECDSA、Ed25519、国密 SM2/SM3/SM4 等 | **原生 C 实现**，以内置模块暴露给脚本 |
+| **自定义算法** | 私有的混淆/摘要/变换算法 | E7 脚本，走定宽整数快速路径 |
+
+原因：标准密码算法在解释器里执行通常比原生慢一到两个数量级（RSA/ECC 这类大数运算尤其明显），而且原生实现更容易做到常量时间和经过审计；脚本只负责“怎么组合”，这正是需要动态下发的部分。
+
+#### 3.8.1 定宽整数与位运算
+- 类型：`i8 u8 i16 u16 i32 u32 i64 u64`（`int` = `i64`）。
+- 运算：`+ - *` 回绕；`/ %` 整数除；`& | ^ ~ << >> >>>` 按位宽；移位量按位宽取模（与 C 的未定义行为不同，E7 明确定义）。
+- 内建函数（每个都是单条 VM 指令）：`rotl32 rotr32 rotl64 rotr64 clz ctz popcnt bswap32 bswap64 mulhi64`（64×64 取高 64 位，用于大数/哈希）。
+- 字面量按上下文推断：`const K: u32[] = [0x428a2f98, ...]` 中的字面量直接是 `u32`。
+
+#### 3.8.2 字节与编码
+- `Uint8Array` 是字节串的唯一标准类型；支持 `subarray`、`slice`、`set`、拼接 `concatBytes(...)`。
+- `DataView`：`getUint32(off, littleEndian)` / `setUint32` 等，用于大小端读写（每个都是单条指令）。
+- `TextEncoder` / `TextDecoder`（UTF-8）。
+- `e7:encoding` 模块：`hex`、`base64`、`base64url`、`base32`（编码/解码）、`encodeURIComponent`。
+- `JSON.stringify`（v1）：确定性输出（字段顺序 = 声明顺序；可选键排序），用于“对 JSON 体签名”；`JSON.parse` 返回 `JsonValue` 类型（带类型安全的访问方法，不引入 `any`）。
+
+#### 3.8.3 `bigint`
+- 支持 TS 的 `bigint` 类型和 `123n` 字面量，原生 C++ 大数实现。
+- 额外提供 `modPow`、`modInverse`、`gcd` 等原生函数（Montgomery 乘法），便于脚本实现非标准的数论类算法。
+- 标准 RSA/ECC 仍建议直接调用 `e7:crypto`，不要在脚本中用 `bigint` 手写。
+
+#### 3.8.4 原生 `e7:crypto` 模块（同步 API）
+```ts
+import { sha256, hmac, ed25519, ecdsa, rsa, timingSafeEqual } from "e7:crypto";
+
+export function sign(params: Map<string, string>, key: KeyHandle): string {
+  const keys = [...params.keys()].sort();
+  const canonical = keys.map(k => `${k}=${encodeURIComponent(params.get(k)!)}`).join("&");
+  const mac = hmac("sha256", key, new TextEncoder().encode(canonical));
+  return hex.encode(mac);
+}
+```
+- 算法范围（按编译开关裁剪体积）：摘要 SHA-1/224/256/384/512、SHA-3/Keccak、MD5、SM3、CRC32；MAC/KDF：HMAC、HKDF、PBKDF2；对称：AES-CBC/CTR/GCM、ChaCha20-Poly1305、SM4；签名：RSA PKCS#1 v1.5 / PSS、ECDSA P-256/secp256k1、Ed25519、SM2。
+- 实现来源（候选，待定）：BearSSL（MIT，常量时间、体积小，覆盖 RSA/ECDSA/AES/SHA）+ Monocypher（Ed25519/X25519/ChaCha）+ GmSSL（Apache-2.0，国密）；或统一用 mbedTLS。不建议自己从头写密码原语。
+- 不使用 WebCrypto 的 `crypto.subtle`，因为它是异步（Promise）API，而 v1 没有 async。
+- Node 差分测试：提供一个基于 `node:crypto` 的 `e7:crypto` 垫片，同一脚本在 Node 和 E7 上对比输出；同时用 NIST / RFC 官方测试向量验证。
+
+#### 3.8.5 密钥句柄（密钥不进脚本）
+- 宿主把密钥存放在 iOS Keychain / Android Keystore / Windows DPAPI 中，只把一个不透明的 `KeyHandle` 传给脚本。
+- 脚本可以用句柄做 `hmac` / `sign`，但**拿不到密钥明文**，下发的脚本即使被截获或篡改也无法导出密钥。
+- 也支持直接传入 `Uint8Array` 形式的密钥（适合验签用的公钥或测试）。
+- MAC 比较必须用 `timingSafeEqual`。
+
+#### 3.8.6 性能目标（签名场景）
+- 脚本层：一次典型的“参数规范化 + HMAC-SHA256 + Hex”在中端手机上 < 1 ms。
+- 纯脚本实现的 SHA-256（`u32` 快速路径）用作 VM 位运算性能的基准，目标是达到同机原生实现的 1/20 ~ 1/50。
+- VM 为此提供：定宽整数全类型化指令、`rotl/rotr` 单指令、`Uint8Array`/`DataView` 读写单指令、常见组合的超级指令（如 `x = rotr32(x, n) ^ y`）。
 
 ## 4. 整体架构
 
@@ -236,6 +307,7 @@ Trailer: SHA-256 摘要 | Ed25519 签名 | 公钥 ID
 | 资源 | 指令预算、内存上限、调用深度上限、墙钟超时；超限时安全终止并返回错误 |
 | 版本 | VM 拒绝加载高于自身支持版本的字节码；服务器按客户端 VM 版本下发对应产物 |
 | 合规 | iOS 不使用 JIT；纯解释执行，下发脚本不改变 App 主要用途 |
+| 加固（可选，v1.x） | 若签名算法本身需要防逆向：每个发布版本随机打乱操作码编号、常量池/字符串加密、剥离调试信息、控制流平坦化；VM 自身做完整性校验。注意：客户端算法无法做到绝对保密，加固只能提高逆向成本 |
 
 ---
 
@@ -286,7 +358,8 @@ platform/ios android windows
 | M3 后端+VM | IR、寄存器分配、CodeGen、解释器、基本类型与函数 | fib / 循环 / 快排跑通，Node 差分测试通过 |
 | M4 对象与 GC | class/interface/闭包/数组/Map/字符串、mark-sweep | 综合用例通过，无泄漏（ASan/LSan） |
 | M5 字节码与安全 | `.e7b` 序列化、验证器、签名、沙箱、预算挂起/恢复 | fuzz 24h 无崩溃；篡改字节码被拒 |
-| M6 性能 | 常量折叠、融合比较跳转、内联小函数、超级指令 | 基准达到或超过 Lua 5.4 |
+| M5.5 签名能力 | 定宽整数指令、`Uint8Array`/`DataView`、`e7:encoding`、`e7:crypto`（接入原生库）、`bigint`、密钥句柄 | 全部算法通过 NIST/RFC 测试向量；与 Node 垫片差分一致 |
+| M6 性能 | 常量折叠、融合比较跳转、内联小函数、超级指令 | 基准达到或超过 Lua 5.4；脚本 SHA-256 达到 §3.8.6 目标 |
 | M7 三端集成 | C API、iOS/Android/Windows 构建与 Demo App、端上编译 | 三端真机运行同一 `.e7b` 结果一致 |
 | E8（v2） | 协程（`yield`/`async`）、增量 GC、getter/setter、RegExp | — |
 
@@ -295,15 +368,22 @@ platform/ios android windows
 |---|---|
 | 命名 | 语言 E7，引擎 e7vm |
 | 语法 | 只用严格 TS 子集 |
-| 整数默认 | 整数字面量 → `int`(i64) |
+| 整数默认 | v0.3 定为 `int`(i64)；**v0.4 建议改为与 JS 一致的 `number`，定宽整数显式标注**（待确认，见 §3.2） |
 | 异常 | 不支持；运行时错误终止调用并返回宿主 |
-| 负载 | 常规数学/数值算法 + 字符串 |
+| 负载 | 签名/验签为主，兼顾数学与字符串 |
+| 密码原语 | 原生实现、以 `e7:crypto` 暴露；脚本负责组合逻辑 |
 
 ## 12. 下一步（M0 规范冻结需要产出）
 1. `docs/SPEC.md`：E7 语法子集（EBNF）、类型规则、数值与字符串语义、错误模型。
 2. `docs/BYTECODE.md`：指令集表、编码、`.e7b` 格式、验证规则。
 3. `lib/e7.d.ts`：标准库与 `int` 等类型声明，可直接在 VS Code 中试写 E7 脚本。
-4. `examples/`：10 个左右典型算法脚本（数值 + 字符串），同时作为第一批测试与基准。
+4. `examples/`：10 个左右典型脚本，同时作为第一批测试与基准：API 参数签名（HMAC）、JSON 体签名、RSA/ECDSA/Ed25519 验签、纯脚本 SHA-256、自定义位运算摘要、Base64/Hex、大数模幂，以及若干数值与字符串算法。
+
+### 待确认
+1. §3.2 的整数默认语义修订（建议：默认与 JS 一致，定宽整数显式标注）。
+2. 需要哪些具体算法？尤其是否需要**国密 SM2/SM3/SM4**、secp256k1。
+3. 签名算法本身是否需要**防逆向加固**（§6 加固一行）？
+4. 密钥是否由宿主通过 Keychain/Keystore 管理、以句柄形式传给脚本？
 
 ## 参考资料
 - Static TypeScript 论文（MPLR 2019）：https://mmoskal.github.io/pdf/static-typescript.pdf
@@ -312,3 +392,7 @@ platform/ios android windows
 - E 语言（命名冲突参考）：https://en.wikipedia.org/wiki/E_(programming_language)
 - Eve 语言（witheve，命名冲突参考）：https://github.com/witheve/Eve
 - e8vm（命名冲突参考）：https://github.com/ryanphuang/e8
+- BearSSL：https://bearssl.org/
+- Monocypher：https://monocypher.org/
+- GmSSL（国密）：https://github.com/guanzhi/GmSSL
+- Mbed TLS：https://github.com/Mbed-TLS/mbedtls
