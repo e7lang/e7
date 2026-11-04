@@ -675,7 +675,7 @@ Type* Checker::checkLogical(Expr* e, Type* expected) {
     }
     if (isNullish(lt)) return rt;
     Type* res;
-    if (rt->t == TT::Optional || isNullish(rt)) res = unify(lt, rt, e->loc, "'??' expression");
+    if (rt->t == TT::Optional || isNullish(rt)) res = unify(lb, rt, e->loc, "'??' expression");
     else res = unify(lb, rt, e->loc, "'??' expression");
     if (rt != res) coerce(e->b, res);
     return res;
