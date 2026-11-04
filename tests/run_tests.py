@@ -7,7 +7,7 @@ For every tests/cases/**/*.ts:
   * `<name>.out` exists           stdout must equal the file
   * otherwise                     stdout must equal Node.js output (differential test)
 """
-import argparse, os, subprocess, sys, glob, difflib
+import argparse, os, pathlib, subprocess, sys, glob, difflib
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -27,7 +27,8 @@ def main():
     files = [f for f in files if not any(part.startswith("_") for part in os.path.relpath(f, ROOT).split(os.sep))]
     if a.filter:
         files = [f for f in files if any(x in f for x in a.filter)]
-    shim = os.path.join(ROOT, "node_shim", "register.mjs")
+    # --import takes a URL (a bare "D:\\..." path is rejected on Windows)
+    shim = pathlib.Path(ROOT, "node_shim", "register.mjs").resolve().as_uri()
     passed = failed = 0
     for f in files:
         rel = os.path.relpath(f, ROOT)
