@@ -68,6 +68,23 @@ GCC UBSan（含 `float-cast-overflow`）。
 （与 Node 的随机差分测试）。另用 660 个"边界数值 × 内建函数"脚本（±Infinity/NaN/±1e300/-0/±2^53…）在
 float-cast-overflow UBSan 下运行，零报告。
 
+### 3.3 第三轮独立审查（加密正确性与编码，含与 Node 的差分对比）
+
+| # | 问题 | 修复 |
+|---|---|---|
+| 1 | `rsaVerify` 公钥解析对嵌套 SPKI 无限递归（栈溢出） | 只允许一层 SPKI，检查 rsaEncryption OID，拒绝尾随数据 |
+| 2 | **合法**的 DER ECDSA 签名在 r/s 都短于曲线长度时被拒（P-521 约 26%） | 自写严格 DER 解码并左补齐；2×长度的输入先按 raw、再按 DER 尝试 |
+| 3 | BearSSL 宽松 ASN.1 导致同一 (r,s) 的多种非 DER 编码都能验证（可塑性） | 严格 DER：最小长度、非负且最小整数编码、无尾随数据 |
+| 4 | RSA 超长公钥指数 e / 超长 dp、dq 使 modpow 绕过指令预算（可达数小时） | e ≤ 64 位（同 OpenSSL）；dp/dq/iq 长度不超过 p/q |
+| 5 | `ecdsaPublicKey` 接受 0 或 ≥ n 的私钥标量 | 统一检查 1 ≤ x < n |
+| 6 | Ed25519 验签（余因子方程）对攻击者给定的小阶公钥接受任意消息的零签名 | 拒绝非规范编码与 8 阶子群点（编码独立计算，与 libsodium 一致） |
+| 7 | X25519 未拒绝低阶公钥（全零共享密钥） | 常量时间检查全零输出并报错（RFC 7748 §6.1） |
+
+已确认正确：RSA PKCS#1 v1.5 完整 DigestInfo 比对、PSS 各边界、ECDSA r/s 为 0 或 ≥ n 拒绝、GCM/ChaCha 常量时间
+认证、CBC 填充、CTR 计数器回绕、HKDF/PBKDF2/HMAC/全部哈希、各编码与 Node 一致、KeyHandle 不泄漏、随机数来源、
+模块签名覆盖范围。回归测试：`crypto_ecdsa_der.ts`（OpenSSL 生成的 72 组 DER/raw 签名）、`crypto_ecdsa_strict_der.ts`、
+`crypto_ed25519_strict.ts`、`rt_x25519_low_order.ts`、`rt_ec_scalar_zero.ts`、`rt_rsa_huge_e.ts`。
+
 **宿主侧必须做的配置**（见 EMBEDDING.md §6）：开启签名校验、设置指令预算与内存上限。命令行工具 `e7` 仅用于开发，
 默认不设预算。
 

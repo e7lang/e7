@@ -170,20 +170,31 @@ static std::vector<uint8_t> intBytes(const uint8_t* p, size_t n) {
 struct RsaPub {
   std::vector<uint8_t> n, e;
 };
+static bool parseRsaPubInner(const uint8_t* p, size_t len, RsaPub& out, bool spkiAllowed);
+// PKCS#1 RSAPublicKey or SubjectPublicKeyInfo (rsaEncryption). The public exponent is limited to
+// 64 bits (as OpenSSL does) so verification cost is bounded.
 static bool parseRsaPub(const uint8_t* p, size_t len, RsaPub& out) {
+  if (!parseRsaPubInner(p, len, out, true)) return false;
+  return !out.e.empty() && out.e.size() <= 8 && !out.n.empty();
+}
+static bool parseRsaPubInner(const uint8_t* p, size_t len, RsaPub& out, bool spkiAllowed) {
   Der d{p, len};
   size_t l;
   const uint8_t* seq = d.read(0x30, l);
-  if (!seq) return false;
+  if (!seq || seq + l != p + len) return false;
   Der s{seq, l};
   if (s.peek(0x30)) {
     // SubjectPublicKeyInfo
+    if (!spkiAllowed) return false;
     size_t al;
-    s.read(0x30, al);
+    const uint8_t* alg = s.read(0x30, al);
+    if (!alg) return false;
+    static const uint8_t rsaOid[] = {0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01};
+    if (al < sizeof rsaOid || memcmp(alg, rsaOid, sizeof rsaOid) != 0) return false;
     size_t bl;
     const uint8_t* bits = s.read(0x03, bl);
     if (!bits || bl < 2 || bits[0] != 0) return false;
-    return parseRsaPub(bits + 1, bl - 1, out);
+    return parseRsaPubInner(bits + 1, bl - 1, out, false);
   }
   size_t nl, el;
   const uint8_t* n = s.read(0x02, nl);
@@ -241,6 +252,9 @@ static bool parseRsaPriv(const uint8_t* p, size_t len, RsaPriv& out) {
   if (out.bits < 512 || out.bits > 4096) return false;
   std::vector<uint8_t> pp = stripZeros(out.p), qq = stripZeros(out.q);
   if (pp.empty() || qq.empty() || pp.size() + qq.size() > 520) return false;
+  // CRT exponents/coefficient are reduced mod p/q; bound them (their length drives modpow cost)
+  if (stripZeros(out.dp).size() > pp.size() || stripZeros(out.dq).size() > qq.size() || stripZeros(out.iq).size() > pp.size())
+    return false;
   return mulBE(pp, qq) == stripZeros(out.n);
 }
 static bool parseRsaPrivInner(const uint8_t* p, size_t len, RsaPriv& out, int depth) {
@@ -540,6 +554,9 @@ E7_NATIVE(c_x25519) {
   if (sk->len != 32 || pk->len != 32) vm.error("X25519 keys must be 32 bytes");
   uint8_t out[32];
   crypto_x25519(out, sk->ptr(), pk->ptr());
+  uint8_t acc = 0;
+  for (int i = 0; i < 32; i++) acc |= out[i];  // constant time
+  if (acc == 0) vm.error("X25519: low-order public key (all-zero shared secret)");  // RFC 7748 6.1
   r->r = outBytes(vm, out, 32);
 }
 
@@ -558,7 +575,27 @@ static Curve needCurve(VM& vm, Slot s) {
   vm.error("unsupported curve '%s' (use P-256, P-384 or P-521)", n.c_str());
 }
 // raw scalar, SEC1 ECPrivateKey or PKCS#8 DER
+static std::vector<uint8_t> ecPrivScalarRaw(VM& vm, BytesObj* k, const Curve& c);
+// private scalar, required to satisfy 1 <= x < n (the curve order)
 static std::vector<uint8_t> ecPrivScalar(VM& vm, BytesObj* k, const Curve& c) {
+  std::vector<uint8_t> x = ecPrivScalarRaw(vm, k, c);
+  size_t olen = 0;
+  const unsigned char* order = c.impl->order(c.id, &olen);
+  bool nonzero = false;
+  for (uint8_t b : x) nonzero |= b != 0;
+  bool below = false;
+  if (olen == x.size()) {
+    for (size_t i = 0; i < olen; i++) {
+      if (x[i] != order[i]) { below = x[i] < order[i]; break; }
+    }
+  }
+  if (!nonzero || !below) {
+    crypto_wipe(x.data(), x.size());
+    vm.error("invalid EC private key (scalar out of range)");
+  }
+  return x;
+}
+static std::vector<uint8_t> ecPrivScalarRaw(VM& vm, BytesObj* k, const Curve& c) {
   if (k->len == c.len) return vec(k);
   Der d{k->ptr(), k->len};
   size_t l;
@@ -629,6 +666,38 @@ E7_NATIVE(c_ecdsaSign) {
   if (!sl) vm.error("ECDSA signing failed (invalid private key)");
   r->r = outBytes(vm, sig, sl);
 }
+// Strict DER ECDSA-Sig-Value (SEQUENCE { INTEGER r, INTEGER s }) -> raw r||s, each left-padded to
+// `len` bytes. Rejects BER leniencies (non-minimal lengths, negative or zero-padded integers,
+// trailing data) so a signature has exactly one accepted DER encoding.
+static bool derLen(const uint8_t* p, size_t n, size_t& pos, size_t& out) {
+  if (pos >= n) return false;
+  uint8_t b = p[pos++];
+  if (b < 0x80) { out = b; return true; }
+  if (b != 0x81 || pos >= n) return false;  // signatures are < 256 bytes
+  out = p[pos++];
+  return out >= 0x80;  // minimal encoding
+}
+static bool derInt(const uint8_t* p, size_t n, size_t& pos, size_t len, uint8_t* dst) {
+  size_t l;
+  if (pos >= n || p[pos++] != 0x02 || !derLen(p, n, pos, l) || l == 0 || l > n - pos) return false;
+  const uint8_t* v = p + pos;
+  pos += l;
+  if (v[0] & 0x80) return false;                         // negative
+  if (l > 1 && v[0] == 0 && !(v[1] & 0x80)) return false;  // non-minimal
+  if (v[0] == 0) { v++; l--; }
+  if (l > len) return false;
+  memset(dst, 0, len - l);
+  memcpy(dst + (len - l), v, l);
+  return true;
+}
+static bool ecdsaDerToRaw(const std::vector<uint8_t>& sig, size_t len, std::vector<uint8_t>& raw) {
+  const uint8_t* p = sig.data();
+  size_t n = sig.size(), pos = 0, sl;
+  if (n < 2 || p[pos++] != 0x30 || !derLen(p, n, pos, sl) || sl != n - pos) return false;
+  raw.assign(2 * len, 0);
+  return derInt(p, n, pos, len, raw.data()) && derInt(p, n, pos, len, raw.data() + len) && pos == n;
+}
+
 E7_NATIVE(c_ecdsaVerify) {
   E7_UNUSED;
   Curve c = needCurve(vm, a[0]);
@@ -639,18 +708,18 @@ E7_NATIVE(c_ecdsaVerify) {
   BytesObj* sg = B(vm, a[4]);
   if (!ok) { r->i = 0; return; }
   std::vector<uint8_t> sig = vec(sg);
-  if (sig.size() != 2 * c.len) {
-    size_t rl = br_ecdsa_asn1_to_raw(sig.data(), sig.size());
-    if (!rl || rl != 2 * c.len) { r->i = 0; return; }
-    sig.resize(rl);
-  }
   uint8_t hv[64];
   hashOnce(h, m->ptr(), m->len, hv);
   br_ec_public_key pk;
   pk.curve = c.id;
   pk.q = q.data();
   pk.qlen = q.size();
-  r->i = br_ecdsa_i31_vrfy_raw(c.impl, hv, h.outLen, &pk, sig.data(), sig.size()) == 1;
+  // raw r||s (exactly 2*len bytes) or strict DER; a 2*len-byte input is tried both ways
+  bool ok2 = sig.size() == 2 * c.len && br_ecdsa_i31_vrfy_raw(c.impl, hv, h.outLen, &pk, sig.data(), sig.size()) == 1;
+  std::vector<uint8_t> raw;
+  if (!ok2 && ecdsaDerToRaw(sig, c.len, raw))
+    ok2 = br_ecdsa_i31_vrfy_raw(c.impl, hv, h.outLen, &pk, raw.data(), raw.size()) == 1;
+  r->i = ok2;
 }
 E7_NATIVE(c_ecdsaPub) {
   E7_UNUSED;
