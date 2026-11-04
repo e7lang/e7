@@ -9,7 +9,8 @@ function name(c: Color): string {
   }
 }
 console.log(name(Color.Green), name(Color.Blue));
-const d: Dir = Dir.Down;
+function pickDir(): Dir { return Dir.Down; }
+const d: Dir = pickDir();
 console.log(d === Dir.Down, d === Dir.Up);
 function len(s: string | null): number {
   if (s === null) return -1;

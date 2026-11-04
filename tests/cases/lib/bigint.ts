@@ -1,5 +1,6 @@
 const a = 123456789012345678901234567890n;
-const b = 987654321098765432109876543210n;
+function mkB(): bigint { return 987654321098765432109876543210n; }
+const b = mkB();
 console.log(a + b, a - b, a * b, b / a, b % a, -a, a ** 3n);
 console.log(a < b, a > b, a === 123456789012345678901234567890n, a !== b, a <= a);
 console.log((-7n) / 2n, (-7n) % 2n, 7n / -2n, (-7n) >> 1n, 7n << 100n, (1n << 64n) - 1n);

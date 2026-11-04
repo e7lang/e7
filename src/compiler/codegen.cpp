@@ -2066,6 +2066,11 @@ void Gen::binaryOp(const std::string& op, Type* lt, Type* rt, uint16_t d, uint16
   if (t->t == TT::Int) {
     bool sgn = isSignedInt(t);
     int bits = intBits(t);
+    if ((op == "<<" || op == ">>" || op == ">>>") && rt && rt->t == TT::Number) {
+      uint16_t cnt = temp(K_I);
+      emit(OP_F2I, cnt, b);
+      b = cnt;
+    }
     if (op == "+") { emit(OP_ADD_I, d, a, b); wrapInt(d, d, t); }
     else if (op == "-") { emit(OP_SUB_I, d, a, b); wrapInt(d, d, t); }
     else if (op == "*") { emit(OP_MUL_I, d, a, b); wrapInt(d, d, t); }
@@ -2479,6 +2484,11 @@ void Gen::genCall(Expr* e, uint16_t dst) {
       uint16_t d = dst == kNoReg ? temp(K_I) : dst;
       uint16_t a = gen(e->list[0]);
       uint16_t b = e->list.size() > 1 ? gen(e->list[1]) : kNoReg;
+      if (b != kNoReg && e->list[1]->type->t == TT::Number) {
+        uint16_t cnt = temp(K_I);
+        emit(OP_F2I, cnt, b);
+        b = cnt;
+      }
       if (op == "rotl32") emit(OP_ROTL32, d, a, b);
       else if (op == "rotr32") emit(OP_ROTR32, d, a, b);
       else if (op == "rotl64") emit(OP_ROTL64, d, a, b);

@@ -3,6 +3,10 @@
 #include <random>
 
 #include "common.h"
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include "compiler/compiler.h"
 #include "core/module.h"
 #include "e7/e7.h"
@@ -17,6 +21,10 @@ static int usage() {
 }
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  _setmode(_fileno(stdout), _O_BINARY);
+  _setmode(_fileno(stderr), _O_BINARY);
+#endif
   if (argc < 2) return usage();
   std::string input, output, signFile;
   bool disasm = false, checkOnly = false;

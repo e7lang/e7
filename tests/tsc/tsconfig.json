@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "ESNext", "moduleResolution": "bundler", "strict": true, "noEmit": true,
+    "allowImportingTsExtensions": true, "lib": ["ES2023", "DOM"], "moduleDetection": "force",
+    "useDefineForClassFields": true, "types": []
+  },
+  "files": ["../../lib/e7.d.ts"],
+  "include": ["../cases/lang/**/*.ts", "../cases/lib/**/*.ts", "../cases/modules/**/*.ts", "../../examples/**/*.ts"]
+}

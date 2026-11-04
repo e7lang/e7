@@ -1,0 +1,1 @@
+../../../examples/license_check.ts

@@ -10,9 +10,11 @@ console.log((1234.5678).toFixed(1), (-0.0001).toFixed(2), (1e21).toFixed(2), (12
 let s = "Hello";
 s += ", world";
 console.log(s, s.length, s.toUpperCase(), s.toLowerCase(), s.charAt(4), s.charCodeAt(0));
-console.log("a" < "b", "abc" < "abd", "B" < "a", "x" === "x", "x" !== "y");
+const sx: string = String("x"), sy: string = String("y");
+console.log("a" < "b", "abc" < "abd", "B" < "a", sx === "x", sx !== sy);
 console.log(true && false, true || false, !true, typeof s, typeof a);
-console.log(1 === 1, 1 !== 2, NaN === NaN, 0 === -0, Infinity > 1e308);
+const one = Number("1"), two = Number("2"), nan = Number("x"), z = Number("0");
+console.log(one === 1, one !== two, nan === nan, z === -0, Infinity > 1e308);
 let x = 10;
 x += 5; x -= 3; x *= 2; x /= 4; x %= 4; x **= 3;
 console.log(x);

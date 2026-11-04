@@ -509,7 +509,7 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
   }
   if (isShift) {
     if (isNumberish(lt) && isNumberish(rt)) return T.number();
-    if (lt->t == TT::Int && rt->t == TT::Int) return lt;
+    if (lt->t == TT::Int && (rt->t == TT::Int || rt->t == TT::Number)) return lt;  // shift count may be any number
     if (lt->t == TT::Int && rLit) return lt;
     if (lt->t == TT::BigInt && rt->t == TT::BigInt) {
       if (op == ">>>") return errT(e->loc, "'>>>' is not allowed on bigint");
@@ -674,7 +674,7 @@ Type* Checker::checkAssign(Expr* e) {
     res = T.string();
   } else if (isNumberish(lt) && isNumberish(rt)) {
     res = T.number();
-  } else if (lt->t == TT::Int && (rt == lt || (isShift && rt->t == TT::Int))) {
+  } else if (lt->t == TT::Int && (rt == lt || (isShift && (rt->t == TT::Int || rt->t == TT::Number)))) {
     if (bop == "**") return errT(e->loc, "'**' is not supported for integer types");
     res = lt;
   } else if (lt->t == TT::BigInt && rt->t == TT::BigInt) {

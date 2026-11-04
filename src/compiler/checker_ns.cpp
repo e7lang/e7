@@ -23,8 +23,9 @@ static Expr* mkNull(Program& P, Types& T, Loc l) {
 }
 
 static const struct { const char* name; double v; } kMathConsts[] = {
-    {"PI", M_PI}, {"E", M_E}, {"LN2", M_LN2}, {"LN10", M_LN10}, {"LOG2E", M_LOG2E}, {"LOG10E", M_LOG10E},
-    {"SQRT2", M_SQRT2}, {"SQRT1_2", M_SQRT1_2}};
+    {"PI", 3.141592653589793}, {"E", 2.718281828459045}, {"LN2", 0.6931471805599453}, {"LN10", 2.302585092994046},
+    {"LOG2E", 1.4426950408889634}, {"LOG10E", 0.4342944819032518}, {"SQRT2", 1.4142135623730951},
+    {"SQRT1_2", 0.7071067811865476}};
 static const struct { const char* name; double v; } kNumberConsts[] = {
     {"MAX_SAFE_INTEGER", 9007199254740991.0}, {"MIN_SAFE_INTEGER", -9007199254740991.0},
     {"EPSILON", 2.220446049250313e-16}, {"MAX_VALUE", 1.7976931348623157e308}, {"MIN_VALUE", 5e-324},
@@ -376,7 +377,9 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     if (id == "mulhi64" && isSignedInt(t0)) return errT(args[0]->loc, "mulhi64 requires u64");
     if (op.arity == 2) {
       Type* t1 = isIntLiteralExpr(args[1]) ? check(args[1], t0) : check(args[1], nullptr);
-      if (t1->t != TT::Int && t1->t != TT::Unknown) return errT(args[1]->loc, id + "() requires an integer argument");
+      bool isRot = id.rfind("rot", 0) == 0;
+      if (t1->t != TT::Int && t1->t != TT::Unknown && !(isRot && t1->t == TT::Number))
+        return errT(args[1]->loc, id + "() requires an integer argument");
       if ((id == "mulhi64" || id == "imulhi64") && t1 != t0) return errT(args[1]->loc, "operands must have the same type");
     }
     e->intrinsic = IN_INTOP;
@@ -656,6 +659,14 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     if (!kt && exp && exp->t == TT::Map) { kt = exp->key; vt = exp->val; }
     if (!args.empty()) {
       if (args.size() != 1) return errT(l, "new Map() takes at most one argument");
+      Type* pre = strip(args[0])->k == EK::Array ? T.unknown() : check(args[0], nullptr);
+      if (pre->t == TT::Map) {
+        if (kt && (pre->key != kt || pre->val != vt)) return errT(args[0]->loc, "Map type mismatch in copy constructor");
+        e->intrinsic = IN_NATIVE_NORECV;
+        e->native = "Map.copy";
+        return pre;
+      }
+      args[0]->type = nullptr;
       Type* want = kt ? T.array(T.tuple({kt, vt})) : nullptr;
       Type* at = check(args[0], want);
       if (!kt) {
@@ -681,6 +692,14 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     if (!et && exp && exp->t == TT::Set) et = exp->elem;
     if (!args.empty()) {
       if (args.size() != 1) return errT(l, "new Set() takes at most one argument");
+      Type* pre = strip(args[0])->k == EK::Array ? T.unknown() : check(args[0], nullptr);
+      if (pre->t == TT::Set) {
+        if (et && pre->elem != et) return errT(args[0]->loc, "Set type mismatch in copy constructor");
+        e->intrinsic = IN_NATIVE_NORECV;
+        e->native = "Map.copy";
+        return pre;
+      }
+      args[0]->type = nullptr;
       Type* at = check(args[0], et ? T.array(et) : nullptr);
       if (!et) {
         if (at->t != TT::Array) return errT(args[0]->loc, "new Set(x) expects an array");

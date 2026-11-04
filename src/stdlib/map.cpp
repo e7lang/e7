@@ -244,6 +244,14 @@ E7_NATIVE(m_clear) {
   m->count = 0;
   vm.accountExternal((int64_t)mapBytes(m) - (int64_t)before);
 }
+E7_NATIVE(m_copy) {
+  E7_UNUSED;
+  MapObj* src = Mo(vm, a[0]);
+  MapObj* m = vm.newMap(src->kvt, src->vvt, src->km, src->isSet);
+  for (auto& e : src->entries)
+    if (e.live) mapSet(vm, m, e.k, e.v);
+  r->r = m;
+}
 E7_NATIVE(m_size) { E7_UNUSED; r->f = Mo(vm, a[0])->count; }
 E7_NATIVE(m_keys) {
   E7_UNUSED;
@@ -335,6 +343,7 @@ void registerMapNatives(VM& vm) {
   vm.registerNative("Set.fromArray", "RFF>R", s_fromArray);
   vm.registerNative("Map.clear", "R>V", m_clear);
   vm.registerNative("Map.size", "R>F", m_size);
+  vm.registerNative("Map.copy", "R>R", m_copy);
   vm.registerNative("Map.keys", "R>R", m_keys);
   vm.registerNative("Map.values", "R>R", m_values);
   vm.registerNative("Map.entries", "RF>R", m_entries);

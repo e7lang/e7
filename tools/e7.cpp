@@ -3,6 +3,10 @@
 #include <cstring>
 
 #include "common.h"
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include "compiler/compiler.h"
 #include "core/module.h"
 #include "e7/e7.h"
@@ -43,6 +47,10 @@ static void printValue(const e7_value& v) {
 }
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  _setmode(_fileno(stdout), _O_BINARY);
+  _setmode(_fileno(stderr), _O_BINARY);
+#endif
   std::string file, call, trust;
   int64_t budget = 0, slice = 0;
   size_t mem = 0;
