@@ -1,5 +1,7 @@
 // Swift wrapper around the e7vm C API (iOS / macOS).
-// Link e7vm.xcframework (built by platform/ios/build_xcframework.sh); it exposes the `CE7VM` module.
+// Swift Package Manager: depend on the `E7VM` product of https://github.com/e7lang/e7.git (the package
+// compiles the VM from source as the `CE7VM` target). Alternatively link e7vm.xcframework (built by
+// platform/ios/build_xcframework.sh), which exposes the same `CE7VM` module, and add this file.
 //
 //   let vm = try E7VM(trustedKeys: [serverPublicKey])
 //   let module = try vm.load(bytecodeFromServer)
@@ -16,12 +18,12 @@ public struct E7Error: Error, CustomStringConvertible {
 }
 
 /// Opaque reference to a key held by the app (e.g. Keychain); resolved through `keyProvider`.
-public struct KeyHandle {
+public struct KeyHandle: Equatable, Hashable {
   public let id: Int64
   public init(_ id: Int64) { self.id = id }
 }
 
-public enum E7Value {
+public enum E7Value: Equatable {
   case number(Double), int(Int64), uint(UInt64), bool(Bool), string(String), bytes(Data), handle(KeyHandle), void
 }
 
@@ -45,7 +47,16 @@ private final class ArgBuffers {
 public final class E7VM {
   private let vm: OpaquePointer
   private var natives: [NativeBox] = []
-  private var keyBuffer = [UInt8]()
+  /// Key material handed to the VM by the key provider; must stay valid until the next callback.
+  private var keyBuffer: UnsafeMutableBufferPointer<UInt8>?
+
+  private func clearKeyBuffer() {
+    if let b = keyBuffer {
+      for i in b.indices { b[i] = 0 }
+      b.deallocate()
+      keyBuffer = nil
+    }
+  }
 
   /// Returns key material for a KeyHandle id (keys never become script values).
   public var keyProvider: ((Int64) -> Data?)? {
@@ -54,13 +65,13 @@ public final class E7VM {
       if keyProvider == nil { e7_set_key_provider(vm, nil, nil); return }
       e7_set_key_provider(vm, { user, id, key, len in
         let this = Unmanaged<E7VM>.fromOpaque(user!).takeUnretainedValue()
+        this.clearKeyBuffer()
         guard let d = this.keyProvider?(id) else { return -1 }
-        for i in this.keyBuffer.indices { this.keyBuffer[i] = 0 }
-        this.keyBuffer = [UInt8](d)
-        this.keyBuffer.withUnsafeBufferPointer { b in
-          key!.pointee = b.baseAddress
-          len!.pointee = b.count
-        }
+        let b = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: max(d.count, 1))
+        _ = b.initialize(from: d)
+        this.keyBuffer = b
+        key!.pointee = UnsafePointer(b.baseAddress)
+        len!.pointee = d.count
         return 0
       }, me)
     }
@@ -104,7 +115,13 @@ public final class E7VM {
     vm = v
   }
 
-  deinit { e7_vm_free(vm) }
+  deinit {
+    e7_vm_free(vm)
+    clearKeyBuffer()
+  }
+
+  /// Library version, e.g. "1.0.1".
+  public static var version: String { String(cString: e7_version()) }
 
   private func check(_ st: e7_status) throws {
     if st != E7_OK { throw E7Error(status: Int32(st.rawValue), message: String(cString: e7_last_error(vm))) }
@@ -127,6 +144,8 @@ public final class E7VM {
     return E7Module(m!)
   }
 
+  public func hasFunction(_ module: E7Module, _ function: String) -> Bool { e7_has_function(module.ptr, function) != 0 }
+  public func collectGarbage() { e7_collect_garbage(vm) }
   public func setBudget(_ ticks: Int64) { e7_set_budget(vm, ticks) }
   public func seedRandom(_ seed: UInt64) { e7_seed_random(vm, seed) }
   public var memoryUsed: Int { e7_memory_used(vm) }
@@ -184,6 +203,36 @@ public final class E7VM {
       throw E7Error(status: Int32(st.rawValue), message: errs.map { String(cString: $0) } ?? "compile error")
     }
     return Data(bytes: out!, count: len)
+  }
+
+  /// Appends an Ed25519 signature trailer to a module. `seed` is the 32-byte secret key.
+  public static func sign(_ bytecode: Data, seed: Data) throws -> Data {
+    guard seed.count == 32 else {
+      throw E7Error(status: Int32(E7_ERR_ARGS.rawValue), message: "seed must be 32 bytes")
+    }
+    let code = [UInt8](bytecode)
+    let sd = [UInt8](seed)
+    var out: UnsafeMutablePointer<UInt8>?
+    var len = 0
+    let st = code.withUnsafeBufferPointer { c in
+      sd.withUnsafeBufferPointer { s in e7_sign_module(c.baseAddress, c.count, s.baseAddress, &out, &len) }
+    }
+    defer { e7_free(out) }
+    guard st == E7_OK, let o = out else {
+      throw E7Error(status: Int32(st.rawValue), message: "signing failed")
+    }
+    return Data(bytes: o, count: len)
+  }
+
+  /// Ed25519 public key (32 bytes) for a 32-byte secret seed; pass it in `trustedKeys`.
+  public static func publicKey(seed: Data) throws -> Data {
+    guard seed.count == 32 else {
+      throw E7Error(status: Int32(E7_ERR_ARGS.rawValue), message: "seed must be 32 bytes")
+    }
+    let sd = [UInt8](seed)
+    var pk = [UInt8](repeating: 0, count: 32)
+    sd.withUnsafeBufferPointer { s in pk.withUnsafeMutableBufferPointer { p in e7_public_key(s.baseAddress, p.baseAddress) } }
+    return Data(pk)
   }
 
   // MARK: - marshaling
