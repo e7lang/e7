@@ -10,6 +10,8 @@
 
 namespace e7 { uint32_t crc32(const uint8_t* p, size_t n); }
 
+static void quiet(void*, const char*, size_t) {}
+
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   if (size < 1) return 0;
   bool repair = data[0] & 1;
@@ -24,6 +26,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   cfg.max_frames = 2000;
   e7_vm* vm = e7_vm_new(&cfg);
   if (!vm) return 0;
+  e7_set_print(vm, quiet, nullptr);  // console.log output would only slow the fuzzer down
   e7_set_budget(vm, 200000);
   e7_module* mod = nullptr;
   if (e7_load(vm, m.data(), m.size(), &mod) == E7_OK && e7_has_function(mod, "main")) {
