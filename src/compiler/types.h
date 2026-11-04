@@ -132,6 +132,7 @@ struct ClassSym : Sym {
   int classIdx = -1;
   int state = 0;  // 0 = unresolved, 1 = resolving, 2 = resolved
   bool isRecord = false;
+  bool isTuple = false;
   std::string file;
 };
 

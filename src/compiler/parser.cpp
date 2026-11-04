@@ -743,9 +743,15 @@ class Parser {
         }
       }
       if (eatP("...")) pr.rest = true;
-      if (isP("{") || isP("[")) fail("destructuring parameters are not supported");
       if (isKw("this")) fail("'this' parameters are not supported");
-      pr.name = ident();
+      if (isP("{") || isP("[")) {
+        if (pr.isProperty || pr.rest) fail("invalid destructuring parameter");
+        VarDecl d = parseBindingPattern();
+        pr.pattern = A.decl(d);
+        pr.name = "__arg" + std::to_string(params.size());
+      } else {
+        pr.name = ident();
+      }
       if (eatP("?")) pr.optional = true;
       if (eatP(":")) pr.type = parseType();
       if (eatP("=")) pr.init = parseAssign();
@@ -778,6 +784,8 @@ class Parser {
     if (eatP(":")) s->retType = parseType();
     if (!isP("{")) fail("function overloads / declarations without body are not supported");
     s->body = parseBlock();
+    Expr* none = nullptr;
+    applyPatterns(s->params, s->body, none);
     return s;
   }
 
@@ -844,6 +852,10 @@ class Parser {
         if (m.isStatic) fail("constructor cannot be static");
         parseParams(m.params, true);
         m.body = parseBlock();
+        {
+          Expr* none = nullptr;
+          applyPatterns(m.params, m.body, none);
+        }
         s->members.push_back(m);
         continue;
       }
@@ -857,6 +869,10 @@ class Parser {
         if (eatP(":")) m.retType = parseType();
         if (!isP("{")) fail("method overloads are not supported");
         m.body = parseBlock();
+        {
+          Expr* none = nullptr;
+          applyPatterns(m.params, m.body, none);
+        }
       } else {
         m.kind = ClassMember::Field;
         if (eatP(":")) m.type = parseType();
@@ -1111,6 +1127,35 @@ class Parser {
       f->exprBody = parseAssign();
       noIn = saved;
     }
+    applyPatterns(f->params, f->body, f->exprBody);
+  }
+
+  // Destructuring parameters become `const <pattern> = __argN;` at the start of the body.
+  void applyPatterns(std::vector<Param>& params, Stmt*& body, Expr*& exprBody) {
+    std::vector<Stmt*> pre;
+    for (auto& p : params) {
+      if (!p.pattern) continue;
+      Stmt* v = A.stmt(SK::Var, p.loc);
+      v->isConst = true;
+      VarDecl d = *p.pattern;
+      Expr* id = A.expr(EK::Ident, p.loc);
+      id->raw = p.name;
+      d.init = id;
+      v->decls.push_back(d);
+      pre.push_back(v);
+    }
+    if (pre.empty()) return;
+    if (exprBody) {
+      Stmt* b = A.stmt(SK::Block, exprBody->loc);
+      Stmt* r = A.stmt(SK::Return, exprBody->loc);
+      r->expr = exprBody;
+      b->stmts = pre;
+      b->stmts.push_back(r);
+      body = b;
+      exprBody = nullptr;
+      return;
+    }
+    if (body) body->stmts.insert(body->stmts.begin(), pre.begin(), pre.end());
   }
 
   Expr* parseAssign() {
@@ -1471,6 +1516,7 @@ class Parser {
           parseParams(f->params, false);
           if (eatP(":")) f->retType = parseType();
           f->body = parseBlock();
+          applyPatterns(f->params, f->body, f->exprBody);
           f->intrinsic = 1;  // function expression
           return f;
         }

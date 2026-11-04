@@ -226,6 +226,19 @@ struct Gen {
     emitRegList(args);
   }
 
+  // An expression node that reads an already-evaluated register.
+  Expr* regExpr(uint16_t reg, Type* t, Loc l) {
+    VarSym* v = P.make<VarSym>();
+    v->name = "<tmp>";
+    v->type = t;
+    v->owner = fn;
+    varReg[v] = reg;
+    Expr* id = P.arena.expr(EK::Ident, l);
+    id->var = v;
+    id->type = t;
+    return id;
+  }
+
   // ---------------------------------------------------------------- program
   void genFunction(FuncSym* f);
   void genInit();
@@ -337,7 +350,7 @@ bool Gen::run(const std::string& name) {
     ClassDesc cd;
     cd.name = c->name;
     cd.parent = c->parent ? c->parent->classIdx : -1;
-    cd.isRecord = c->isRecord;
+    cd.isRecord = c->isTuple ? 2 : c->isRecord ? 1 : 0;
     for (auto& f : c->fields) cd.fields.push_back(FieldDesc{f.name, vtOf(f.type)});
     for (auto& m : c->vtable) {
       cd.vtable.push_back((uint32_t)m.fn->funcIdx);
@@ -2124,34 +2137,23 @@ void Gen::genCall(Expr* e, uint16_t dst) {
   Kind rk = e->type ? kindOf(e->type) : K_V;
   auto retChar = [&]() { return rk == K_V ? 'V' : kindChar(rk); };
   // optional chaining on the receiver: obj?.m()
-  if (e->optional && callee->k == EK::Member && (e->intrinsic == IN_METHOD || e->intrinsic == IN_IFACE_METHOD || e->intrinsic == IN_NATIVE || e->intrinsic == IN_FIELD_CALL)) {
-    // evaluate receiver once, branch on nullish
+  if (e->optional && callee->k == EK::Member && callee->optional) {
     uint16_t recv = temp(K_R);
     genInto(callee->a, recv);
     Label* nul = newLabel();
     Label* end = newLabel();
     jump(OP_JNULLISH, recv, nul);
-    // temporarily mark the member object as already evaluated
     Expr* savedObj = callee->a;
-    Expr* holder = P.arena.expr(EK::Conv, savedObj->loc);
-    holder->conv = ConvKind::None;
     Type* bt = baseOf(savedObj->type);
-    holder->type = bt;
-    holder->a = savedObj;
-    // generate the call with the receiver register via a synthetic identifier
-    VarSym* tmpVar = P.make<VarSym>();
-    tmpVar->name = "<recv>";
-    tmpVar->type = bt;
-    tmpVar->owner = fn;
-    varReg[tmpVar] = recv;
-    Expr* id = P.arena.expr(EK::Ident, savedObj->loc);
-    id->var = tmpVar;
-    id->type = bt;
-    callee->a = id;
-    bool opt = e->optional;
+    uint16_t recvBase = recv;
+    if (isBoxedOptional(savedObj->type)) {
+      recvBase = temp(K(bt));
+      emit(kindOf(bt) == K_F ? OP_UNBOX_F : OP_UNBOX_I, recvBase, recv);
+    }
+    callee->a = regExpr(recvBase, bt, savedObj->loc);
     e->optional = false;
     Type* savedT = e->type;
-    Type* innerT = baseOf(savedT);
+    Type* innerT = e->innerType ? e->innerType : baseOf(savedT);
     e->type = innerT;
     Kind ik = kindOf(innerT);
     if (ik == K_V || dst == kNoReg) {
@@ -2162,12 +2164,11 @@ void Gen::genCall(Expr* e, uint16_t dst) {
       boxIfNeeded(dst, v, innerT, savedT);
     }
     e->type = savedT;
-    e->optional = opt;
+    e->optional = true;
     callee->a = savedObj;
-    varReg.erase(tmpVar);
     jump(OP_JMP, 0, end);
     place(nul);
-    if (dst != kNoReg && ik != K_V) emit(OP_LOADUNDEF, dst);
+    if (dst != kNoReg && kindOf(savedT) != K_V) emit(OP_LOADUNDEF, dst);
     place(end);
     return;
   }
@@ -2847,6 +2848,36 @@ void Gen::genNew(Expr* e, uint16_t d) {
 }
 
 void Gen::genMember(Expr* e, uint16_t d) {
+  if (e->optional) {
+    uint16_t obj = temp(K_R);
+    genInto(e->a, obj);
+    Label* nul = newLabel();
+    Label* end = newLabel();
+    jump(OP_JNULLISH, obj, nul);
+    Expr* saved = e->a;
+    Type* bt = baseOf(saved->type);
+    uint16_t base = obj;
+    if (isBoxedOptional(saved->type)) {
+      base = temp(K(bt));
+      emit(kindOf(bt) == K_F ? OP_UNBOX_F : OP_UNBOX_I, base, obj);
+    }
+    e->a = regExpr(base, bt, saved->loc);
+    e->optional = false;
+    Type* savedT = e->type;
+    Type* innerT = e->innerType ? e->innerType : baseOf(savedT);
+    e->type = innerT;
+    uint16_t v = temp(K(innerT));
+    genMember(e, v);
+    boxIfNeeded(d, v, innerT, savedT);
+    e->type = savedT;
+    e->optional = true;
+    e->a = saved;
+    jump(OP_JMP, 0, end);
+    place(nul);
+    emit(OP_LOADUNDEF, d);
+    place(end);
+    return;
+  }
   switch (e->intrinsic) {
     case IN_CONST_NUM: loadNum(d, e->num); return;
     case IN_CONST_STR: loadStr(d, e->str); return;
@@ -2881,19 +2912,6 @@ void Gen::genMember(Expr* e, uint16_t d) {
       emit(op3(fk, OP_GETN_I, OP_GETN_F, OP_GETN_R), into, obj, (uint16_t)(D->icNames.size() - 1));
     }
   };
-  if (e->optional) {
-    Label* nul = newLabel();
-    Label* end = newLabel();
-    jump(OP_JNULLISH, obj, nul);
-    uint16_t v = temp(fk);
-    load(v);
-    boxIfNeeded(d, v, fieldT, e->type);
-    jump(OP_JMP, 0, end);
-    place(nul);
-    emit(OP_LOADUNDEF, d);
-    place(end);
-    return;
-  }
   if (isBoxedOptional(fieldT) && e->type != fieldT && kindOf(e->type) != K_R) {
     uint16_t v = temp(K_R);
     load(v);

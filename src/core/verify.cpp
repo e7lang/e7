@@ -80,6 +80,7 @@ bool verifyModule(const Module& m, std::string& err) {
     const ClassDesc& c = m.classes[ci];
     if (c.parent >= (int32_t)ci || c.parent < -1) return F("class %zu: invalid parent", ci);
     if (c.fields.size() > 65535) return F("class %zu: too many fields", ci);
+    if (c.isRecord > 2) return F("class %zu: bad kind", ci);
     for (auto& fd : c.fields)
       if (fd.vt >= VT__COUNT) return F("class %zu: bad field type", ci);
     if (c.methodNames.size() != c.vtable.size()) return F("class %zu: bad method table", ci);

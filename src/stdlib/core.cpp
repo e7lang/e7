@@ -58,6 +58,18 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
       return out;
     }
     case OT::Map: return static_cast<MapObj*>(o)->isSet ? u"[object Set]" : u"[object Map]";
+    case OT::Instance: {
+      auto* in = static_cast<InstObj*>(o);
+      if (!in->cls->isTuple) return u"[object Object]";
+      std::u16string out;
+      for (uint32_t i = 0; i < in->cls->nfields; i++) {
+        if (i) out += u',';
+        Slot e = in->fields()[i];
+        if (in->cls->fieldVT[i] == VT_REF && (!e.r || e.r == vm.undef())) continue;
+        out += valueToString(vm, e, in->cls->fieldVT[i]);
+      }
+      return out;
+    }
     case OT::Closure: return u"function " + utf8ToUtf16(static_cast<CloObj*>(o)->fn->name) + u"() { [native code] }";
     case OT::Buffer: return u"[object ArrayBuffer]";
     case OT::Handle: return u"[object KeyHandle]";
@@ -192,6 +204,19 @@ static std::string inspectRec(VM& vm, Slot v, uint8_t vt, int depth, bool top, s
     }
     seen.erase(o);
     return out + " }";
+  }
+  if (o->type == OT::Instance && static_cast<InstObj*>(o)->cls->isTuple) {
+    auto* in = static_cast<InstObj*>(o);
+    if (in->cls->nfields == 0) return "[]";
+    if (depth > 2) return "[Array]";
+    seen.insert(o);
+    std::string out = "[ ";
+    for (uint32_t i = 0; i < in->cls->nfields; i++) {
+      if (i) out += ", ";
+      out += inspectRec(vm, in->fields()[i], in->cls->fieldVT[i], depth + 1, false, seen);
+    }
+    seen.erase(o);
+    return out + " ]";
   }
   if (o->type == OT::Instance) {
     auto* in = static_cast<InstObj*>(o);

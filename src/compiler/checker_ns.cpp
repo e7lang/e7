@@ -496,7 +496,7 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
   // ------------------------------------------------------------ e7:crypto
   if (id.rfind("e7:crypto.", 0) == 0) {
     std::string n = id.substr(10);
-    static const char* hashes[] = {"md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha512_256",
+    static const char* hashes[] = {"md5", "sha1", "sha224", "sha256", "sha384", "sha512",
                                    "sha3_224", "sha3_256", "sha3_384", "sha3_512", "keccak256"};
     for (const char* h : hashes)
       if (n == h) {

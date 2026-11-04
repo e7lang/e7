@@ -103,6 +103,7 @@ struct ClassRT {
   std::string name;
   ClassRT* parent = nullptr;
   bool isRecord = false;
+  bool isTuple = false;
   uint32_t nfields = 0;
   std::vector<uint8_t> fieldVT;
   std::vector<std::string> fieldNames;

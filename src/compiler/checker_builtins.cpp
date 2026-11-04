@@ -170,7 +170,10 @@ Type* Checker::checkCall(Expr* e, Type* expected) {
   if (ft->t != TT::Func) return errT(e->loc, "type '" + typeName(ft) + "' is not callable");
   checkArgs(e, ft, e->list);
   e->intrinsic = IN_CLOSURE_CALL;
-  if (e->optional) return ft->ret->t == TT::Void ? T.voidT() : T.optional(ft->ret, false, true);
+  if (e->optional) {
+    e->innerType = ft->ret;
+    return ft->ret->t == TT::Void ? T.voidT() : T.optional(ft->ret, false, true);
+  }
   return ft->ret;
 }
 
@@ -291,7 +294,10 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
       if (!ret) return T.unknown();
       break;
   }
-  if (e->optional) return ret->t == TT::Void ? T.voidT() : T.optional(ret, false, true);
+  if (e->optional) {
+    e->innerType = ret;
+    return ret->t == TT::Void ? T.voidT() : T.optional(ret, false, true);
+  }
   return ret;
 }
 

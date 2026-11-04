@@ -497,6 +497,7 @@ ModuleRT* VM::loadModule(Module&& mod) {
     const ClassDesc& d = m.classes[i];
     c.name = d.name;
     c.isRecord = d.isRecord != 0;
+    c.isTuple = d.isRecord == 2;
     c.parent = d.parent >= 0 ? &M->classes[d.parent] : nullptr;
     c.nfields = (uint32_t)d.fields.size();
     for (size_t k = 0; k < d.fields.size(); k++) {

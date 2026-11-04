@@ -42,6 +42,7 @@ enum class EK {
 
 struct Stmt;
 struct Expr;
+struct VarDecl;
 
 struct Param {
   std::string name;
@@ -52,6 +53,7 @@ struct Param {
   bool isProperty = false;  // constructor parameter property
   Loc loc;
   VarSym* sym = nullptr;
+  VarDecl* pattern = nullptr;  // destructuring parameter
 };
 
 enum class ConvKind {
@@ -71,6 +73,7 @@ struct Expr {
   EK k;
   Loc loc;
   Type* type = nullptr;  // filled by checker
+  Type* innerType = nullptr;  // optional chaining: type of the member/call result before '?.' widening
   // literal data
   double num = 0;
   bool isIntLit = false;     // Num: written as integer literal
@@ -198,8 +201,10 @@ struct Arena {
   std::vector<std::unique_ptr<Expr>> exprs;
   std::vector<std::unique_ptr<Stmt>> stmts;
   std::vector<std::unique_ptr<TypeNode>> types;
+  std::vector<std::unique_ptr<VarDecl>> decls;
   Expr* expr(EK k, Loc l) { exprs.emplace_back(new Expr()); exprs.back()->k = k; exprs.back()->loc = l; return exprs.back().get(); }
   Stmt* stmt(SK k, Loc l) { stmts.emplace_back(new Stmt()); stmts.back()->k = k; stmts.back()->loc = l; return stmts.back().get(); }
+  VarDecl* decl(const VarDecl& d) { decls.emplace_back(new VarDecl(d)); return decls.back().get(); }
   TypeNode* type(TNK k, Loc l) { types.emplace_back(new TypeNode()); types.back()->k = k; types.back()->loc = l; return types.back().get(); }
 };
 

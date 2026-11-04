@@ -93,6 +93,16 @@ struct Stringifier {
         nl(indent);
         out += u']';
       }
+    } else if (o->type == OT::Instance && static_cast<InstObj*>(o)->cls->isTuple) {
+      auto* in = static_cast<InstObj*>(o);
+      out += u'[';
+      for (uint32_t i = 0; i < in->cls->nfields; i++) {
+        if (i) out += u',';
+        nl(inner);
+        if (!value(in->fields()[i], in->cls->fieldVT[i], inner)) out += u"null";
+      }
+      if (in->cls->nfields) nl(indent);
+      out += u']';
     } else if (o->type == OT::Instance) {
       auto* in = static_cast<InstObj*>(o);
       out += u'{';

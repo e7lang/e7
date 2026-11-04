@@ -206,10 +206,10 @@ Type* Checker::checkIdent(Expr* e) {
 }
 
 // ------------------------------------------------------------------ records
-Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& fields) {
+Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& fields, bool tuple) {
   // find identical layout (names + value types)
   for (ClassSym* c : recordClasses) {
-    if (c->fields.size() != fields.size()) continue;
+    if (c->fields.size() != fields.size() || c->isTuple != tuple) continue;
     bool same = true;
     for (size_t i = 0; i < fields.size() && same; i++)
       if (c->fields[i].name != fields[i].first || vtOf(c->fields[i].type) != vtOf(fields[i].second)) same = false;
@@ -220,6 +220,7 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
   for (size_t i = 0; i < fields.size(); i++) c->name += (i ? "," : "") + fields[i].first;
   c->name += "}";
   c->isRecord = true;
+  c->isTuple = tuple;
   c->state = 2;
   for (auto& f : fields) {
     c->fieldIdx[f.first] = (int)c->fields.size();
@@ -235,7 +236,7 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
 ClassSym* Checker::tupleRecord(Type* tt) {
   std::vector<std::pair<std::string, Type*>> fs;
   for (size_t i = 0; i < tt->elems.size(); i++) fs.push_back({std::to_string(i), tt->elems[i]});
-  return recordFor(fs)->cls;
+  return recordFor(fs, true)->cls;
 }
 
 // ------------------------------------------------------------------ arrays & objects
@@ -905,6 +906,7 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
   }
   if (e->optional) {
     if (result->t == TT::Void) return errT(e->loc, "void in optional chain");
+    e->innerType = result;
     return T.optional(result, false, true);
   }
   return result;

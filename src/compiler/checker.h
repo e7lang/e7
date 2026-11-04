@@ -170,7 +170,7 @@ class Checker {
  public:
   std::vector<ClassSym*> recordClasses;
   ClassSym* tupleRecord(Type* tupleType);
-  Type* recordFor(const std::vector<std::pair<std::string, Type*>>& fields);
+  Type* recordFor(const std::vector<std::pair<std::string, Type*>>& fields, bool tuple = false);
 };
 
 }  // namespace e7
