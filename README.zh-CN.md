@@ -170,6 +170,18 @@ let mac = try vm.call(module, "sign", .string("amount=100&currency=CNY"), .strin
 // .string("0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6")
 ```
 
+Android 直接从 Maven 引入 AAR：
+
+```kotlin
+dependencies {
+    implementation("org.e7vm:e7vm-android:1.0.1")   // 桌面 JVM 用 org.e7vm:e7vm:1.0.1
+}
+```
+
+在发布到 Maven Central 之前，可以添加 GitHub Packages 仓库 `https://maven.pkg.github.com/e7lang/e7`
+（需要带 `read:packages` 权限的 token，见 [docs/EMBEDDING.md](docs/EMBEDDING.md#31-gradle-dependency-recommended)），
+或从 [Release 页面](https://github.com/e7lang/e7/releases/latest) 下载 `.aar`。
+
 各平台的具体写法，以及宿主函数、`KeyHandle`、预算与分片执行，见 [docs/EMBEDDING.md](docs/EMBEDDING.md)。
 
 ### 6. 编辑器配置
@@ -262,7 +274,8 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 | 平台 | 构建 | 绑定 |
 |---|---|---|
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
-| Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so` | Java/Kotlin：`platform/java/org/e7vm` |
+| Android | Maven `org.e7vm:e7vm-android`（AAR），或 `cd platform/android && ./gradlew :library:assembleRelease`，或 `ANDROID_NDK_HOME=... platform/android/build_android.sh` | Java/Kotlin：`platform/java/org/e7vm` |
+| JVM（桌面） | Maven `org.e7vm:e7vm`（jar 内含 Linux、macOS、Windows 的 JNI 库） | Java/Kotlin：`platform/java/org/e7vm` |
 | iOS / macOS（Swift） | Swift Package Manager：`.package(url: "https://github.com/e7lang/e7.git", from: "1.0.1")`，或 `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`.product(name: "E7VM", package: "e7")`（`platform/ios/E7VM/E7VM.swift`） |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]`（VS 2022） | C/C++、C#：`platform/windows/E7VM.cs` |
 | .NET（Windows / Linux / macOS） | `dotnet add package E7VM` | C#：NuGet 包 [`E7VM`](https://www.nuget.org/packages/E7VM) |
@@ -303,6 +316,9 @@ build/e7 test examples/tests   # 用 e7:test 编写的单元测试
 - **移动端：** iOS、Android NDK、JNI。
 - **Windows：** MSVC 与 clang-cl。
 - **TypeScript：** `tsc` 严格检查。
+
+[`.github/workflows/maven.yml`](.github/workflows/maven.yml) 构建 Maven 制品，并在 Linux、macOS、Windows
+和 Android 模拟器上运行 Java 测试套件。
 
 ## 性能
 

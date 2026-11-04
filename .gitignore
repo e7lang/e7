@@ -13,3 +13,8 @@ examples/embed/*.pub
 # release packaging output
 dist/
 .swiftpm/
+
+# Gradle (platform/android)
+.gradle/
+local.properties
+.cxx/
