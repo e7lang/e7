@@ -1,5 +1,7 @@
 # e7vm — E7 语言与虚拟机
 
+[![CI](https://github.com/e7lang/e7/actions/workflows/ci.yml/badge.svg)](https://github.com/e7lang/e7/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/e7lang/e7)](https://github.com/e7lang/e7/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Playground](https://img.shields.io/badge/try-playground-10b981)](https://e7lang.github.io/playground)
+
 [English](README.md) | **简体中文** · 官网：[e7lang.github.io](https://e7lang.github.io) · [**在浏览器里试用**](https://e7lang.github.io/playground) · [下载](https://github.com/e7lang/e7/releases/latest)
 
 **E7** 是一门**严格静态类型的 TypeScript 子集**：每个合法的 E7 程序同时也是合法的 TypeScript 程序。
