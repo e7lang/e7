@@ -1,0 +1,13 @@
+// A valid E7 script
+console.log("hello from E7 👋");
+
+function sum(xs: number[]): number {
+  let s = 0;
+  for (const x of xs) s += x;
+  return s;
+}
+console.log(`sum = ${sum([1, 2, 3])}`);
+
+export function main(): number {
+  return 6 * 7;
+}

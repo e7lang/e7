@@ -1,0 +1,212 @@
+name: JS
+
+# npm package @e7lang/e7 (packages/e7, from the WebAssembly build) and the VS Code extension
+# (editors/vscode). Builds, tests the packed tarball / .vsix and, when called with publish: true
+# (e.g. from a release workflow), attaches both to the GitHub release v<version> and publishes them.
+#
+# Calling it from another workflow:
+#   jobs:
+#     js:
+#       uses: ./.github/workflows/js.yml
+#       with: { version: "1.0.1", publish: true }
+#       secrets: inherit                    # NPM_TOKEN, VSCE_PAT, OVSX_PAT (each optional)
+#       permissions: { contents: write, id-token: write }
+on:
+  push:
+    branches: [main, "feat/js"]
+  pull_request:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version being released (must match packages/e7 and editors/vscode package.json)"
+        type: string
+        required: true
+      publish:
+        description: "Upload to the GitHub release v<version>, npm, the VS Code Marketplace and Open VSX"
+        type: boolean
+        default: false
+    secrets:
+      NPM_TOKEN:
+        required: false
+      VSCE_PAT:
+        required: false
+      OVSX_PAT:
+        required: false
+
+concurrency:
+  group: js-${{ github.ref }}-${{ inputs.publish && 'publish' || 'build' }}
+  cancel-in-progress: ${{ !inputs.publish && github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  wasm:
+    name: wasm + npm package
+    runs-on: ubuntu-24.04
+    outputs:
+      tgz: ${{ steps.pack.outputs.tgz }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Check versions
+        run: |
+          npm_v=$(node -p 'require("./packages/e7/package.json").version')
+          ext_v=$(node -p 'require("./editors/vscode/package.json").version')
+          js_v=$(sed -n 's/^export const version = "\(.*\)";/\1/p' packages/e7/index.js)
+          echo "npm $npm_v, extension $ext_v, index.js $js_v, input '${{ inputs.version }}'"
+          [ "$npm_v" = "$ext_v" ] && [ "$npm_v" = "$js_v" ] || { echo "::error::package versions differ"; exit 1; }
+          want="${{ inputs.version }}"; want="${want#v}"
+          if [ -n "$want" ] && [ "$want" != "$npm_v" ]; then
+            echo "::error::version input $want != package version $npm_v (bump packages/e7/package.json, packages/e7/index.js and editors/vscode/package.json)"
+            exit 1
+          fi
+      - uses: mymindstorm/setup-emsdk@v14
+        with: { version: "4.0.10" }
+      - run: emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build-wasm -j 4
+      - run: ls -l build-wasm/e7wasm.*
+      # the playground API must keep working
+      - run: node tests/wasm/smoke.mjs build-wasm/e7wasm.js
+      - name: Assemble the package
+        run: cp build-wasm/e7wasm.js build-wasm/e7wasm.wasm packages/e7/wasm/ && cp LICENSE packages/e7/
+      - name: Test (source tree)
+        working-directory: packages/e7
+        run: npm test
+      - name: npm pack
+        id: pack
+        working-directory: packages/e7
+        run: |
+          tgz=$(npm pack --silent | tail -n 1)
+          tar tzf "$tgz"
+          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with: { name: e7-npm, path: "packages/e7/*.tgz", if-no-files-found: error }
+      - uses: actions/upload-artifact@v4
+        with: { name: e7-wasm-js, path: "packages/e7/wasm/e7wasm.*", if-no-files-found: error }
+
+  npm-test:
+    name: npm (node ${{ matrix.node }}, ${{ matrix.os }})
+    needs: wasm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, node: "18", browser: false }
+          - { os: ubuntu-24.04, node: "20", browser: false }
+          - { os: ubuntu-24.04, node: "22", browser: true }
+          - { os: macos-14, node: "22", browser: false }
+          - { os: windows-2022, node: "22", browser: false }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ matrix.node }}" }
+      - uses: actions/download-artifact@v4
+        with: { name: e7-npm, path: dist-npm }
+      - name: Install the tarball into a fresh project
+        run: |
+          mkdir -p "$RUNNER_TEMP/consumer"
+          cp -r packages/e7/test "$RUNNER_TEMP/consumer/test"
+          cd "$RUNNER_TEMP/consumer"
+          echo '{ "name": "consumer", "private": true, "type": "module" }' > package.json
+          npm install --no-audit --no-fund "$GITHUB_WORKSPACE/dist-npm/${{ needs.wasm.outputs.tgz }}"
+          ls node_modules/@e7lang/e7 node_modules/@e7lang/e7/wasm
+      - name: Tests against the installed package
+        working-directory: ${{ runner.temp }}/consumer
+        run: node --test test/api.test.mjs test/cli.test.mjs
+      - name: CLI from node_modules/.bin
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          npx --no-install e7-js --version
+          npx --no-install e7-js run test/fixtures/sign.ts | tee out.txt
+          grep -q 0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6 out.txt
+      - name: Type definitions (tsc --strict)
+        if: matrix.node == '22'
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          npm install --no-save --no-audit --no-fund typescript@5.9.3
+          npx --no-install tsc -p test/tsconfig.json
+      - name: Browser smoke test (Chromium)
+        if: matrix.browser
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          npx --yes playwright@1.63.0 install --with-deps chromium
+          npm install --no-save --no-audit --no-fund playwright@1.63.0
+          node test/browser.mjs
+
+  vscode:
+    name: VS Code extension
+    needs: wasm
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - uses: actions/download-artifact@v4
+        with: { name: e7-wasm-js, path: packages/e7/wasm }
+      - name: Install
+        working-directory: editors/vscode
+        run: npm ci --no-audit --no-fund
+      - name: Build
+        working-directory: editors/vscode
+        run: node scripts/build.mjs --minify
+      - name: Integration tests (VS Code under xvfb)
+        working-directory: editors/vscode
+        run: xvfb-run -a node test/runTest.js
+      - name: Package .vsix
+        working-directory: editors/vscode
+        run: |
+          npx --no-install vsce package --no-dependencies -o "e7-$(node -p 'require("./package.json").version').vsix"
+          unzip -l e7-*.vsix
+      - uses: actions/upload-artifact@v4
+        with: { name: e7-vscode, path: "editors/vscode/*.vsix", if-no-files-found: error }
+
+  publish:
+    name: publish
+    if: inputs.publish
+    needs: [wasm, npm-test, vscode]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+      - uses: actions/download-artifact@v4
+        with: { name: e7-npm, path: out }
+      - uses: actions/download-artifact@v4
+        with: { name: e7-vscode, path: out }
+      - run: ls -l out
+      - name: Attach to GitHub release v${{ inputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ inputs.version }}"; v="v${v#v}"
+          gh release upload "$v" out/*.tgz out/*.vsix --clobber --repo "$GITHUB_REPOSITORY"
+      - name: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "::notice::NPM_TOKEN is not set: skipping npm publish"; exit 0; fi
+          npm publish out/*.tgz --access public --provenance
+      - name: Install publishing tools
+        working-directory: editors/vscode
+        run: npm ci --no-audit --no-fund
+      - name: VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then echo "::notice::VSCE_PAT is not set: skipping the VS Code Marketplace"; exit 0; fi
+          cd editors/vscode && npx --no-install vsce publish --packagePath ../../out/*.vsix
+      - name: Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then echo "::notice::OVSX_PAT is not set: skipping Open VSX"; exit 0; fi
+          cd editors/vscode && npx --no-install ovsx publish ../../out/*.vsix -p "$OVSX_PAT"

@@ -62,6 +62,9 @@ Windows (x64) from the [latest release](https://github.com/e7lang/e7/releases/la
 `bin/e7`, `bin/e7c`, `include/e7/e7.h`, static libraries in `lib/`, `types/e7.d.ts` and examples.
 **.NET:** `dotnet add package E7VM` (C# binding with native libraries for Windows, Linux and macOS).
 No install at all: the [playground](https://e7lang.github.io/playground) runs the compiler and VM in your browser (WebAssembly).
+**Node.js / browsers:** `npm install @e7lang/e7` ([packages/e7](packages/e7)) is the same compiler and VM on
+WebAssembly, with a JavaScript API (`compile`, `check`, `run`, `disassemble`) and the `e7-js` command
+(`npx -p @e7lang/e7 e7-js run sign.ts`).
 
 **From source:**
 
@@ -191,6 +194,11 @@ or download the `.aar` from the [release](https://github.com/e7lang/e7/releases/
 Add [`lib/e7.d.ts`](lib/e7.d.ts) to your `tsconfig.json` `files` to get completion and type errors in
 VS Code. Running `tsc --strict` on your scripts gives the same diagnostics as `e7c`.
 
+The **E7 Language** VS Code extension ([editors/vscode](editors/vscode), publisher `e7lang`; the `.vsix` is
+attached to each [release](https://github.com/e7lang/e7/releases/latest)) adds the E7 compiler's own
+diagnostics as you type, *E7: Run File*, *E7: Compile to Bytecode* and *E7: Show Bytecode*. It works on
+`*.e7` files, `.ts` files that import `"e7:..."` modules and files matching the `e7.files` setting.
+
 ## Testing your scripts
 
 Put tests in `*.test.ts` files, export functions whose names start with `test`, and use the assertions from the
@@ -268,7 +276,8 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 - **Execution control.**
   - The instruction budget also covers heavy native calls.
   - Optional suspend/resume (`e7_resume`) for time-slicing on the UI thread.
-- **Bindings.** C API ([`include/e7/e7.h`](include/e7/e7.h)), Java/Kotlin (JNI), Swift, C#.
+- **Bindings.** C API ([`include/e7/e7.h`](include/e7/e7.h)), Java/Kotlin (JNI), Swift, C#, and
+  JavaScript/WebAssembly ([`@e7lang/e7`](packages/e7)).
 
 The full language reference is in [docs/SPEC.md](docs/SPEC.md).
 
@@ -282,6 +291,7 @@ The full language reference is in [docs/SPEC.md](docs/SPEC.md).
 | iOS / macOS (Swift) | Swift Package Manager: `.package(url: "https://github.com/e7lang/e7.git", from: "1.0.1")`, or `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `.product(name: "E7VM", package: "e7")` (`platform/ios/E7VM/E7VM.swift`) |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]` (VS 2022) | C/C++, C#: `platform/windows/E7VM.cs` |
 | .NET (Windows / Linux / macOS) | `dotnet add package E7VM` | C#: NuGet package [`E7VM`](https://www.nuget.org/packages/E7VM) |
+| WebAssembly (Node.js, browsers) | `emcmake cmake -S . -B build-wasm && cmake --build build-wasm` → `e7wasm.js` + `e7wasm.wasm` | JavaScript: npm `@e7lang/e7` ([packages/e7](packages/e7)) |
 
 CMake options:
 
@@ -323,6 +333,9 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs 15 jobs on ever
 
 [`.github/workflows/maven.yml`](.github/workflows/maven.yml) builds the Maven artifacts and runs the Java
 test suite on Linux, macOS, Windows and an Android emulator.
+[`.github/workflows/js.yml`](.github/workflows/js.yml) builds the WebAssembly module, then tests the packed
+npm tarball (`node --test` on Node 18/20/22, Linux/macOS/Windows, plus headless Chromium) and the VS Code
+extension (integration tests in VS Code under xvfb), and packages the `.vsix`.
 
 ## Performance
 
@@ -350,8 +363,9 @@ src/compiler/       parser, type checker, codegen
 src/core/           bytecode format, serializer, verifier, disassembler, JS number formatting
 src/vm/             interpreter, object model, GC
 src/stdlib/         built-ins                  src/crypto/      e7:crypto, module signatures
-src/capi/           C API                      tools/           e7, e7c command-line tools
+src/capi/           C API                      tools/           e7, e7c command-line tools, e7wasm
 platform/           Android (JNI) / Java, iOS (Swift), Windows (C#)
+packages/e7/        npm package @e7lang/e7     editors/vscode/  VS Code extension
 examples/           sample scripts + embedding example (examples/embed)
 tests/ bench/ docs/                            third_party/     BearSSL (MIT), Monocypher (BSD-2/CC0)
 ```

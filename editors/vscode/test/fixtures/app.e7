@@ -1,0 +1,5 @@
+import { twice } from "./lib/util";
+
+export function main(): number {
+  return twice(21);
+}

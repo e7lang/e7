@@ -1,0 +1,5 @@
+wasm/e7wasm.js
+wasm/e7wasm.wasm
+LICENSE
+*.tgz
+node_modules/
