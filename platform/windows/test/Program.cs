@@ -26,15 +26,19 @@ static class Program
 
     static int Main(string[] args)
     {
-        // Resolve "e7vm" from the directory given on the command line (libe7vm.so / .dylib / e7vm.dll).
-        string? dir = args.Length > 0 ? Path.GetFullPath(args[0]) : null;
-        NativeLibrary.SetDllImportResolver(typeof(E7VM).Assembly, (name, asm, path) =>
+        // With a directory argument, resolve "e7vm" from it (libe7vm.so / .dylib / e7vm.dll, as built by CMake).
+        // Without one, the default probing applies (e.g. runtimes/<rid>/native/ of the E7VM NuGet package).
+        if (args.Length > 0)
         {
-            if (name != "e7vm" || dir == null) return IntPtr.Zero;
-            foreach (var f in new[] { "e7vm.dll", "libe7vm.so", "libe7vm.dylib", Path.Combine("Release", "e7vm.dll") })
-                if (File.Exists(Path.Combine(dir, f))) return NativeLibrary.Load(Path.Combine(dir, f));
-            return IntPtr.Zero;
-        });
+            string dir = Path.GetFullPath(args[0]);
+            NativeLibrary.SetDllImportResolver(typeof(E7VM).Assembly, (name, asm, path) =>
+            {
+                if (name != "e7vm") return IntPtr.Zero;
+                foreach (var f in new[] { "e7vm.dll", "libe7vm.so", "libe7vm.dylib", Path.Combine("Release", "e7vm.dll") })
+                    if (File.Exists(Path.Combine(dir, f))) return NativeLibrary.Load(Path.Combine(dir, f));
+                return IntPtr.Zero;
+            });
+        }
 
         Console.WriteLine($"e7vm {E7VM.Version}");
         const string signSrc = @"import { hmac } from ""e7:crypto"";

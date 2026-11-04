@@ -59,6 +59,7 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 **预编译版本：** 从 [最新 Release](https://github.com/e7lang/e7/releases/latest) 下载对应平台的 `e7-<版本>-<平台>`：
 Linux（x64、arm64）、macOS（通用二进制）、Windows（x64）。压缩包内含 `bin/e7`、`bin/e7c`、`include/e7/e7.h`、
 `lib/` 静态库、`types/e7.d.ts` 和示例。
+**.NET：** `dotnet add package E7VM`（C# 绑定，内含 Windows、Linux、macOS 原生库）。
 什么都不想装：[Playground](https://e7lang.github.io/playground) 直接在浏览器里运行编译器和虚拟机（WebAssembly）。
 
 **从源码构建：** 需要 CMake ≥ 3.16 和支持 C++17 的编译器（GCC、Clang、MSVC），Ninja 可选。
@@ -204,6 +205,7 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 | Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so` | Java/Kotlin：`platform/java/org/e7vm` |
 | iOS | `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`platform/ios/E7VM/E7VM.swift` |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]`（VS 2022） | C/C++、C#：`platform/windows/E7VM.cs` |
+| .NET（Windows / Linux / macOS） | `dotnet add package E7VM` | C#：NuGet 包 [`E7VM`](https://www.nuget.org/packages/E7VM) |
 
 CMake 选项：
 

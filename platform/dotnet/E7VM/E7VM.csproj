@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- NuGet package "E7VM": the C# binding (platform/windows/E7VM.cs) plus prebuilt e7vm native
+       libraries under runtimes/<rid>/native/. Pack (see .github/workflows/nuget.yml):
+         dotnet pack platform/dotnet/E7VM -c Release -p:Version=1.0.1 -p:E7NativeDir=<dir> -o out
+       where <dir> holds win-x64/e7vm.dll, linux-x64/libe7vm.so, linux-arm64/libe7vm.so and
+       osx/libe7vm.dylib (universal arm64 + x86_64). -->
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>E7VM</AssemblyName>
+    <RootNamespace>E7</RootNamespace>
+    <Version>1.0.1</Version>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <PackageId>E7VM</PackageId>
+    <Authors>e7lang</Authors>
+    <Description>e7vm for .NET: an embeddable, sandboxed bytecode VM for E7 (a strict TypeScript subset). Run server-delivered, optionally signed scripts with memory limits, instruction budgets, host functions and key handles. Includes native libraries for Windows x64, Linux x64/arm64 and macOS (Apple Silicon + Intel).</Description>
+    <PackageTags>e7;e7vm;vm;bytecode;interpreter;scripting;sandbox;typescript;embedding</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/e7lang/e7</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/e7lang/e7.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Copyright>Copyright (c) 2026 Everett</Copyright>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+
+    <!-- Directory with the prebuilt native libraries (see above); empty = managed-only build. -->
+    <E7NativeDir Condition="'$(E7NativeDir)' == ''"></E7NativeDir>
+    <!-- Set E7RequireNative=true when packing for release so a missing library fails the pack. -->
+    <E7RequireNative Condition="'$(E7RequireNative)' == ''">false</E7RequireNative>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../windows/E7VM.cs" Link="E7VM.cs" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(E7NativeDir)' != ''">
+    <E7Native Include="$(E7NativeDir)/win-x64/e7vm.dll" Rid="win-x64" />
+    <E7Native Include="$(E7NativeDir)/linux-x64/libe7vm.so" Rid="linux-x64" />
+    <E7Native Include="$(E7NativeDir)/linux-arm64/libe7vm.so" Rid="linux-arm64" />
+    <E7Native Include="$(E7NativeDir)/osx/libe7vm.dylib" Rid="osx-arm64" />
+    <E7Native Include="$(E7NativeDir)/osx/libe7vm.dylib" Rid="osx-x64" />
+    <None Include="@(E7Native)" Pack="true" PackagePath="runtimes/%(Rid)/native/" Visible="false" />
+  </ItemGroup>
+
+  <Target Name="E7CheckNative" BeforeTargets="GenerateNuspec" Condition="'$(E7RequireNative)' == 'true'">
+    <Error Condition="'$(E7NativeDir)' == ''" Text="E7RequireNative=true but E7NativeDir is not set" />
+    <Error Condition="!Exists('%(E7Native.FullPath)')" Text="missing native library: %(E7Native.FullPath)" />
+  </Target>
+</Project>

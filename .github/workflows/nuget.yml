@@ -1,0 +1,214 @@
+name: NuGet
+
+# Builds the e7vm shared library for every desktop platform, packs the E7VM NuGet package
+# (platform/dotnet/E7VM) and tests it from a local feed on Linux, Windows and macOS.
+# Release integration: call it with `uses: ./.github/workflows/nuget.yml`, `with: { version: 1.0.1, publish: true }`
+# and `secrets: inherit`; the caller must grant `contents: write` and `packages: write`.
+# Publishing uploads the .nupkg to the GitHub release v<version>, pushes it to GitHub Packages and,
+# when the NUGET_API_KEY secret is set, to nuget.org.
+on:
+  push:
+    branches: [main, 'feat/nuget']
+  pull_request:
+  workflow_call:
+    inputs:
+      version:
+        description: "Package version (e.g. 1.0.1); the release tag is v<version>"
+        required: true
+        type: string
+      publish:
+        description: "Upload to the GitHub release, GitHub Packages and nuget.org"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      NUGET_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nuget-${{ github.ref }}-${{ inputs.version || 'ci' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: linux-x64, os: ubuntu-22.04,
+              cmake: '-G Ninja -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"', lib: build/libe7vm.so }
+          - { rid: linux-arm64, os: ubuntu-22.04-arm,
+              cmake: '-G Ninja -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"', lib: build/libe7vm.so }
+          - { rid: osx, os: macos-14,
+              cmake: '-G Ninja "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0', lib: build/libe7vm.dylib }
+          - { rid: win-x64, os: windows-2022,
+              cmake: '-G "Visual Studio 17 2022" -A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', lib: build/Release/e7vm.dll }
+    name: native (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install ninja; else sudo apt-get update && sudo apt-get install -y ninja-build; fi
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_SHARED=ON -DE7_BUILD_TESTS=OFF -DE7_BUILD_TOOLS=OFF ${{ matrix.cmake }}
+      - name: Build
+        run: cmake --build build --config Release --target e7vm -j 4
+      - name: Inspect
+        run: |
+          ls -l ${{ matrix.lib }}
+          case "$RUNNER_OS" in
+            Linux)
+              ldd ${{ matrix.lib }}
+              if ldd ${{ matrix.lib }} | grep -E 'libstdc\+\+|libgcc_s'; then echo "libstdc++/libgcc must be linked statically" >&2; exit 1; fi
+              objdump -T ${{ matrix.lib }} | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 ;;
+            macOS)
+              lipo -info ${{ matrix.lib }}
+              lipo ${{ matrix.lib }} -verify_arch arm64 x86_64
+              otool -L ${{ matrix.lib }}
+              otool -l ${{ matrix.lib }} | grep -A3 -E 'LC_BUILD_VERSION|LC_VERSION_MIN' | head -8 ;;
+          esac
+      - name: Stage
+        run: mkdir -p native/${{ matrix.rid }} && cp ${{ matrix.lib }} native/${{ matrix.rid }}/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e7vm-native-${{ matrix.rid }}
+          path: native
+          if-no-files-found: error
+
+  pack:
+    needs: native
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0.x" }
+      - uses: actions/download-artifact@v4
+        with: { pattern: e7vm-native-*, path: native, merge-multiple: true }
+      - name: Version
+        id: ver
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"; v="${v#v}"
+          else v="$(sed -n 's/^project(e7vm VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)-ci.${{ github.run_number }}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "package version: $v"
+      - name: Pack
+        run: |
+          find native -type f | sort
+          dotnet pack platform/dotnet/E7VM -c Release -o out \
+            -p:Version=${{ steps.ver.outputs.version }} -p:E7NativeDir="$PWD/native" -p:E7RequireNative=true
+      - name: Check package contents
+        run: |
+          ls -l out
+          nupkg="out/E7VM.${{ steps.ver.outputs.version }}.nupkg"
+          unzip -l "$nupkg"
+          for f in README.md lib/netstandard2.0/E7VM.dll lib/net8.0/E7VM.dll \
+                   runtimes/win-x64/native/e7vm.dll runtimes/linux-x64/native/libe7vm.so \
+                   runtimes/linux-arm64/native/libe7vm.so runtimes/osx-arm64/native/libe7vm.dylib \
+                   runtimes/osx-x64/native/libe7vm.dylib; do
+            unzip -l "$nupkg" | grep -q " $f\$" || { echo "missing in package: $f" >&2; exit 1; }
+          done
+          test -f "out/E7VM.${{ steps.ver.outputs.version }}.snupkg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e7-nuget
+          path: |
+            out/*.nupkg
+            out/*.snupkg
+          if-no-files-found: error
+
+  test:
+    needs: pack
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, rid: linux-x64 }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64 }
+          - { os: windows-2022, rid: win-x64 }
+          - { os: macos-14, rid: osx-arm64 }
+          - { os: macos-15-intel, rid: osx-x64 }
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.pack.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: platform/windows/test
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0.x" }
+      - uses: actions/download-artifact@v4
+        with: { name: e7-nuget, path: feed }
+      - name: Create a console app consuming the package
+        run: |
+          mkdir -p "$RUNNER_TEMP/app" && cd "$RUNNER_TEMP/app"
+          dotnet new console -n E7PkgTest -o . --framework net8.0
+          # isolated package cache so the test cannot pick up anything but ./feed + nuget.org
+          export NUGET_PACKAGES="$RUNNER_TEMP/nuget-packages"
+          echo "NUGET_PACKAGES=$NUGET_PACKAGES" >> "$GITHUB_ENV"
+          dotnet add package E7VM --version "$VERSION" --source "$GITHUB_WORKSPACE/feed"
+          cp "$GITHUB_WORKSPACE/platform/windows/test/Program.cs" Program.cs
+          cat E7PkgTest.csproj
+      - name: Run tests (dotnet run, default native probing)
+        working-directory: ${{ runner.temp }}/app
+        run: dotnet run -c Release
+      - name: Run tests (RID-specific publish)
+        working-directory: ${{ runner.temp }}/app
+        run: |
+          dotnet publish -c Release -r ${{ matrix.rid }} --self-contained false -o pub
+          ls pub
+          exe=E7PkgTest; [ "$RUNNER_OS" = "Windows" ] && exe=E7PkgTest.exe
+          ./pub/$exe
+
+  publish:
+    needs: [pack, test]
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    env:
+      VERSION: ${{ needs.pack.outputs.version }}
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0.x" }
+      - uses: actions/download-artifact@v4
+        with: { name: e7-nuget, path: out }
+      - name: Upload to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "v$VERSION" out/*.nupkg --clobber -R "$GITHUB_REPOSITORY"
+      - name: Push to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          dotnet nuget push "out/E7VM.$VERSION.nupkg" --source https://nuget.pkg.github.com/e7lang/index.json \
+            --api-key "$GITHUB_TOKEN" --skip-duplicate --no-symbols
+      - name: Push to nuget.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "::notice::NUGET_API_KEY is not set; skipping nuget.org"
+            exit 0
+          fi
+          # pushes the matching .snupkg from the same directory as well
+          dotnet nuget push "out/E7VM.$VERSION.nupkg" --source https://api.nuget.org/v3/index.json \
+            --api-key "$NUGET_API_KEY" --skip-duplicate

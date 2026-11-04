@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Test for platform/windows/E7VM.cs against the e7vm shared library. Run:
        dotnet run (project platform/windows/test) with the directory holding the library as argument;
-       see the csharp job in .github/workflows/ci.yml. -->
+       see the csharp job in .github/workflows/ci.yml. Program.cs also runs unchanged against the E7VM
+       NuGet package (no argument: default runtimes/<rid>/native/ probing); see .github/workflows/nuget.yml. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
