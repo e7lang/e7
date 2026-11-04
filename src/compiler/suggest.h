@@ -1,0 +1,81 @@
+// "Did you mean ...?" suggestions for compiler diagnostics.
+#pragma once
+#include <algorithm>
+#include <cctype>
+#include <string>
+#include <vector>
+
+namespace e7 {
+
+// Optimal string alignment distance (Levenshtein + adjacent transpositions); case differences
+// cost half (scaled by 2 to stay integral).
+inline size_t editDistance2(const std::string& a, const std::string& b) {
+  size_t n = a.size(), m = b.size();
+  std::vector<std::vector<size_t>> d(n + 1, std::vector<size_t>(m + 1));
+  for (size_t i = 0; i <= n; i++) d[i][0] = 2 * i;
+  for (size_t j = 0; j <= m; j++) d[0][j] = 2 * j;
+  for (size_t i = 1; i <= n; i++)
+    for (size_t j = 1; j <= m; j++) {
+      size_t sub = a[i - 1] == b[j - 1] ? 0
+                   : tolower((unsigned char)a[i - 1]) == tolower((unsigned char)b[j - 1]) ? 1 : 2;
+      size_t v = std::min({d[i - 1][j] + 2, d[i][j - 1] + 2, d[i - 1][j - 1] + sub});
+      if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) v = std::min(v, d[i - 2][j - 2] + 2);
+      d[i][j] = v;
+    }
+  return d[n][m];
+}
+
+// The candidate closest to `name`, or "" when none is close enough.
+inline std::string closestName(const std::string& name, const std::vector<std::string>& candidates) {
+  if (name.empty() || name.size() > 64) return "";
+  std::string best;
+  size_t bestD = (size_t)-1;
+  // allowed distance: about a third of the length (at least one edit)
+  // (very short names only match when they differ in case alone)
+  size_t limit = name.size() < 3 ? 1 : 2 * std::max<size_t>(1, (name.size() + 1) / 3);
+  for (const std::string& c : candidates) {
+    if (c == name || c.empty() || c[0] == '<' || c.size() > 64) continue;
+    size_t lenDiff = c.size() > name.size() ? c.size() - name.size() : name.size() - c.size();
+    if (2 * lenDiff > limit) continue;
+    size_t d = editDistance2(name, c);
+    if (d <= limit && (d < bestD || (d == bestD && c < best))) {
+      best = c;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+// "; did you mean 'x'?" or "".
+inline std::string didYouMean(const std::string& name, const std::vector<std::string>& candidates) {
+  std::string b = closestName(name, candidates);
+  return b.empty() ? "" : "; did you mean '" + b + "'?";
+}
+
+// Exported names of the builtin modules.
+inline const std::vector<std::string>& builtinModuleExports(const std::string& module) {
+  static const std::vector<std::string> encoding = {
+      "hexEncode", "hexDecode", "base64Encode", "base64Decode", "base64UrlEncode", "base64UrlDecode",
+      "base32Encode", "base32Decode", "utf8Encode", "utf8Decode", "pemDecode", "pemEncode", "concatBytes",
+      "bytesEqual"};
+  static const std::vector<std::string> crypto = {
+      "KeyHandle", "HashName", "md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3_224", "sha3_256",
+      "sha3_384", "sha3_512", "keccak256", "hash", "hmac", "hkdf", "pbkdf2", "crc32", "randomBytes",
+      "timingSafeEqual", "aesGcmEncrypt", "aesGcmDecrypt", "chacha20Poly1305Encrypt", "chacha20Poly1305Decrypt",
+      "aesCbcEncrypt", "aesCbcDecrypt", "aesCtr", "ed25519PublicKey", "ed25519Sign", "ed25519Verify", "x25519",
+      "ecdsaSign", "ecdsaVerify", "ecdsaPublicKey", "rsaVerify", "rsaSign"};
+  static const std::vector<std::string> test = {"assert", "assertEqual", "assertNotEqual", "assertClose",
+                                                "assertThrows", "fail"};
+  static const std::vector<std::string> none;
+  if (module == "e7:encoding") return encoding;
+  if (module == "e7:crypto") return crypto;
+  if (module == "e7:test") return test;
+  return none;
+}
+
+inline const std::vector<std::string>& builtinModuleNames() {
+  static const std::vector<std::string> names = {"e7:crypto", "e7:encoding", "e7:test"};
+  return names;
+}
+
+}  // namespace e7

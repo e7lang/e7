@@ -153,11 +153,54 @@ or `Map<string, V>` (E7 extension: objects with dynamic keys). Parsing **validat
 
 - `import { a, b as c } from "./x"`, `import * as ns from "./x"`, `import type {...}`, `export function/const/class/interface/type/enum`,
   `export { a, b as c }`. Paths are relative to the current file and the extension may be omitted (tries `.ts`, `.e7`, `/index.ts`). Circular dependencies are forbidden.
-- Built-in modules: `e7:crypto`, `e7:encoding` (API in `lib/e7.d.ts`).
+- Built-in modules: `e7:crypto`, `e7:encoding`, `e7:test` (API in `lib/e7.d.ts`; `e7:test` is described in section 7.1).
 - Host functions: `declare function name(a: string, n: number): string;`; parameters/return values are limited to
   `number boolean string`, fixed-width integers, `Uint8Array KeyHandle void`, and are checked against the signature registered by the host when the module is loaded.
 - `export function`s in the entry file can be called by the host (only parameters and return values of the types above can cross the boundary). Top-level code runs once at load time,
   and module-level variables persist across calls.
+
+### 7.1 `e7:test` (assertions)
+
+Assertion helpers used by the `e7 test` runner; they work in any program. A failed assertion is a runtime error
+(section 8): it stops the call with a message and a stack trace.
+
+| Function | Fails when |
+|---|---|
+| `assert(condition: boolean, message?)` | `condition` is false |
+| `assertEqual(actual, expected, message?)` | the values are not structurally equal |
+| `assertNotEqual(actual, expected, message?)` | the values are structurally equal |
+| `assertClose(actual: number, expected: number, tolerance = 1e-9, message?)` | `|actual - expected| > tolerance` |
+| `assertThrows(fn: () => void, expectedMessage?)` | calling `fn` does not raise a runtime error, or its message does not contain `expectedMessage` |
+| `fail(message?): never` | always |
+
+`assertEqual` / `assertNotEqual` accept any one type for both operands (the checker treats them as a builtin
+generic `<T>(actual: T, expected: T)`; user-defined generics are not supported). The second operand is checked
+against the type of the first, unless the first is a literal whose type depends on context (an integer literal,
+`null`, `undefined`, `[]`). Structural equality: numbers by value with `NaN` equal to `NaN` (and `0` equal to `-0`),
+integers, booleans and enum values by value, strings / bigints / `Uint8Array`s by content, arrays element-wise,
+class instances (same class) and object literals field by field, `Map`s and `Set`s by entries regardless of
+insertion order, `Date`s by time, functions by identity. Failure messages show both values:
+
+```
+assertEqual failed: totals
+  expected: [ 1, 3 ]
+  actual:   [ 1, 2 ]
+    at testTotals (cart.test.ts:8)
+```
+
+`assertThrows` catches the runtime errors of section 8 that are raised by the script (`throw`, `abort`, failed
+assertions, out-of-bounds access, failed `JSON.parse` validation, ...), so code that rejects bad input can be
+tested; instruction budget, memory limit and call depth errors are not caught. Outside `assertThrows`, errors still
+cannot be caught (there is no `try`/`catch`).
+
+Test runner: `e7 test [files or directories...]` compiles each `*.test.ts` / `*.test.e7` file (default: all of them
+under the current directory, skipping `node_modules`, `build*` and hidden directories) and calls every exported
+function whose name starts with `test` and that takes no parameters, each in a fresh VM (module-level state is not
+shared between tests) with its own instruction budget (`--budget`, default 10^9, which includes module
+initialization) and memory limit (`--mem`, default 128 MiB). A test passes when it returns normally, or returns
+`true` if its return type is `boolean`. Options: `--filter <text>`, `--json`, `--verbose` (show the output of passing
+tests), `--seed <n>`. The exit code is 1 if any test failed (or none ran), otherwise 0. A Node.js implementation of
+`e7:test` for differential testing is in `tests/node_shim/e7-test.mjs`.
 
 ## 8. Runtime errors
 
@@ -165,6 +208,12 @@ The following terminate the current call (the host receives an error code and a 
 array/string/byte out-of-bounds access, null reference access, failed `!`/`as` assertions, integer division by zero, `throw`/`abort`, JSON validation failure,
 failed strict `Map` lookups, instruction budget exhausted (`E7_ERR_BUDGET`, or suspend with `E7_SUSPENDED`), memory limit (`E7_ERR_MEMORY`),
 call stack too deep (`E7_ERR_STACK`), and host function errors.
+
+The stack trace lists one frame per line, innermost first, as `at <function> (<file>:<line>)`; the file is the
+source file relative to the entry file (also for imported modules), top-level code appears as `<init>`, and a builtin
+or host function that was running (or that called back into the script, like `Array.sort`) appears as
+`at <name> (native)`. Repeated cycles of recursion are collapsed into one line such as
+`... 19998 more frames of f (recursion)`.
 
 ## 9. Known differences from JavaScript (summary)
 

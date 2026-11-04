@@ -72,6 +72,10 @@ class Checker {
   // ---- diagnostics
   void err(Loc l, const std::string& msg);
   Type* errT(Loc l, const std::string& msg) { err(l, msg); return T.unknown(); }
+  // "; did you mean 'x'?" suffixes (empty when nothing is close)
+  std::string suggestName(const std::string& name, bool typeNames);
+  std::string suggestMember(Type* t, const std::string& name);
+  std::string suggestNamespaceMember(const std::string& ns, const std::string& name);
 
   // ---- scopes
   Scope* pushScope(bool fnBoundary = false);

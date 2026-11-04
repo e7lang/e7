@@ -180,6 +180,54 @@ let mac = try vm.call(module, "sign", .string("amount=100&currency=CNY"), .strin
 Add [`lib/e7.d.ts`](lib/e7.d.ts) to your `tsconfig.json` `files` to get completion and type errors in
 VS Code. Running `tsc --strict` on your scripts gives the same diagnostics as `e7c`.
 
+## Testing your scripts
+
+Put tests in `*.test.ts` files, export functions whose names start with `test`, and use the assertions from the
+built-in `e7:test` module ([`examples/tests/`](examples/tests/)):
+
+```ts
+import { assert, assertEqual, assertThrows } from "e7:test";
+import { totalOf, discountPercent } from "./pricing.ts";
+
+export function testDiscountCodes(): void {
+  assertEqual(discountPercent(" welcome10 "), 10);
+  assertEqual(totalOf([{ sku: "pen", unitCents: 199, qty: 3 }], null).total, 597);
+}
+
+export function testUnknownCodeIsRejected(): void {
+  assertThrows(() => { discountPercent("FREE"); }, "unknown discount code");
+}
+```
+
+```bash
+build/e7 test                    # every **/*.test.ts under the current directory
+build/e7 test examples/tests --filter Discount
+```
+
+```
+✓ examples/tests/pricing.test.ts › testDiscountCodesAreCaseInsensitive (0.2 ms)
+
+1 passed, 0 failed (1 file, 2 ms)
+```
+
+- Each test runs in a **fresh VM** with its own instruction budget (`--budget`, default 10^9) and memory limit
+  (`--mem`, default 128 MiB), so tests cannot affect each other and an endless loop fails instead of hanging.
+- A test passes when it returns normally (or returns `true`, if it returns `boolean`). A failed assertion, `throw`,
+  runtime error, or exhausted budget or memory fails it. The runner prints the message, the stack trace and the test's
+  output.
+- Assertions: `assert`, `assertEqual` / `assertNotEqual` (structural equality for any type: arrays, objects, Maps,
+  `Uint8Array`s, ...), `assertClose`, `assertThrows`, `fail` ([SPEC §7.1](docs/SPEC.md#71-e7test-assertions)).
+- `--json` prints machine-readable results; the exit code is 1 when a test fails.
+- Test files are ordinary TypeScript: with `lib/e7.d.ts` they type-check under `tsc --strict`.
+
+Compile errors point at the code and suggest fixes:
+
+```
+cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
+ 4 | console.log(totl + tax);
+   |             ^
+```
+
 ## Features
 
 - **Language.**
@@ -250,6 +298,7 @@ and every finding was fixed with a regression test. The evidence is in
 python3 tests/run_tests.py     # language/library tests, byte-for-byte against Node.js + error cases
 ctest --test-dir build         # all suites: C API, re-entrancy, malicious modules, fuzzers, locale
 tests/tsc/check.sh             # every test and example type-checks with tsc --strict
+build/e7 test examples/tests   # unit tests written with e7:test
 ```
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs 15 jobs on every push:

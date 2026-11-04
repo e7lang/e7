@@ -3,6 +3,7 @@
 
 #include "checker.h"
 #include "intrinsics.h"
+#include "suggest.h"
 
 namespace e7 {
 
@@ -133,7 +134,7 @@ Type* Checker::checkCall(Expr* e, Type* expected) {
   }
   if (c->k == EK::Ident) {
     Sym* s = lookup(c->raw);
-    if (!s) return errT(c->loc, "cannot find name '" + c->raw + "'");
+    if (!s) return errT(c->loc, "cannot find name '" + c->raw + "'" + suggestName(c->raw, false));
     if (s->k == SymK::Builtin) return checkBuiltinCall(e, static_cast<BuiltinSym*>(s)->id, expected);
     if (s->k == SymK::Namespace && static_cast<NamespaceSym*>(s)->builtin) {
       // Number(x), String(x), Boolean(x), BigInt(x)
@@ -277,7 +278,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
         ret = ft->ret;
         break;
       }
-      return errT(m->loc, "property '" + name + "' does not exist on type '" + c->name + "'");
+      return errT(m->loc, "property '" + name + "' does not exist on type '" + c->name + "'" + suggestMember(bt, name));
     }
     case TT::Object: {
       const ObjShape::Method* mm = bt->shape->findMethod(name);
@@ -306,7 +307,8 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
         ret = p->type->ret;
         break;
       }
-      return errT(m->loc, "property '" + name + "' does not exist or is not callable on type '" + typeName(bt) + "'");
+      return errT(m->loc, "property '" + name + "' does not exist or is not callable on type '" + typeName(bt) + "'" +
+                              suggestMember(bt, name));
     }
     default:
       ret = checkBuiltinMethod(e, m, bt, expected);
@@ -355,7 +357,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
   auto N = [&](double v) { return mkNum(P, T, v, l); };
   auto S = [&](const std::u16string& v) { return mkStr(P, T, v, l); };
   auto noSuch = [&]() -> Type* {
-    return errT(m->loc, std::string(isCall ? "method" : "property") + " '" + name + "' does not exist on type '" + typeName(bt) + "'");
+    return errT(m->loc, std::string(isCall ? "method" : "property") + " '" + name + "' does not exist on type '" + typeName(bt) + "'" +
+                            suggestMember(bt, name));
   };
   auto cb = [&](Expr* arg, const std::vector<Type*>& ps, Type* ret) {
     return callbackType(this, P, T, arg, ps, ret, [&](Expr* x, Type* t) { return check(x, t); },

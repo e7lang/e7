@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "checker.h"
+#include "suggest.h"
 
 #include <cmath>
 #include <cstdio>
@@ -48,6 +49,122 @@ Sym* Checker::lookup(const std::string& name, bool* crossedFn) {
     if (s->fnBoundary) crossed = true;
   }
   return nullptr;
+}
+
+std::string Checker::suggestName(const std::string& name, bool typeNames) {
+  std::vector<std::string> cands;
+  for (Scope* s = scope; s; s = s->parent)
+    for (auto& kv : s->names) {
+      SymK k = kv.second->k;
+      bool isType = k == SymK::Class || k == SymK::Interface || k == SymK::Alias || k == SymK::Enum;
+      bool isValue = k == SymK::Var || k == SymK::Func || k == SymK::Class || k == SymK::Enum ||
+                     k == SymK::Namespace || k == SymK::Builtin;
+      if (typeNames ? isType : isValue) cands.push_back(kv.first);
+    }
+  if (typeNames) {
+    for (const char* n : {"number", "string", "boolean", "bigint", "void", "null", "undefined", "never", "i8", "u8",
+                          "i16", "u16", "i32", "u32", "i64", "u64", "int", "Array", "ReadonlyArray", "Map",
+                          "ReadonlyMap", "Set", "ReadonlySet", "Uint8Array", "ArrayBuffer", "DataView", "TextEncoder",
+                          "TextDecoder", "Error", "Date"})
+      cands.push_back(n);
+  } else {
+    cands.push_back("undefined");
+    cands.push_back("null");
+  }
+  return didYouMean(name, cands);
+}
+
+std::string Checker::suggestMember(Type* t, const std::string& name) {
+  std::vector<std::string> c;
+  auto add = [&](std::initializer_list<const char*> l) {
+    for (const char* n : l) c.push_back(n);
+  };
+  if (!t) return "";
+  switch (t->t) {
+    case TT::Class:
+      for (auto& kv : t->cls->fieldIdx) c.push_back(kv.first);
+      for (auto& kv : t->cls->methodIdx) c.push_back(kv.first);
+      break;
+    case TT::Object:
+      for (auto& p : t->shape->props) c.push_back(p.name);
+      for (auto& m : t->shape->methods) c.push_back(m.name);
+      break;
+    case TT::String:
+      add({"at", "charAt", "charCodeAt", "codePointAt", "concat", "endsWith", "includes", "indexOf", "lastIndexOf",
+           "length", "localeCompare", "normalize", "padEnd", "padStart", "repeat", "replace", "replaceAll", "slice",
+           "split", "startsWith", "substring", "toLowerCase", "toString", "toUpperCase", "trim", "trimEnd",
+           "trimStart"});
+      break;
+    case TT::Number: case TT::Enum:
+      add({"toExponential", "toFixed", "toPrecision", "toString", "valueOf"});
+      break;
+    case TT::Int: case TT::Bool: case TT::BigInt: add({"toString"}); break;
+    case TT::Array:
+      add({"at", "concat", "copyWithin", "entries", "every", "fill", "filter", "find", "findIndex", "findLast",
+           "findLastIndex", "flat", "flatMap", "forEach", "includes", "indexOf", "join", "keys", "lastIndexOf",
+           "length", "map", "pop", "push", "reduce", "reduceRight", "reverse", "shift", "slice", "some", "sort",
+           "splice", "toString", "unshift", "values"});
+      break;
+    case TT::Bytes:
+      add({"at", "buffer", "byteLength", "byteOffset", "fill", "forEach", "includes", "indexOf", "join",
+           "lastIndexOf", "length", "reverse", "set", "slice", "subarray", "toString"});
+      break;
+    case TT::ArrayBuffer: add({"byteLength", "slice"}); break;
+    case TT::DataView:
+      add({"buffer", "byteLength", "byteOffset", "getBigInt64", "getBigUint64", "setBigInt64", "setBigUint64"});
+      for (const char* k : {"Uint8", "Int8", "Uint16", "Int16", "Uint32", "Int32", "Float32", "Float64"}) {
+        c.push_back(std::string("get") + k);
+        c.push_back(std::string("set") + k);
+      }
+      break;
+    case TT::Map: add({"clear", "delete", "entries", "forEach", "get", "has", "keys", "set", "size", "values"}); break;
+    case TT::Set: add({"add", "clear", "delete", "entries", "forEach", "has", "keys", "size", "values"}); break;
+    case TT::TextEncoder: add({"encode", "encoding"}); break;
+    case TT::TextDecoder: add({"decode", "encoding"}); break;
+    case TT::Error: add({"message"}); break;
+    case TT::Date:
+      add({"getTime", "valueOf", "getTimezoneOffset", "setTime", "toISOString", "toJSON", "toString", "toUTCString",
+           "toDateString", "toTimeString"});
+      for (const char* g : {"FullYear", "Month", "Date", "Day", "Hours", "Minutes", "Seconds", "Milliseconds"}) {
+        c.push_back(std::string("get") + g);
+        c.push_back(std::string("getUTC") + g);
+      }
+      break;
+    default: break;
+  }
+  return didYouMean(name, c);
+}
+
+std::string Checker::suggestNamespaceMember(const std::string& ns, const std::string& name) {
+  std::vector<std::string> c;
+  if (ns == "Math") {
+    c = {"PI", "E", "LN2", "LN10", "LOG2E", "LOG10E", "SQRT2", "SQRT1_2", "abs", "ceil", "floor", "round", "trunc",
+         "sign", "sqrt", "cbrt", "exp", "expm1", "log", "log1p", "log2", "log10", "sin", "cos", "tan", "asin", "acos",
+         "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "fround", "clz32", "atan2", "pow", "imul", "hypot",
+         "max", "min", "random"};
+  } else if (ns == "Number") {
+    c = {"MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER", "EPSILON", "MAX_VALUE", "MIN_VALUE", "POSITIVE_INFINITY",
+         "NEGATIVE_INFINITY", "NaN", "isFinite", "isInteger", "isNaN", "isSafeInteger", "parseFloat", "parseInt"};
+  } else if (ns == "String") {
+    c = {"fromCharCode", "fromCodePoint"};
+  } else if (ns == "JSON") {
+    c = {"parse", "stringify"};
+  } else if (ns == "console") {
+    c = {"debug", "error", "info", "log", "trace", "warn"};
+  } else if (ns == "Object") {
+    c = {"freeze", "keys"};
+  } else if (ns == "Array") {
+    c = {"from", "isArray", "of"};
+  } else if (ns == "Uint8Array") {
+    c = {"BYTES_PER_ELEMENT", "from", "of"};
+  } else if (ns == "BigInt") {
+    c = {"asIntN", "asUintN"};
+  } else if (ns == "Date") {
+    c = {"UTC", "now", "parse"};
+  } else {
+    c = builtinModuleExports(ns);
+  }
+  return didYouMean(name, c);
 }
 
 std::string Checker::varKey(VarSym* v) {
@@ -268,7 +385,7 @@ void Checker::declareFile(FileInfo* fi) {
   for (Stmt* s : fi->file->body) {
     switch (s->k) {
       case SK::Func: {
-        if (!s->typeParams.empty()) err(s->loc, "generic functions are not supported yet");
+        if (!s->typeParams.empty()) err(s->loc, "generic functions are not supported yet; write one function per concrete type (builtins such as Array<T>, Map<K, V> and Set<T> are generic)");
         FuncSym* f = newFunc(s->name, &s->params, s->retType, s->body, nullptr);
         f->isTopLevel = true;
         f->declStmt = s;
@@ -292,7 +409,7 @@ void Checker::declareFile(FileInfo* fi) {
         break;
       }
       case SK::Class: {
-        if (!s->typeParams.empty()) err(s->loc, "generic classes are not supported yet");
+        if (!s->typeParams.empty()) err(s->loc, "generic classes are not supported yet; write one class per concrete type or use Array<T> / Map<K, V> / Set<T>");
         ClassSym* c = P.make<ClassSym>();
         c->name = s->name;
         c->decl = s;
@@ -304,7 +421,7 @@ void Checker::declareFile(FileInfo* fi) {
         break;
       }
       case SK::Interface: {
-        if (!s->typeParams.empty()) err(s->loc, "generic interfaces are not supported yet");
+        if (!s->typeParams.empty()) err(s->loc, "generic interfaces are not supported yet; write one interface per concrete type");
         InterfaceSym* is = P.make<InterfaceSym>();
         is->name = s->name;
         is->decl = s;
@@ -313,7 +430,7 @@ void Checker::declareFile(FileInfo* fi) {
         break;
       }
       case SK::TypeAlias: {
-        if (!s->typeParams.empty()) err(s->loc, "generic type aliases are not supported yet");
+        if (!s->typeParams.empty()) err(s->loc, "generic type aliases are not supported yet; write one alias per concrete type");
         AliasSym* a = P.make<AliasSym>();
         a->name = s->name;
         a->decl = s;
@@ -370,8 +487,11 @@ void Checker::declareFile(FileInfo* fi) {
 void Checker::bindImports(FileInfo* fi, Stmt* s) {
   bool builtinMod = s->from.rfind("e7:", 0) == 0;
   if (builtinMod) {
-    if (s->from != "e7:crypto" && s->from != "e7:encoding") {
-      err(s->loc, "unknown builtin module '" + s->from + "'");
+    if (s->from != "e7:crypto" && s->from != "e7:encoding" && s->from != "e7:test") {
+      std::string alt = closestName(s->from, builtinModuleNames());
+      err(s->loc, "unknown builtin module '" + s->from + "'" +
+                      (alt.empty() ? "; the builtin modules are e7:crypto, e7:encoding and e7:test"
+                                   : "; did you mean '" + alt + "'?"));
       return;
     }
     if (!s->nsAlias.empty()) {
@@ -383,6 +503,11 @@ void Checker::bindImports(FileInfo* fi, Stmt* s) {
       return;
     }
     for (auto& sp : s->imports) {
+      const auto& names = builtinModuleExports(s->from);
+      if (std::find(names.begin(), names.end(), sp.name) == names.end()) {
+        err(s->loc, "module '" + s->from + "' has no exported member '" + sp.name + "'" + didYouMean(sp.name, names));
+        continue;
+      }
       if (sp.name == "KeyHandle") {
         AliasSym* a = P.make<AliasSym>();
         a->name = sp.alias;
@@ -414,7 +539,9 @@ void Checker::bindImports(FileInfo* fi, Stmt* s) {
   for (auto& sp : s->imports) {
     auto e = tfi->exports.find(sp.name);
     if (e == tfi->exports.end()) {
-      err(s->loc, "module '" + s->from + "' has no exported member '" + sp.name + "'");
+      std::vector<std::string> names;
+      for (auto& kv : tfi->exports) names.push_back(kv.first);
+      err(s->loc, "module '" + s->from + "' has no exported member '" + sp.name + "'" + didYouMean(sp.name, names));
       continue;
     }
     declare(sp.alias, e->second, s->loc);
@@ -560,7 +687,8 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "undefined") { noArgs(); return T.undef(); }
   if (name == "never") { noArgs(); return T.never(); }
   if (name == "any" || name == "unknown" || name == "object" || name == "Object" || name == "Function" || name == "symbol")
-    return errT(l, "type '" + name + "' is not supported in E7 (all types must be static)");
+    return errT(l, "type '" + name + "' is not supported in E7 (all types must be static); use a concrete type, an "
+                   "interface, a union with null, or Map<K, V> for dynamic keys");
   static const std::pair<const char*, uint8_t> ints[] = {{"i8", VT_I8}, {"u8", VT_U8}, {"i16", VT_I16}, {"u16", VT_U16},
                                                           {"i32", VT_I32}, {"u32", VT_U32}, {"i64", VT_I64}, {"u64", VT_U64},
                                                           {"int", VT_I64}};
@@ -592,7 +720,7 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "Int32Array" || name == "Uint32Array" || name == "Float64Array" || name == "Uint16Array" ||
       name == "Int8Array" || name == "Int16Array" || name == "Float32Array" || name == "Uint8ClampedArray")
     return errT(l, "'" + name + "' is not supported; use Uint8Array, DataView or typed arrays like u32[]");
-  return errT(l, "unknown type '" + name + "'");
+  return errT(l, "unknown type '" + name + "'" + suggestName(name, true));
 }
 
 void Checker::resolveInterface(InterfaceSym* is) {

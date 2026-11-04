@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "common.h"
+#include "diag.h"
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
@@ -11,9 +12,12 @@
 #include "core/module.h"
 #include "e7/e7.h"
 
+int runTestCommand(int argc, char** argv);  // e7_test.cpp
+
 static int usage() {
   fprintf(stderr,
           "usage: e7 [options] <file.ts|file.e7|file.e7b>\n"
+          "       e7 test [options] [files or directories...]   (run tests; see e7 test --help)\n"
           "  --call <fn>        call an exported function (no arguments) and print its result\n"
           "                     (default: main, if exported)\n"
           "  --budget <n>       instruction budget (ticks)\n"
@@ -22,6 +26,7 @@ static int usage() {
           "  --seed <n>         seed for Math.random\n"
           "  --trust <pub-hex-file>  require a module signature from this key\n"
           "  --time             print execution time\n"
+          "  --no-excerpt       compile errors without source excerpts\n"
           "  --version          print the version\n");
   return 2;
 }
@@ -52,11 +57,12 @@ int main(int argc, char** argv) {
   _setmode(_fileno(stdout), _O_BINARY);
   _setmode(_fileno(stderr), _O_BINARY);
 #endif
+  if (argc >= 2 && strcmp(argv[1], "test") == 0) return runTestCommand(argc - 2, argv + 2);
   std::string file, call, trust;
   int64_t budget = 0, slice = 0;
   size_t mem = 0;
   uint64_t seed = 0;
-  bool hasSeed = false, timeIt = false;
+  bool hasSeed = false, timeIt = false, excerpt = true;
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
     if (a == "--call" && i + 1 < argc) call = argv[++i];
@@ -66,6 +72,7 @@ int main(int argc, char** argv) {
     else if (a == "--seed" && i + 1 < argc) { seed = strtoull(argv[++i], nullptr, 10); hasSeed = true; }
     else if (a == "--trust" && i + 1 < argc) trust = argv[++i];
     else if (a == "--time") timeIt = true;
+    else if (a == "--no-excerpt") excerpt = false;
     else if (a == "--version" || a == "-v") { printf("e7 %s\n", E7_VERSION); return 0; }
     else if (a.size() && a[0] == '-') return usage();
     else file = a;
@@ -97,7 +104,7 @@ int main(int argc, char** argv) {
   } else {
     e7::CompileOutput co = e7::compileProgram(file, e7::readFileFromDisk);
     if (!co.ok) {
-      fprintf(stderr, "%s", co.errorText().c_str());
+      fprintf(stderr, "%s", formatCompileErrors(co, excerpt).c_str());
       e7_vm_free(vm);
       return 1;
     }
