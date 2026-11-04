@@ -76,14 +76,64 @@ function collectFiles(entry, source, readFile, files) {
   }
 }
 
-// byte column (1-based, UTF-8) -> UTF-16 column (1-based)
+// Compiler column (1-based) -> UTF-16 column (1-based). The E7 lexer advances its column by one per
+// UTF-8 byte in code and comments but by one per code point inside string and template literals, so
+// the line is re-scanned with the same rules (tracking literals that span lines).
 function utf16Column(text, line, col) {
   if (typeof text !== "string" || line < 1 || col <= 1) return Math.max(1, col);
-  const lines = text.split("\n");
-  const l = lines[line - 1];
-  if (l === undefined) return col;
-  const bytes = enc.encode(l);
-  return dec.decode(bytes.subarray(0, Math.min(col - 1, bytes.length))).length + 1 + Math.max(0, col - 1 - bytes.length);
+  let ln = 1;
+  let mode = "code"; // code | str | tmpl | line | block
+  let quote = "";
+  const tmpl = []; // brace depth at each open `${`
+  let depth = 0;
+  let lexCol = 1;
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const cp = text.codePointAt(i);
+    const units = cp > 0xffff ? 2 : 1;
+    const ch = text[i];
+    if (ln === line && lexCol >= col) break;
+    if (ch === "\n") {
+      if (ln === line) break;
+      ln++;
+      lexCol = 1;
+      if (mode === "line" || mode === "str") mode = "code";
+      i++;
+      continue;
+    }
+    const literal = mode === "str" || mode === "tmpl";
+    const width = literal || cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    const next = text[i + 1];
+    let consumed = units;
+    let adv = width;
+    if (mode === "code") {
+      if (ch === "/" && next === "/") mode = "line";
+      else if (ch === "/" && next === "*") { mode = "block"; consumed = 2; adv = 2; }
+      else if (ch === '"' || ch === "'") { mode = "str"; quote = ch; }
+      else if (ch === "`") mode = "tmpl";
+      else if (ch === "{") depth++;
+      else if (ch === "}") {
+        if (tmpl.length && tmpl[tmpl.length - 1] === depth) { tmpl.pop(); mode = "tmpl"; }
+        else depth--;
+      }
+    } else if (mode === "block") {
+      if (ch === "*" && next === "/") { mode = "code"; consumed = 2; adv = 2; }
+    } else if (mode === "str") {
+      if (ch === "\\") { consumed = 1 + (next !== undefined && next !== "\n" ? (text.codePointAt(i + 1) > 0xffff ? 2 : 1) : 0); adv = consumed > 1 ? 2 : 1; }
+      else if (ch === quote) mode = "code";
+    } else if (mode === "tmpl") {
+      if (ch === "\\") { consumed = 1 + (next !== undefined && next !== "\n" ? (text.codePointAt(i + 1) > 0xffff ? 2 : 1) : 0); adv = consumed > 1 ? 2 : 1; }
+      else if (ch === "`") mode = "code";
+      else if (ch === "$" && next === "{") { tmpl.push(depth); mode = "code"; consumed = 2; adv = 2; }
+    }
+    if (ln === line && lexCol + adv > col) break; // column points inside this token piece
+    lexCol += adv;
+    i += consumed;
+  }
+  // UTF-16 index of position i relative to the start of the line
+  const lineStart = text.lastIndexOf("\n", i - 1) + 1;
+  return i - lineStart + 1 + Math.max(0, col - lexCol);
 }
 
 function toBytes(x) {

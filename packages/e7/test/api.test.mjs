@@ -52,10 +52,20 @@ test("compile: type error diagnostics with file, line, column", async () => {
 });
 
 test("compile: columns are UTF-16 based after non-ASCII text", async () => {
-  const line = "/* é 👋 */ let x: number = 'a';";
-  const r = await compile(line);
-  assert.equal(r.diagnostics[0].file, "main.ts");
-  assert.equal(r.diagnostics[0].column, line.indexOf("'a'") + 1);
+  const cases = [
+    "/* é 👋 */ let x: number = 'a';",
+    'const greeting: string = "héllo 世界 👋"; let x: number = \'a\';',
+    "const t: string = `é${\"世\"}👋 ${1}`; let x: number = 'a';",
+    "// 世界\nconst m: string = `é\n世👋`; let x: number = 'a';",
+  ];
+  for (const src of cases) {
+    const r = await compile(src);
+    const d = r.diagnostics[0];
+    assert.equal(d.file, "main.ts");
+    const lines = src.split("\n");
+    assert.equal(d.line, lines.length, src);
+    assert.equal(d.column, lines[lines.length - 1].indexOf("'a'") + 1, src);
+  }
 });
 
 test("compile: syntax errors and several errors", async () => {
