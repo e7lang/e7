@@ -1,0 +1,27 @@
+name: Labels
+
+# Keeps the repository's issue labels in sync with .github/labels.tsv (creates / updates; never deletes).
+on:
+  push:
+    branches: [main]
+    paths: [".github/labels.tsv", ".github/workflows/labels.yml"]
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          grep -v '^#' .github/labels.tsv | while IFS=$'\t' read -r name color desc; do
+            [ -n "$name" ] || continue
+            gh label create "$name" --color "$color" --description "$desc" --force -R "$GITHUB_REPOSITORY"
+            echo "synced: $name"
+          done
+          gh label list -R "$GITHUB_REPOSITORY" --limit 100

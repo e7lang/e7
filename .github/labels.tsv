@@ -1,0 +1,25 @@
+# name	color	description   (synced by .github/workflows/labels.yml)
+bug	d73a4a	Something is not working
+enhancement	a2eeef	New feature or improvement
+documentation	0075ca	Docs, README, website text
+question	d876e3	Usage question
+security	b60205	Security issue or hardening (report vulnerabilities privately, see SECURITY.md)
+performance	fbca04	Speed, memory or size
+good first issue	7057ff	Good for newcomers
+help wanted	008672	Extra attention is welcome
+duplicate	cfd3d7	Already reported
+invalid	e4e669	Not a valid report
+wontfix	ffffff	Will not be worked on
+area: language	1d76db	Syntax, type checker, language semantics (SPEC)
+area: compiler	0e8a16	e7c, parser, codegen, diagnostics
+area: vm	5319e7	Interpreter, verifier, GC, limits
+area: stdlib	c5def5	Built-in library: strings, arrays, JSON, bigint, Date, ...
+area: crypto	bfd4f2	e7:crypto / e7:encoding
+area: c-api	0052cc	C API (e7.h) and embedding
+area: bindings	006b75	Kotlin/Java, Swift, C# wrappers
+area: tooling	c2e0c6	CLI, packaging, releases, CI
+area: playground	f9d0c4	WebAssembly build and the browser playground
+platform: android	3ddc84	Android
+platform: ios	999999	iOS / macOS
+platform: windows	00a4ef	Windows
+platform: linux	f5c518	Linux
