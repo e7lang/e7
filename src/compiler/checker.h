@@ -151,6 +151,7 @@ class Checker {
   Type* checkTemplate(Expr* e);
   Type* checkAs(Expr* e);
   bool checkLValue(Expr* e);
+  std::string memberWriteError(Expr* target);  // "" when the member may be written here
   void checkArgs(Expr* call, Type* fnType, std::vector<Expr*>& args, size_t skip = 0);
   Type* checkBuiltinCall(Expr* e, const std::string& id, Type* expected);
   Type* checkMethodCall(Expr* e, Expr* member, Type* expected);

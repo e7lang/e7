@@ -36,6 +36,13 @@ All notable changes to E7 / e7vm are listed here. The format follows
   CI checks that version numbers and the SwiftPM/CMake source lists agree.
 
 ### Fixed
+- Compiler crash (found by the new fuzzers) on compound assignment to an array's `length` (`a.length -= 1`); it is now a
+  compile error with a suggested rewrite. `++`/`--` on `length` produced wrong code and are rejected the same way.
+- Writes that TypeScript rejects are now compile errors instead of being accepted: `length` of strings and `Uint8Array`,
+  `readonly` fields and parameter properties outside their constructor, `static readonly` fields, members of an
+  imported namespace, and `++`/`--` on built-in properties such as `Map.size` or `Math.PI` (which previously produced
+  invalid bytecode that the verifier rejected).
+- Plain assignment to a mutable static field (`Counter.count = 0`) was wrongly rejected.
 - Swift wrapper: the key provider handed the VM a pointer into a temporary Swift array; keys are now copied into a
   buffer owned by the VM wrapper and wiped before reuse.
 - `-DE7_FUZZ=ON` referenced a missing `fuzz/` directory.

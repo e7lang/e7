@@ -843,13 +843,13 @@ void Checker::resolveClass(ClassSym* c) {
     ctor->type = c->parent->ctor->type;
   }
 
-  auto addField = [&](const std::string& name, Type* t, Expr* init, bool optional, Loc l) {
+  auto addField = [&](const std::string& name, Type* t, Expr* init, bool optional, Loc l, bool readonly) {
     if (c->fieldIdx.count(name) || c->methodIdx.count(name)) {
       err(l, "duplicate member '" + name + "' in class '" + c->name + "'");
       return;
     }
     c->fieldIdx[name] = (int)c->fields.size();
-    c->fields.push_back({name, t, init, optional, c, l});
+    c->fields.push_back({name, t, init, optional, c, l, readonly});
   };
   // parameter properties come first (TS emits them first in the constructor)
   if (ctorDecl) {
@@ -858,7 +858,7 @@ void Checker::resolveClass(ClassSym* c) {
       if (!p.type) { err(p.loc, "parameter property '" + p.name + "' needs a type annotation"); continue; }
       Type* t = resolveType(p.type);
       if (p.optional) t = T.optional(t, false, true);
-      addField(p.name, t, nullptr, p.optional, p.loc);
+      addField(p.name, t, nullptr, p.optional, p.loc, p.readonly);
     }
   }
   // methods
@@ -896,6 +896,7 @@ void Checker::resolveClass(ClassSym* c) {
     if (m.isStatic) {
       VarSym* v = newVar(c->name + "." + m.name, nullptr, false, m.loc);
       v->isGlobal = true;
+      v->isConst = m.readonly;  // `static readonly`: only its initializer writes it
       v->owner = nullptr;
       v->globalIdx = (int)P.globals.size();
       P.globals.push_back(v);
@@ -934,7 +935,7 @@ void Checker::resolveClass(ClassSym* c) {
       err(m.loc, "field '" + m.name + "' needs a type annotation or initializer");
       t = T.unknown();
     }
-    addField(m.name, t, m.init, m.optional, m.loc);
+    addField(m.name, t, m.init, m.optional, m.loc, m.readonly);
   }
   scope = savedScope;
   curFn = savedFn;

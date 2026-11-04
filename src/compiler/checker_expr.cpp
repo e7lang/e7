@@ -513,9 +513,40 @@ static Type* storageTypeOf(Expr* x) {
   return nullptr;
 }
 
+std::string Checker::memberWriteError(Expr* target) {
+  target = strip(target);
+  if (target->k != EK::Member) return "";
+  const std::string& n = target->raw;
+  if (target->intrinsic == IN_STATIC_FIELD) {
+    Expr* base = strip(target->a);
+    Sym* s = base->k == EK::Ident ? lookup(base->raw) : nullptr;
+    if (!s || s->k != SymK::Class) return "cannot assign to '" + n + "' because it is an import";
+    if (target->var && target->var->isConst) return "cannot assign to '" + n + "' because it is a read-only property";
+    return "";
+  }
+  if (target->field >= 0 && target->cls) {
+    const ClassSym::Field& f = target->cls->fields[target->field];
+    // like TypeScript: a readonly field may only be assigned through `this` in its own class's constructor
+    bool inOwnCtor = curFn && curFn == f.owner->ctor && strip(target->a)->k == EK::This;
+    if (f.readonly && !inOwnCtor) return "cannot assign to '" + n + "' because it is a read-only property";
+    return "";
+  }
+  if (target->intrinsic != 0 || !target->native.empty()) return "cannot assign to '" + n + "'";
+  return "";
+}
+
 Type* Checker::checkUpdate(Expr* e) {
   if (!checkLValue(e->a)) return T.unknown();
   Type* t = check(e->a, nullptr);
+  // built-in / intrinsic properties (array length, Map.size, Math.PI, static fields, ...) are not
+  // writable through ++ / --, consistent with assignment
+  Expr* target = strip(e->a);
+  if (target->k == EK::Member && target->intrinsic == IN_ARR_LEN && target->a->type &&
+      baseOf(target->a->type)->t == TT::Array)
+    return errT(e->loc, "'" + e->raw + "' on an array length is not supported; write 'a.length = a.length " +
+                            e->raw.substr(0, 1) + " 1' instead");
+  std::string werr = memberWriteError(target);
+  if (!werr.empty()) return errT(e->loc, werr);
   Type* st = storageTypeOf(e->a);
   if (st) t = st;
   if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown) {
@@ -734,9 +765,17 @@ Type* Checker::checkAssign(Expr* e) {
       if (p) lt = p->type;
     }
     if (target->k == EK::Member && target->intrinsic == IN_ARR_LEN) {
+      // only arrays have a writable length (string / Uint8Array length is read-only, as in TypeScript)
+      Type* ot = target->a->type ? baseOf(target->a->type) : nullptr;
+      if (!ot || ot->t != TT::Array)
+        return errT(e->loc, "cannot assign to 'length' because it is a read-only property");
+      if (op != "=")
+        return errT(e->loc, "'" + op + "' on an array length is not supported; write 'a.length = a.length " +
+                                op.substr(0, op.size() - 1) + " ...' instead");
       target->intrinsic = IN_ARR_LENGTH_SET;
-    } else if (target->k == EK::Member && (target->intrinsic != 0 || !target->native.empty())) {
-      return errT(e->loc, "cannot assign to '" + target->raw + "'");
+    } else if (target->k == EK::Member) {
+      std::string werr = memberWriteError(target);
+      if (!werr.empty()) return errT(e->loc, werr);
     }
     if (target->k == EK::Index && target->a->type && baseOf(target->a->type)->t == TT::String)
       return errT(e->loc, "strings are immutable");

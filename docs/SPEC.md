@@ -112,7 +112,11 @@ utility types such as `Record/Partial/Pick`, `Promise`, `Symbol`, `RegExp`, and 
 - Classes: fields (optionally initialized, types can be inferred), constructor parameter properties (`constructor(public x: number)`), methods, static fields/methods,
   single inheritance with `extends` (the first statement of a derived class constructor must be `super(...)`; if the constructor is omitted, the superclass constructor parameters are inherited automatically),
   `super.method()`, `implements` (checked structurally), `instanceof`. Method overrides require identical signatures.
-  `public/private/protected/readonly` modifiers are accepted but not enforced at runtime.
+  `public/private/protected` modifiers are accepted but not enforced. `readonly` is enforced at compile time as in TypeScript: a readonly
+  field (or parameter property) can only be assigned through `this` in its own class's constructor, and a `static readonly` field only by its
+  initializer. Mutable static fields can be written with `=`, compound assignment and `++`/`--`. Writing an array's `length` truncates or
+  extends it (`a.length = n`); compound assignment and `++`/`--` on `length` are not supported, and `length` of strings and `Uint8Array`
+  is read-only. Members of an imported namespace (`import * as ns`) cannot be assigned.
   Arrow function fields can capture `this`. **Not supported**: getters/setters, abstract classes, `#private`, generic classes, class expressions, methods as values (use arrow functions).
 - Uninitialized fields start as `0` / `false` / `null`; optional fields start as `undefined`.
 

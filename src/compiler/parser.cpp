@@ -752,6 +752,7 @@ class Parser {
       if (allowProps) {
         while (isKw("public") || isKw("private") || isKw("protected") || isKw("readonly")) {
           if (peek().k == TK::Punct && (peek().text == ":" || peek().text == "," || peek().text == ")" || peek().text == "?" || peek().text == "=")) break;
+          if (isKw("readonly")) pr.readonly = true;
           i++;
           pr.isProperty = true;
         }
@@ -845,6 +846,7 @@ class Parser {
         if ((isKw("public") || isKw("private") || isKw("protected") || isKw("readonly") || isKw("static") || isKw("override") || isKw("declare")) &&
             peek().k != TK::Punct) {
           if (isKw("static")) m.isStatic = true;
+          if (isKw("readonly")) m.readonly = true;
           if (isKw("declare")) fail("'declare' fields are not supported");
           i++;
           any = true;

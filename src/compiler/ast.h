@@ -51,6 +51,7 @@ struct Param {
   bool optional = false;
   bool rest = false;
   bool isProperty = false;  // constructor parameter property
+  bool readonly = false;    // `readonly` parameter property
   Loc loc;
   VarSym* sym = nullptr;
   VarDecl* pattern = nullptr;  // destructuring parameter
@@ -135,6 +136,7 @@ struct ClassMember {
   enum Kind { Field, Method, Ctor } kind = Field;
   std::string name;
   bool isStatic = false;
+  bool readonly = false;
   bool optional = false;
   TypeNode* type = nullptr;
   Expr* init = nullptr;
