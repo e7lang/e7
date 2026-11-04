@@ -16,6 +16,9 @@ inline ArrObj* A(VM& vm, Slot s) {
   if (E7_UNLIKELY(!s.r || s.r->type != OT::Array)) vm.error(s.r ? "expected an array" : "cannot read properties of null or undefined (array)");
   return static_cast<ArrObj*>(s.r);
 }
+// A small non-negative integer immediate supplied by bytecode: returns -1 unless 0 <= d < n
+// (checked before converting, since converting NaN/out-of-range doubles is undefined behaviour).
+inline int immIndex(double d, int n) { return d >= 0 && d < n ? (int)d : -1; }
 inline BytesObj* B(VM& vm, Slot s) {
   if (E7_UNLIKELY(!s.r || s.r->type != OT::Bytes)) vm.error(s.r ? "expected a Uint8Array" : "cannot read properties of null or undefined (Uint8Array)");
   return static_cast<BytesObj*>(s.r);

@@ -32,3 +32,9 @@ endif()
 add_executable(locale_test locale_test.cpp)
 target_link_libraries(locale_test PRIVATE e7vm_static)
 add_test(NAME locale_test COMMAND locale_test)
+
+# hand-crafted malicious modules (security review regressions) must be rejected without crashing
+add_executable(malicious_test malicious_test.cpp)
+target_link_libraries(malicious_test PRIVATE e7vm_static)
+file(GLOB E7_MALICIOUS ${CMAKE_CURRENT_SOURCE_DIR}/malicious/*.e7b)
+add_test(NAME malicious_test COMMAND malicious_test ${E7_MALICIOUS})

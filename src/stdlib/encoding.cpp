@@ -188,6 +188,7 @@ E7_NATIVE(e_pemEncode) {
 E7_NATIVE(e_concatBytes) {
   E7_UNUSED;
   ArrObj* arr = A(vm, a[0]);
+  if (arr->vt != VT_REF) vm.error("concatBytes: expected an array of Uint8Array");
   uint64_t total = 0;
   for (uint32_t i = 0; i < arr->len; i++) total += B(vm, arr->data[i])->len;
   if (total > 0x7FFFFFFF) vm.error("concatBytes: result too large");

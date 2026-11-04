@@ -164,8 +164,8 @@ static void storeN(uint8_t* p, int n, uint64_t v, bool le) {
 E7_NATIVE(dv_get) {
   E7_UNUSED;
   BytesObj* v = B(vm, a[0]);
-  int t = (int)a[2].f;
-  if (t < 0 || t > 7) vm.error("invalid DataView type");
+  int t = immIndex(a[2].f, 8);
+  if (t < 0) vm.error("invalid DataView type");
   bool le = a[3].i != 0;
   uint64_t raw = loadN(dvPtr(vm, v, a[1].f, kSize[t]), kSize[t], le);
   switch (t) {
@@ -182,8 +182,8 @@ E7_NATIVE(dv_get) {
 E7_NATIVE(dv_set) {
   E7_UNUSED;
   BytesObj* v = B(vm, a[0]);
-  int t = (int)a[3].f;
-  if (t < 0 || t > 7) vm.error("invalid DataView type");
+  int t = immIndex(a[3].f, 8);
+  if (t < 0) vm.error("invalid DataView type");
   bool le = a[4].i != 0;
   double x = a[2].f;
   uint64_t raw;

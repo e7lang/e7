@@ -272,7 +272,7 @@ static void logImpl(VM& vm, Slot arr, bool err) {
   std::string line;
   for (uint32_t i = 0; i < a->len; i++) {
     if (i) line += ' ';
-    line += inspectValue(vm, a->data[i], VT_REF, 0, true);
+    line += inspectValue(vm, a->data[i], a->vt, 0, true);
   }
   if (err && !vm.printFn) {
     fwrite(line.data(), 1, line.size(), stderr);
@@ -408,7 +408,7 @@ E7_NATIVE(n_intToStringRadix) {
   E7_UNUSED;
   double rd = toInteger(a[1].f);
   if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix must be between 2 and 36");
-  uint8_t vt = (uint8_t)a[2].f;
+  uint8_t vt = (uint8_t)immIndex(a[2].f, VT__COUNT);
   std::string s = vt == VT_U64 ? uint64ToString(a[0].u, (int)rd) : int64ToString(a[0].i, (int)rd);
   r->r = vm.newStringAscii(s.c_str());
 }

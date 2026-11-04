@@ -245,7 +245,7 @@ E7_NATIVE(d_get) {
   double t = D(vm, a[0])->v.f;
   if (t != t) { r->f = NAN; return; }
   Parts p = split(t);
-  switch ((int)a[1].f) {
+  switch (immIndex(a[1].f, 64)) {
     case 0: r->f = p.y; break;
     case 1: r->f = p.mo - 1; break;
     case 2: r->f = p.d; break;

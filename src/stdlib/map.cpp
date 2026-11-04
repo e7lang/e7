@@ -144,6 +144,10 @@ static bool mapDelete(VM& vm, MapObj* m, Slot k) {
 static MapObj* newMapChecked(VM& vm, double kvt, double vvt, double km, bool isSet) {
   if (!(kvt >= 0 && kvt < VT__COUNT) || !(vvt >= 0 && vvt < VT__COUNT) || !(km >= 0 && km <= KM_REF))
     vm.error("invalid Map parameters");
+  // the key mode decides how key slots are hashed/compared, so it must agree with the key kind
+  Kind kk = kindOfVT((uint8_t)kvt);
+  KeyMode m = (KeyMode)(int)km;
+  if ((kk == K_F) != (m == KM_NUM) || (kk == K_I) != (m == KM_INT)) vm.error("invalid Map parameters");
   return vm.newMap((uint8_t)kvt, (uint8_t)vvt, (KeyMode)(int)km, isSet);
 }
 
@@ -152,6 +156,7 @@ E7_NATIVE(m_fromEntries) {
   E7_UNUSED;
   ArrObj* arr = A(vm, a[0]);
   MapObj* m = newMapChecked(vm, a[1].f, a[2].f, a[3].f, false);
+  if (arr->vt != VT_REF) vm.error("Map entry is not a [key, value] pair");
   for (uint32_t i = 0; i < arr->len; i++) {
     Obj* o = arr->data[i].r;
     if (!o || o->type != OT::Instance) vm.error("Map entry is not a [key, value] pair");

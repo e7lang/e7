@@ -239,8 +239,9 @@ E7_NATIVE(a_newLen) {
   E7_UNUSED;
   double d = a[0].f;
   if (!(d >= 0 && d <= 0x7FFFFFF) || std::trunc(d) != d) vm.error("RangeError: invalid array length");
-  uint8_t vt = (uint8_t)a[1].f;
-  if (vt >= VT__COUNT) vm.error("invalid element type");
+  int vti = immIndex(a[1].f, VT__COUNT);
+  if (vti < 0) vm.error("invalid element type");
+  uint8_t vt = (uint8_t)vti;
   ArrObj* arr = vm.newArray(vt, (uint32_t)d);
   arr->len = (uint32_t)d;
   if (vt == VT_REF)

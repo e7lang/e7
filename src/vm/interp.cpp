@@ -450,6 +450,7 @@ dispatch:
       ic.cls = cls;
       ic.index = it->second;
     }
+    if (E7_UNLIKELY(ic.index >= cls->vtable.size())) { ip = next; THROW("invalid method slot"); }
     FuncRT* callee = cls->vtable[ic.index];
     if (E7_UNLIKELY(callee->sigId != M->sigMap[sig])) { ip = next; THROW("method signature mismatch"); }
     Slot self = R[B];

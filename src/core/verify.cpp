@@ -60,8 +60,34 @@ bool verifyModule(const Module& m, std::string& err) {
   if (m.funcs.size() > 65535) return F("too many functions");
   if (m.classes.size() > 65535) return F("too many classes");
   if (m.natives.size() > 65535) return F("too many natives");
-  for (auto& e : m.exports)
+  // host signatures of exports drive how the C API converts arguments/results, so they must agree
+  // exactly with the function's register kinds
+  auto hostKind = [](char c) -> char {
+    switch (c) {
+      case 'n': return 'F';
+      case 'b': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': return 'I';
+      case 's': case 'y': case 'h': return 'R';
+      case 'v': return 'V';
+      case 'x': return '*';  // not passable from/to the host
+      default: return 0;
+    }
+  };
+  for (auto& e : m.exports) {
     if (e.func >= m.funcs.size()) return F("export '%s' has invalid function", e.name.c_str());
+    if (m.funcs[e.func].sig >= m.sigs.size()) return F("export '%s' has invalid function", e.name.c_str());
+    const std::string& fs = m.sigs[m.funcs[e.func].sig];
+    const std::string fp = sigParams(fs);
+    const std::string& hs = e.hostSig;
+    size_t gt = hs.find('>');
+    if (gt == std::string::npos || gt + 2 != hs.size() || gt != fp.size())
+      return F("export '%s' has invalid host signature", e.name.c_str());
+    for (size_t i = 0; i <= gt; i++) {
+      char hk = i < gt ? hostKind(hs[i]) : hostKind(hs[gt + 1]);
+      char fk = i < gt ? fp[i] : sigRet(fs);
+      if (!hk || (hk == 'V') != (fk == 'V') || (hk != '*' && hk != fk))
+        return F("export '%s' host signature does not match the function", e.name.c_str());
+    }
+  }
 
   // functions: signatures and register files
   for (size_t fi = 0; fi < m.funcs.size(); fi++) {
@@ -122,6 +148,14 @@ bool verifyModule(const Module& m, std::string& err) {
     std::vector<uint32_t> jumps;
     size_t pc = 0;
     size_t lastStart = 0;
+    // each inline-cache slot serves exactly one role (field of kind I/F/R, or method), so a cache hit
+    // filled by one instruction can never be misread by another
+    std::vector<char> icRole(f.icNames.size(), 0);
+    auto icUse = [&](uint32_t slot, char role) -> bool {
+      if (icRole[slot] && icRole[slot] != role) return F("function %zu pc %zu: inline cache reused with a different type", fi, pc);
+      icRole[slot] = role;
+      return true;
+    };
     auto reg = [&](uint32_t r, char kind) -> bool {
       if (r >= f.regKinds.size()) return F("function %zu pc %zu: register %u out of range", fi, pc, r);
       if (kind != '*' && kc(f.regKinds[r]) != kind)
@@ -185,6 +219,7 @@ bool verifyModule(const Module& m, std::string& err) {
             uint32_t sig = op == OP_CALLV ? lo : hi;
             if (op == OP_CALLV && hi != 0) return F("function %zu pc %zu: bad call metadata", fi, pc);
             if (op == OP_CALLI && lo >= f.icNames.size()) return F("function %zu pc %zu: bad inline cache", fi, pc);
+            if (op == OP_CALLI && !icUse(lo, 'M')) return false;
             if (sig >= m.sigs.size()) return F("function %zu pc %zu: bad call signature", fi, pc);
             const std::string& s = m.sigs[sig];
             std::string ps = sigParams(s);
@@ -251,6 +286,7 @@ bool verifyModule(const Module& m, std::string& err) {
               break;
             case 'Q':
               if (x >= f.icNames.size()) return F("function %zu pc %zu: bad inline cache", fi, pc);
+              if (!icUse(x, oi.kind)) return false;
               break;
             case 'U':
               if (x >= f.upvalKinds.size()) return F("function %zu pc %zu: bad upvalue", fi, pc);
