@@ -49,7 +49,7 @@ jobs:
           want="$(sed -n 's/^project(e7vm VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
           [ "${{ steps.ver.outputs.version }}" = "$want" ] || { echo "tag v${{ steps.ver.outputs.version }} != CMake version $want" >&2; exit 1; }
       - name: Configure
-        run: eval cmake -S . -B build ${{ matrix.cmake }}
+        run: cmake -S . -B build ${{ matrix.cmake }}
       - name: Build
         run: cmake --build build --config Release -j 4
       - name: Test
