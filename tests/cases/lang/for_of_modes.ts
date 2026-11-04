@@ -1,0 +1,12 @@
+const m = new Map<string, number>([["a", 1], ["b", 2]]);
+for (const k of m.keys()) console.log("k", k);
+for (const v of m.values()) console.log("v", v);
+for (const [k, v] of m.entries()) console.log("e", k, v);
+for (const e of m) console.log("t", e[0], e[1]);
+const s = new Set<string>(["x", "y"]);
+for (const v of s.values()) console.log("s", v);
+for (const [a, b] of s.entries()) console.log("se", a, b);
+const arr = [10, 20];
+for (const i of arr.keys()) console.log("ak", i);
+for (const v of arr.values()) console.log("av", v);
+for (const p of arr.entries()) console.log("ae", p[0], p[1]);

@@ -1,4 +1,14 @@
-# E7 语言与 e7vm 虚拟机设计方案（草案 v0.4）
+# E7 语言与 e7vm 虚拟机设计方案（v1.0 已实现）
+
+> **实现状态（v1.0）**：本文档中的方案已全部落地，实现细节以 [SPEC.md](SPEC.md)、[BYTECODE.md](BYTECODE.md)、
+> [EMBEDDING.md](EMBEDDING.md) 为准。与最初方案相比的调整：
+> - 字符串统一使用 UTF-16 存储（未做 Latin-1 双表示；循环拼接由原生实现保证正确性，性能见 README）。
+> - 指令为 64 位定长（`op:16 A:16 B:16 C:16`），寄存器上限 65535，比原计划的 32 位编码更宽松。
+> - 原计划的"运行时 quickening"由静态类型直接生成类型化指令替代；另加入了比较-跳转融合、常量寄存器提升、循环倒置。
+> - 支持 `throw new Error(msg)`，语义为终止脚本（仍然没有 `try/catch`）。
+> - 用户自定义泛型、getter/setter、协程语法留待 E8；VM 已具备挂起/恢复能力（`e7_resume`）。
+> - 加密库：BearSSL（RSA、ECDSA、AES、ChaCha20-Poly1305、SHA-1/2、HMAC、HKDF）+ Monocypher（Ed25519/X25519），
+>   SHA-3/Keccak、PBKDF2、RSA-PSS 为自研实现，全部与 Node.js `node:crypto` 交叉验证。国密 SM2/3/4 未包含。
 
 > v0.4 变更：明确主要负载是 **签名 / 验签算法**。新增 §3.8（面向签名场景的设计）：定宽整数类型与位运算、字节处理、原生 `e7:crypto` 模块、`bigint`、密钥句柄；**建议修订**整数字面量默认类型（见 §3.2）；安全章节新增可选的字节码加固。
 >
