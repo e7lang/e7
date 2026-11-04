@@ -1,75 +1,107 @@
-# e7fvm 设计调研与规划（草案 v0.1）
+# E7 语言与 e7fvm 虚拟机设计方案（草案 v0.2）
 
-> 目标：用 **C++17** 实现一个可嵌入的轻量脚本语言 + 字节码虚拟机，作为**算法执行器**运行在 **Android / iOS / Windows** 上。
-> 脚本先**离线编译成字节码（中间语言）**，再分发给各端 VM 执行。
+> v0.2 变更：根据反馈改为 **严格静态类型**、语法以 **TypeScript 严格子集** 为主；明确 **脚本由服务器下发**、**端上带编译器（可选）**、**为协程预留设计**；新增命名调研。
+> 现阶段只做设计，不开发。
+
+已确认的需求：
+
+| 项 | 结论 |
+|---|---|
+| 类型 | 严格静态类型，无 `any` |
+| 语法 | TypeScript 子集（或同等优雅的 Ruby 风格），要求“写得少、表达得多” |
+| 脚本来源 | **服务器下发** → 签名校验 + 字节码验证 + 沙箱是 P0 |
+| 编译器 | 核心是 VM 跑 `.e7b`；编译器也要能在手机上跑（可选模块） |
+| 协程 | v1 不提供语法，但 VM 架构从第一天按“可挂起”设计 |
+| 平台 | Android / iOS / Windows，C++17 |
 
 ---
 
-## 0. 结论速览（TL;DR）
+## 1. 命名调研
 
-| 决策点 | 建议 | 理由 |
+### 1.1 一个发现：`e7f` 就是 `everettjf` 的缩写
+`everettjf` = **e** + `verettj`（7 个字母）+ **f** → **e7f**，与 `i18n`（internationalization）、`k8s`（kubernetes）是同一种数字缩写法（numeronym）。
+仓库名 `e7fvm` 正好可以解读为 **e7f VM = everettjf 的虚拟机**。这个名字和你的 ID 有天然关系，而且有“梗”可讲。
+
+### 1.2 候选名
+
+| 名字 | 与 everettjf 的关系 | 冲突情况（检索结果） | 评价 |
+|---|---|---|---|
+| **E7** ⭐ | e7f 缩写的前半部分 | 未发现同名编程语言；只有 Berkeley 的 E7 课程、Esterel v7 | 短、好记、扩展名自然（`.e7` / `.e7b`）；推荐 |
+| **E7F** | 完整 numeronym | 未发现冲突 | 最独特，但读起来略拗口；适合作为项目/组织名 |
+| E8 | 无直接关系（E7 的“下一代”；数学上 E8 李群很有美感） | 有小众 `e8vm` 项目和 PSU 课程语言 E8 | 失去与 ID 的关联 |
+| Eve | Everett 前三字母 | 有 Eve 语言（witheve，2018 年停更），另有 EVE Online | 冲突较多，不推荐 |
+| Evr / Ever | Everett 的 "ever" | 未发现同名语言 | 寓意好（ever），可作备选 |
+| Rett | Everett 的后半 | 与医学名词 Rett 综合征同名 | 不推荐 |
+| Jet | j(e)t / jf | JetBrains、Microsoft Jet 引擎等大量冲突 | 不推荐 |
+
+注：“E” 本身已经是一门老语言（1997 年 Electric Communities 的 E），所以用 “E7” 而不是 “E”。
+
+### 1.3 推荐命名体系
+- 语言：**E7**（读作 “E-seven”）
+- 引擎/仓库：**e7fvm**（e7f = everettjf）
+- 源文件 `.e7`，字节码 `.e7b`，编译器命令 `e7c`，运行器 `e7`
+- 版本演进可以自然地留给 **E8**（例如引入协程/泛型大版本时）
+
+---
+
+## 2. 语法方案调研
+
+### 2.1 可参考的“静态类型脚本”先例
+
+| 项目 | 做法 | 对我们的启示 |
 |---|---|---|
-| 实现语言 | C++17，关闭 RTTI，核心路径不用异常；对外暴露 **C API** | 方便 Swift/ObjC、JNI/Kotlin、C# 绑定；编译器全平台可用 |
-| 语法风格 | **Ruby/Lua 式 `end` 块** + `let` 显式声明 + 可选类型标注 | 比 Python 缩进更适合嵌入（脚本常被放进字符串/JSON/网络下发，缩进易损坏）；比 Ruby 更简单、可静态解析 |
-| 执行方式 | **源码 → AST → 寄存器式字节码 (.e7b)**，VM 解释执行 | 寄存器式 VM 比栈式少 ~30–45% 指令分派，Lua 5 / Dalvik 已验证 |
-| JIT | **不做** | iOS 禁止普通 App 申请可执行内存（W^X），JIT 无法跨平台；把精力放在解释器优化 |
-| 分派方式 | GCC/Clang 用 **computed goto**，MSVC 回落 `switch` | Windows 建议用 clang-cl 构建以获得同等性能 |
-| 值表示 | 16 字节 tagged union（完整 int64 + f64 + 指针） | 算法场景需要精确 int64；NaN-boxing 无法无损放 int64 |
-| 数值类型 | `int`(i64) 与 `float`(f64) 区分 | 算法正确性（整除、位运算、溢出语义可控） |
-| 内存管理 | 精确 **标记-清除 GC**（后续可加增量/分代），配合类型化数组减少分配 | 实现简单、无循环引用问题 |
-| 性能手段 | 编译期常量折叠/寄存器分配 + 运行时 **quickening**（类型特化指令）+ 内联缓存 + `f64[]/i32[]` 等类型化数组 | 无 JIT 前提下最有效的几招 |
-| 安全 | 默认沙箱：无文件/网络 IO，指令预算、内存上限、字节码加载校验 | 脚本可能来自网络下发 |
-| 构建 | CMake；产物：iOS xcframework、Android `.so`（arm64-v8a/armeabi-v7a/x86_64）、Windows `.dll/.lib` | 一套源码 |
+| **Static TypeScript（微软 MakeCode，MPLR 2019 论文）** | TS 的语法子集，类改为**名义类型**，编译到 ARM 机器码，mark-sweep GC；对象访问密集的基准比 MicroPython/Duktape 快 ≥20 倍，比 V8 慢不到 2 倍 | **最直接的先例**：证明“严格 TS 子集 + 静态编译”可行且很快 |
+| AssemblyScript | TS 语法 + `i32/i64/f64` 等数值类型（通过声明文件让 tsc 认识），编译到 Wasm | 用 `.d.ts` 声明额外数值类型，**IDE 白拿** |
+| Crystal | Ruby 语法 + 静态类型 + 全局类型推断 | Ruby 风格也能静态化，但需要自研全部工具链 |
+| Swift / Kotlin | 现代静态类型语言的表达力标杆 | 借鉴其可空类型 `T?`、表达式风格 |
+| Wasm / JVM | 加载时做字节码类型验证 | 服务器下发字节码的安全模型 |
 
-性能预期：做到 **Lua 5.4 解释器同量级**是现实目标；紧密数值循环一般比原生 C 慢 10–50 倍。真正的热点可通过“原生扩展函数”注册进 VM（C++ 实现，脚本调用）。
+### 2.2 方案 A：E7 = 严格 TypeScript 子集（推荐）
 
----
+核心规则：**每一个合法的 E7 程序，同时也是合法的 TypeScript 程序**（反之不成立：E7 更严格）。
 
-## 1. 调研：可参考的现有引擎
+同一个算法的写法：
 
-| 引擎 | 语言 | VM 类型 | 可借鉴点 | 不足（对本项目） |
-|---|---|---|---|---|
-| **Lua 5.4** | C | 寄存器式 | 32 位定长指令编码、upvalue 闭包、table、极小体积，嵌入 API 标杆 | 1 起始下标、全局变量默认、语法较老 |
-| LuaJIT（解释器部分） | C+asm | 寄存器式 | 手写汇编解释器、NaN-boxing、类型特化 | 汇编不可移植，JIT 在 iOS 不可用 |
-| **Wren** | C | 栈式 | 类为中心、优雅语法、computed goto、单遍编译器、fiber | 栈式，偏 OOP 而非数值 |
-| **Crafting Interpreters (clox)** | C | 栈式 | 最清晰的入门实现：扫描器→Pratt 解析→字节码→GC | 教学性质，性能一般 |
-| **pocketpy** | C++17→C11 | 栈式 | 类 Python 语法、面向游戏/移动端嵌入 | 缩进语法、动态性高导致优化难 |
-| mruby | C | 寄存器式 | Ruby 语法、可预编译 `.mrb` 字节码（与本项目思路一致） | 语义庞大、体积偏大 |
-| Squirrel / Gravity / Berry | C/C++ | 栈/寄存器 | 游戏/IoT 嵌入经验、引用计数方案 | 生态小 |
-| QuickJS | C | 栈式 | 字节码序列化、完整 GC、可移植性 | JS 语义过重 |
-| Umka | C | 栈式 | **静态类型**脚本，类型化后指令更快 | 语法 Go 风格 |
+```ts
+// 快速排序
+function quicksort(a: number[], lo = 0, hi = a.length - 1): void {
+  if (lo >= hi) return;
+  const p = a[(lo + hi) >> 1];
+  let i = lo, j = hi;
+  while (i <= j) {
+    while (a[i] < p) i++;
+    while (a[j] > p) j--;
+    if (i <= j) { [a[i], a[j]] = [a[j], a[i]]; i++; j--; }
+  }
+  quicksort(a, lo, j);
+  quicksort(a, i, hi);
+}
 
-**取舍**：架构参考 Lua 5.4（寄存器 VM、指令编码、闭包/upvalue）；编译器结构参考 clox/Wren（Pratt 解析）；字节码离线序列化参考 mruby/QuickJS；语法取 Ruby 的简洁 + Lua 的可预测。
+class Point {
+  constructor(public x: number, public y: number) {}   // 一行声明字段 + 构造
+  dist(o: Point): number { return Math.hypot(this.x - o.x, this.y - o.y); }
+}
 
----
+const pts = [new Point(0, 0), new Point(3, 4)];
+const total = pts.map(p => p.x + p.y).reduce((s, v) => s + v, 0);  // 推断为 number
+export function main(): string { return `total=${total}`; }
+```
 
-## 2. 语法设计（草案）
+选它的理由：
+1. **工具链白拿**：VS Code / WebStorm 直接提供高亮、补全、跳转、类型报错（配一个 `e7.d.ts` 声明标准库和 `int` 等类型即可）。手机端开发者、前端开发者几乎零学习成本。
+2. **可以做差分测试**：同一个脚本在 Node.js 和 E7 VM 上各跑一遍、比对输出，这是免费又强力的正确性测试手段。
+3. **静态类型天然存在**：TS 的类型标注语法成熟（泛型、可空、联合、函数类型），不用自己设计。
+4. 优雅度靠：类型推断、箭头函数、解构、模板字符串、`for...of`、构造函数参数属性、可选链 `?.`、`??`。
 
-设计原则：
-1. **块用 `end` 结束，不依赖缩进** —— 脚本可安全地压缩、拼接、通过网络/JSON 传输。
-2. **`let` 显式声明局部变量**，无隐式全局 —— 所有变量在编译期解析为寄存器槽位，零运行时查找；拼写错误在编译期报错。
-3. **表达式导向**：`if`/`match` 可作为表达式；函数最后一个表达式是返回值（可选，同时支持 `return`）。
-4. **可选类型标注** `: int / float / f64[]` —— 不写也能跑；写了编译器能直接生成特化指令。
-5. 0 起始下标，区间 `0..n`（不含 n）、`0..=n`（含 n）。
+代价：花括号和分号让代码比 Ruby 略“重”；TS 的结构化类型、`any`、原型链等必须裁剪掉（见 §3）。
 
-### 2.1 示例
+### 2.3 方案 B：Ruby 风格静态语言（Crystal 式）
 
 ```ruby
-# 注释用 #
-
-let PI = 3.14159265358979          # 模块级常量
-
-fn gcd(a: int, b: int) -> int
-  while b != 0
-    a, b = b, a % b
-  end
-  a                                # 最后一个表达式即返回值
-end
-
-fn quicksort(a, lo = 0, hi = len(a) - 1)
-  return if lo >= hi               # 后置 if（Ruby 风格）
-  let p = a[(lo + hi) / 2]
-  let i, j = lo, hi
+def quicksort(a : Array(Float), lo = 0, hi = a.size - 1)
+  return if lo >= hi
+  p = a[(lo + hi) >> 1]
+  i, j = lo, hi
   while i <= j
     i += 1 while a[i] < p
     j -= 1 while a[j] > p
@@ -82,190 +114,191 @@ fn quicksort(a, lo = 0, hi = len(a) - 1)
   quicksort(a, i, hi)
 end
 
-# 类型化数组：连续内存、无装箱，算法热点用它
-fn dot(x: f64[], y: f64[]) -> float
-  let s = 0.0
-  for i in 0..len(x)
-    s += x[i] * y[i]
-  end
-  s
+class Point(x : Float, y : Float)        # 一行定义类
+  def dist(o : Point) = Math.hypot(x - o.x, y - o.y)
 end
 
-# 闭包 / lambda
-let squares = map(1..=10, |x| x * x)
-let evens   = [1, 2, 3, 4].filter(|x| x % 2 == 0)
-
-# 结构体（轻量记录类型，字段编译期定偏移）
-struct Point
-  x: float
-  y: float
-end
-
-fn dist(a: Point, b: Point)
-  let dx = a.x - b.x
-  let dy = a.y - b.y
-  sqrt(dx * dx + dy * dy)
-end
-
-# match 表达式
-let kind = match n
-  0        => "zero"
-  1..10    => "small"
-  _        => "big"
-end
+total = pts.map { |p| p.x + p.y }.sum
 ```
 
-### 2.2 v1 语言范围（刻意保持小）
-- 类型：`nil` `bool` `int` `float` `string` `array` `map` 类型化数组(`i32[] i64[] f32[] f64[] u8[]`) `struct` `function/closure`
-- 控制流：`if/elif/else` `while` `for in` `break/continue` `return` `match`
-- 函数：默认参数、多返回值（元组解构）、闭包
-- 模块：`import "math"`（编译期链接进同一字节码包或由宿主提供）
-- **暂不做**：类继承、异常（用 `(value, err)` 返回或 `error()` 终止执行）、协程（v2 可加，用于分步执行长算法）
+优点：确实更短更优雅。缺点：没有现成 IDE 支持（要自研 LSP、高亮）、没有现成的“参照实现”做差分测试、学习人群更小、语法设计和类型推断规则全部要自己定，工作量和风险明显更大。
+
+### 2.4 结论
+- **v1 采用方案 A（严格 TS 子集）**，用类型推断和精选语法特性保证简洁。
+- 编译器架构上把“前端”（词法/语法 → 类型化 AST）和“后端”（类型化 IR → 字节码）解耦。如果以后想要 Ruby 风格，可以**再加一个前端**，复用全部后端和 VM，两种语法编译出同一种 `.e7b`。
 
 ---
 
-## 3. 整体架构
+## 3. E7 语言规范要点（v1）
 
-```
-          ┌──────────── 编译端（PC/构建服务器，或端上按需） ───────────┐
- .e7 源码 → Lexer → Parser(Pratt) → AST → Resolver(作用域/类型推断)
-                                         → CodeGen(寄存器分配) → Optimizer(常量折叠/窥孔)
-                                         → Serializer → .e7b 字节码包
-          └───────────────────────────────────────────────────────────┘
-                                     │ 分发（随包 / 网络下发）
-          ┌──────────── 运行端（Android / iOS / Windows） ─────────────┐
- .e7b → Loader + Verifier(校验) → VM(解释器循环) ⇄ GC/Heap
-                                        ⇅
-                         C API ← 宿主（Swift/ObjC、JNI/Kotlin、C#、C++）
-          └───────────────────────────────────────────────────────────┘
-```
+### 3.1 类型系统
+| 类别 | 内容 | 说明 |
+|---|---|---|
+| 基本类型 | `boolean` `int` `number` `string` | `number` = f64（与 TS 一致）；`int` = i64，在 `e7.d.ts` 中声明为 `type int = number`，所以 tsc 也认识 |
+| 存储类型 | `i32` `u8` `f32` 等 | 仅用于数组元素/字段以节省内存 |
+| 数组 | `T[]`、`Float64Array`、`Int32Array` … | 静态类型下 `number[]` **本身就是连续 f64 存储**，无装箱 |
+| 容器 | `Map<K,V>` `Set<T>` | 内置泛型 |
+| 类 | `class`（单继承、`implements`） | **名义类型**，字段布局编译期固定，方法走 vtable |
+| 接口 | `interface` | 编译期结构检查，运行时用 itable 分派 |
+| 记录 | `type P = { x: number, y: number }` / 对象字面量 | 编译为匿名定长结构体 |
+| 可空 | `T \| null`、`?.`、`??`、`!` | 只有 `null`，**没有 `undefined`** |
+| 枚举 | `enum`、字符串字面量联合 `"a" \| "b"` | 编译为整数 |
+| 函数 | 函数类型、箭头函数、闭包、默认参数、元组返回 `[int, string]` | |
+| 泛型 | 泛型函数和类 | 按“值类别”单态化（int/number/引用各生成一份） |
+| 模块 | `import` / `export` | 编译期链接 |
 
-- **编译器与 VM 解耦**：运行端可以只链接 VM（更小、无解析器攻击面），也可以带编译器支持端上直接跑源码（调试方便）。
-- 编译选项：`e7c script.e7 -o script.e7b [-O2] [--strip-debug]`。
+### 3.2 数值语义（算法执行器的关键）
+- 整数字面量推断为 `int`，带小数点的推断为 `number`。
+- `int` 可隐式提升为 `number`；`number → int` 必须显式（`Math.floor` / `Math.trunc` / `toInt`）。
+- `int + - * % 位运算` 结果仍是 `int`；**`int / int` 结果是 `number`**，与 JS 一致；整除用 `Math.floor(a / b)` 或 `idiv(a, b)`（编译器识别为单条整除指令）。
+- `int` 是 64 位、溢出回绕。在 ±2^53 以内与 JS 结果完全一致（差分测试覆盖此范围）。
+- 不开 fast-math，保证三端浮点结果一致（确定性）。
 
----
+### 3.3 刻意不支持（相对 TS）
+`any` / `unknown` 的随意转换、`undefined`、`==`（只允许 `===`）、`var`、原型链/`prototype`、`eval`/`Function()`、运行时增删属性、`delete`、getter/setter（v1）、装饰器、`with`、宽松的结构化赋值转换、声明合并。
 
-## 4. 字节码与 VM
-
-### 4.1 指令编码（32 位定长，参考 Lua 5.4）
-```
- iABC : | op:8 | A:8 | B:8 | C:8 |      R[A] = R[B] op R[C]
- iABx : | op:8 | A:8 |   Bx:16   |      常量索引、全局槽
- iAsBx: | op:8 | A:8 |  sBx:16   |      跳转偏移
-```
-- 每个函数最多 256 个寄存器（局部变量 + 临时值）。
-- 带 K 版本的指令（`ADDK R[A] = R[B] + K[C]`）减少常量加载。
-
-### 4.2 指令集草案（约 60–80 条）
-- 数据移动：`MOVE LOADK LOADI LOADF LOADNIL LOADBOOL GETUPVAL SETUPVAL GETGLOBAL SETGLOBAL`
-- 算术（通用 + 特化）：`ADD SUB MUL DIV IDIV MOD POW NEG` 及 `ADD_II ADD_FF ADDK_I ...`
-- 位运算：`BAND BOR BXOR SHL SHR BNOT`
-- 比较跳转（融合）：`LT_JMP LE_JMP EQ_JMP`、`LTI_JMP`（与立即数比较）
-- 循环：`FORPREP FORLOOP`（数值 for 专用，计数器放寄存器，无分配）
-- 容器：`NEWARR NEWMAP GETIDX SETIDX GETIDX_F64 SETIDX_F64 GETFIELD SETFIELD LEN`
-- 调用：`CALL TAILCALL RETURN CLOSURE CALLNATIVE`
-- 其他：`CONCAT MATCH_RANGE NOP HALT`
-
-### 4.3 解释器循环
-- `Value* R`（当前帧寄存器基址）、`const Instr* ip`、`Value* K` 常驻局部变量 → 编译器放进 CPU 寄存器。
-- GCC/Clang：`static void* dispatch[] = {&&op_MOVE, ...}; goto *dispatch[op];`
-- MSVC：`switch` 回落（宏统一两种写法）。
-- 调用不走 C 递归（脚本函数调用在同一个循环内压帧），避免栈溢出，也便于以后加协程。
-
-### 4.4 Quickening（运行时指令特化）
-通用 `ADD` 首次执行时看到两个 int → 原地改写为 `ADD_II`；类型不符时退回通用版本。
-字段访问 `GETFIELD` 用**内联缓存**（缓存 shape → 偏移）。
-这是无 JIT 前提下性价比最高的优化。
-
-### 4.5 .e7b 文件格式
-```
-magic "E7B\0" | version u16 | flags u16 | 小端固定
-常量池（int/float/string） | 函数原型表（参数数、寄存器数、upvalue 描述、指令数组）
-调试信息段（行号表，可剥离） | 校验和 CRC32
-```
-加载时 **Verifier** 检查：寄存器/常量索引越界、跳转目标合法、版本兼容 —— 保证恶意或损坏字节码不会让 VM 越界访问内存。
+### 3.4 预留关键字（为协程准备）
+`function*` / `yield`、`async` / `await` 在 v1 解析器中**识别但报“暂不支持”**，保证未来加入时不破坏已有代码。
 
 ---
 
-## 5. 值表示与内存
+## 4. 整体架构
 
-```cpp
-struct Value {            // 16 字节
-  Type tag;               // NIL BOOL INT FLOAT OBJ ...
-  union { int64_t i; double f; bool b; Obj* o; };
-};
 ```
-- 堆对象（`String Array Map TypedArray Struct Closure Proto Upvalue`）统一 `Obj` 头：类型 + GC 标记 + next 链。
-- 字符串驻留（intern）→ 字符串比较、map 键查找 O(1)。
-- **GC**：v1 精确停顿式 mark-sweep，按分配量触发；v2 改增量（三色标记）以降低移动端卡顿。
-- 支持**每个 VM 实例独立堆 + 自定义 allocator**（宿主可限制内存上限）。
-- 多线程模型：一个 `e7_vm` 实例单线程使用；多个实例可在不同线程并行（无全局状态）。
+ ┌──────────── 服务器 / 构建端（主路径） ────────────┐
+ .e7 → Lexer → Parser → AST → TypeChecker → 类型化 IR → Optimizer → CodeGen
+                                                  → .e7b → Ed25519 签名 → 下发
+ └──────────────────────────────────────────────────┘
+ ┌──────────── 设备端 ──────────────────────────────┐
+ [可选] libe7c（同一份编译器源码，编译开关 E7_WITH_COMPILER）
+ .e7b → 签名校验 → 格式解析 → **字节码类型验证器** → VM ⇄ GC
+                                    ⇅ C API（只暴露宿主授权的原生函数）
+ Swift/ObjC · Kotlin/JNI · C#/C++
+ └──────────────────────────────────────────────────┘
+```
+
+- 生产环境：**服务器编译并签名**，设备只加载 `.e7b`。核心库 `libe7vm` 不含编译器，体积小、攻击面小。
+- 端上编译（调试、本地热更新、离线编辑场景）：链接 `libe7c`，编译产物同样要经过验证器（验证器不信任任何来源，包括自己的编译器）。
 
 ---
 
-## 6. 嵌入 API（C 接口，草案）
+## 5. VM 设计（为静态类型重新设计）
+
+静态类型让 VM 可以做得比 Lua 这类动态 VM 更快、更简单：
+
+### 5.1 无标签寄存器 + 全类型化指令
+- 寄存器槽 8 字节，**不带类型标签**；每个函数原型携带一张“寄存器类型表”（int / number / ref …）。
+- 指令按类型区分：`ADD_I` `ADD_F` `LT_I_JMP` `LOAD_F64_ELEM` `GETFIELD off` `CALL_VIRT slot` `CALL_IFACE` …
+- 字段访问是**固定偏移量的一次内存读**，不需要哈希查找和内联缓存；动态 VM 需要的 quickening 也不需要了。
+- 指令编码保持 32 位定长（`op:8 A:8 B:8 C:8` / `op:8 A:8 Bx:16`），超大函数用扩展前缀指令。
+- 分派：GCC/Clang 用 computed goto，MSVC 回落 switch（Windows 发布推荐 clang-cl）。
+
+### 5.2 字节码验证器（服务器下发的安全基石）
+类似 JVM/Wasm：加载时对每个函数做一遍数据流类型检查，保证：
+- 每条指令的操作数寄存器类型与指令要求一致（例如不能把 int 当指针解引用）；
+- 常量/寄存器/字段/函数索引不越界，跳转目标合法；
+- 调用参数个数和类型匹配。
+验证通过后，执行期**不需要任何类型检查**，同时保证内存安全。运行时只保留必要检查：数组越界、空指针、整数除零。
+
+### 5.3 内存与 GC
+- 精确 GC：寄存器类型表 = GC 根映射，对象布局表 = 对象内指针位置。
+- v1：停顿式 mark-sweep；v2：增量三色标记（降低移动端卡顿）。
+- 每个 VM 实例独立堆、可设内存上限、可接自定义 allocator；实例之间无共享状态，可多线程各跑各的。
+- 字符串驻留；`number[]` 等为连续存储；宿主大数组可**零拷贝**包装进脚本。
+
+### 5.4 为协程预留（v1 不暴露语法）
+1. **脚本调用脚本不使用 C 栈递归**：所有脚本帧都放在 VM 自管理的栈上，帧之间用偏移而不是裸指针（栈可扩容、可整体保存）。
+2. **执行状态 = 一个 Fiber 对象**（栈 + 当前帧 + ip）。v1 只有一个主 Fiber，v2 加 `yield` / `await` 时只是多建几个。
+3. **指令预算 = 天然的挂起点**：在回跳和调用处检查预算。预算耗尽时，v1 就可以返回 `E7_SUSPENDED`，宿主下一帧调用 `e7_resume` 继续执行。这样**长算法分帧执行、不卡 UI** 在 v1 就能免费获得，不需要协程语法。
+4. 原生函数回调脚本的位置标记为“不可挂起边界”，规则提前定好。
+5. 指令集预留 `YIELD` / `RESUME` / `AWAIT` 操作码编号。
+
+### 5.5 `.e7b` 文件格式
+```
+Header : magic "E7B\0" | 格式版本 | 最低 VM 版本 | flags | 小端
+Body   : 常量池 | 类型表(类/接口/记录布局) | 函数原型(寄存器类型表 + 指令) | 导入导出表
+Debug  : 行号表、局部变量名（可剥离）
+Trailer: SHA-256 摘要 | Ed25519 签名 | 公钥 ID
+```
+
+---
+
+## 6. 安全与沙箱（P0）
+
+| 层 | 措施 |
+|---|---|
+| 传输/来源 | `.e7b` 签名（Ed25519），宿主内置公钥，验签失败拒绝加载；支持密钥轮换（公钥 ID） |
+| 结构 | 格式解析全部带边界检查；对解析器和验证器做 **fuzz 测试**（libFuzzer） |
+| 类型 | 字节码验证器（§5.2） |
+| 能力 | 默认无文件/网络/系统调用；脚本只能调用宿主显式注册的原生函数（白名单） |
+| 资源 | 指令预算、内存上限、调用深度上限、墙钟超时；超限时安全终止并返回错误 |
+| 版本 | VM 拒绝加载高于自身支持版本的字节码；服务器按客户端 VM 版本下发对应产物 |
+| 合规 | iOS 不使用 JIT；纯解释执行，下发脚本不改变 App 主要用途 |
+
+---
+
+## 7. 嵌入 API（C 接口草案）
 
 ```c
-e7_vm*  e7_new(const e7_config* cfg);           // 内存上限、指令预算、allocator
+e7_vm*  e7_new(const e7_config* cfg);   // 内存上限、指令预算、allocator、受信公钥
 void    e7_free(e7_vm*);
-int     e7_load_bytecode(e7_vm*, const uint8_t* data, size_t len, e7_module** out);
-int     e7_compile(e7_vm*, const char* src, size_t len, e7_buffer* out_bc, e7_error* err); // 可选
+int     e7_load(e7_vm*, const uint8_t* e7b, size_t len, e7_module** out);  // 验签 + 验证
+int     e7_compile(const char* src, size_t len, e7_buffer* out, e7_diag* diag); // 需 libe7c
 int     e7_call(e7_vm*, e7_module*, const char* fn, const e7_value* args, int argc, e7_value* ret);
-void    e7_register_native(e7_vm*, const char* name, e7_native_fn fn, void* userdata);
-// 零拷贝传大数组：宿主内存直接包装成 f64[]
+int     e7_resume(e7_vm*, e7_value* ret);          // 预算耗尽后继续执行
+void    e7_register_native(e7_vm*, const char* name, const char* signature, e7_native_fn, void* ud);
 e7_value e7_wrap_f64_array(e7_vm*, double* data, size_t n, e7_release_fn release);
-const char* e7_last_error(e7_vm*);             // 含脚本行号的错误栈
+const char* e7_last_error(e7_vm*);                 // 含源码行号的调用栈
 ```
-上层绑定：iOS 用 Swift 包装（xcframework + module map），Android 用 JNI + Kotlin 封装（AAR），Windows 直接 C/C++ 或 C# P/Invoke。
+原生函数注册时带类型签名（如 `"(number[],int)->number"`），编译期和加载期都会检查脚本调用是否匹配。
+上层封装：iOS → Swift Package + xcframework；Android → AAR（JNI + Kotlin）；Windows → DLL / C# P/Invoke。
 
 ---
 
-## 7. 跨平台与合规注意
-- **iOS**：无 JIT，纯解释执行合规；App Store 条款允许解释执行脚本，但下发脚本不得改变 App 主要用途。
-- **Android**：NDK + CMake；32 位 armeabi-v7a 也需支持（指针 4 字节，Value 仍 16 字节，无影响）。
-- **Windows**：MSVC 可编但无 computed goto，推荐 clang-cl 发布构建。
-- 统一：只依赖 C++17 标准库子集；禁止平台相关头文件进入核心；浮点行为统一（不开 `-ffast-math`，保证各端算法结果一致）。
+## 8. 工具链
+- `e7.d.ts`：标准库与 `int`/`i32` 等类型声明，让 VS Code 原生支持 E7。
+- `e7c`：编译器命令行（`--check` 只做类型检查、`-O2`、`--strip-debug`、`--sign key`）。
+- `e7`：运行器 / 反汇编器（`e7 dis a.e7b`）/ 基准工具。
+- 测试：单元测试 + `.e7` 用例（期望输出）+ **Node.js 差分测试** + fuzz。
+- 基准：fib、nbody、spectral-norm、quicksort、matmul、字符串处理；对照 Lua 5.4、QuickJS。
 
----
-
-## 8. 目录结构（规划）
-
+## 9. 目录结构（规划）
 ```
-e7fvm/
-  include/e7/e7.h          # 对外 C API
-  src/
-    common/                # 内存、字符串、哈希表、工具
-    compiler/              # lexer parser ast resolver codegen optimizer
-    vm/                    # value object gc vm(dispatch) loader verifier
-    stdlib/                # math array string 内置库
-  tools/e7c/               # 命令行编译器
-  tools/e7/                # 命令行运行器 / REPL
-  tests/                   # 单元测试 + 脚本用例(.e7 + 期望输出)
-  bench/                   # 基准：fib、nbody、spectral-norm、quicksort、matmul（对比 Lua 5.4）
-  platform/ios android windows
-  CMakeLists.txt
+include/e7/e7.h       对外 C API
+src/common/           内存、字符串、容器
+src/compiler/         lexer parser ast checker ir optimizer codegen   → libe7c
+src/vm/               loader verifier interp gc object fiber natives  → libe7vm
+src/stdlib/           Math String Array Map 等
+tools/e7c tools/e7    命令行
+lib/e7.d.ts           IDE 类型声明
+tests/ bench/ fuzz/
+platform/ios android windows
 ```
 
----
-
-## 9. 里程碑
-
+## 10. 里程碑
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| M1 骨架 | CMake、Lexer、Pratt Parser、AST、错误报告（带行列号） | 能解析示例脚本并打印 AST |
-| M2 最小 VM | 寄存器分配、CodeGen、int/float/bool/nil、算术、if/while/for、函数调用、computed goto 循环 | `fib(30)`、循环求和跑通 |
-| M3 数据结构 | string/array/map/struct、闭包与 upvalue、GC | 快排、哈希计数等用例通过 |
-| M4 字节码文件 | 序列化/反序列化、Verifier、`e7c` 工具 | 编译后 .e7b 在另一进程加载执行结果一致 |
-| M5 性能 | 常量折叠、融合比较跳转、quickening、类型化数组、内联缓存 | 基准接近 Lua 5.4 |
-| M6 嵌入与移植 | C API、沙箱（指令预算/内存上限）、iOS/Android/Windows 构建与示例 App | 三端真机跑通同一 .e7b |
-| M7 完善 | 标准库、调试信息/栈回溯、fuzz 测试（解析器与 Verifier）、文档 | — |
+| M0 规范 | 冻结 v1 语法子集、类型规则、数值语义、指令集、`.e7b` 格式 | 本文档定稿 + `e7.d.ts` |
+| M1 前端 | Lexer、Parser（TS 子集）、AST、诊断信息 | 示例脚本解析通过，非法语法报错准确 |
+| M2 类型检查 | 推断、类/接口/泛型/可空检查 | 用例与 tsc 判定一致（E7 更严格处有专门用例） |
+| M3 后端+VM | IR、寄存器分配、CodeGen、解释器、基本类型与函数 | fib / 循环 / 快排跑通，Node 差分测试通过 |
+| M4 对象与 GC | class/interface/闭包/数组/Map/字符串、mark-sweep | 综合用例通过，无泄漏（ASan/LSan） |
+| M5 字节码与安全 | `.e7b` 序列化、验证器、签名、沙箱、预算挂起/恢复 | fuzz 24h 无崩溃；篡改字节码被拒 |
+| M6 性能 | 常量折叠、融合比较跳转、内联小函数、超级指令 | 基准达到或超过 Lua 5.4 |
+| M7 三端集成 | C API、iOS/Android/Windows 构建与 Demo App、端上编译 | 三端真机运行同一 `.e7b` 结果一致 |
+| E8（v2） | 协程（`yield`/`async`）、增量 GC、getter/setter、可能的 Ruby 风格前端 | — |
 
----
+## 11. 还需要确认
+1. 命名：语言叫 **E7**、引擎叫 **e7fvm** 是否 OK？还是更喜欢 E7F / Evr？
+2. 语法：同意 v1 走**严格 TS 子集**（方案 A），把 Ruby 风格留作将来可选的第二前端吗？
+3. 整数默认：整数字面量推断为 `int`（i64）是否 OK？（另一种是全部默认 `number`，更像 JS 但循环更慢）
+4. 异常：v1 是否需要 `try/catch/throw`？（不需要的话，错误直接终止脚本并返回宿主，更简单）
+5. 主要算法负载类型（数值计算 / 字符串 / 图与规则），用来决定标准库和基准的优先级。
 
-## 10. 待确认问题
-1. 语法风格：是否接受本文的 “`end` 块 + `let` 声明 + 可选类型” 方案？还是更偏 Python 缩进？
-2. 类型系统：纯动态（+可选标注）即可，还是希望**强制静态类型**（性能更高、实现更复杂）？
-3. 脚本来源：是否会从服务器下发？（决定 Verifier/沙箱的优先级）
-4. 端上是否需要编译器（直接跑源码），还是只带 VM 跑 .e7b？
-5. 算法场景的典型负载：数值计算（矩阵/信号）、还是字符串/图/规则匹配为主？（决定优先优化哪类指令和内置库）
-6. 是否需要协程/分步执行（例如长算法分帧执行不卡 UI）？
+## 参考资料
+- Static TypeScript 论文（MPLR 2019）：https://mmoskal.github.io/pdf/static-typescript.pdf
+- Rocket-fast embedded TypeScript for MakeCode Arcade：https://www.microsoft.com/en-us/research/blog/rocket-fast-embedded-typescript-for-makecode-arcade/
+- MakeCode 语言说明：https://makecode.com/language
+- E 语言（命名冲突参考）：https://en.wikipedia.org/wiki/E_(programming_language)
+- Eve 语言（witheve，命名冲突参考）：https://github.com/witheve/Eve
+- e8vm（命名冲突参考）：https://github.com/ryanphuang/e8
