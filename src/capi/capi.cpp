@@ -60,7 +60,7 @@ static e7_status fail(e7_vm* v, e7_status st, const std::string& msg) {
 
 extern "C" {
 
-const char* e7_version(void) { return "1.0.0"; }
+const char* e7_version(void) { return "1.0.1"; }
 
 void e7_config_init(e7_config* cfg) {
   memset(cfg, 0, sizeof *cfg);

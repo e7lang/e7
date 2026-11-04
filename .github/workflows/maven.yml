@@ -16,7 +16,7 @@ name: Maven
 # secrets exist) and attaches the .aar / .jar to the GitHub release v<version> (which must exist).
 on:
   push:
-    branches: [main, "feat/maven"]
+    branches: [main]
   pull_request:
   workflow_call:
     inputs:

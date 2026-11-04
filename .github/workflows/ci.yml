@@ -66,6 +66,8 @@ jobs:
       - run: tests/tsc/check.sh
       - name: SwiftPM and CMake build the same sources
         run: python3 scripts/check-source-lists.py
+      - name: All version declarations agree
+        run: python3 scripts/check-versions.py
 
   macos:
     runs-on: macos-14

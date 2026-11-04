@@ -68,6 +68,7 @@ jobs:
       - name: Check tag matches CMake project version
         if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
         run: |
+          python3 scripts/check-versions.py "${{ steps.ver.outputs.version }}"
           want="$(sed -n 's/^project(e7vm VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
           [ "${{ steps.ver.outputs.version }}" = "$want" ] || { echo "tag v${{ steps.ver.outputs.version }} != CMake version $want" >&2; exit 1; }
       - name: Configure
@@ -155,10 +156,14 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - id: tag
-        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+        run: |
+          t="${{ inputs.tag || github.ref_name }}"
+          echo "tag=$t" >> "$GITHUB_OUTPUT"
+          echo "version=${t#v}" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
       - name: Homebrew formula and Scoop manifest
@@ -180,8 +185,22 @@ jobs:
           | Windows x64 | \`e7-${TAG#v}-windows-x64.zip\` |
 
           Each archive contains \`bin/\`, \`include/e7/e7.h\`, \`lib/\`, \`bindings/\` (C#, Swift, Java/Kotlin), \`types/e7.d.ts\`, \`examples/\`.
-          Try the language without installing anything: https://e7lang.github.io/playground
           Verify downloads with the matching \`.sha256\` file.
+
+          **Packages** (attached below as well)
+
+          | | Install |
+          |---|---|
+          | CLI via Homebrew | \`e7.rb\` formula (tap: \`brew install e7lang/tap/e7\` once the tap exists) |
+          | CLI via Scoop | \`scoop install https://github.com/e7lang/e7/releases/download/${TAG}/e7.json\` |
+          | Swift (SwiftPM) | \`.package(url: "https://github.com/e7lang/e7.git", from: "${TAG#v}")\` |
+          | Android (AAR) / JVM (jar) | \`org.e7vm:e7vm-android:${TAG#v}\` / \`org.e7vm:e7vm:${TAG#v}\` (GitHub Packages; \`.aar\` / \`.jar\` attached) |
+          | .NET (NuGet) | \`E7VM\` \`${TAG#v}\` (\`.nupkg\` attached) |
+          | JavaScript (npm) | \`@e7lang/e7@${TAG#v}\` (WebAssembly; \`.tgz\` attached) |
+          | VS Code | *E7 Language* extension (\`.vsix\` attached) |
+
+          Try the language without installing anything: https://e7lang.github.io/playground
+          Changes: see [CHANGELOG.md](https://github.com/e7lang/e7/blob/${TAG}/CHANGELOG.md).
           NOTES
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
@@ -201,6 +220,33 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/e7.rb
           git diff --cached --quiet || { git commit -m "e7 ${{ steps.tag.outputs.tag }}"; git push; }
+
+  # Language packages: each workflow builds, tests and then publishes (registries whose secrets are
+  # missing are skipped with a notice; artifacts are always attached to the GitHub release).
+  nuget:
+    needs: publish
+    uses: ./.github/workflows/nuget.yml
+    with: { version: "${{ needs.publish.outputs.version }}", publish: true }
+    secrets: inherit
+    permissions: { contents: write, packages: write }
+
+  maven:
+    needs: publish
+    uses: ./.github/workflows/maven.yml
+    with: { version: "${{ needs.publish.outputs.version }}", publish: true }
+    secrets: inherit
+    permissions: { contents: write, packages: write }
+
+  js:
+    needs: publish
+    uses: ./.github/workflows/js.yml
+    with: { version: "${{ needs.publish.outputs.version }}", publish: true }
+    secrets: inherit
+    permissions: { contents: write, id-token: write }
+
+  swift:
+    needs: publish
+    uses: ./.github/workflows/swift.yml
 
   # Install the published release the way users will, and run it.
   verify-homebrew:

@@ -7,7 +7,7 @@ on:
   pull_request:
     paths: ["src/**", "fuzz/**", "include/**", "third_party/**", "CMakeLists.txt", ".clusterfuzzlite/**"]
   push:
-    branches: [main, feat/lead]
+    branches: [main]
     paths: ["fuzz/**", ".clusterfuzzlite/**", ".github/workflows/cflite.yml"]
   schedule:
     - cron: "23 3 * * *"

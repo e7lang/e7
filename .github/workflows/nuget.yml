@@ -8,7 +8,7 @@ name: NuGet
 # when the NUGET_API_KEY secret is set, to nuget.org.
 on:
   push:
-    branches: [main, 'feat/nuget']
+    branches: [main]
   pull_request:
   workflow_call:
     inputs:

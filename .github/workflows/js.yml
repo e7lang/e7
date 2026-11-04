@@ -13,7 +13,7 @@ name: JS
 #       permissions: { contents: write, id-token: write }
 on:
   push:
-    branches: [main, "feat/js"]
+    branches: [main]
   pull_request:
   workflow_call:
     inputs:
