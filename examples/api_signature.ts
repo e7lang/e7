@@ -23,7 +23,7 @@ export function signRequest(method: string, path: string, params: Map<string, st
   return { query, signature, contentSha256 };
 }
 
-const params = new Map<string, string>([["amount", "100.00"], ["currency", "CNY"], ["memo", "订单 #42"]]);
+const params = new Map<string, string>([["amount", "100.00"], ["currency", "CNY"], ["memo", "Café order #42 ✓"]]);
 const r = signRequest("post", "/v1/pay", params, '{"item":"book"}', new TextEncoder().encode("s3cr3t"), 1700000000, "n-001");
 console.log(r.query);
 console.log(r.contentSha256);

@@ -267,8 +267,6 @@ tests/ bench/ docs/                            third_party/     BearSSL (MIT), M
 - [docs/DESIGN.md](docs/DESIGN.md): design and decision record
 - [docs/PRODUCTION.md](docs/PRODUCTION.md): production-readiness checklist with evidence
 
-The detailed docs are currently written in Chinese.
-
 ## License
 
 See [LICENSE](LICENSE). Third-party code: BearSSL (MIT) and Monocypher (BSD-2-Clause / CC0), in `third_party/`.

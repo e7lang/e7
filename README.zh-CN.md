@@ -255,6 +255,8 @@ tests/ bench/ docs/                            third_party/     BearSSL（MIT）
 
 ## 文档
 
+以下文档均为英文：
+
 - [docs/SPEC.md](docs/SPEC.md)：语言规范（语法、类型系统、数值语义、标准库、与 TS 的差异）
 - [docs/EMBEDDING.md](docs/EMBEDDING.md)：C API、Android/iOS/Windows 集成、安全建议
 - [docs/BYTECODE.md](docs/BYTECODE.md)：`.e7b` 格式、指令集、验证规则、签名格式
