@@ -64,6 +64,8 @@ jobs:
         with: { node-version: "22" }
       - run: npm install -g typescript@5.6
       - run: tests/tsc/check.sh
+      - name: SwiftPM and CMake build the same sources
+        run: python3 scripts/check-source-lists.py
 
   macos:
     runs-on: macos-14
