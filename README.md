@@ -58,7 +58,7 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 Prerequisites: CMake ≥ 3.16 and a C++17 compiler (GCC, Clang, MSVC). Ninja is optional.
 
 ```bash
-git clone https://github.com/everettjf/e7fvm.git && cd e7fvm
+git clone https://github.com/e7lang/e7.git && cd e7
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```

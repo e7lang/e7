@@ -57,7 +57,7 @@ Note: "E" is already an old language (E by Electric Communities, 1997), hence "E
 ### 1.3 Naming scheme (final)
 - Language: **E7** (pronounced "E-seven", from e7f = everettjf)
 - Engine: **e7vm** (library `libe7vm`, optional compiler library `libe7c`)
-- Repository: currently `e7fvm`; it can be renamed to `e7vm` in the GitHub settings (GitHub redirects the old URL automatically)
+- Repository: [github.com/e7lang/e7](https://github.com/e7lang/e7) (moved from `everettjf/e7fvm`)
 - Source files `.e7`, bytecode `.e7b`, compiler command `e7c`, runner `e7`
 - Future versions can naturally move on to **E8** (e.g. for a major release that introduces coroutines/generics)
 

@@ -57,7 +57,7 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 需要 CMake ≥ 3.16 和支持 C++17 的编译器（GCC、Clang、MSVC）。Ninja 可选。
 
 ```bash
-git clone https://github.com/everettjf/e7fvm.git && cd e7fvm
+git clone https://github.com/e7lang/e7.git && cd e7
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
