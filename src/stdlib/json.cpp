@@ -6,6 +6,8 @@
 
 namespace e7 {
 
+std::string dateToISO(double t);
+
 // ------------------------------------------------------------------ stringify
 static void quoteJson(std::u16string& out, const char16_t* s, size_t n) {
   static const char* hex = "0123456789abcdef";
@@ -71,6 +73,14 @@ struct Stringifier {
       }
       case OT::Box: {
         auto* b = static_cast<BoxObj*>(o);
+        if (b->flags & 1) {  // Date.prototype.toJSON
+          if (b->v.f != b->v.f) { out += u"null"; return true; }
+          std::string iso = dateToISO(b->v.f);
+          out += u'"';
+          out.append(iso.begin(), iso.end());
+          out += u'"';
+          return true;
+        }
         return value(b->v, b->vt, indent);
       }
       case OT::BigInt: vm.error("TypeError: Do not know how to serialize a BigInt");

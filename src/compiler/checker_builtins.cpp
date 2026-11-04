@@ -860,6 +860,44 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       if (prop("message")) { native("Error.message"); return str; }
       return noSuch();
     }
+    case TT::Date: {
+      static const char* getters[] = {"getFullYear", "getMonth", "getDate", "getDay", "getHours", "getMinutes",
+                                      "getSeconds", "getMilliseconds"};
+      for (int k = 0; k < 8; k++) {
+        std::string g = getters[k];
+        std::string ug = "getUTC" + g.substr(3);
+        if (meth(g.c_str()) || meth(ug.c_str())) {
+          if (!argsMatch(e, args, {}, 0, name.c_str())) return T.unknown();
+          args.push_back(N(k));
+          native("Date.get");
+          return num;
+        }
+      }
+      if (meth("getTime") || meth("valueOf")) {
+        if (!argsMatch(e, args, {}, 0, name.c_str())) return T.unknown();
+        native("Date.getTime");
+        return num;
+      }
+      if (meth("getTimezoneOffset")) {
+        if (!argsMatch(e, args, {}, 0, name.c_str())) return T.unknown();
+        e->intrinsic = IN_CONST_NUM;
+        e->num = 0;
+        return num;
+      }
+      if (meth("setTime")) {
+        if (!argsMatch(e, args, {num}, 1, "setTime")) return T.unknown();
+        native("Date.setTime");
+        return num;
+      }
+      if (meth("toISOString") || meth("toJSON") || meth("toString") || meth("toUTCString") || meth("toDateString") ||
+          meth("toTimeString") || meth("toGMTString")) {
+        if (!argsMatch(e, args, {}, 0, name.c_str())) return T.unknown();
+        std::string n = name == "toJSON" ? "toISOString" : name == "toGMTString" ? "toUTCString" : name;
+        native("Date." + n);
+        return str;
+      }
+      return noSuch();
+    }
     case TT::Func:
       return errT(m->loc, "function values have no properties");
     default:

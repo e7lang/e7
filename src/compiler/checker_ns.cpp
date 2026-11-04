@@ -306,7 +306,19 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       nat("Date.now");
       return num;
     }
-    return errT(l, "Date is not supported except Date.now()");
+    if (isCall && name == "UTC") {
+      if (args.empty() || args.size() > 7) return errT(l, "Date.UTC expects 1-7 numbers");
+      while (args.size() < 7) args.push_back(N(args.size() == 2 ? 1 : 0));
+      if (!argsMatch(e, args, {num, num, num, num, num, num, num}, 7, "Date.UTC")) return T.unknown();
+      nat("Date.UTC");
+      return num;
+    }
+    if (isCall && name == "parse") {
+      if (!argsMatch(e, args, {str}, 1, "Date.parse")) return T.unknown();
+      nat("Date.parse");
+      return num;
+    }
+    return bad();
   }
   if (M == "e7:crypto" || M == "e7:encoding") {
     BuiltinSym tmp;
@@ -789,7 +801,23 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     nat("Error.new");
     return T.error();
   }
-  if (name == "Date" || name == "RegExp" || name == "Promise" || name == "WeakMap" || name == "WeakSet" || name == "Proxy")
+  if (name == "Date") {
+    if (args.empty()) { nat("Date.newNow"); return T.date(); }
+    if (args.size() == 1) {
+      Type* t = check(args[0], nullptr);
+      if (t->t == TT::String) { nat("Date.fromString"); return T.date(); }
+      if (t->t == TT::Date) { nat("Date.copy"); return T.date(); }
+      if (!coerce(args[0], num)) return T.unknown();
+      nat("Date.fromNumber");
+      return T.date();
+    }
+    if (args.size() > 7) return errT(l, "Date takes at most 7 arguments");
+    while (args.size() < 7) args.push_back(mkNum(P, T, args.size() == 2 ? 1 : 0, l));
+    if (!argsMatch(e, args, {num, num, num, num, num, num, num}, 7, "Date")) return T.unknown();
+    nat("Date.fromParts");
+    return T.date();
+  }
+  if (name == "RegExp" || name == "Promise" || name == "WeakMap" || name == "WeakSet" || name == "Proxy")
     return errT(l, "'" + name + "' is not supported in E7");
   return errT(l, "cannot find class '" + name + "'");
 }

@@ -522,6 +522,7 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
     if (lt->t == TT::Int && lt == rt) return T.boolean();
     if (isStringy(lt) && isStringy(rt)) return T.boolean();
     if (lt->t == TT::BigInt && rt->t == TT::BigInt) return T.boolean();
+    if (lt->t == TT::Date && rt->t == TT::Date) { e->intrinsic = IN_DATE_CMP; return T.boolean(); }
     return mismatch();
   }
   if (op == "===" || op == "!==" || op == "==" || op == "!=") {

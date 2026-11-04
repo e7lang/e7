@@ -53,6 +53,7 @@ VM::VM(const VMConfig& cfg) : cfg_(cfg) {
   registerBigIntNatives(*this);
   registerJsonNatives(*this);
   registerCryptoNatives(*this);
+  registerDateNatives(*this);
 }
 
 VM::~VM() {

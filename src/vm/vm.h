@@ -259,5 +259,6 @@ void registerBytesNatives(VM& vm);
 void registerBigIntNatives(VM& vm);
 void registerJsonNatives(VM& vm);
 void registerCryptoNatives(VM& vm);
+void registerDateNatives(VM& vm);
 
 }  // namespace e7

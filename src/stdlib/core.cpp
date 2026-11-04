@@ -8,6 +8,8 @@
 namespace e7 {
 
 ModuleRT* currentModule(VM& vm) { return vm.currentModule(); }
+std::string dateToISO(double t);
+std::string dateToString(double t);
 
 std::u16string intToU16(int64_t v, uint8_t vt) {
   std::string s;
@@ -34,6 +36,7 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::String: return strU16(static_cast<StrObj*>(o));
     case OT::Box: {
       auto* b = static_cast<BoxObj*>(o);
+      if (b->flags & 1) { std::string ds = dateToString(b->v.f); return std::u16string(ds.begin(), ds.end()); }
       return valueToString(vm, b->v, b->vt);
     }
     case OT::BigInt: return ascii(bigToString(static_cast<BigObj*>(o), 10));
@@ -82,7 +85,7 @@ bool strictEquals(VM& vm, Slot a, Slot b, uint8_t vt) {
   if (vt != VT_REF) return a.i == b.i;
   Obj* x = a.r;
   Obj* y = b.r;
-  if (x && y && x->type == OT::Box && y->type == OT::Box) {
+  if (x && y && x->type == OT::Box && y->type == OT::Box && !((x->flags | y->flags) & 1)) {
     auto* bx = static_cast<BoxObj*>(x);
     auto* by = static_cast<BoxObj*>(y);
     if (kindOfVT(bx->vt) != kindOfVT(by->vt)) return false;
@@ -143,6 +146,7 @@ static std::string inspectRec(VM& vm, Slot v, uint8_t vt, int depth, bool top, s
     }
     case OT::Box: {
       auto* b = static_cast<BoxObj*>(o);
+      if (b->flags & 1) return b->v.f != b->v.f ? "Invalid Date" : dateToISO(b->v.f);
       return inspectRec(vm, b->v, b->vt, depth, top, seen);
     }
     case OT::BigInt: return bigToString(static_cast<BigObj*>(o), 10) + "n";

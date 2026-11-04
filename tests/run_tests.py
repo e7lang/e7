@@ -12,7 +12,8 @@ import argparse, os, subprocess, sys, glob, difflib
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def run(cmd, timeout=120):
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    env = dict(os.environ, TZ="UTC")  # E7 dates are always UTC
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, env=env)
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 
 def main():

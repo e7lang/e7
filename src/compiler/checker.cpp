@@ -585,6 +585,7 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "TextEncoder") { noArgs(); return T.textEncoder(); }
   if (name == "TextDecoder") { noArgs(); return T.textDecoder(); }
   if (name == "Error") { noArgs(); return T.error(); }
+  if (name == "Date") { noArgs(); return T.date(); }
   if (name == "Record" || name == "Partial" || name == "Required" || name == "Pick" || name == "Omit" || name == "Readonly")
     return errT(l, "utility type '" + name + "' is not supported; use Map<K, V> or an interface");
   if (name == "Promise") return errT(l, "Promise is not supported (no async in E7 v1)");

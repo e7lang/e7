@@ -2156,6 +2156,14 @@ void Gen::genBinary(Expr* e, uint16_t d) {
     emit(OP_SCAT, d, sa, sb);
     return;
   }
+  if (e->intrinsic == IN_DATE_CMP) {
+    uint16_t a = gen(e->a), b = gen(e->b);
+    uint16_t ta = temp(K_F), tb = temp(K_F);
+    callNative("Date.getTime", {a}, ta, 'F');
+    callNative("Date.getTime", {b}, tb, 'F');
+    binaryOp(op, T.number(), T.number(), d, ta, tb, e->loc);
+    return;
+  }
   uint16_t a = gen(e->a);
   uint16_t b = gen(e->b);
   binaryOp(op, e->a->type, e->b->type, d, a, b, e->loc);
@@ -2610,6 +2618,12 @@ void Gen::genCall(Expr* e, uint16_t dst) {
       mov(d, acc, K_F);
       return;
     }
+    case IN_CONST_NUM:
+      if (dst != kNoReg) loadNum(dst, e->num);
+      return;
+    case IN_CONST_STR:
+      if (dst != kNoReg) loadStr(dst, e->str);
+      return;
     case IN_ABORT: {
       uint16_t m = gen(e->list[0]);
       emit(OP_ABORT, m);

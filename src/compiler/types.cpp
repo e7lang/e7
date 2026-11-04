@@ -21,6 +21,7 @@ Types::Types() {
   tenc_ = mk(TT::TextEncoder);
   tdec_ = mk(TT::TextDecoder);
   error_ = mk(TT::Error);
+  date_ = mk(TT::Date);
   for (uint8_t v = VT_I8; v <= VT_U64; v++) {
     ints_[v] = mk(TT::Int);
     ints_[v]->vt = v;
@@ -230,6 +231,7 @@ std::string typeName(const Type* t) {
     case TT::TextEncoder: return "TextEncoder";
     case TT::TextDecoder: return "TextDecoder";
     case TT::Error: return "Error";
+    case TT::Date: return "Date";
   }
   return "?";
 }

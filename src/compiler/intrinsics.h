@@ -45,6 +45,7 @@ enum Intrinsic : int {
   IN_OBJECT_KEYS,
   IN_ABORT,
   IN_ARR_LENGTH_SET,
+  IN_DATE_CMP,           // relational comparison of two Dates (by time value)
 };
 
 }  // namespace e7
