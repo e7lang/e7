@@ -11,14 +11,14 @@
 
 ```ts
 // sign.ts：在 VS Code 里有完整的类型检查与补全（配合 lib/e7.d.ts）
+// App 调用这个函数；更新时只需从服务器下发新脚本，无需发版。
 import { hmac } from "e7:crypto";
 import { hexEncode } from "e7:encoding";
-import type { KeyHandle } from "e7:crypto";
 
-export function sign(params: Map<string, string>, key: KeyHandle): string {
-  const query = [...params.keys()].sort()
-    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params.get(k)!)}`).join("&");
-  return hexEncode(hmac("sha256", key, new TextEncoder().encode(query)));
+export function sign(msg: string, key: string): string {
+  const enc = new TextEncoder();
+  const mac = hmac("sha256", enc.encode(key), enc.encode(msg));
+  return hexEncode(mac);
 }
 ```
 
@@ -88,7 +88,7 @@ import { hmac } from "e7:crypto";
 import { hexEncode } from "e7:encoding";
 
 // Called by the host app: returns hex(HMAC-SHA256(secret, message))
-export function sign(message: string, secret: string): string {
+export function sign(msg: string, key: string): string {
   const enc = new TextEncoder();
   return hexEncode(hmac("sha256", enc.encode(secret), enc.encode(message)));
 }

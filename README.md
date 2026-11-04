@@ -12,14 +12,14 @@ sandboxed and fast; modules can optionally be signed.
 
 ```ts
 // sign.ts: full type checking and completion in VS Code (via lib/e7.d.ts)
+// Your app calls this. Ship updates from your server, without an app release.
 import { hmac } from "e7:crypto";
 import { hexEncode } from "e7:encoding";
-import type { KeyHandle } from "e7:crypto";
 
-export function sign(params: Map<string, string>, key: KeyHandle): string {
-  const query = [...params.keys()].sort()
-    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params.get(k)!)}`).join("&");
-  return hexEncode(hmac("sha256", key, new TextEncoder().encode(query)));
+export function sign(msg: string, key: string): string {
+  const enc = new TextEncoder();
+  const mac = hmac("sha256", enc.encode(key), enc.encode(msg));
+  return hexEncode(mac);
 }
 ```
 
@@ -91,7 +91,7 @@ import { hmac } from "e7:crypto";
 import { hexEncode } from "e7:encoding";
 
 // Called by the host app: returns hex(HMAC-SHA256(secret, message))
-export function sign(message: string, secret: string): string {
+export function sign(msg: string, key: string): string {
   const enc = new TextEncoder();
   return hexEncode(hmac("sha256", enc.encode(secret), enc.encode(message)));
 }
