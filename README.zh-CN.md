@@ -40,32 +40,7 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 
 ## 架构
 
-```mermaid
-flowchart TB
-  subgraph DEV["开发 / 构建服务器"]
-    TS["app.ts<br/>（TypeScript 子集）"] --> C["e7c 编译器<br/>解析 → 类型检查 → 代码生成"]
-    DTS["lib/e7.d.ts<br/>（IDE 与 tsc 类型声明）"] -.-> TS
-    C --> E7B["app.e7b<br/>字节码 + CRC"]
-    KEY["release.seed<br/>（Ed25519 私钥）"] --> SIGN["签名"]
-    E7B --> SIGN --> SE7B["已签名的 app.e7b"]
-  end
-
-  SE7B -- "CDN / 接口下发" --> LOAD
-
-  subgraph APP["你的 App（Android / iOS / Windows / macOS / Linux）"]
-    HOST["宿主代码<br/>Kotlin · Swift · C# · C/C++"] --> API["C API  e7.h"]
-    API --> LOAD
-    subgraph VM["e7vm"]
-      LOAD["1 · 校验签名<br/>（内置的受信公钥）"] --> VER["2 · 解析 + 字节码验证器<br/>（内存安全）"]
-      VER --> LINK["3 · 链接原生函数<br/>（签名比对）"]
-      LINK --> INT["4 · 解释器<br/>寄存器 VM · GC · 指令预算"]
-      INT <--> STD["标准库<br/>String Array Map JSON BigInt Date …"]
-      INT <--> CRY["e7:crypto / e7:encoding<br/>BearSSL · Monocypher"]
-    end
-    INT <--> NAT["宿主函数<br/>（由 App 注册）"]
-    CRY <--> KP["密钥提供者<br/>Keychain / Keystore / DPAPI"]
-  end
-```
+<p align="center"><img src="docs/architecture.png" alt="e7vm architecture" width="760"></p>
 
 | 层 | 位置 | 职责 |
 |---|---|---|

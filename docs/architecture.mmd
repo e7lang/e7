@@ -1,0 +1,58 @@
+%% e7vm architecture diagram (single source for docs/architecture.png).
+%% Regenerate: npx -p @mermaid-js/mermaid-cli@11.4.2 mmdc -c docs/architecture.config.json -i docs/architecture.mmd -o docs/architecture.png -s 2 -b white
+flowchart TB
+  subgraph BUILD["🛠️  Build server"]
+    direction TB
+    TS(["app.ts<br/>TypeScript subset"]):::src
+    DTS(["lib/e7.d.ts<br/>IDE + tsc types"]):::src
+    CC["e7c compiler<br/>parse → check → codegen"]:::tool
+    E7B[("app.e7b<br/>bytecode + CRC32")]:::artifact
+    SEED{{"release.seed<br/>Ed25519 private key"}}:::key
+    SIGN["Ed25519 sign"]:::tool
+    SE7B[("signed app.e7b")]:::artifact
+    DTS -.-> TS
+    TS --> CC --> E7B --> SIGN --> SE7B
+    SEED --> SIGN
+  end
+
+  SE7B == "📦 CDN / API" ==> V1
+
+  subgraph APP["📱  Your app · Android · iOS · Windows · macOS · Linux"]
+    HOST["Host code<br/>Kotlin · Swift · C# · C/C++"]:::host
+    CAPI["C API · e7.h"]:::host
+    HOST --> CAPI --> V1
+    subgraph VM["⚙️  e7vm"]
+      V1["① Verify signature<br/>trusted public keys"]:::guard
+      V2["② Bytecode verifier<br/>memory safety"]:::guard
+      V3["③ Link natives<br/>signature-checked"]:::guard
+      V4["④ Interpreter<br/>register VM · GC · budget"]:::core
+      STD["Standard library<br/>String · Array · Map<br/>JSON · BigInt · Date"]:::lib
+      CRY["e7:crypto · e7:encoding<br/>BearSSL · Monocypher"]:::lib
+      V1 --> V2 --> V3 --> V4
+      V4 <--> STD
+      V4 <--> CRY
+    end
+    NAT["Host functions<br/>registered by the app"]:::host
+    KP{{"Key provider<br/>Keychain · Keystore · DPAPI"}}:::key
+    V4 <--> NAT
+    CRY <--> KP
+  end
+
+  classDef src fill:#E0F2FE,stroke:#0284C7,stroke-width:2px,color:#0C4A6E
+  classDef tool fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#1E3A8A
+  classDef artifact fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
+  classDef key fill:#FFE4E6,stroke:#E11D48,stroke-width:2px,color:#881337
+  classDef host fill:#F3E8FF,stroke:#9333EA,stroke-width:2px,color:#581C87
+  classDef guard fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+  classDef core fill:#16A34A,stroke:#14532D,stroke-width:2px,color:#FFFFFF
+  classDef lib fill:#CCFBF1,stroke:#0D9488,stroke-width:2px,color:#134E4A
+
+  style BUILD fill:#F8FAFC,stroke:#2563EB,stroke-width:2px,stroke-dasharray:6 4,color:#1E3A8A
+  style APP fill:#FDF4FF,stroke:#9333EA,stroke-width:2px,color:#581C87
+  style VM fill:#F0FDF4,stroke:#16A34A,stroke-width:2px,color:#14532D
+  linkStyle default stroke:#64748B,stroke-width:2px
+  linkStyle 6 stroke:#D97706,stroke-width:4px
+  linkStyle 9,10,11 stroke:#16A34A,stroke-width:3px
+  linkStyle 12,13 stroke:#0D9488,stroke-width:2px
+  linkStyle 14,7,8 stroke:#9333EA,stroke-width:2px
+  linkStyle 15 stroke:#E11D48,stroke-width:2px

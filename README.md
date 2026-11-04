@@ -41,32 +41,7 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 
 ## Architecture
 
-```mermaid
-flowchart TB
-  subgraph DEV["Development / build server"]
-    TS["app.ts<br/>(TypeScript subset)"] --> C["e7c compiler<br/>parse → type-check → codegen"]
-    DTS["lib/e7.d.ts<br/>(IDE + tsc types)"] -.-> TS
-    C --> E7B["app.e7b<br/>bytecode + CRC"]
-    KEY["release.seed<br/>(Ed25519 private key)"] --> SIGN["sign"]
-    E7B --> SIGN --> SE7B["signed app.e7b"]
-  end
-
-  SE7B -- "CDN / API" --> LOAD
-
-  subgraph APP["Your app (Android / iOS / Windows / macOS / Linux)"]
-    HOST["Host code<br/>Kotlin · Swift · C# · C/C++"] --> API["C API  e7.h"]
-    API --> LOAD
-    subgraph VM["e7vm"]
-      LOAD["1 · verify signature<br/>(trusted public keys)"] --> VER["2 · decode + bytecode verifier<br/>(memory safety)"]
-      VER --> LINK["3 · link natives<br/>(signature-checked)"]
-      LINK --> INT["4 · interpreter<br/>register VM · GC · budget"]
-      INT <--> STD["stdlib<br/>String Array Map JSON BigInt Date …"]
-      INT <--> CRY["e7:crypto / e7:encoding<br/>BearSSL · Monocypher"]
-    end
-    INT <--> NAT["host functions<br/>(registered by the app)"]
-    CRY <--> KP["key provider<br/>Keychain / Keystore / DPAPI"]
-  end
-```
+<p align="center"><img src="docs/architecture.png" alt="e7vm architecture" width="760"></p>
 
 | Layer | Where | What it does |
 |---|---|---|
