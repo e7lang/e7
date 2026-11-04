@@ -128,6 +128,23 @@ jobs:
       - run: node tests/wasm/smoke.mjs build-wasm/e7wasm.js
       - uses: actions/upload-artifact@v4
         with: { name: e7-wasm, path: "build-wasm/e7wasm.*" }
+      # Build the website (e7lang/e7lang.github.io) against this commit and drive the playground
+      # in a headless browser, so changes here cannot silently break the online playground.
+      - name: Website + playground end-to-end
+        run: |
+          git clone --depth 1 --branch docusaurus https://github.com/e7lang/e7lang.github.io.git site \
+            || git clone --depth 1 https://github.com/e7lang/e7lang.github.io.git site
+          cd site
+          cp ../build-wasm/e7wasm.js ../build-wasm/e7wasm.wasm static/playground/
+          npm ci --no-audit --no-fund
+          node scripts/sync-docs.mjs ..
+          node scripts/check-examples.mjs
+          npm run build
+          npx --yes playwright@1.63.0 install --with-deps chromium
+          npm install --no-save --no-audit --no-fund playwright@1.63.0
+          (npx docusaurus serve --port 3210 --no-open &)
+          npx --yes wait-on@8.0.3 -t 60000 http://localhost:3210
+          node scripts/e2e.mjs http://localhost:3210
 
   windows:
     strategy:
