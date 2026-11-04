@@ -303,8 +303,99 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
 
 Type* Checker::checkObject(Expr* e, Type* expected) {
   Type* exp = expected ? baseOf(expected) : nullptr;
-  for (auto& p : e->props)
-    if (p.spread) return errT(p.loc, "object spread is not supported");
+  bool anySpread = false;
+  for (auto& p : e->props) anySpread |= p.spread;
+  if (anySpread) {
+    // { ...a, k: v, ...b }: later entries override earlier ones; a key keeps its first position
+    std::vector<std::string> names;
+    std::vector<Type*> types;
+    std::vector<int> src;
+    std::vector<std::vector<int>> cond;
+    auto upsert = [&](const std::string& k, Type* t, int idx) {
+      for (size_t i = 0; i < names.size(); i++)
+        if (names[i] == k) {
+          // an optional spread property only overrides when present (TS semantics)
+          Type* bt = baseOf(t);
+          if (e->props[idx].spread && t->t == TT::Optional && t->hasUndef && !t->hasNull && bt == baseOf(types[i])) {
+            cond[i].push_back(idx);
+            return;
+          }
+          if (types[i]->t == TT::Optional && types[i]->hasUndef && src[i] >= 0 && e->props[src[i]].spread) {
+            // possibly-absent key from a spread: JS places a newly added key last (best static approximation)
+            names.erase(names.begin() + i); types.erase(types.begin() + i);
+            src.erase(src.begin() + i); cond.erase(cond.begin() + i);
+            break;
+          }
+          types[i] = t; src[i] = idx; cond[i].clear();
+          return;
+        }
+      names.push_back(k);
+      types.push_back(t);
+      src.push_back(idx);
+      cond.emplace_back();
+    };
+    for (size_t pi = 0; pi < e->props.size(); pi++) {
+      ObjProp& p = e->props[pi];
+      if (p.spread) {
+        Type* t = check(p.value, nullptr);
+        if (t->t == TT::Class) {
+          resolveClass(t->cls);
+          for (auto& f : t->cls->fields) upsert(f.name, f.type, (int)pi);
+        } else if (t->t == TT::Object) {
+          for (auto& pr : t->shape->props) upsert(pr.name, pr.type, (int)pi);
+        } else if (t->t != TT::Unknown) {
+          return errT(p.loc, "only objects can be spread into an object literal (got '" + typeName(t) + "')");
+        }
+        continue;
+      }
+      const ObjShape::Prop* sp = exp && exp->t == TT::Object ? exp->shape->findProp(p.key) : nullptr;
+      Type* t = check(p.value, sp ? sp->type : nullptr);
+      if (sp) coerce(p.value, sp->type);
+      else if (t->t == TT::Null || t->t == TT::Undefined || t->t == TT::Void) {
+        err(p.loc, "cannot infer the type of property '" + p.key + "'");
+        t = T.unknown();
+      }
+      upsert(p.key, sp ? sp->type : t, (int)pi);
+    }
+    std::vector<std::pair<std::string, Type*>> fields;
+    if (exp && exp->t == TT::Object) {
+      ObjShape* sh = exp->shape;
+      if (!sh->methods.empty()) return errT(e->loc, "object literals cannot implement '" + typeName(exp) + "' (it has methods)");
+      for (size_t i = 0; i < names.size(); i++) {
+        const ObjShape::Prop* sp = sh->findProp(names[i]);
+        Type* ft = sp ? sp->type : types[i];
+        if (sp && types[i] != ft && !(kindOf(types[i]) == K_R && kindOf(ft) == K_R && !isBoxedOptional(types[i]) &&
+                                      !isBoxedOptional(ft) && assignable(types[i], ft)) &&
+            !assignable(types[i], ft))
+          err(e->loc, "property '" + names[i] + "' of type '" + typeName(types[i]) + "' is not assignable to '" + typeName(ft) + "'");
+        fields.push_back({names[i], ft});
+      }
+      for (auto& sp : sh->props) {
+        bool present = false;
+        for (auto& n : names) if (n == sp.name) present = true;
+        if (present) continue;
+        if (!sp.optional && !(sp.type->t == TT::Optional && sp.type->hasUndef))
+          err(e->loc, "property '" + sp.name + "' is missing in object literal of type '" + typeName(exp) + "'");
+        fields.push_back({sp.name, sp.type});
+        src.push_back(-1);
+        cond.emplace_back();
+      }
+      e->cls = recordFor(fields)->cls;
+      e->fieldSrc = src;
+      e->fieldCond = cond;
+      return exp;
+    }
+    if (exp && exp->t != TT::Unknown) return errT(e->loc, "an object literal is not assignable to type '" + typeName(exp) + "'");
+    std::vector<ObjShape::Prop> props;
+    for (size_t i = 0; i < names.size(); i++) {
+      props.push_back({names[i], types[i], false});
+      fields.push_back({names[i], types[i]});
+    }
+    e->cls = recordFor(fields)->cls;
+    e->fieldSrc = src;
+    e->fieldCond = cond;
+    return T.anonObject(props);
+  }
   for (size_t i = 0; i < e->props.size(); i++)
     for (size_t j = 0; j < i; j++)
       if (e->props[i].key == e->props[j].key) return errT(e->props[i].loc, "duplicate property '" + e->props[i].key + "'");
@@ -577,6 +668,7 @@ Type* Checker::checkLogical(Expr* e, Type* expected) {
     Type* lt = check(e->a, nullptr);
     Type* lb = baseOf(lt);
     Type* rt = check(e->b, lb);
+    if (lt->t == TT::Void || rt->t == TT::Void) return errT(e->loc, "void value in '??' expression");
     if (lt->t != TT::Optional && !isNullish(lt)) {
       // allowed but pointless; result is left type
       return lt;

@@ -88,6 +88,8 @@ struct Expr {
   Expr* c = nullptr;  // cond alternate
   std::vector<Expr*> list;  // array elements, call args, template exprs
   std::vector<ObjProp> props;
+  std::vector<int> fieldSrc;  // object literal with spreads: prop index supplying each record field (-1 = absent)
+  std::vector<std::vector<int>> fieldCond;  // later optional spread sources: override only when not undefined
   std::vector<TypeNode*> typeArgs;
   TypeNode* asType = nullptr;
   bool prefix = false;    // update

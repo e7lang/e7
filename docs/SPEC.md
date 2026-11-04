@@ -40,7 +40,7 @@ E7 是 TypeScript 的**严格子集**：每个能通过 E7 编译器的程序，
 
 **不支持**（编译错误并给出提示）：`any`、`unknown`、`object`、除 `null/undefined` 之外的联合类型、交叉类型、
 用户自定义泛型（函数/类/接口/别名）、索引签名（请用 `Map<K, V>`）、`keyof`/`typeof` 类型运算、条件/映射类型、
-`Record/Partial/Pick` 等工具类型、`Promise`、`Symbol`、`RegExp`、`Date`（仅 `Date.now()`）、`Int32Array` 等其他
+`Record/Partial/Pick` 等工具类型、`Promise`、`Symbol`、`RegExp`、`Int32Array` 等其他
 类型化数组（请用 `u32[]` 或 `DataView`）。字符串字面量类型（`"a" | "b"`）按 `string` 处理。
 
 ### 2.1 赋值兼容
@@ -62,6 +62,9 @@ E7 是 TypeScript 的**严格子集**：每个能通过 E7 编译器的程序，
 
 - `let` / `const`（**不支持 `var`**）；块级作用域；循环中 `let` 每次迭代新绑定（闭包捕获行为同 JS）。
 - 数组/对象/元组解构（声明、赋值 `[a, b] = [b, a]`、函数参数、`for...of`）；不支持默认值与 `...rest` 解构。
+- 对象展开 `{ ...a, k: v, ...b }`：源可以是对象类型或类实例（只复制字段，不复制方法），后出现的同名属性覆盖前者；
+  源中的**可选**属性只在存在时覆盖（同 TS：`{ retries: 3, ...opts }` 的 `retries` 类型为 `number`）。
+  结果的属性顺序在编译期确定：可能缺省的属性被后面的显式属性赋值时排在末尾（与 JS 在该属性缺省时一致）。
 - `if / else`、`while`、`do...while`、`for(;;)`、`for...of`（数组、字符串按码点、`Uint8Array`、`Map`、`Set`、
   `arr.entries()/keys()/values()`、`map.keys()/values()/entries()`），`switch`（支持贯穿），`break/continue`（含标签），
   标签块。**不支持** `for...in`、`with`、`try/catch/finally`。
@@ -135,7 +138,11 @@ E7 是 TypeScript 的**严格子集**：每个能通过 E7 编译器的程序，
 - **TextEncoder / TextDecoder**（UTF-8，解码按 WHATWG 规则替换非法序列）。
 - **bigint**：全部算术/位运算/比较，`BigInt.asUintN/asIntN`，`toString(radix)`，作为 Map 键。
 - **JSON.stringify**（含缩进参数；元组输出为数组；`undefined` 字段省略；循环引用报错）。
-- **Object.keys(obj)**、`Date.now()`。
+- **Object.keys(obj)**。
+- **Date**（**UTC 语义**：本地时间即 UTC，`getTimezoneOffset()` 恒为 0，结果与 `TZ=UTC` 下的 Node 一致）：
+  `Date.now/parse/UTC`，`new Date()/new Date(ms)/new Date(string)/new Date(y, m, d?, h?, mi?, s?, ms?)/new Date(date)`，
+  全部 `get*/getUTC*`、`getTime/setTime/valueOf`（其他 `set*` 方法不支持，可用 `Date.UTC` 计算后 `setTime`）、`toISOString/toJSON/toString/toUTCString/toDateString/toTimeString`，
+  `<`/`>` 比较；`Date.parse` 支持 ISO 8601 与 RFC 1123 格式，无效日期为 `NaN`（`toISOString` 时终止）。
 
 ### 6.4 JSON.parse（类型校验）
 E7 中必须写成 `JSON.parse(text) as T`，`T` 可以是基本类型、数组、元组、接口/对象类型（嵌套）、可空与可选字段、

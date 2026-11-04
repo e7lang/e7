@@ -17,7 +17,7 @@ const o: Opts = { name: "x" };
 o.log?.("not printed");
 const o2: Opts = { name: "y", log: s => console.log("log:", s) };
 o2.log?.("printed");
-let fn: ((x: number) => number) | null = null;
+let fn: ((x: number) => number) | null = Math.random() > 2 ? (x => x) : null;
 console.log(fn?.(1));
 fn = x => x * 3;
 console.log(fn?.(2));

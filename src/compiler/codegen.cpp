@@ -1459,6 +1459,11 @@ uint16_t Gen::toStringReg(uint16_t src, Type* t) {
 
 void Gen::genInto(Expr* e, uint16_t dst) {
   line(e->loc);
+  // void-typed wrappers (f()!, f() as void) produce no value: just evaluate the operand
+  if ((e->k == EK::NonNull || e->k == EK::As) && e->type && e->type->t == TT::Void && e->a) {
+    genInto(e->a, dst);
+    return;
+  }
   switch (e->k) {
     case EK::Num:
       if (dst == kNoReg) return;
@@ -2711,6 +2716,71 @@ void Gen::genArrayLit(Expr* e, uint16_t d) {
 
 void Gen::genObjectLit(Expr* e, uint16_t d) {
   ClassSym* c = e->cls;
+  if (!e->fieldSrc.empty()) {
+    // spreads: evaluate every entry in source order, then assemble
+    std::vector<uint16_t> vals(e->props.size());
+    for (size_t i = 0; i < e->props.size(); i++) {
+      Expr* v = e->props[i].value;
+      vals[i] = temp(K(v->type));
+      genInto(v, vals[i]);
+    }
+    uint16_t obj = temp(K_R);
+    emit(OP_NEW, obj, (uint16_t)c->classIdx);
+    auto readSpread = [&](int si, const std::string& name, Type*& sft) -> uint16_t {
+      Type* st = e->props[si].value->type;
+      uint16_t raw;
+      if (st->t == TT::Class) {
+        int idx = st->cls->fieldIdx[name];
+        sft = st->cls->fields[idx].type;
+        raw = temp(K(sft));
+        emit(op3(K(sft), OP_GETF_I, OP_GETF_F, OP_GETF_R), raw, vals[si], (uint16_t)idx);
+      } else {
+        sft = st->shape->findProp(name)->type;
+        raw = temp(K(sft));
+        D->icNames.push_back(kStr(utf8ToUtf16(name)));
+        emit(op3(K(sft), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, vals[si], (uint16_t)(D->icNames.size() - 1));
+      }
+      return raw;
+    };
+    for (size_t fi = 0; fi < c->fields.size(); fi++) {
+      Type* ft = c->fields[fi].type;
+      int si = e->fieldSrc[fi];
+      size_t m0 = mark();
+      uint16_t v;
+      if (si < 0) {
+        if (K(ft) != K_R) { release(m0); continue; }
+        v = temp(K_R);
+        emit(OP_LOADUNDEF, v);
+      } else if (!e->props[si].spread) {
+        v = vals[si];
+      } else {
+        Type* sft;
+        uint16_t raw = readSpread(si, c->fields[fi].name, sft);
+        v = temp(K(ft));
+        boxIfNeeded(v, raw, sft, ft);
+      }
+      // later optional spreads override only when the property is present
+      if (!e->fieldCond[fi].empty()) {
+        uint16_t nv = temp(K(ft));
+        mov(nv, v, K(ft));
+        v = nv;
+      }
+      for (int ci : e->fieldCond[fi]) {
+        Type* sft;
+        uint16_t raw = readSpread(ci, c->fields[fi].name, sft);
+        uint16_t t = temp(K_I);
+        emit(OP_ISUNDEF, t, raw);
+        Label* skip = newLabel();
+        jump(OP_JT, t, skip);
+        unboxNarrowed(v, raw, sft, ft);
+        place(skip);
+      }
+      emit(op3(K(ft), OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)fi, v);
+      release(m0);
+    }
+    mov(d, obj, K_R);
+    return;
+  }
   uint16_t obj = temp(K_R);
   emit(OP_NEW, obj, (uint16_t)c->classIdx);
   std::vector<bool> set(c->fields.size(), false);
