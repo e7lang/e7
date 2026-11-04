@@ -156,7 +156,25 @@ vm.SetBudget(10_000_000);
 var sig = (string)vm.Call(module, "sign", "a=1&b=2", new E7.KeyHandle(1))!;
 ```
 
-## 6. Security recommendations
+## 6. JavaScript / WebAssembly (Node.js, browsers, editors)
+
+The npm package [`@e7lang/e7`](../packages/e7) is the compiler and VM built with Emscripten
+(`tools/e7wasm.cpp`). Every `run` uses a fresh VM with an instruction budget and a memory limit; host
+functions and `KeyHandle` are not available from JavaScript (use the native API for those).
+
+```js
+import { compile, run } from "@e7lang/e7";
+const { bytecode, diagnostics } = await compile(source, { fileName: "sign.ts" });
+const r = await run(bytecode, { call: "sign", args: ["a=1&b=2", "secret"], budget: 10_000_000, memoryLimit: 32 << 20 });
+if (r.ok) console.log(r.result); else console.error(r.status, r.error);
+```
+
+`.e7b` files are portable: bytecode produced by `compile()` loads in the native VM (`e7_load`) and vice
+versa. The `e7-js` command (`run`, `check`, `compile -o`, `disasm`) covers the `e7` / `e7c` workflow
+without a native build, and the VS Code extension ([editors/vscode](../editors/vscode)) uses the same
+package for diagnostics and *Run File*.
+
+## 7. Security recommendations
 
 1. **When scripts are downloaded at runtime, enable signature checking** (`require_signature` + built-in public key); keep the private key only on the build server or an HSM.
 2. Set `memory_limit` (e.g. 16–64 MiB) and an instruction budget; for scripts driven by external input, set a smaller `max_frames`.
@@ -166,7 +184,7 @@ var sig = (string)vm.Call(module, "sign", "a=1&b=2", new E7.KeyHandle(1))!;
    so keys that must stay secret should remain in the host or on the server.
 6. Script error messages include the source file name and line number; to hide them, compile on the server with different file names.
 
-## 7. Size and performance reference
+## 8. Size and performance reference
 
 - Linux x86-64 shared library (`MinSizeRel`, stripped, all crypto algorithms included): about **470 KB** for the runtime only, about **920 KB** with the on-device compiler.
 - Interpreter performance is comparable to or faster than V8's interpreter (`--jitless`); standard crypto algorithms run as native code. See the benchmark table in the README.

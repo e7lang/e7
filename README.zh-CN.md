@@ -60,6 +60,8 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 Linux（x64、arm64）、macOS（通用二进制）、Windows（x64）。压缩包内含 `bin/e7`、`bin/e7c`、`include/e7/e7.h`、
 `lib/` 静态库、`types/e7.d.ts` 和示例。
 什么都不想装：[Playground](https://e7lang.github.io/playground) 直接在浏览器里运行编译器和虚拟机（WebAssembly）。
+**Node.js / 浏览器：** `npm install @e7lang/e7`（[packages/e7](packages/e7)）是同一套编译器和虚拟机的 WebAssembly 版本，
+提供 JavaScript API（`compile`、`check`、`run`、`disassemble`）和 `e7-js` 命令行（`npx -p @e7lang/e7 e7-js run sign.ts`）。
 
 **从源码构建：** 需要 CMake ≥ 3.16 和支持 C++17 的编译器（GCC、Clang、MSVC），Ninja 可选。
 
@@ -163,6 +165,10 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 把 [`lib/e7.d.ts`](lib/e7.d.ts) 加入 `tsconfig.json` 的 `files`，VS Code 里就有补全和类型报错。
 对脚本运行 `tsc --strict`，得到的诊断与 `e7c` 一致。
 
+VS Code 扩展 **E7 Language**（[editors/vscode](editors/vscode)，发布者 `e7lang`；每个 [Release](https://github.com/e7lang/e7/releases/latest)
+都附带 `.vsix`）在输入时给出 E7 编译器自己的诊断，并提供 *E7: Run File*、*E7: Compile to Bytecode*、*E7: Show Bytecode* 命令。
+它作用于 `*.e7` 文件、导入 `"e7:..."` 模块的 `.ts` 文件，以及匹配 `e7.files` 设置的文件。
+
 ## 特性
 
 - **语言。**
@@ -192,7 +198,8 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 - **执行控制。**
   - 指令预算同时覆盖重型原生函数调用。
   - 可选的挂起/恢复（`e7_resume`），用于在 UI 线程上分片执行。
-- **绑定。** C API（[`include/e7/e7.h`](include/e7/e7.h)）、Java/Kotlin（JNI）、Swift、C#。
+- **绑定。** C API（[`include/e7/e7.h`](include/e7/e7.h)）、Java/Kotlin（JNI）、Swift、C#，以及
+  JavaScript/WebAssembly（[`@e7lang/e7`](packages/e7)）。
 
 完整的语言规范见 [docs/SPEC.md](docs/SPEC.md)。
 
@@ -204,6 +211,7 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 | Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so` | Java/Kotlin：`platform/java/org/e7vm` |
 | iOS | `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`platform/ios/E7VM/E7VM.swift` |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]`（VS 2022） | C/C++、C#：`platform/windows/E7VM.cs` |
+| WebAssembly（Node.js、浏览器） | `emcmake cmake -S . -B build-wasm && cmake --build build-wasm` → `e7wasm.js` + `e7wasm.wasm` | JavaScript：npm `@e7lang/e7`（[packages/e7](packages/e7)） |
 
 CMake 选项：
 
@@ -241,6 +249,10 @@ tests/tsc/check.sh             # 所有测试和示例都能通过 tsc --strict
 - **Windows：** MSVC 与 clang-cl。
 - **TypeScript：** `tsc` 严格检查。
 
+[`.github/workflows/js.yml`](.github/workflows/js.yml) 构建 WebAssembly 模块，然后测试打包后的 npm 包
+（Node 18/20/22，Linux/macOS/Windows 上的 `node --test`，以及无头 Chromium）和 VS Code 扩展
+（在 xvfb 下运行 VS Code 集成测试），并打包 `.vsix`。
+
 ## 性能
 
 数据来自 x86-64 的 Release 构建，单位为毫秒（脚本在 `bench/`）。对比对象是 Node.js 22，包括 V8 解释器
@@ -265,8 +277,9 @@ src/compiler/       语法分析、类型检查、代码生成
 src/core/           字节码格式、序列化、验证器、反汇编、JS 数字格式化
 src/vm/             解释器、对象模型、GC
 src/stdlib/         内建库                     src/crypto/      e7:crypto、模块签名
-src/capi/           C API                      tools/           e7、e7c 命令行工具
+src/capi/           C API                      tools/           e7、e7c 命令行工具、e7wasm
 platform/           Android（JNI）/ Java、iOS（Swift）、Windows（C#）
+packages/e7/        npm 包 @e7lang/e7          editors/vscode/  VS Code 扩展
 examples/           示例脚本 + 嵌入示例（examples/embed）
 tests/ bench/ docs/                            third_party/     BearSSL（MIT）、Monocypher（BSD-2/CC0）
 ```

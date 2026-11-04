@@ -61,6 +61,9 @@ export function sign(params: Map<string, string>, key: KeyHandle): string {
 Windows (x64) from the [latest release](https://github.com/e7lang/e7/releases/latest). Each archive has
 `bin/e7`, `bin/e7c`, `include/e7/e7.h`, static libraries in `lib/`, `types/e7.d.ts` and examples.
 No install at all: the [playground](https://e7lang.github.io/playground) runs the compiler and VM in your browser (WebAssembly).
+**Node.js / browsers:** `npm install @e7lang/e7` ([packages/e7](packages/e7)) is the same compiler and VM on
+WebAssembly, with a JavaScript API (`compile`, `check`, `run`, `disassemble`) and the `e7-js` command
+(`npx -p @e7lang/e7 e7-js run sign.ts`).
 
 **From source:**
 
@@ -167,6 +170,11 @@ then `call("sign", ...)`. See [docs/EMBEDDING.md](docs/EMBEDDING.md) for each pl
 Add [`lib/e7.d.ts`](lib/e7.d.ts) to your `tsconfig.json` `files` to get completion and type errors in
 VS Code. Running `tsc --strict` on your scripts gives the same diagnostics as `e7c`.
 
+The **E7 Language** VS Code extension ([editors/vscode](editors/vscode), publisher `e7lang`; the `.vsix` is
+attached to each [release](https://github.com/e7lang/e7/releases/latest)) adds the E7 compiler's own
+diagnostics as you type, *E7: Run File*, *E7: Compile to Bytecode* and *E7: Show Bytecode*. It works on
+`*.e7` files, `.ts` files that import `"e7:..."` modules and files matching the `e7.files` setting.
+
 ## Features
 
 - **Language.**
@@ -196,7 +204,8 @@ VS Code. Running `tsc --strict` on your scripts gives the same diagnostics as `e
 - **Execution control.**
   - The instruction budget also covers heavy native calls.
   - Optional suspend/resume (`e7_resume`) for time-slicing on the UI thread.
-- **Bindings.** C API ([`include/e7/e7.h`](include/e7/e7.h)), Java/Kotlin (JNI), Swift, C#.
+- **Bindings.** C API ([`include/e7/e7.h`](include/e7/e7.h)), Java/Kotlin (JNI), Swift, C#, and
+  JavaScript/WebAssembly ([`@e7lang/e7`](packages/e7)).
 
 The full language reference is in [docs/SPEC.md](docs/SPEC.md).
 
@@ -208,6 +217,7 @@ The full language reference is in [docs/SPEC.md](docs/SPEC.md).
 | Android | `ANDROID_NDK_HOME=... platform/android/build_android.sh` → `build-android/jniLibs/<abi>/libe7vm_jni.so` | Java/Kotlin: `platform/java/org/e7vm` |
 | iOS | `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `platform/ios/E7VM/E7VM.swift` |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]` (VS 2022) | C/C++, C#: `platform/windows/E7VM.cs` |
+| WebAssembly (Node.js, browsers) | `emcmake cmake -S . -B build-wasm && cmake --build build-wasm` → `e7wasm.js` + `e7wasm.wasm` | JavaScript: npm `@e7lang/e7` ([packages/e7](packages/e7)) |
 
 CMake options:
 
@@ -246,6 +256,10 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs 15 jobs on ever
 - **Windows:** MSVC and clang-cl.
 - **TypeScript:** `tsc` strict check.
 
+[`.github/workflows/js.yml`](.github/workflows/js.yml) builds the WebAssembly module, then tests the packed
+npm tarball (`node --test` on Node 18/20/22, Linux/macOS/Windows, plus headless Chromium) and the VS Code
+extension (integration tests in VS Code under xvfb), and packages the `.vsix`.
+
 ## Performance
 
 These numbers are from x86-64, Release build, in milliseconds (scripts in `bench/`). They compare
@@ -272,8 +286,9 @@ src/compiler/       parser, type checker, codegen
 src/core/           bytecode format, serializer, verifier, disassembler, JS number formatting
 src/vm/             interpreter, object model, GC
 src/stdlib/         built-ins                  src/crypto/      e7:crypto, module signatures
-src/capi/           C API                      tools/           e7, e7c command-line tools
+src/capi/           C API                      tools/           e7, e7c command-line tools, e7wasm
 platform/           Android (JNI) / Java, iOS (Swift), Windows (C#)
+packages/e7/        npm package @e7lang/e7     editors/vscode/  VS Code extension
 examples/           sample scripts + embedding example (examples/embed)
 tests/ bench/ docs/                            third_party/     BearSSL (MIT), Monocypher (BSD-2/CC0)
 ```
