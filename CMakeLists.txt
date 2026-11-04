@@ -34,6 +34,8 @@ endif()
 file(GLOB_RECURSE BEARSSL_SRC CONFIGURE_DEPENDS third_party/bearssl/src/*.c)
 add_library(e7_bearssl STATIC ${BEARSSL_SRC})
 target_include_directories(e7_bearssl PUBLIC third_party/bearssl/inc PRIVATE third_party/bearssl/src)
+# portable, UB-free byte access on every architecture
+target_compile_definitions(e7_bearssl PRIVATE BR_LE_UNALIGNED=0 BR_BE_UNALIGNED=0)
 if(NOT MSVC)
   target_compile_options(e7_bearssl PRIVATE -w)
 endif()

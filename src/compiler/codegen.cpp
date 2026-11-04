@@ -1454,6 +1454,11 @@ void Gen::genInto(Expr* e, uint16_t dst) {
         if (t->t == TT::Int) {
           emit(OP_ADDI_I, r, r, (uint16_t)(int16_t)(e->raw == "++" ? 1 : -1));
           wrapInt(r, r, t);
+        } else if (t->t == TT::BigInt) {
+          uint16_t one = temp(K_R), s1 = temp(K_R);
+          loadStr(s1, u"1");
+          callNative("BigInt.parseLiteral", {s1}, one, 'R');
+          callNative(e->raw == "++" ? "BigInt.add" : "BigInt.sub", {r, one}, r, 'R');
         } else {
           uint16_t one = temp(K_F);
           loadNum(one, 1);
@@ -1467,7 +1472,7 @@ void Gen::genInto(Expr* e, uint16_t dst) {
       Expr* fake = P.arena.expr(EK::Assign, e->loc);
       fake->raw = e->raw == "++" ? "+=" : "-=";
       fake->a = e->a;
-      Expr* one = P.arena.expr(EK::Num, e->loc);
+      Expr* one = P.arena.expr(t->t == TT::BigInt ? EK::BigLit : EK::Num, e->loc);
       one->num = 1;
       one->isIntLit = true;
       one->ival = 1;

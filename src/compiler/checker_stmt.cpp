@@ -641,8 +641,8 @@ void Checker::checkStmt(Stmt* s) {
       loops.push_back({label, true, false});
       checkStmt(s->body);
       loops.pop_back();
-      popScope();
       if (s->update) check(s->update, nullptr);
+      popScope();
       popScope();
       break;
     }

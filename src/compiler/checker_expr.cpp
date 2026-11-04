@@ -426,7 +426,7 @@ Type* Checker::checkUpdate(Expr* e) {
   Type* t = check(e->a, nullptr);
   Type* st = storageTypeOf(e->a);
   if (st) t = st;
-  if (t->t == TT::Number || t->t == TT::Int || t->t == TT::Unknown) {
+  if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown) {
     std::string key = pathKey(e->a);
     invalidatePath(key);
     return t;

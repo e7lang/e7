@@ -165,7 +165,9 @@ std::string VM::stackTrace() const {
 // ------------------------------------------------------------------ heap
 void* VM::allocRaw(OT t, size_t size) {
   if (E7_UNLIKELY(bytes_ + size > cfg_.memoryLimit)) {
-    if (nativeDepth_ == 0 && frames_.empty()) collectGarbage();
+    // Emergency collection. Safe when no native code is running: every live reference is then
+    // held in a register, a global, a pinned object or the object graph.
+    if (nativeDepth_ == 0 && gcInhibit_ == 0) collectGarbage();
     if (bytes_ + size > cfg_.memoryLimit) errorCode(ERR_MEMORY, "out of memory (limit %zu bytes)", cfg_.memoryLimit);
   }
   Obj* o = static_cast<Obj*>(malloc(size));
@@ -183,6 +185,7 @@ void* VM::allocRaw(OT t, size_t size) {
 
 void VM::accountExternal(int64_t delta) {
   if (delta > 0) {
+    if (bytes_ + (size_t)delta > cfg_.memoryLimit && nativeDepth_ == 0 && gcInhibit_ == 0) collectGarbage();
     if (bytes_ + (size_t)delta > cfg_.memoryLimit)
       errorCode(ERR_MEMORY, "out of memory (limit %zu bytes)", cfg_.memoryLimit);
     bytes_ += (size_t)delta;
@@ -213,6 +216,7 @@ StrObj* VM::newStringAscii(const char* p) {
 }
 
 ArrObj* VM::newArray(uint8_t vt, uint32_t cap) {
+  NoGC ng(*this);
   auto* a = static_cast<ArrObj*>(allocRaw(OT::Array, sizeof(ArrObj)));
   a->vt = vt;
   a->len = 0;
@@ -237,6 +241,7 @@ void VM::arrayPush(ArrObj* a, Slot v) {
 }
 
 BufObj* VM::newBuffer(uint32_t len) {
+  NoGC ng(*this);
   auto* b = static_cast<BufObj*>(allocRaw(OT::Buffer, sizeof(BufObj)));
   b->len = 0;
   b->data = nullptr;
@@ -254,10 +259,12 @@ BytesObj* VM::newBytesView(BufObj* buf, uint32_t off, uint32_t len) {
   return v;
 }
 BytesObj* VM::newBytes(uint32_t len) {
+  NoGC ng(*this);
   BufObj* b = newBuffer(len);
   return newBytesView(b, 0, len);
 }
 BytesObj* VM::newBytesFrom(const uint8_t* p, size_t len) {
+  NoGC ng(*this);
   if (len > 0x7FFFFFFF) error("byte array too large");
   BytesObj* v = newBytes((uint32_t)len);
   if (len) memcpy(v->ptr(), p, len);
@@ -537,6 +544,7 @@ int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
   for (uint16_t r : f->refInit) R[r].r = nullptr;
   frames_.push_back(Frame{f, f->code, nullptr, 0, kNoReg, true});
   resultKind_ = 'V';
+  if (gcRequested_) collectGarbage();
   try {
     int st = execute(0);
     if (st == ERR_SUSPENDED) suspended_ = true;
@@ -545,6 +553,7 @@ int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
   } catch (...) {
     frames_.clear();
     nativeDepth_ = 0;
+    gcInhibit_ = 0;
     tempRoots_.clear();
     suspended_ = false;
     throw;
@@ -569,6 +578,7 @@ int VM::resume() {
 
 void VM::resetExecution() {
   frames_.clear();
+  gcInhibit_ = 0;
   suspended_ = false;
   nativeDepth_ = 0;
   tempRoots_.clear();

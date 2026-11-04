@@ -36,10 +36,18 @@ bool verifyModule(const Module& m, std::string& err) {
   err.clear();
   V v{m, err};
   char buf[256];
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-security"
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
   auto F = [&](const char* fmt, auto... args) {
     snprintf(buf, sizeof buf, fmt, args...);
     return v.fail(buf);
   };
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
   for (size_t i = 0; i < m.sigs.size(); i++)
     if (!validSig(m.sigs[i])) return F("invalid signature #%zu", i);

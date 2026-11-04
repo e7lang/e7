@@ -82,6 +82,27 @@ static inline uint16_t argReg(const uint64_t* words, uint32_t i) {
   return (uint16_t)(words[i >> 2] >> (16 * (i & 3)));
 }
 
+Slot VM::invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32_t argc) {
+  std::vector<Slot> args(argc);
+  for (uint32_t k = 0; k < argc; k++) args[k] = R[argReg(aw, k)];
+  Slot ret;
+  ret.u = 0;
+  nativeDepth_++;
+  nb.fn(*this, args.data(), argc, &ret, nb.ud);
+  nativeDepth_--;
+  return ret;
+}
+
+StrObj* VM::intToStringObj(Slot v, uint8_t vt) {
+  std::string s;
+  if (vt == VT_U64) s = uint64ToString(v.u);
+  else if (vt == VT_BOOL) s = v.i ? "true" : "false";
+  else s = int64ToString(v.i);
+  return newStringAscii(s.c_str());
+}
+
+StrObj* VM::numToStringObj(double d) { return newStringAscii(numberToString(d).c_str()); }
+
 int VM::execute(size_t /*entryDepth*/) {
   Frame* fr;
   FuncRT* fn;
@@ -394,17 +415,18 @@ dispatch:
     uint32_t argc = C;
     const uint64_t* aw = ip;
     ip += (argc + 3) >> 2;
-    Slot argsLocal[16];
-    std::vector<Slot> argsHeap;
-    Slot* args = argsLocal;
-    if (argc > 16) { argsHeap.resize(argc); args = argsHeap.data(); }
-    for (uint32_t k = 0; k < argc; k++) args[k] = R[argReg(aw, k)];
     fr->ip = ip;
     Slot ret;
-    ret.u = 0;
-    nativeDepth_++;
-    nb.fn(*this, args, argc, &ret, nb.ud);
-    nativeDepth_--;
+    if (E7_LIKELY(argc <= 16)) {
+      Slot args[16];
+      for (uint32_t k = 0; k < argc; k++) args[k] = R[argReg(aw, k)];
+      ret.u = 0;
+      nativeDepth_++;
+      nb.fn(*this, args, argc, &ret, nb.ud);
+      nativeDepth_--;
+    } else {
+      ret = invokeNativeMany(nb, R, aw, argc);
+    }
     if (A != kNoReg) R[A] = ret;
     DISPATCH();
   }
@@ -664,14 +686,10 @@ dispatch:
     R[A].i = ((uint16_t)ins == OP_SLT) ? c < 0 : c <= 0;
     DISPATCH();
   }
-  CASE(NUM2STR) { fr->ip = ip; R[A].r = newStringAscii(numberToString(R[B].f).c_str()); DISPATCH(); }
+  CASE(NUM2STR) { fr->ip = ip; R[A].r = numToStringObj(R[B].f); DISPATCH(); }
   CASE(INT2STR) {
     fr->ip = ip;
-    std::string s;
-    if (C == VT_U64) s = uint64ToString(R[B].u);
-    else if (C == VT_BOOL) s = R[B].i ? "true" : "false";
-    else s = int64ToString(R[B].i);
-    R[A].r = newStringAscii(s.c_str());
+    R[A].r = intToStringObj(R[B], (uint8_t)C);
     DISPATCH();
   }
   CASE(BOOL2STR) { fr->ip = ip; R[A].r = newStringAscii(R[B].i ? "true" : "false"); DISPATCH(); }

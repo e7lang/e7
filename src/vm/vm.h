@@ -193,6 +193,9 @@ class VM {
  private:
   friend struct Interp;
   int execute(size_t entryDepth);
+  Slot invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32_t argc);
+  StrObj* intToStringObj(Slot v, uint8_t vt);
+  StrObj* numToStringObj(double d);
   void* allocRaw(OT t, size_t size);
   void maybeGC();
   void markRoots();
@@ -211,6 +214,12 @@ class VM {
   size_t nextGC_ = 1u << 20;
   uint64_t gcCount_ = 0;
   bool gcRequested_ = false;
+  int gcInhibit_ = 0;  // >0 while a multi-step allocation is in progress
+  struct NoGC {
+    VM& v;
+    explicit NoGC(VM& vm) : v(vm) { v.gcInhibit_++; }
+    ~NoGC() { v.gcInhibit_--; }
+  };
   std::vector<Obj*> gray_;
   std::vector<Obj*> tempRoots_;
   std::unordered_map<Obj*, uint32_t> pins_;

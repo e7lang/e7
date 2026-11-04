@@ -344,7 +344,14 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     Type* target = T.intT(p.second);
     if (args.size() != 1) return errT(l, id + "() expects 1 argument");
     Type* t;
-    if (isIntLiteralExpr(args[0])) t = check(args[0], target);
+    int64_t litv;
+    std::string why;
+    Expr* lit = args[0];
+    while (lit->k == EK::Paren) lit = lit->a;
+    bool neg = lit->k == EK::Unary && lit->raw == "-";
+    Expr* num = neg ? lit->a : lit;
+    while (num->k == EK::Paren) num = num->a;
+    if (isIntLiteralExpr(args[0]) && litFits(num, target, litv, neg, why)) t = check(args[0], target);
     else t = check(args[0], nullptr);
     if (t->t != TT::Number && t->t != TT::Int && t->t != TT::BigInt && t->t != TT::Bool && t->t != TT::Unknown &&
         !(t->t == TT::Enum && !t->en->isString))

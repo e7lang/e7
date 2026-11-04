@@ -4,6 +4,10 @@
 
 namespace e7 {
 
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic ignored "-Wformat-security"
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
 std::string disassemble(const Module& m) {
   std::string out;
   char buf[512];

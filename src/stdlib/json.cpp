@@ -498,7 +498,7 @@ E7_NATIVE(j_parse) {
   JParser p{vm, text->chars(), text->len};
   JNode root = p.parse();
   Builder b{vm, currentModule(vm), desc};
-  Slot v = b.build(&root, 0, "");
+  Slot v = b.build(&root, 0, "$");
   r->r = boxValue(vm, v, b.vtOfDesc(0) != VT_REF && desc[0] != '?' && desc[0] != '~' ? b.vtOfDesc(0) : VT_REF).r;
 }
 
