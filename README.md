@@ -1,6 +1,6 @@
 # e7vm — the E7 language and virtual machine
 
-**English** | [简体中文](README.zh-CN.md)
+**English** | [简体中文](README.zh-CN.md) · Website: [e7lang.github.io](https://e7lang.github.io)
 
 **E7** is a **strictly, statically typed subset of TypeScript**: every valid E7 program is also a valid
 TypeScript program. **e7vm** is a small embeddable bytecode VM written in C++17 for
