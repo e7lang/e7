@@ -66,7 +66,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: "21" }
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Ninja
@@ -106,7 +106,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: "21" }
       - uses: gradle/actions/setup-gradle@v4
       - uses: actions/download-artifact@v4
@@ -161,7 +161,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: "21" }
       - uses: gradle/actions/setup-gradle@v4
       - name: Build and stage org.e7vm:e7vm-android
@@ -212,7 +212,7 @@ jobs:
     name: android emulator (API ${{ matrix.api-level }}, x86_64)
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: "21" }
       - uses: gradle/actions/setup-gradle@v4
       - name: Enable KVM
@@ -237,6 +237,22 @@ jobs:
           disable-animations: true
           working-directory: platform/android
           script: ./gradlew --console=plain -Pe7.abis=x86_64 :library:connectedDebugAndroidTest
+      - name: Check that the instrumented tests ran
+        run: |
+          shopt -s globstar nullglob
+          files=(platform/android/library/build/outputs/androidTest-results/connected/**/TEST-*.xml)
+          [ ${#files[@]} -gt 0 ] || { echo "no instrumented test results" >&2; exit 1; }
+          python3 - "${files[@]}" <<'EOF'
+          import sys, xml.etree.ElementTree as ET
+          t = f = 0
+          for p in sys.argv[1:]:
+              for s in ET.parse(p).getroot().iter("testsuite"):
+                  t += int(s.get("tests", 0)); f += int(s.get("failures", 0)) + int(s.get("errors", 0))
+                  for c in s.iter("testcase"):
+                      print(s.get("hostname", ""), c.get("classname"), c.get("name"), "FAILED" if len(c) else "ok")
+          print(f"{t} instrumented tests, {f} failed")
+          sys.exit(1 if f or t < 9 else 0)
+          EOF
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -259,7 +275,7 @@ jobs:
       SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: "21" }
       - uses: gradle/actions/setup-gradle@v4
       - name: Version
