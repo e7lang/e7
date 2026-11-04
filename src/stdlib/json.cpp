@@ -1,4 +1,5 @@
 // JSON.stringify (JavaScript semantics) and typed JSON.parse (validating, descriptor-driven).
+#include <algorithm>
 #include <unordered_set>
 
 #include "util.h"
@@ -420,7 +421,7 @@ struct Builder {
       }
       case 'M': {
         if (v->t != JNode::Obj) fail(path, "expected an object");
-        uint8_t vvt = (d[p + 1] == '?' || d[p + 1] == '~') ? VT_REF : vtOfDesc(p + 1);
+        uint8_t vvt = (d[p + 1] == '?' || d[p + 1] == '~') ? (uint8_t)VT_REF : vtOfDesc(p + 1);
         MapObj* m = vm.newMap(VT_REF, vvt, KM_STR, false);
         for (auto& kv : v->obj) {
           Slot k;
@@ -456,7 +457,7 @@ struct Builder {
             if (kv.first == uname) { fv = &kv.second; break; }
           auto it = c->fieldIndex.find(name);
           if (it == c->fieldIndex.end()) vm.error("bad JSON descriptor field");
-          uint8_t want = (d[q] == '?' || d[q] == '~') ? VT_REF : vtOfDesc(q);
+          uint8_t want = (d[q] == '?' || d[q] == '~') ? (uint8_t)VT_REF : vtOfDesc(q);
           if (c->fieldVT[it->second] != want) vm.error("bad JSON descriptor field type");
           in->fields()[it->second] = build(fv, q, path + "." + name);
           q = skip(q);
@@ -477,7 +478,7 @@ struct Builder {
         InstObj* in = vm.newInstance(c);
         size_t q = c2 + 1;
         for (size_t k = 0; k < cnt; k++) {
-          uint8_t want = (d[q] == '?' || d[q] == '~') ? VT_REF : vtOfDesc(q);
+          uint8_t want = (d[q] == '?' || d[q] == '~') ? (uint8_t)VT_REF : vtOfDesc(q);
           if (c->fieldVT[k] != want) vm.error("bad JSON descriptor field type");
           in->fields()[k] = build(&v->arr[k], q, path + "[" + std::to_string(k) + "]");
           q = skip(q) + 1;
@@ -499,7 +500,7 @@ E7_NATIVE(j_parse) {
   JNode root = p.parse();
   Builder b{vm, currentModule(vm), desc};
   Slot v = b.build(&root, 0, "$");
-  r->r = boxValue(vm, v, b.vtOfDesc(0) != VT_REF && desc[0] != '?' && desc[0] != '~' ? b.vtOfDesc(0) : VT_REF).r;
+  r->r = boxValue(vm, v, b.vtOfDesc(0) != VT_REF && desc[0] != '?' && desc[0] != '~' ? b.vtOfDesc(0) : (uint8_t)VT_REF).r;
 }
 
 void registerJsonNatives(VM& vm) {

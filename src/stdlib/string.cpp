@@ -1,4 +1,5 @@
 // String natives (UTF-16 semantics, as in JavaScript).
+#include <algorithm>
 #include "util.h"
 
 namespace e7 {

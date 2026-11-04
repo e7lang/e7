@@ -1,5 +1,6 @@
 // e7:crypto natives on top of BearSSL (hashes, HMAC, HKDF, AES, ChaCha20-Poly1305, ECDSA, RSA)
 // and Monocypher (Ed25519 / X25519 primitives).
+#include <algorithm>
 #include <cstring>
 #include <memory>
 

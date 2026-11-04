@@ -1,4 +1,5 @@
 // Math natives (JavaScript semantics).
+#include <algorithm>
 #include "util.h"
 
 namespace e7 {

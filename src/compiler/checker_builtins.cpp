@@ -25,11 +25,6 @@ static Expr* mkStr(Program& P, Types& T, const std::u16string& s, Loc l) {
   e->type = T.string();
   return e;
 }
-static Expr* mkNull(Program& P, Types& T, Loc l) {
-  Expr* e = P.arena.expr(EK::Null, l);
-  e->type = T.nullT();
-  return e;
-}
 static Expr* mkBool(Program& P, Types& T, bool b, Loc l) {
   Expr* e = P.arena.expr(EK::Bool, l);
   e->bval = b;

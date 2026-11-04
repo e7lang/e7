@@ -1,4 +1,5 @@
 // Code generation: typed AST -> e7vm register bytecode.
+#include <algorithm>
 #include "codegen.h"
 
 #include <cmath>
@@ -316,7 +317,6 @@ struct Gen {
   void destructure(VarDecl& d, uint16_t src, Type* t);
   void genForOf(Stmt* s);
   void genSwitch(Stmt* s);
-  LoopCtx* findLoop(const std::string& label, bool forContinue);
 
   // expressions
   uint16_t gen(Expr* e);
@@ -343,7 +343,6 @@ struct Gen {
   void genObjectLit(Expr* e, uint16_t dst);
   void genConsoleLog(Expr* e);
   void genCallbackLoop(Expr* e, uint16_t dst);
-  void callFunc(FuncSym* f, uint16_t dst, const std::vector<uint16_t>& args, Type* ft, std::vector<Expr*>* argExprs);
   std::vector<uint16_t> genArgs(std::vector<Expr*>& args, Type* ft, bool restPacked, size_t* nGiven);
   void callClosure(uint16_t clo, Type* ft, const std::vector<uint16_t>& args, uint16_t dst);
   void boxIfNeeded(uint16_t dst, uint16_t src, Type* from, Type* to);
@@ -396,7 +395,7 @@ bool Gen::run(const std::string& name) {
   for (VarSym* g : P.globals) {
     GlobalDesc gd;
     gd.name = g->name;
-    gd.vt = g->type ? vtOf(g->type) : VT_REF;
+    gd.vt = g->type ? vtOf(g->type) : (uint8_t)VT_REF;
     if (g->type && g->type->t == TT::Unknown) gd.vt = VT_REF;
     M.globals.push_back(gd);
   }
@@ -602,7 +601,7 @@ void Gen::genFunctionOnce(FuncSym* f) {
   curFile = f->file;
   argcReg = kNoReg;
   emittedFieldInits = false;
-  for (VarSym* v : f->captures) D->upvalKinds.push_back((uint8_t)K_R);
+  D->upvalKinds.assign(f->captures.size(), (uint8_t)K_R);
   // upvalue kinds describe the *content* of the captured cells
   for (size_t i = 0; i < f->captures.size(); i++) D->upvalKinds[i] = (uint8_t)K(f->captures[i]->type);
   Loc start = f->declStmt ? f->declStmt->loc : f->arrow ? f->arrow->loc : f->body ? f->body->loc : Loc();
@@ -807,17 +806,6 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
     destructure(sub, r, et);
     release(m0);
   }
-}
-
-LoopCtx* Gen::findLoop(const std::string& label, bool forContinue) {
-  for (auto it = loops.rbegin(); it != loops.rend(); ++it) {
-    if (!label.empty()) {
-      if (it->label == label) return &*it;
-    } else if (forContinue ? it->isLoop : true) {
-      if (forContinue || it->isLoop || it->cont == nullptr) return &*it;
-    }
-  }
-  return nullptr;
 }
 
 void Gen::genStmt(Stmt* s) {
@@ -2248,23 +2236,6 @@ std::vector<uint16_t> Gen::genArgs(std::vector<Expr*>& args, Type* ft, bool rest
     }
   }
   return regs;
-}
-
-void Gen::callFunc(FuncSym* f, uint16_t dst, const std::vector<uint16_t>& args0, Type* ft, std::vector<Expr*>* argExprs) {
-  (void)ft;
-  (void)argExprs;
-  std::vector<uint16_t> args = args0;
-  if (f->hasDefaults) {
-    uint16_t ac = temp(K_I);
-    loadInt(ac, (int64_t)(f->isMethod || f->isCtor ? args.size() - 1 : args.size()));
-    // argc = number of explicitly given arguments (computed by caller below)
-    args.push_back(ac);
-  }
-  Kind rk = kindOf(f->type->ret);
-  uint16_t d = (rk == K_V) ? kNoReg : dst;
-  if (rk != K_V && dst == kNoReg) d = kNoReg;
-  emit(OP_CALL, d, (uint16_t)f->funcIdx, (uint16_t)args.size());
-  emitRegList(args);
 }
 
 void Gen::callClosure(uint16_t clo, Type* ft, const std::vector<uint16_t>& args, uint16_t dst) {
