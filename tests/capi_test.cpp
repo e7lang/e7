@@ -644,6 +644,50 @@ int main() {
     CHECK(e7_call(vm, m2, "small", nullptr, 0, &r) == E7_OK && r.v.num == 3);
     e7_vm_free(vm);
   }
+  // 0.2.5 (equivalence runs, budget slice 1): with suspension enabled, a native that charges its work
+  // up front (pbkdf2) failed with E7_ERR_BUDGET whenever the rest of the current slice was smaller than
+  // its work; it must complete and the call suspend at the next check instead. Without suspension the
+  // budget still stops it.
+  {
+    const char* src =
+        "import { pbkdf2 } from \"e7:crypto\";\n"
+        "import { hexEncode } from \"e7:encoding\";\n"
+        "export function derive(n: number): string {\n"
+        "  let t = 0;\n"
+        "  for (let i = 0; i < n; i++) t += i;\n"
+        "  const k = pbkdf2(\"sha256\", new TextEncoder().encode(\"pw\"), new TextEncoder().encode(\"salt\"), 3000, 32);\n"
+        "  for (let i = 0; i < n; i++) t += i;\n"
+        "  return hexEncode(k) + \":\" + t;\n"
+        "}\n";
+    std::vector<uint8_t> bc = compile(src);
+    e7_vm* plain = e7_vm_new(nullptr);
+    e7_module* pm = nullptr;
+    CHECK(e7_load(plain, bc.data(), bc.size(), &pm) == E7_OK);
+    e7_value n = num(50), r;
+    CHECK(e7_call(plain, pm, "derive", &n, 1, &r) == E7_OK && r.type == E7_STRING);
+    std::string want = r.type == E7_STRING ? std::string(r.v.str.ptr, r.v.str.len) : "";
+    e7_set_budget(plain, 1000);  // no suspension: the budget still stops the native
+    CHECK(e7_call(plain, pm, "derive", &n, 1, &r) == E7_ERR_BUDGET);
+    e7_vm_free(plain);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.suspend_on_budget = 1;
+    e7_vm* vm = e7_vm_new(&cfg);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    for (int64_t slice : {1, 7, 100, 2999}) {
+      e7_set_budget(vm, slice);
+      e7_status st = e7_call(vm, m, "derive", &n, 1, &r);
+      int slices = 1;
+      while (st == E7_SUSPENDED && slices < 100000) {
+        e7_set_budget(vm, slice);
+        st = e7_resume(vm, &r);
+        slices++;
+      }
+      CHECK(st == E7_OK && r.type == E7_STRING && std::string(r.v.str.ptr, r.v.str.len) == want);
+    }
+    e7_vm_free(vm);
+  }
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

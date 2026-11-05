@@ -152,9 +152,16 @@ class VM {
   uint64_t ticksUsed() const { return ticksBase_ + ticksSinceBudget(); }
   // Natives doing work proportional to a script-chosen parameter charge it against the instruction
   // budget up front (a native cannot be suspended halfway), so the budget also bounds them.
+  // With suspension enabled, a native called directly by script code cannot fail for want of budget
+  // (whether it did would depend on where the slice boundary falls): the work is charged, the budget
+  // may go negative, and the next budget check suspends, as for the costs charged after a call.
   void chargeWork(uint64_t ticks) {
     if (ticks > (uint64_t)budget_) {
       if (budgetStart_ == INT64_MAX) return;  // unlimited budget: never fails
+      if (cfg_.suspendOnBudget && nativeDepth_ <= 1) {
+        budget_ -= (int64_t)(ticks > (1ull << 40) ? (1ull << 40) : ticks);
+        return;
+      }
       budget_ = 0;
       errorCode(ERR_BUDGET, "instruction budget exhausted");
     }
