@@ -141,6 +141,15 @@ struct ClassSym : Sym {
   FuncSym* ctor = nullptr;
   std::unordered_map<std::string, FuncSym*> staticMethods;
   std::unordered_map<std::string, VarSym*> staticFields;
+  // static members are inherited as in JavaScript (B.x reads A.x through the prototype chain):
+  // the class whose static members are looked up next (the parent, or the static holder of a generic
+  // parent; for a generic class's holder, that of its `extends` clause)
+  ClassSym* staticParent = nullptr;
+  // inherited static fields written through this class (`B.x = v` creates an own property of B in
+  // JavaScript): hidden globals holding "B has its own x" and the value; reads through B and its
+  // subclasses test the flag first
+  struct StaticShadow { VarSym* has; VarSym* value; };
+  std::map<std::string, StaticShadow> staticShadows;
   std::vector<Type*> implements;
   Type* type = nullptr;
   int classIdx = -1;

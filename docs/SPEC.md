@@ -55,6 +55,9 @@ User-defined generics are supported (section 2.3).
 
 ### 2.2 Type inference and narrowing
 - Variables, return values, arrow function parameters (contextual typing), and object/array literals can all be inferred; an empty array `[]` needs an annotation or a contextual type.
+  As in tsc, an array literal destructured by an array pattern is a tuple when its elements have different types
+  (`const [n, s] = [1, "x"]` binds a `number` and a `string`; nested patterns and literals likewise); with elements of
+  compatible types it is an array. `as const` is not supported (annotate the type instead).
 - A recursive function that omits its return type is an error; an explicit annotation is required.
 - Narrowing: `x === null`, `x !== undefined`, `x == null`, truthiness checks `if (x)`, `instanceof`, combinations with `&&`/`||`/`!`,
   early `return/throw/break/continue`, `x ??= v`, and assignment. Property paths are supported (after `this.head !== null`, `this.head.next` can be used directly).
@@ -198,7 +201,9 @@ try {
 
 ### 4.4 Equality and logic
 - Only `===` / `!==` are allowed; `== null` / `!= null` are allowed as a special case meaning "is null or undefined".
-- Comparing types with no overlap (such as `string === number`) is a compile error (same as TS).
+- Comparing types with no overlap (such as `string === number`) is a compile error (same as TS). Any value can be compared
+  with `null` / `undefined` (also a non-nullable one, or a variable narrowed to a non-nullable type, as tsc accepts); the
+  result of such a comparison is known at compile time. A `void` value cannot be compared.
 - `&&` and `||` can be used with any type in conditions (by truthiness); in value position, `a || b` returns a value (types must be compatible), and `&&` is boolean only.
 - `??`, `??=`, `?.` (members, element access `a?.[i]`, method calls, function calls) are the same as JS.
 
@@ -223,7 +228,11 @@ try {
   `super.method()`, `implements` (checked structurally), `instanceof`. Method overrides require identical signatures.
   `public/private/protected` modifiers are accepted but not enforced. `readonly` is enforced at compile time as in TypeScript: a readonly
   field (or parameter property) can only be assigned through `this` in its own class's constructor, and a `static readonly` field only by its
-  initializer. Mutable static fields can be written with `=`, compound assignment and `++`/`--`. Writing an array's `length` truncates or
+  initializer. Mutable static fields can be written with `=`, compound assignment and `++`/`--`. Static fields, methods and accessors
+  are **inherited** as in JavaScript: `B.x` reads the static member of the nearest base class that has one; writing an inherited
+  static field through a subclass (`B.x = v`, compound assignment, `++`) gives that subclass its own copy (the base class keeps
+  its value), which the subclass and its own subclasses read from then on. `#private` static members are not inherited (as in
+  JavaScript, `B.#x` is an error). Writing an array's `length` truncates or
   extends it (`a.length = n`); compound assignment and `++`/`--` on `length` are not supported, and `length` of strings and `Uint8Array`
   is read-only. Members of an imported namespace (`import * as ns`) cannot be assigned.
   Arrow function fields can capture `this`.

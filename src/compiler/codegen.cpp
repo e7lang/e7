@@ -540,6 +540,7 @@ struct Gen {
   void writeVar(VarSym* v, uint16_t src);
   void genAssign(Expr* e, uint16_t dst);
   void storeTo(Expr* target, uint16_t valueReg);
+  void readStatic(Expr* e, uint16_t d);
   void genBinary(Expr* e, uint16_t dst);
   void binaryOp(const std::string& op, Type* lt, Type* rt, uint16_t dst, uint16_t a, uint16_t b, Loc l);
   void genEquality(Expr* e, uint16_t dst, bool negate);
@@ -820,31 +821,38 @@ void Gen::prologue(FuncSym* f) {
     r++;
   }
   D->nparams = r;
-  // default parameter values
-  if (f->hasDefaults && f->params) {
-    for (size_t i = 0; i < f->params->size(); i++) {
-      Param& p = (*f->params)[i];
-      if (!p.init) continue;
+  // captured parameters / this move into cells, each one after its default value is applied: a later
+  // default (or the body) may read it, or capture it in a closure
+  auto boxParam = [&](VarSym* v) {
+    if (!v->captured) return;
+    uint16_t pr = varReg[v];
+    uint16_t cell = allocReg(K_R);
+    emit(OP_NEWCELL, cell, vtOf(v->type));
+    static const uint16_t setOps[3] = {OP_CSET_I, OP_CSET_F, OP_CSET_R};
+    emit(setOps[K(v->type)], cell, pr);
+    varReg[v] = cell;
+    dbgOpen(v, cell, true, true);
+  };
+  if (f->thisVar && (f->isMethod || f->isCtor)) boxParam(f->thisVar);
+  for (size_t i = 0; i < f->paramSyms.size(); i++) {
+    VarSym* v = f->paramSyms[i];
+    Param* p = f->params && i < f->params->size() ? &(*f->params)[i] : nullptr;
+    // default parameter values
+    if (p && p->init && f->hasDefaults) {
       Label* skip = newLabel();
       size_t m0 = mark();
       uint16_t lim = temp(K_I), cmp = temp(K_I);
       loadInt(lim, (int64_t)i);
       emit(OP_LT_I, cmp, lim, argcReg);  // i < argc: argument was given
       jump(OP_JT, cmp, skip);
-      genInto(p.init, varReg[f->paramSyms[i]]);
+      genInto(p->init, varReg[v]);
       place(skip);
       release(m0);
     }
-  }
-  // closures: a default applies when the argument is undefined; the parameter register holds
-  // `T | undefined`, the variable T (its own register when the representation differs)
-  if (f->arrow && f->params) {
-    for (size_t i = 0; i < f->params->size() && i < f->paramSyms.size(); i++) {
-      Param& p = (*f->params)[i];
-      if (!p.init) continue;
-      Type* outer = f->type->params[i];
-      VarSym* v = f->paramSyms[i];
-      if (outer->t != TT::Optional || !outer->hasUndef) continue;  // never undefined: the default is unused
+    // closures: a default applies when the argument is undefined; the parameter register holds
+    // `T | undefined`, the variable T (its own register when the representation differs)
+    Type* outer = i < f->type->params.size() ? f->type->params[i] : nullptr;
+    if (p && p->init && f->arrow && outer && outer->t == TT::Optional && outer->hasUndef) {
       uint16_t pr = varReg[v];
       uint16_t vr = pr;
       if (K(outer) != K(v->type) || isBoxedOptional(outer) != isBoxedOptional(v->type)) {
@@ -859,25 +867,13 @@ void Gen::prologue(FuncSym* f) {
       emit(OP_ISUNDEF, c, pr);
       jump(OP_JF, c, given);
       release(m0);
-      genInto(p.init, vr);
+      genInto(p->init, vr);
       jump(OP_JMP, 0, done);
       place(given);
       unboxNarrowed(vr, pr, outer, v->type);
       place(done);
     }
-  }
-  // captured parameters / this move into cells
-  std::vector<VarSym*> ps = f->paramSyms;
-  if (f->thisVar && (f->isMethod || f->isCtor)) ps.insert(ps.begin(), f->thisVar);
-  for (VarSym* v : ps) {
-    if (!v->captured) continue;
-    uint16_t pr = varReg[v];
-    uint16_t cell = allocReg(K_R);
-    emit(OP_NEWCELL, cell, vtOf(v->type));
-    static const uint16_t setOps[3] = {OP_CSET_I, OP_CSET_F, OP_CSET_R};
-    emit(setOps[K(v->type)], cell, pr);
-    varReg[v] = cell;
-    dbgOpen(v, cell, true, true);
+    boxParam(v);
   }
 }
 
@@ -2494,6 +2490,37 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
   }
 }
 
+// A static field (Class.x). Read through a subclass (e->cls) of the class that declares it, it is the
+// first own copy that the classes in between have (created by `Sub.x = v`, as in JavaScript), else
+// the declaring class's.
+void Gen::readStatic(Expr* e, uint16_t d) {
+  std::vector<ClassSym::StaticShadow> chain;
+  for (ClassSym* k = e->cls; k; k = k->staticParent) {
+    auto f = k->staticFields.find(e->raw);
+    if (f != k->staticFields.end() && f->second == e->var) break;
+    auto sh = k->staticShadows.find(e->raw);
+    if (sh != k->staticShadows.end()) chain.push_back(sh->second);
+  }
+  if (chain.empty()) {
+    readVar(e->var, d, e->type);
+    return;
+  }
+  Label* end = newLabel();
+  for (auto& sh : chain) {
+    Label* next = newLabel();
+    size_t m0 = mark();
+    uint16_t c = temp(K_I);
+    readVar(sh.has, c, sh.has->type);
+    jump(OP_JF, c, next);
+    release(m0);
+    readVar(sh.value, d, e->type);
+    jump(OP_JMP, 0, end);
+    place(next);
+  }
+  readVar(e->var, d, e->type);
+  place(end);
+}
+
 // ======================================================================= assignment
 void Gen::storeTo(Expr* target, uint16_t v) {
   Expr* t = strip(target);
@@ -2503,7 +2530,19 @@ void Gen::storeTo(Expr* target, uint16_t v) {
       writeVar(t->var, v);
       break;
     case EK::Member: {
-      if (t->intrinsic == IN_STATIC_FIELD) { writeVar(t->var, v); break; }
+      if (t->intrinsic == IN_STATIC_FIELD) {
+        // an inherited static field written through a subclass: that class's own copy (see readStatic)
+        auto sh = t->cls ? t->cls->staticShadows.find(t->raw) : std::map<std::string, ClassSym::StaticShadow>::iterator();
+        if (t->cls && sh != t->cls->staticShadows.end()) {
+          writeVar(sh->second.value, v);
+          uint16_t one = temp(K_I);
+          loadInt(one, 1);
+          writeVar(sh->second.has, one);
+        } else {
+          writeVar(t->var, v);
+        }
+        break;
+      }
       if (isAccessorMember(t)) {
         uint16_t obj = accessorReceiver(t);
         accessorCall(t, obj, true, v, kNoReg);
@@ -2888,6 +2927,11 @@ void Gen::genEquality(Expr* e, uint16_t d, bool negate) {
     Expr* lit = lNull ? l : r;
     Expr* other = lNull ? r : l;
     uint16_t o = gen(other);
+    if (other->type->t != TT::Optional && kindOf(other->type) != K_R) {
+      // a number / boolean / integer (possibly a narrowed nullable variable) is never null or undefined
+      loadInt(d, negate ? 1 : 0);
+      return;
+    }
     uint16_t res = temp(K_I);
     if (loose) emit(OP_ISNULLISH, res, o);
     else if (lit->type->t == TT::Null) emit(OP_ISNULL, res, o);
@@ -4059,7 +4103,7 @@ void Gen::genMember(Expr* e, uint16_t d) {
   switch (e->intrinsic) {
     case IN_CONST_NUM: loadNum(d, e->num); return;
     case IN_CONST_STR: loadStr(d, e->str); return;
-    case IN_STATIC_FIELD: readVar(e->var, d, e->type); return;
+    case IN_STATIC_FIELD: readStatic(e, d); return;
     case IN_DIRECT: genClosure(e->callee, d); return;
     case IN_ARR_LEN: {
       uint16_t obj = gen(e->a);

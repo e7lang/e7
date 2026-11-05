@@ -243,6 +243,17 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
     if (ClassSym* c = classOf(s)) {
       resolveClass(c);
       if (name[0] == '#' && !checkPrivateAccess(m->nameLoc, name, c)) return T.unknown();
+      // static methods are inherited (looked up in the base classes; they have no `this`, so the call
+      // is the same through any subclass); #private ones are not
+      ClassSym* cn = c;
+      for (ClassSym* k = c; k && name[0] != '#'; k = k->staticParent) {
+        auto g = k->genericMethods.find(name);
+        if ((g != k->genericMethods.end() && g->second->isStatic) || k->staticMethods.count(name) ||
+            k->staticFields.count(name)) {
+          c = k;
+          break;
+        }
+      }
       auto gm = c->genericMethods.find(name);
       if (gm != c->genericMethods.end() && gm->second->isStatic) {
         // static generic method
@@ -270,7 +281,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
           e->intrinsic = IN_CLOSURE_CALL;
           return ft->ret;
         }
-        return errT(e->loc, "class '" + c->name + "' has no static method '" + name + "'");
+        return errT(e->loc, "class '" + cn->name + "' has no static method '" + name + "'");
       }
       FuncSym* f = it->second;
       resolveSig(f);

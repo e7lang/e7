@@ -934,16 +934,16 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     if (!kt && exp && exp->t == TT::Map) { kt = exp->key; vt = exp->val; }
     if (!args.empty()) {
       if (args.size() != 1) return errT(l, "new Map() takes at most one argument");
-      Type* pre = strip(args[0])->k == EK::Array ? T.unknown() : check(args[0], nullptr);
-      if (pre->t == TT::Map) {
-        if (kt && (pre->key != kt || pre->val != vt)) return errT(args[0]->loc, "Map type mismatch in copy constructor");
-        e->intrinsic = IN_NATIVE_NORECV;
-        e->native = "Map.copy";
-        return pre;
-      }
-      args[0]->type = nullptr;
+      // checked once (checking an expression again is not idempotent), with the entries array as the
+      // contextual type; the result may also be a Map (copy constructor)
       Type* want = kt ? T.array(T.tuple({kt, vt})) : nullptr;
       Type* at = check(args[0], want);
+      if (at->t == TT::Map) {
+        if (kt && (at->key != kt || at->val != vt)) return errT(args[0]->loc, "Map type mismatch in copy constructor");
+        e->intrinsic = IN_NATIVE_NORECV;
+        e->native = "Map.copy";
+        return at;
+      }
       if (!kt) {
         if (at->t == TT::Array && at->elem->t == TT::Tuple && at->elem->elems.size() == 2) {
           kt = at->elem->elems[0];
@@ -967,15 +967,15 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     if (!et && exp && exp->t == TT::Set) et = exp->elem;
     if (!args.empty()) {
       if (args.size() != 1) return errT(l, "new Set() takes at most one argument");
-      Type* pre = strip(args[0])->k == EK::Array ? T.unknown() : check(args[0], nullptr);
-      if (pre->t == TT::Set) {
-        if (et && pre->elem != et) return errT(args[0]->loc, "Set type mismatch in copy constructor");
+      // checked once (checking an expression again is not idempotent), with the array as the contextual
+      // type; the result may also be a Set (copy constructor)
+      Type* at = check(args[0], et ? T.array(et) : nullptr);
+      if (at->t == TT::Set) {
+        if (et && at->elem != et) return errT(args[0]->loc, "Set type mismatch in copy constructor");
         e->intrinsic = IN_NATIVE_NORECV;
         e->native = "Map.copy";
-        return pre;
+        return at;
       }
-      args[0]->type = nullptr;
-      Type* at = check(args[0], et ? T.array(et) : nullptr);
       if (!et) {
         if (at->t != TT::Array) return errT(args[0]->loc, "new Set(x) expects an array");
         et = at->elem;

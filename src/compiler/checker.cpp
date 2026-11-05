@@ -887,6 +887,16 @@ void Checker::resolveClass(ClassSym* c) {
       c->methodIdx = pt->cls->methodIdx;
     }
   }
+  // static members are looked up in the base class next (a generic base: its static holder)
+  if (d->extends) {
+    ClassSym* sp = c->parent;
+    if (holder && d->extends->k == TNK::Ref) sp = classOf(lookup(d->extends->name));
+    if (sp && sp->genericRole == 2 && sp->origin) sp = sp->origin->holder;
+    if (sp && sp != c && sp->state != 1) {
+      resolveClass(sp);
+      c->staticParent = sp;
+    }
+  }
   for (TypeNode* im : d->implements) {
     if (holder) break;
     Type* it = resolveType(im);

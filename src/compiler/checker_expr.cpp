@@ -871,12 +871,10 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
     bool lNull = isNullish(lt), rNull = isNullish(rt);
     if (loose && !lNull && !rNull) return errT(e->loc, "use '" + std::string(op == "==" ? "===" : "!==") + "' instead of '" + op + "'");
     if (lNull || rNull) {
+      // tsc accepts comparing any value with null / undefined (also a variable narrowed to a non-nullable
+      // type, or a non-nullable one): the result is then known, but the program is valid
       Type* other = lNull ? rt : lt;
-      if (isNullish(other)) return T.boolean();
-      if (other->t != TT::Optional) {
-        return errT(e->loc, "this comparison is always " + std::string(op[0] == '=' ? "false" : "true") + ": '" +
-                                typeName(other) + "' cannot be null or undefined");
-      }
+      if (other->t == TT::Void) return errT(e->loc, "an expression of type 'void' cannot be compared");
       return T.boolean();
     }
     Type* lb = baseOf(lt);
@@ -1288,6 +1286,24 @@ Type* Checker::checkAccessor(Expr* e, ClassSym* c, const std::string& name, bool
   return t;
 }
 
+// `B.x = v` where x is a static field of a base class: in JavaScript the assignment creates an own
+// property x of B (the base class keeps its value), read from then on through B and its subclasses
+void Checker::staticShadow(ClassSym* c, const std::string& name, VarSym* inherited) {
+  if (c->staticShadows.count(name)) return;
+  auto global = [&](const std::string& n, Type* t) {
+    VarSym* v = newVar(n, t, false, inherited->loc);
+    v->isGlobal = true;
+    v->owner = nullptr;
+    v->globalIdx = (int)P.globals.size();
+    P.globals.push_back(v);
+    return v;
+  };
+  ClassSym::StaticShadow sh;
+  sh.has = global(c->name + "." + name + " (own)", T.boolean());
+  sh.value = global(c->name + "." + name, inherited->type ? inherited->type : T.unknown());
+  c->staticShadows[name] = sh;
+}
+
 Type* Checker::checkMember(Expr* e, Type* expected) {
   Expr* obj = strip(e->a);
   const std::string& name = e->raw;
@@ -1311,15 +1327,25 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
     if (ClassSym* c = classOf(s)) {
       resolveClass(c);
       if (name[0] == '#' && !checkPrivateAccess(e->nameLoc, name, c)) return T.unknown();
-      auto it = c->staticFields.find(name);
-      if (it != c->staticFields.end()) {
-        e->intrinsic = IN_STATIC_FIELD;
-        e->var = it->second;
-        if (!it->second->type) globalVarType(it->second);
-        return it->second->type ? it->second->type : T.unknown();
+      // own static members first, then the base classes' (as JavaScript reads them through the prototype
+      // chain); #private static members are not inherited
+      for (ClassSym* k = c; k; k = name[0] == '#' ? nullptr : k->staticParent) {
+        auto it = k->staticFields.find(name);
+        if (it != k->staticFields.end()) {
+          e->intrinsic = IN_STATIC_FIELD;
+          e->var = it->second;
+          if (!it->second->type) globalVarType(it->second);
+          Type* t = it->second->type ? it->second->type : T.unknown();
+          if (k != c) {
+            // inherited: read through the classes in between, which may have their own copy
+            e->cls = c;
+            if (e == lvalueTarget && lvalueMode >= 1 && !it->second->isConst) staticShadow(c, name, it->second);
+          }
+          return t;
+        }
+        if (Type* at = checkAccessor(e, k, name, true)) return at;
+        if (k->staticMethods.count(name)) return errT(e->loc, "static methods cannot be used as values; wrap in an arrow function");
       }
-      if (Type* at = checkAccessor(e, c, name, true)) return at;
-      if (c->staticMethods.count(name)) return errT(e->loc, "static methods cannot be used as values; wrap in an arrow function");
       return errT(e->loc, "class '" + c->name + "' has no static member '" + name + "'");
     }
   }
