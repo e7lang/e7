@@ -41,7 +41,8 @@ private func seed(_ base: UInt8) -> Data { Data((0..<32).map { base &+ UInt8($0)
 
 final class E7VMTests: XCTestCase {
   func testVersion() {
-    XCTAssertTrue(E7VM.version.hasPrefix("1."), E7VM.version)
+    // "major.minor.patch"; the exact value is checked against CMakeLists.txt by scripts/check-versions.py
+    XCTAssertNotNil(E7VM.version.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression), E7VM.version)
   }
 
   func testCompileLoadCallString() throws {
