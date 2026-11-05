@@ -9,6 +9,9 @@ if(Python3_FOUND)
     add_test(NAME language_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_tests.py --e7 $<TARGET_FILE:e7> --node ${NODE_EXECUTABLE})
   endif()
   if(TARGET e7 AND TARGET e7c)
+    # the AI skill (skills/e7): every code block / example must behave as the skill claims
+    add_test(NAME skill_check COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/skill/check_skill.py
+             --e7 $<TARGET_FILE:e7> --e7c $<TARGET_FILE:e7c> --root ${CMAKE_SOURCE_DIR})
     # `e7 test` runner and CLI diagnostics (source excerpts)
     add_test(NAME cli_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli/cli_test.py --e7 $<TARGET_FILE:e7> --e7c $<TARGET_FILE:e7c>)
   endif()
