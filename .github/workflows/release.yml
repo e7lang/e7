@@ -2,8 +2,8 @@ name: Release
 
 # Builds prebuilt e7 / e7c binaries + static libraries for every desktop platform and
 # attaches them to a GitHub Release. Start it either way:
-#   - push a version tag:  git tag v1.0.0 && git push origin v1.0.0
-#   - or on GitHub: Releases -> Draft a new release -> new tag v1.0.0 -> Publish
+#   - push a version tag:  git tag v0.1.0 && git push origin v0.1.0
+#   - or on GitHub: Releases -> Draft a new release -> new tag v0.1.0 -> Publish
 # Run it manually (workflow_dispatch) to build the archives without publishing.
 on:
   push:
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Publish a release with this new tag (e.g. v1.0.0) at the selected commit; empty = build only"
+        description: "Publish a release with this new tag (e.g. v0.1.0) at the selected commit; empty = build only"
         required: false
         default: ""
 

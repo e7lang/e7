@@ -173,7 +173,7 @@ Kotlin, Swift and C# use the same flow: create the VM (optionally with a trusted
 then `call("sign", ...)`. In Swift, add the package with Swift Package Manager and call it directly:
 
 ```swift
-// Package.swift: .package(url: "https://github.com/e7lang/e7.git", from: "1.0.2")
+// Package.swift: .package(url: "https://github.com/e7lang/e7.git", from: "0.1.0")
 //                .product(name: "E7VM", package: "e7")
 import E7VM
 
@@ -187,7 +187,7 @@ On Android, add the AAR from Maven:
 
 ```kotlin
 dependencies {
-    implementation("org.e7vm:e7vm-android:1.0.2")   // or org.e7vm:e7vm:1.0.2 for desktop JVMs
+    implementation("org.e7vm:e7vm-android:0.1.0")   // or org.e7vm:e7vm:0.1.0 for desktop JVMs
 }
 ```
 
@@ -323,7 +323,7 @@ The full language reference is in [docs/SPEC.md](docs/SPEC.md).
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
 | Android | Maven `org.e7vm:e7vm-android` (AAR), or `cd platform/android && ./gradlew :library:assembleRelease`, or `ANDROID_NDK_HOME=... platform/android/build_android.sh` | Java/Kotlin: `platform/java/org/e7vm` |
 | JVM (desktop) | Maven `org.e7vm:e7vm` (jar with JNI libraries for Linux, macOS, Windows) | Java/Kotlin: `platform/java/org/e7vm` |
-| iOS / macOS (Swift) | Swift Package Manager: `.package(url: "https://github.com/e7lang/e7.git", from: "1.0.2")`, or `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `.product(name: "E7VM", package: "e7")` (`platform/ios/E7VM/E7VM.swift`) |
+| iOS / macOS (Swift) | Swift Package Manager: `.package(url: "https://github.com/e7lang/e7.git", from: "0.1.0")`, or `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `.product(name: "E7VM", package: "e7")` (`platform/ios/E7VM/E7VM.swift`) |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]` (VS 2022) | C/C++, C#: `platform/windows/E7VM.cs` |
 | .NET (Windows / Linux / macOS) | `dotnet add package E7VM` | C#: NuGet package [`E7VM`](https://www.nuget.org/packages/E7VM) |
 | WebAssembly (Node.js, browsers) | `emcmake cmake -S . -B build-wasm && cmake --build build-wasm` → `e7wasm.js` + `e7wasm.wasm` | JavaScript: npm `@e7lang/e7` ([packages/e7](packages/e7)) |
@@ -338,12 +338,14 @@ CMake options:
 | `E7_SANITIZE` | ASan + UBSan |
 | `E7_NO_COMPUTED_GOTO` | Use switch dispatch |
 
-## Security and production readiness
+## Security and status
 
 e7vm is built for running code that comes over the network. Before release it went through four
-independent security reviews, differential testing against Node.js/OpenSSL, sanitizers, and fuzzing,
-and every finding was fixed with a regression test. The evidence is in
-[docs/PRODUCTION.md](docs/PRODUCTION.md). Recommendations for apps:
+security reviews (each by a separate AI review agent; no third-party audit yet), differential testing
+against Node.js/OpenSSL, sanitizers, and fuzzing, and every finding was fixed with a regression test. The
+evidence is in [docs/PRODUCTION.md](docs/PRODUCTION.md). E7 is **0.x**: thoroughly tested and hardened, but it
+has not yet run in production, and minor releases may change the language, the C API or the bytecode format
+(see [CHANGELOG.md](CHANGELOG.md)). Recommendations for apps:
 
 1. **If scripts are downloaded at runtime, turn on signature checking** (`require_signature` plus the public key built into the app) and keep the private key on the build server.
 2. **Set an instruction budget and a memory limit** (for example 16–64 MiB).
@@ -412,7 +414,7 @@ tests/ bench/ docs/                            third_party/     BearSSL (MIT), M
 - [docs/BYTECODE.md](docs/BYTECODE.md): `.e7b` format, instruction set, verification rules, signature format
 - [docs/DEBUGGING.md](docs/DEBUGGING.md): `e7 debug`, debug information, the C debug API and the WebAssembly JSON protocol
 - [docs/DESIGN.md](docs/DESIGN.md): design and decision record
-- [docs/PRODUCTION.md](docs/PRODUCTION.md): production-readiness checklist with evidence
+- [docs/PRODUCTION.md](docs/PRODUCTION.md): verification record (tests, reviews and evidence)
 
 ## License
 

@@ -1,6 +1,6 @@
-# E7 Language and e7vm Virtual Machine Design (v1.0, implemented)
+# E7 Language and e7vm Virtual Machine Design (0.1, implemented)
 
-> **Implementation status (v1.0)**: Everything in this document has been implemented. For implementation details, [SPEC.md](SPEC.md), [BYTECODE.md](BYTECODE.md)
+> **Implementation status (0.1)**: Everything in this document has been implemented. For implementation details, [SPEC.md](SPEC.md), [BYTECODE.md](BYTECODE.md)
 > and [EMBEDDING.md](EMBEDDING.md) are authoritative. Changes from the original plan:
 > - Strings are always stored as UTF-16 (no dual Latin-1 representation; concatenation in loops is kept correct by a native implementation; see the README for performance).
 > - Instructions are fixed-width 64-bit (`op:16 A:16 B:16 C:16`) with up to 65535 registers, which is roomier than the originally planned 32-bit encoding.

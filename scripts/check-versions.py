@@ -26,6 +26,8 @@ found = {
     "editors/vscode/package.json": json.loads((root / "editors/vscode/package.json").read_text())["version"],
     ".claude-plugin/plugin.json": json.loads((root / ".claude-plugin/plugin.json").read_text())["version"],
     "platform/dotnet/E7VM/E7VM.csproj": grab("platform/dotnet/E7VM/E7VM.csproj", r"<Version>([^<]+)</Version>"),
+    "include/e7/e7.h (E7_VERSION_*)": ".".join(
+        grab("include/e7/e7.h", rf"^#define E7_VERSION_{part} (\d+)") for part in ("MAJOR", "MINOR", "PATCH")),
 }
 want = sys.argv[1].lstrip("v") if len(sys.argv) > 1 else found["CMakeLists.txt"]
 bad = {k: v for k, v in found.items() if v != want}

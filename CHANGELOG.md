@@ -3,112 +3,60 @@
 All notable changes to E7 / e7vm are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+**Versioning while E7 is 0.x**: a minor release (0.1 → 0.2) may contain incompatible changes to the language,
+the C API or the bytecode format; each one is listed under *Changed* or *Removed* with what to do. A patch
+release (0.1.0 → 0.1.1) is compatible. The bytecode format keeps its own version number in the `.e7b` header,
+and a VM rejects a module it cannot run at load time rather than running it incorrectly.
+
 ## [Unreleased]
 
-## [1.0.2] - 2026-11-05
+## [0.1.0] - 2026-11-05
 
-### Added
-- **E7 skill for AI assistants** (`skills/e7`): what E7 supports and rejects compared with TypeScript, with
-  rewrites, the standard library, testing, embedding, and a compile-check workflow. Every code block is checked
-  against the compiler in CI (`skill_check`). Install in Claude Code with `/plugin marketplace add e7lang/e7` and
-  `/plugin install e7@e7lang`; releases attach `e7-skill.zip` for claude.ai, the Claude API and other tools.
-- **`e7:json` module**: `tryParse(text) as T | null` parses and validates like `JSON.parse(text) as T` but returns
-  `null` for malformed or mismatching input instead of terminating; `lastError()` gives the reason (for example
-  `expected a number at $.amount`). Budget and memory exhaustion are still errors.
-- **Debugger** ([docs/DEBUGGING.md](docs/DEBUGGING.md)):
-  - Optional debug information in bytecode (`e7c --debug`, always when running from source, `e7_compile_ex` with
-    `E7_COMPILE_DEBUG`): columns, statement boundaries, local / parameter / captured variable names. Stored as a
-    line-table extension that older VMs skip.
-  - C debug API (`e7_debug_*`): breakpoints by file and line, step in / over / out, pause from any thread, stops on
-    runtime errors and `debugger;`, call stack, scopes, expandable variables, path evaluation; synchronous
-    callback or pause-to-host (`E7_PAUSED`, `e7_debug_resume`). No cost without an attached debugger.
-  - `e7 debug`: a command-line debugger.
-  - WebAssembly: `e7w_compile_ex` and the `e7w_dbg_*` session API with JSON events for debug adapters.
-  - **VS Code debugging**: the E7 extension contributes the `e7` debug type (F5 on an E7 file, *E7: Debug File*,
-    launch configurations with `program`, `call`, `args`, `stopOnEntry`, `budget`, `memoryLimit`): breakpoints,
-    stepping, pause, call stack, variables, watch / hover evaluation, `debugger;` and runtime-error stops. An
-    inline debug adapter drives the WebAssembly VM in a worker thread.
-  - `@e7lang/e7`: `createDebugSession()` (promise-based debug session over the WebAssembly protocol, time-sliced so
-    that `pause()` works) and a `debug` compile option.
-- `debugger;` statement (`DEBUGGER` instruction; a no-op without a debugger).
+First public release. Earlier builds were published as 1.0.0–1.0.2 and have been withdrawn: E7 has been
+tested and hardened but has not yet run in production, so it is versioned 0.x until it has.
 
-### Fixed
-- `JSON.parse(...) as T` accepted 2^63 for `i64` and 2^64 for `u64` fields (the limits were compared as doubles);
-  both are now out of range.
-
-### Changed
-- `JSON.parse` / `tryParse`: the temporary parse tree now counts toward the VM memory limit (`E7_ERR_MEMORY`
-  instead of unbounded native memory for huge documents); type errors in `JSON.parse(...) as T` point at the expression.
-- Runtime error stack traces show columns (`at f (file.ts:12:5)`) for modules with debug information, which
-  includes every program run from source with `e7` / `e7 test`. Release bytecode keeps `file:line`.
-
-## [1.0.1] - 2026-11-04
-
-### Added
-- **Packages for every platform**
-  - Swift Package Manager: `.package(url: "https://github.com/e7lang/e7.git", from: "1.0.1")`, product `E7VM`
-    (built from source; XCTest suite on macOS and the iOS simulator).
-  - Android AAR `org.e7vm:e7vm-android` and desktop JVM jar `org.e7vm:e7vm` (JNI libraries for Linux x64/arm64,
-    macOS, Windows bundled and loaded automatically); tested on desktop JVMs and an Android emulator.
-  - NuGet package `E7VM` with native libraries for win-x64, linux-x64, linux-arm64, osx-arm64 and osx-x64.
-  - npm package `@e7lang/e7`: the compiler and VM as WebAssembly for Node.js 18+ and browsers
-    (`compile`, `check`, `run`, `disassemble`), plus the `e7-js` command line tool.
-  - Homebrew formula and Scoop manifest for the `e7` / `e7c` command line tools.
-- **VS Code extension "E7 Language"**: diagnostics from the E7 compiler as you type, *Run File*,
-  *Compile to Bytecode* and *Show Bytecode* commands; works on `*.e7` files and `.ts` files that import `e7:` modules.
-- **Test runner** `e7 test` and the `e7:test` module (`assert`, `assertEqual`, `assertNotEqual`, `assertClose`,
-  `assertThrows`, `fail`): every test runs in a fresh VM with its own budget and memory limit; `--filter`, `--json`.
-- **Better diagnostics**: "did you mean ...?" suggestions for unknown names, properties, methods, enum members,
-  imports and modules; clearer messages naming the alternative for unsupported TypeScript features (`any`,
-  generics, `try`/`catch`, `async`, `for...in`, regular expressions, accessors); `e7` / `e7c` show the source line
-  with a caret.
-- **Better stack traces**: correct file names for frames in imported modules, native frames
-  (`at JSON.parse (native)`), and long recursion collapsed into one line.
-- Swift wrapper: `E7VM.sign`, `E7VM.publicKey`, `E7VM.version`, `hasFunction`, `collectGarbage`.
-- Fuzzing: libFuzzer targets for the loader and the compiler (`fuzz/`), ClusterFuzzLite with ASan and UBSan on pull
-  requests and nightly, and a replay of the fuzz entry points over the test corpora in every CI job.
-- Release automation: optional macOS signing + notarization and Windows Authenticode signing (enabled by secrets);
-  packages published from the release workflow; post-release install checks with Homebrew and Scoop.
-- Project docs: `CHANGELOG.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue forms, PR template;
-  CI checks that version numbers and the SwiftPM/CMake source lists agree.
-
-### Fixed
-- Compiler crash (found by the new fuzzers) on compound assignment to an array's `length` (`a.length -= 1`); it is now a
-  compile error with a suggested rewrite. `++`/`--` on `length` produced wrong code and are rejected the same way.
-- Writes that TypeScript rejects are now compile errors instead of being accepted: `length` of strings and `Uint8Array`,
-  `readonly` fields and parameter properties outside their constructor, `static readonly` fields, members of an
-  imported namespace, and `++`/`--` on built-in properties such as `Map.size` or `Math.PI` (which previously produced
-  invalid bytecode that the verifier rejected).
-- Plain assignment to a mutable static field (`Counter.count = 0`) was wrongly rejected.
-- Swift wrapper: the key provider handed the VM a pointer into a temporary Swift array; keys are now copied into a
-  buffer owned by the VM wrapper and wiped before reuse.
-- `-DE7_FUZZ=ON` referenced a missing `fuzz/` directory.
-
-### Changed
-- The C# binding's managed assembly is named `E7.dll` (namespace `E7`) so it cannot collide with the native
-  `e7vm.dll` on case-insensitive file systems; the NuGet package id is `E7VM`.
-- Imports from built-in modules are checked where the import is written.
-
-## [1.0.0] - 2026-11-04
-
-First public release.
-
+### Language and VM
 - **Language**: E7, a strict subset of TypeScript (every E7 program passes `tsc --strict` and prints the
   same output on Node.js): classes, interfaces, enums, tuples, closures, destructuring, spread, `?.`, `??`,
   template strings, multi-file modules, `Map`/`Set`, `Uint8Array`, `bigint`, `Date`, type-checked
-  `JSON.parse(text) as T`, and fixed-width integers `i8`…`u64`.
+  `JSON.parse(text) as T`, fixed-width integers `i8`…`u64`, and `debugger;`.
 - **e7vm**: register-based bytecode VM in C++17 with a bytecode verifier, precise GC, inline caches,
   instruction budget (including native calls), memory and call-depth limits, suspend/resume.
 - **Crypto and encodings** (`e7:crypto`, `e7:encoding`): SHA-1/2/3, MD5, HMAC, HKDF, PBKDF2, AES-GCM/CBC/CTR,
   ChaCha20-Poly1305, Ed25519, X25519, ECDSA P-256/384/521, RSA PKCS#1 v1.5 and PSS; hex, base64(url),
   base32, UTF-8, PEM. `KeyHandle` keeps keys in the host.
+- **`e7:json`**: `tryParse(text) as T | null` parses and validates like `JSON.parse(text) as T` but returns
+  `null` for malformed or mismatching input instead of terminating; `lastError()` gives the reason.
 - **Optional Ed25519 module signatures** (`e7c --sign`, `trusted_keys` / `require_signature`).
-- **Embedding**: C API, Kotlin/Java (JNI), Swift and C# bindings; Android, iOS, Windows, macOS and Linux builds.
-- **Tools**: `e7` (run), `e7c` (compile, sign, disassemble), prebuilt binaries for Linux x64/arm64,
-  macOS universal and Windows x64.
+- **Diagnostics**: "did you mean ...?" suggestions, messages naming the alternative for unsupported TypeScript
+  features (`any`, generics, `try`/`catch`, `async`, `for...in`, regular expressions, accessors), source line
+  with a caret; stack traces with file names across modules, native frames, columns when debug information is
+  present, and long recursion collapsed into one line.
+
+### Tools
+- `e7` (run, `e7 test`, `e7 debug`) and `e7c` (compile, sign, disassemble); prebuilt binaries for Linux
+  x64/arm64, macOS universal and Windows x64; Homebrew formula and Scoop manifest.
+- **Test runner** `e7 test` and the `e7:test` module (`assert`, `assertEqual`, `assertNotEqual`, `assertClose`,
+  `assertThrows`, `fail`): every test runs in a fresh VM with its own budget and memory limit; `--filter`, `--json`.
+- **Debugger** ([docs/DEBUGGING.md](docs/DEBUGGING.md)): optional debug information (`e7c --debug`), a C debug API
+  (`e7_debug_*`: breakpoints, stepping, pause, call stack, variables, evaluation), the `e7 debug` command-line
+  debugger, and a WebAssembly debug session API.
+- **VS Code extension "E7 Language"**: diagnostics as you type, *Run File*, *Compile to Bytecode*, *Show
+  Bytecode*, and debugging (F5) on the bundled WebAssembly VM.
+- **E7 skill for AI assistants** (`skills/e7`), checked against the compiler in CI. Claude Code:
+  `/plugin marketplace add e7lang/e7`, then `/plugin install e7@e7lang`; other tools: `e7-skill.zip`.
 - **Website** with docs and an in-browser playground (WebAssembly): https://e7lang.github.io
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v1.0.2...HEAD
-[1.0.2]: https://github.com/e7lang/e7/compare/v1.0.1...v1.0.2
-[1.0.1]: https://github.com/e7lang/e7/compare/v1.0.0...v1.0.1
-[1.0.0]: https://github.com/e7lang/e7/releases/tag/v1.0.0
+### Embedding and packages
+- C API; Kotlin/Java (JNI), Swift and C# bindings; Android, iOS, Windows, macOS and Linux builds.
+- Swift Package Manager (`.package(url: "https://github.com/e7lang/e7.git", from: "0.1.0")`, product `E7VM`),
+  Android AAR `org.e7vm:e7vm-android` and JVM jar `org.e7vm:e7vm`, NuGet package `E7VM`, npm package
+  `@e7lang/e7` (compiler, VM and debug session as WebAssembly for Node.js 18+ and browsers).
+
+### Verification
+- Differential tests against Node.js 22, `tsc --strict` checks, C API, debugger and locale tests, binding tests
+  on an Android emulator, the iOS simulator, JVMs and .NET; libFuzzer targets for the loader and compiler with
+  ClusterFuzzLite (ASan + UBSan) on pull requests and nightly. See [docs/PRODUCTION.md](docs/PRODUCTION.md).
+
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/e7lang/e7/releases/tag/v0.1.0

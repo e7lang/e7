@@ -169,7 +169,7 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 Swift 项目可直接通过 Swift Package Manager 引入：
 
 ```swift
-// Package.swift：.package(url: "https://github.com/e7lang/e7.git", from: "1.0.2")
+// Package.swift：.package(url: "https://github.com/e7lang/e7.git", from: "0.1.0")
 //                .product(name: "E7VM", package: "e7")
 import E7VM
 
@@ -183,7 +183,7 @@ Android 直接从 Maven 引入 AAR：
 
 ```kotlin
 dependencies {
-    implementation("org.e7vm:e7vm-android:1.0.2")   // 桌面 JVM 用 org.e7vm:e7vm:1.0.2
+    implementation("org.e7vm:e7vm-android:0.1.0")   // 桌面 JVM 用 org.e7vm:e7vm:0.1.0
 }
 ```
 
@@ -316,7 +316,7 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
 | Android | Maven `org.e7vm:e7vm-android`（AAR），或 `cd platform/android && ./gradlew :library:assembleRelease`，或 `ANDROID_NDK_HOME=... platform/android/build_android.sh` | Java/Kotlin：`platform/java/org/e7vm` |
 | JVM（桌面） | Maven `org.e7vm:e7vm`（jar 内含 Linux、macOS、Windows 的 JNI 库） | Java/Kotlin：`platform/java/org/e7vm` |
-| iOS / macOS（Swift） | Swift Package Manager：`.package(url: "https://github.com/e7lang/e7.git", from: "1.0.2")`，或 `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`.product(name: "E7VM", package: "e7")`（`platform/ios/E7VM/E7VM.swift`） |
+| iOS / macOS（Swift） | Swift Package Manager：`.package(url: "https://github.com/e7lang/e7.git", from: "0.1.0")`，或 `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`.product(name: "E7VM", package: "e7")`（`platform/ios/E7VM/E7VM.swift`） |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]`（VS 2022） | C/C++、C#：`platform/windows/E7VM.cs` |
 | .NET（Windows / Linux / macOS） | `dotnet add package E7VM` | C#：NuGet 包 [`E7VM`](https://www.nuget.org/packages/E7VM) |
 | WebAssembly（Node.js、浏览器） | `emcmake cmake -S . -B build-wasm && cmake --build build-wasm` → `e7wasm.js` + `e7wasm.wasm` | JavaScript：npm `@e7lang/e7`（[packages/e7](packages/e7)） |
@@ -331,11 +331,12 @@ CMake 选项：
 | `E7_SANITIZE` | 开启 ASan + UBSan |
 | `E7_NO_COMPUTED_GOTO` | 使用 switch 分派 |
 
-## 安全与生产就绪
+## 安全与当前状态
 
-e7vm 就是为运行从网络下发的代码而设计的。发布前经过了 4 轮独立安全审查、与 Node.js/OpenSSL 的差分测试、
-sanitizer 和模糊测试，所有发现的问题都已修复并配有回归测试。证据见 [docs/PRODUCTION.md](docs/PRODUCTION.md)。
-对 App 的建议：
+e7vm 就是为运行从网络下发的代码而设计的。发布前经过了 4 轮安全审查（每轮由单独运行的 AI 审查代理完成，尚未做第三方审计）、
+与 Node.js/OpenSSL 的差分测试、sanitizer 和模糊测试，所有发现的问题都已修复并配有回归测试。证据见 [docs/PRODUCTION.md](docs/PRODUCTION.md)。
+E7 目前是 **0.x** 版本：已完成全面测试和安全加固，但还没有在生产环境中运行过；次版本升级可能改动语言、C API 或字节码格式
+（见 [CHANGELOG.md](CHANGELOG.md)）。对 App 的建议：
 
 1. **如果脚本是在运行时从网络下载的，开启签名校验**（`require_signature` + 内置在 App 里的公钥），私钥只放在构建服务器上。
 2. **设置指令预算和内存上限**（例如 16–64 MiB）。
@@ -404,7 +405,7 @@ tests/ bench/ docs/                            third_party/     BearSSL（MIT）
 - [docs/BYTECODE.md](docs/BYTECODE.md)：`.e7b` 格式、指令集、验证规则、签名格式
 - [docs/DEBUGGING.md](docs/DEBUGGING.md)：`e7 debug`、调试信息、C 调试 API 与 WebAssembly JSON 协议
 - [docs/DESIGN.md](docs/DESIGN.md)：设计方案与决策记录
-- [docs/PRODUCTION.md](docs/PRODUCTION.md)：生产就绪检查清单（验证项与证据）
+- [docs/PRODUCTION.md](docs/PRODUCTION.md)：验证记录（测试、审查与证据）
 
 ## 许可
 

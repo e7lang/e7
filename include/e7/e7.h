@@ -30,8 +30,8 @@ extern "C" {
 #  define E7_API
 #endif
 
-#define E7_VERSION_MAJOR 1
-#define E7_VERSION_MINOR 0
+#define E7_VERSION_MAJOR 0
+#define E7_VERSION_MINOR 1
 #define E7_VERSION_PATCH 0
 
 typedef struct e7_vm e7_vm;

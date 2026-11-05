@@ -1,4 +1,4 @@
-# E7 Language Specification (v1.0)
+# E7 Language Specification (0.1)
 
 E7 is a **strict subset** of TypeScript: every program accepted by the E7 compiler is also accepted by `tsc --strict` (with `lib/e7.d.ts`),
 and produces the same result when run on a JavaScript engine (except for fixed-width integers, see §4.2). The converse does not hold: E7 rejects TS
