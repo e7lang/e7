@@ -122,6 +122,7 @@ static void mapSet(VM& vm, MapObj* m, Slot k, Slot v) {
   e.v = v;
   e.hash = h;
   e.live = true;
+  e.seq = m->nextSeq++;
   uint32_t b = h & (uint32_t)(m->buckets.size() - 1);
   e.next = m->buckets[b];
   m->entries.push_back(e);
@@ -306,30 +307,47 @@ E7_NATIVE(m_entries) {
   }
   r->r = arr;
 }
+// Iteration cursors are insertion numbers (MapEntry::seq), not vector indices: compaction (rehash after
+// deletions) and clear() move entries, but an iteration must still visit every entry inserted after
+// its current position, as in JavaScript. entries stay sorted by seq.
+static size_t lowerBoundSeq(const MapObj* m, int64_t s) {
+  const auto& E = m->entries;
+  if (E.empty()) return 0;
+  int64_t guess = s - E[0].seq;  // no compaction since: seq - first seq is the index
+  if (guess >= 0 && guess < (int64_t)E.size() && E[(size_t)guess].seq == s) return (size_t)guess;
+  size_t lo = 0, hi = E.size();
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (E[mid].seq < s) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+static const MapEntry& entryAtSeq(VM& vm, const MapObj* m, int64_t s) {
+  size_t i = lowerBoundSeq(m, s);
+  if (i >= m->entries.size() || m->entries[i].seq != s || !m->entries[i].live) vm.error("map iterator out of range");
+  return m->entries[i];
+}
 E7_NATIVE(m_next) {
   E7_UNUSED;
   MapObj* m = Mo(vm, a[0]);
-  int64_t i = a[1].i;
-  if (i < 0) i = 0;
-  for (; i < (int64_t)m->entries.size(); i++)
-    if (m->entries[i].live) { r->i = i; return; }
+  int64_t s = a[1].i;
+  if (s < 0) s = 0;
+  for (size_t i = lowerBoundSeq(m, s); i < m->entries.size(); i++)
+    if (m->entries[i].live) { r->i = m->entries[i].seq; return; }
   r->i = -1;
 }
 template <Kind K>
 static void m_keyAt(VM& vm, Slot* a, uint32_t, Slot* r, void*) {
   MapObj* m = Mo(vm, a[0]);
   checkK<K>(vm, m);
-  int64_t i = a[1].i;
-  if (i < 0 || i >= (int64_t)m->entries.size()) vm.error("map iterator out of range");
-  *r = m->entries[i].k;
+  *r = entryAtSeq(vm, m, a[1].i).k;
 }
 template <Kind V>
 static void m_valAt(VM& vm, Slot* a, uint32_t, Slot* r, void*) {
   MapObj* m = Mo(vm, a[0]);
   if (kindOfVT(m->vvt) != V) vm.error("map value type mismatch");
-  int64_t i = a[1].i;
-  if (i < 0 || i >= (int64_t)m->entries.size()) vm.error("map iterator out of range");
-  *r = m->entries[i].v;
+  *r = entryAtSeq(vm, m, a[1].i).v;
 }
 
 template <Kind K, Kind V>

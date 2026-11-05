@@ -312,7 +312,6 @@ or host function that was running (or that called back into the script, like `Ar
 | Fixed-width integer arithmetic | Floating point | Machine integers that wrap around |
 | `console.log` of long arrays/nested objects | Multi-line, columned format | Single-line format (`JSON.stringify` is identical) |
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
-| Malformed or mismatching JSON | `JSON.parse` throws, `catch` it | `tryParse(text) as T \| null` from `e7:json` returns `null` |
+| JSON of the wrong shape | Accepted (no validation) | `JSON.parse(text) as T` ends the call (not catchable); `tryParse(text) as T \| null` from `e7:json` returns `null`. Syntax errors are a catchable `SyntaxError` in both |
 | Case conversion / `localeCompare` | Full Unicode / locale | Latin/Greek/Cyrillic / code-unit comparison |
-| Inserting after many deletions during Map iteration | Order defined by the spec | May skip new elements due to table compaction (very rare) |
-| Exceptions | `try/catch` | Not supported; `throw` terminates the script |
+| Exceptions | Every error is catchable | `try`/`catch` catches the errors Node.js also throws; E7-specific checks and resource limits end the call (section 3.1) |

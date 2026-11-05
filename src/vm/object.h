@@ -78,6 +78,7 @@ struct CloObj : Obj {
 struct MapEntry {
   Slot k;
   Slot v;
+  int64_t seq;  // insertion number: the iteration cursor (survives compaction and clear, see map.cpp)
   uint32_t hash;
   int32_t next;  // chain
   bool live;
@@ -88,7 +89,8 @@ struct MapObj : Obj {
   KeyMode km;
   bool isSet;
   uint32_t count;
-  std::vector<MapEntry> entries;
+  int64_t nextSeq = 0;  // seq of the next inserted entry (never reset, also not by clear)
+  std::vector<MapEntry> entries;  // in insertion (seq) order; dead entries are compacted away by rehash
   std::vector<int32_t> buckets;
 };
 
