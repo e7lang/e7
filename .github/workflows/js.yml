@@ -8,7 +8,7 @@ name: JS
 #   jobs:
 #     js:
 #       uses: ./.github/workflows/js.yml
-#       with: { version: "1.0.1", publish: true }
+#       with: { version: "1.0.2", publish: true }
 #       secrets: inherit                    # NPM_TOKEN, VSCE_PAT, OVSX_PAT (each optional)
 #       permissions: { contents: write, id-token: write }
 on:

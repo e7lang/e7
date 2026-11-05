@@ -5,6 +5,8 @@ All notable changes to E7 / e7vm are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-05
+
 ### Added
 - **E7 skill for AI assistants** (`skills/e7`): what E7 supports and rejects compared with TypeScript, with
   rewrites, the standard library, testing, embedding, and a compile-check workflow. Every code block is checked
@@ -106,6 +108,7 @@ First public release.
   macOS universal and Windows x64.
 - **Website** with docs and an in-browser playground (WebAssembly): https://e7lang.github.io
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/e7lang/e7/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/e7lang/e7/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/e7lang/e7/releases/tag/v1.0.0

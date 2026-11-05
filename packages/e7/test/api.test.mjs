@@ -14,7 +14,7 @@ const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.resolv
 
 test("version and init", async () => {
   assert.equal(version, pkg.version);
-  assert.equal(version, "1.0.1");
+  assert.equal(version, "1.0.2");
   const e7 = await init();
   assert.equal(await init(), e7, "init() is idempotent");
   assert.match(e7.version, /^\d+\.\d+\.\d+/);

@@ -120,7 +120,7 @@ public final class E7VM {
     clearKeyBuffer()
   }
 
-  /// Library version, e.g. "1.0.1".
+  /// Library version, e.g. "1.0.2".
   public static var version: String { String(cString: e7_version()) }
 
   private func check(_ st: e7_status) throws {
