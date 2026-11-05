@@ -1,6 +1,7 @@
 name: Fuzzing (ClusterFuzzLite)
 
-# Continuous fuzzing of the bytecode loader/verifier/interpreter and the compiler with libFuzzer +
+# Continuous fuzzing of the bytecode loader/verifier/interpreter, the compiler and the e7:crypto /
+# e7:encoding natives (fuzz/fuzz_natives.cpp) with libFuzzer +
 # AddressSanitizer / UndefinedBehaviorSanitizer. PRs get a short run on changed code; a nightly batch
 # run grows the corpus. Crashes are reported in the run's logs and as artifacts.
 on:

@@ -28,6 +28,7 @@ static int usage() {
           "  --seed <n>         seed for Math.random\n"
           "  --trust <pub-hex-file>  require a module signature from this key\n"
           "  --time             print execution time\n"
+          "  --stats            print instruction ticks, GC collections and pauses, peak heap\n"
           "  --no-excerpt       compile errors without source excerpts\n"
           "  --version          print the version\n");
   return 2;
@@ -54,6 +55,18 @@ static void printValue(const e7_value& v) {
   }
 }
 
+// --stats (stderr; scripts/bench.py parses this line): ticks are deterministic for a given program,
+// so they measure the work done independently of the machine
+static void printStats(e7_vm* vm) {
+  e7_gc_stats gs;
+  memset(&gs, 0, sizeof gs);
+  gs.struct_size = sizeof gs;
+  e7_gc_stats_get(vm, &gs);
+  fprintf(stderr, "[stats ticks %llu, gc %llu collections (max pause %.3f ms, total %.3f ms), peak heap %zu bytes]\n",
+          (unsigned long long)e7_ticks_used(vm), (unsigned long long)gs.collections, gs.max_pause_ns / 1e6,
+          gs.total_pause_ns / 1e6, gs.peak_heap_bytes);
+}
+
 int main(int argc, char** argv) {
 #ifdef _WIN32
   _setmode(_fileno(stdout), _O_BINARY);
@@ -65,7 +78,7 @@ int main(int argc, char** argv) {
   int64_t budget = 0, slice = 0;
   size_t mem = 0;
   uint64_t seed = 0;
-  bool hasSeed = false, timeIt = false, excerpt = true;
+  bool hasSeed = false, timeIt = false, stats = false, excerpt = true;
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
     if (a == "--call" && i + 1 < argc) call = argv[++i];
@@ -75,6 +88,7 @@ int main(int argc, char** argv) {
     else if (a == "--seed" && i + 1 < argc) { seed = strtoull(argv[++i], nullptr, 10); hasSeed = true; }
     else if (a == "--trust" && i + 1 < argc) trust = argv[++i];
     else if (a == "--time") timeIt = true;
+    else if (a == "--stats") stats = true;
     else if (a == "--no-excerpt") excerpt = false;
     else if (a == "--version" || a == "-v") { printf("e7 %s\n", E7_VERSION); return 0; }
     else if (a.size() && a[0] == '-') return usage();
@@ -122,6 +136,7 @@ int main(int argc, char** argv) {
   e7_status st = e7_load(vm, bytes.data(), bytes.size(), &mod);
   if (st != E7_OK) {
     fprintf(stderr, "%s\n", e7_last_error(vm));
+    if (stats) printStats(vm);
     e7_vm_free(vm);
     return st == E7_ERR_RUNTIME ? 3 : 1;
   }
@@ -149,6 +164,7 @@ int main(int argc, char** argv) {
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     fprintf(stderr, "[time %.3f ms, heap %zu bytes]\n", ms, e7_memory_used(vm));
   }
+  if (stats) printStats(vm);
   e7_vm_free(vm);
   return rc;
 }

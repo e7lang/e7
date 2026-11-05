@@ -272,9 +272,21 @@ int main() {
     e7_value a = num(1e7), ret;
     e7_set_budget(vm, 1000);
     CHECK(e7_call(vm, m, "spin", &a, 1, &ret) == E7_ERR_BUDGET);
+    uint64_t exhausted = e7_ticks_used(vm);
+    CHECK(exhausted >= 1000 && exhausted < 2000);  // counted up to the budget
     e7_set_budget(vm, 0);
     a = num(1000);
     CHECK(e7_call(vm, m, "spin", &a, 1, &ret) == E7_OK && ret.v.num == 2997);
+    CHECK(e7_ticks_used(vm) > exhausted);
+    e7_vm_free(vm);
+    // ticks with an unlimited budget equal the ticks of the same work run in suspended slices
+    vm = e7_vm_new(nullptr);
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    a = num(100000);
+    CHECK(e7_call(vm, m, "spin", &a, 1, &ret) == E7_OK);
+    uint64_t unlimitedTicks = e7_ticks_used(vm);
+    CHECK(unlimitedTicks > 100000);
+    CHECK(e7_ticks_used(nullptr) == 0);
     e7_vm_free(vm);
     e7_config cfg;
     e7_config_init(&cfg);
@@ -292,6 +304,7 @@ int main() {
       slices++;
     }
     CHECK(st == E7_OK && slices > 10);
+    CHECK(e7_ticks_used(vm) == unlimitedTicks);
     double want = 0;
     for (int i = 0; i < 100000; i++) want += i % 7;
     CHECK(ret.v.num == want);

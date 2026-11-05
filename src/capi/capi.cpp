@@ -462,6 +462,7 @@ void e7_abort_suspended(e7_vm* v) {
   }
 }
 void e7_set_budget(e7_vm* v, int64_t ticks) { v->vm->setBudget(ticks); }
+uint64_t e7_ticks_used(e7_vm* v) { return v ? v->vm->ticksUsed() : 0; }
 const char* e7_last_error(e7_vm* v) { return v->lastError.c_str(); }
 
 static void nativeThunk(VM& vm, Slot* a, uint32_t n, Slot* r, void* ud) {

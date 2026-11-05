@@ -3,7 +3,8 @@ name: NuGet
 # Builds the e7vm shared library for every desktop platform, packs the E7VM NuGet package
 # (platform/dotnet/E7VM) and tests it from a local feed on Linux, Windows and macOS.
 # Release integration: call it with `uses: ./.github/workflows/nuget.yml`, `with: { version: 0.2.0, publish: true }`
-# and `secrets: inherit`; the caller must grant `contents: write` and `packages: write`.
+# and `secrets: inherit`; the caller must grant `contents: write`, `packages: write`, `id-token: write` and
+# `attestations: write` (build provenance attestation of the .nupkg).
 # Publishing uploads the .nupkg to the GitHub release v<version>, pushes it to GitHub Packages and,
 # when the NUGET_API_KEY secret is set, to nuget.org.
 on:
@@ -184,6 +185,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write      # build provenance attestation of the packages
+      attestations: write
     env:
       VERSION: ${{ needs.pack.outputs.version }}
     steps:
@@ -191,6 +194,12 @@ jobs:
         with: { dotnet-version: "8.0.x" }
       - uses: actions/download-artifact@v4
         with: { name: e7-nuget, path: out }
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            out/*.nupkg
+            out/*.snupkg
       - name: Upload to the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

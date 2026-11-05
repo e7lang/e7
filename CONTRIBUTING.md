@@ -31,6 +31,33 @@ Before sending a PR, please also run:
 CI runs all of these plus macOS, Windows (MSVC and clang-cl), 32-bit, Android, iOS, WebAssembly and
 the language bindings.
 
+## Performance baseline
+
+The `perf` CI job runs [`scripts/bench.py`](scripts/bench.py) on every `bench/*.ts` and compares with
+[`bench/baseline.json`](bench/baseline.json):
+
+- **Instruction ticks and peak heap** (from `e7 --stats`) must match **exactly**. They are deterministic and
+  machine-independent, and change only when the compiled bytecode, the standard library or the GC changes.
+- **Machine instructions** (`Ir` under `valgrind --tool=cachegrind`, Linux x86-64, gcc Release, the CI
+  runner `ubuntu-24.04`) may not grow by more than **3%** per benchmark.
+
+```bash
+python3 scripts/bench.py --check                 # ticks and heap (uses build/e7 and build/e7c)
+python3 scripts/bench.py --check --cachegrind    # plus Ir, on Linux with valgrind
+```
+
+When a change is *meant* to change these numbers (a compiler optimization, a new GC policy, a new
+benchmark), update the baseline in the same pull request and say why in the description:
+
+1. Ticks and heap: `python3 scripts/bench.py --update` (any platform) and commit `bench/baseline.json`.
+2. Instruction counts: download the `bench-baseline` artifact of the PR's `perf` job (a complete
+   `baseline.json` measured on the CI runner) and commit it as `bench/baseline.json`, or run
+   `python3 scripts/bench.py --update --cachegrind` on Linux x86-64 with the same configuration
+   (`cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release`, the distribution gcc).
+
+An Ir number more than 3% *below* the baseline passes with a note; update the baseline to lock in the
+gain. Wall-clock timings (`e7 --time`, `bench/gc_pause.cpp`) are reported but never gated.
+
 ## Adding a language test
 
 Put a program in `tests/cases/lang/` (or `lib/`, `modules/`). The harness runs it with e7 and with Node.js

@@ -102,7 +102,9 @@ while (st == E7_SUSPENDED) {                     // e.g. resume one slice per fr
 ```
 Without suspension enabled, an exhausted budget returns `E7_ERR_BUDGET`, which guards against infinite loops. Native functions for strings/arrays/encoding/JSON/hashing/BigInt etc. charge the budget by the amount of data processed
 (settled after the call returns), so the budget also caps the total time a script can spend in heavy native functions. While a call is suspended, no new `e7_call` can be started (`E7_ERR_STATE`);
-use `e7_abort_suspended` to abandon it.
+use `e7_abort_suspended` to abandon it. `e7_ticks_used(vm)` returns the ticks charged since the VM was
+created (with any budget, also unlimited): a deterministic, machine-independent measure of the work a script
+did, useful for sizing budgets (`e7 --stats` prints it).
 
 ### 2.4 Debugging
 

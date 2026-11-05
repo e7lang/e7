@@ -138,12 +138,19 @@ class VM {
   bool suspended() const { return suspended_; }
   Slot result() const { return result_; }
   char resultKind() const { return resultKind_; }
-  void setBudget(int64_t ticks) { budget_ = ticks <= 0 ? INT64_MAX : ticks; }
+  void setBudget(int64_t ticks) {
+    ticksBase_ += ticksSinceBudget();
+    budget_ = budgetStart_ = ticks <= 0 ? INT64_MAX : ticks;
+  }
+  // Ticks charged since the VM was created (instructions on back edges and calls, native costs).
+  // Derived from the budget counter, so counting costs nothing in the interpreter loop; an unlimited
+  // budget is INT64_MAX ticks, counted down like any other.
+  uint64_t ticksUsed() const { return ticksBase_ + ticksSinceBudget(); }
   // Natives doing work proportional to a script-chosen parameter charge it against the instruction
   // budget up front (a native cannot be suspended halfway), so the budget also bounds them.
   void chargeWork(uint64_t ticks) {
-    if (budget_ == INT64_MAX) return;
     if (ticks > (uint64_t)budget_) {
+      if (budgetStart_ == INT64_MAX) return;  // unlimited budget: never fails
       budget_ = 0;
       errorCode(ERR_BUDGET, "instruction budget exhausted");
     }
@@ -309,6 +316,9 @@ class VM {
   Slot* stack_ = nullptr;
   std::vector<Frame> frames_;
   int64_t budget_ = INT64_MAX;
+  int64_t budgetStart_ = INT64_MAX;  // budget_ as last set: ticksUsed() = ticksBase_ + start - budget_
+  uint64_t ticksBase_ = 0;
+  uint64_t ticksSinceBudget() const { return (uint64_t)budgetStart_ - (uint64_t)budget_; }
   uint32_t nativeDepth_ = 0;
   // native currently executing (nullptr while script code runs) and, for each callback from a
   // native into script, the frame index of the callback and the calling native (stack traces)

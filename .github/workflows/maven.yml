@@ -11,7 +11,7 @@ name: Maven
 #     uses: ./.github/workflows/maven.yml
 #     with: { version: "0.2.0", publish: true }
 #     secrets: inherit
-#     permissions: { contents: write, packages: write }
+#     permissions: { contents: write, packages: write, id-token: write, attestations: write }
 # It then publishes to GitHub Packages (always), to Maven Central (only if the MAVEN_CENTRAL_* and SIGNING_*
 # secrets exist) and attaches the .aar / .jar to the GitHub release v<version> (which must exist).
 on:
@@ -269,6 +269,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write      # build provenance attestations of the .aar / .jar
+      attestations: write
     env:
       HAS_CENTRAL: ${{ secrets.MAVEN_CENTRAL_USERNAME != '' && secrets.MAVEN_CENTRAL_PASSWORD != '' && secrets.SIGNING_KEY != '' && secrets.SIGNING_PASSWORD != '' }}
       SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
@@ -292,6 +294,12 @@ jobs:
         with: { name: e7-android-aar, path: dist }
       - uses: actions/download-artifact@v4
         with: { name: e7-jvm-jar, path: dist }
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.aar
+            dist/*.jar
       - name: Publish to GitHub Packages
         working-directory: platform/android
         env:

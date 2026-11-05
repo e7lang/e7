@@ -17,6 +17,24 @@ In scope: memory-safety or sandbox escapes from bytecode or source (verifier, in
 limit bypasses (instruction budget, memory, call depth), signature-check bypasses, and incorrect results
 from `e7:crypto`. See [docs/PRODUCTION.md](docs/PRODUCTION.md) for the threat model and past review findings.
 
+## Verifying releases
+
+Every file attached to a [release](https://github.com/e7lang/e7/releases) (the `e7-<version>-<platform>`
+archives, the Homebrew formula and Scoop manifest, `e7-skill.zip`, the SBOM) and every language package
+(`.nupkg`, `.aar`, `.jar`, npm `.tgz`, `.vsix`) has a GitHub build provenance attestation (SLSA provenance
+signed through Sigstore with the identity of the release workflow). Verify a download with the
+[GitHub CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify e7-0.2.0-linux-x64.tar.gz --repo e7lang/e7
+gh attestation verify E7VM.0.2.0.nupkg --repo e7lang/e7
+```
+
+The command fails unless the file was built by a workflow of `e7lang/e7`; its output names the workflow
+run and commit. The npm package also carries npm provenance (`npm audit signatures`). Each release
+includes an SPDX software bill of materials, `e7-<version>.spdx.json`; the C dependencies are vendored
+in `third_party/` (BearSSL, Monocypher).
+
 ## Supported versions
 
 Security fixes are made for the latest release.

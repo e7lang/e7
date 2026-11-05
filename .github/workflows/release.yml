@@ -154,6 +154,10 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write      # create the release, upload assets
+      id-token: write      # sign build provenance attestations (Sigstore)
+      attestations: write  # store them (gh attestation verify)
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       version: ${{ steps.tag.outputs.version }}
@@ -164,8 +168,21 @@ jobs:
           t="${{ inputs.tag || github.ref_name }}"
           echo "tag=$t" >> "$GITHUB_OUTPUT"
           echo "version=${t#v}" >> "$GITHUB_OUTPUT"
+      # SPDX software bill of materials of the source tree the release is built from (package
+      # manifests of the language bindings and tools; third_party/ holds the vendored C libraries).
+      # Scanned before the build artifacts are downloaded, so it describes the sources only.
+      - name: SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: ${{ runner.temp }}/e7-${{ steps.tag.outputs.version }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
+      - name: Add the SBOM to the release files
+        run: cp "$RUNNER_TEMP/e7-${{ steps.tag.outputs.version }}.spdx.json" dist/
       - name: Homebrew formula and Scoop manifest
         run: python3 scripts/gen-packaging.py "${{ steps.tag.outputs.tag }}" dist dist
       - name: AI skill (zip for claude.ai / the Claude API / other tools)
@@ -173,6 +190,18 @@ jobs:
           mkdir -p skillpkg && cp -R skills/e7 skillpkg/e7 && rm -rf skillpkg/e7/evals
           (cd skillpkg && zip -qr ../dist/e7-skill.zip e7)
           unzip -l dist/e7-skill.zip | tail -3
+      # Build provenance (SLSA, signed with this workflow's identity) for every file attached to the
+      # release; verify with `gh attestation verify <file> --repo e7lang/e7`. The language packages
+      # (.nupkg, .aar / .jar, .tgz / .vsix) are attested by their reusable workflows below.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.spdx.json
+            dist/e7.rb
+            dist/e7.json
       - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -190,7 +219,9 @@ jobs:
           | Windows x64 | \`e7-${TAG#v}-windows-x64.zip\` |
 
           Each archive contains \`bin/\`, \`include/e7/e7.h\`, \`lib/\`, \`bindings/\` (C#, Swift, Java/Kotlin), \`types/e7.d.ts\`, \`examples/\`.
-          Verify downloads with the matching \`.sha256\` file.
+          Verify downloads with the matching \`.sha256\` file, and their build provenance with
+          \`gh attestation verify <file> --repo e7lang/e7\` (every archive and package is attested).
+          Software bill of materials (SPDX): \`e7-${TAG#v}.spdx.json\`.
 
           **Packages** (attached below as well)
 
@@ -234,21 +265,21 @@ jobs:
     uses: ./.github/workflows/nuget.yml
     with: { version: "${{ needs.publish.outputs.version }}", publish: true }
     secrets: inherit
-    permissions: { contents: write, packages: write }
+    permissions: { contents: write, packages: write, id-token: write, attestations: write }
 
   maven:
     needs: publish
     uses: ./.github/workflows/maven.yml
     with: { version: "${{ needs.publish.outputs.version }}", publish: true }
     secrets: inherit
-    permissions: { contents: write, packages: write }
+    permissions: { contents: write, packages: write, id-token: write, attestations: write }
 
   js:
     needs: publish
     uses: ./.github/workflows/js.yml
     with: { version: "${{ needs.publish.outputs.version }}", publish: true }
     secrets: inherit
-    permissions: { contents: write, id-token: write }
+    permissions: { contents: write, id-token: write, attestations: write }
 
   swift:
     needs: publish
