@@ -33,7 +33,7 @@ struct LoopCtx {
 
 struct Gen {
  public:
-  Gen(Program& p, Checker& c, Module& m) : P(p), C(c), T(p.types), M(m) {}
+  Gen(Program& p, Checker& c, Module& m, bool dbg) : P(p), C(c), T(p.types), M(m), debug(dbg) {}
 
   bool run(const std::string& name);
 
@@ -41,6 +41,60 @@ struct Gen {
   Checker& C;
   Types& T;
   Module& M;
+  // debug information (--debug): positions per instruction, statement boundaries, variable names
+  bool debug = false;
+  Loc wantPos;                                   // position of the innermost construct being generated
+  DebugPos lastPos{UINT32_MAX, 0, 0};            // last recorded position
+  std::unordered_map<VarSym*, size_t> openLocals;  // variable -> index in D->debug.locals (live)
+  void notePos() {
+    if (!wantPos.line || (lastPos.line == wantPos.line && lastPos.col == wantPos.col)) return;
+    lastPos = DebugPos{(uint32_t)pc(), wantPos.line, wantPos.col};
+    D->debug.pos.push_back(lastPos);
+  }
+  void stmtBoundary(Loc l) {
+    if (!debug || !l.line) return;
+    auto& st = D->debug.stmts;
+    if (!st.empty() && st.back().pc == (uint32_t)pc()) st.pop_back();  // innermost statement wins
+    st.push_back(DebugPos{(uint32_t)pc(), l.line, l.col});
+  }
+  void dbgOpen(VarSym* v, uint16_t reg, bool cell, bool param) {
+    if (!debug || !v || v->name.empty() || v->name[0] == '<') return;
+    dbgClose(v);
+    DebugLocal l;
+    l.name = v->name;
+    l.reg = reg;
+    l.startPc = (uint32_t)pc();
+    l.endPc = l.startPc;
+    uint8_t vt = v->type ? vtOf(v->type) : (uint8_t)VT_REF;
+    uint8_t rk = D->regKinds[reg];
+    if (!cell && (uint8_t)kindOfVT(vt) != rk) vt = rk == K_F ? (uint8_t)VT_NUMBER : rk == K_R ? (uint8_t)VT_REF : (uint8_t)VT_I64;
+    l.vt = vt;
+    l.flags = (uint8_t)((cell ? kDebugLocalCell : 0) | (param ? kDebugLocalParam : 0));
+    openLocals[v] = D->debug.locals.size();
+    D->debug.locals.push_back(l);
+  }
+  void dbgClose(VarSym* v) {
+    if (!debug) return;
+    auto it = openLocals.find(v);
+    if (it == openLocals.end()) return;
+    D->debug.locals[it->second].endPc = (uint32_t)pc();
+    openLocals.erase(it);
+  }
+  void dbgCloseAll() {
+    if (!debug) return;
+    for (auto& kv : openLocals) D->debug.locals[kv.second].endPc = (uint32_t)pc();
+    openLocals.clear();
+  }
+  void dbgBegin(FuncSym* f) {
+    D->hasDebug = debug;
+    wantPos = Loc();
+    lastPos = DebugPos{UINT32_MAX, 0, 0};
+    openLocals.clear();
+    if (debug && f) {
+      D->debug.upvalNames.clear();
+      for (VarSym* c : f->captures) D->debug.upvalNames.push_back(c ? c->name : std::string());
+    }
+  }
   std::map<int64_t, uint32_t> intIdx;
   std::map<uint64_t, uint32_t> numIdx;
   std::map<std::u16string, uint32_t> strIdx;
@@ -151,6 +205,7 @@ struct Gen {
   }
   void line(Loc l) {
     if (!l.line) return;
+    if (debug) wantPos = l;
     if (curFile != segFileRaw) {
       segFileRaw = curFile;
       std::string d = displayPath(curFile);
@@ -166,8 +221,14 @@ struct Gen {
       D->lines.push_back(l.line);
     }
   }
-  void emit(uint16_t op, uint16_t a = 0, uint16_t b = 0, uint16_t c = 0) { D->code.push_back(encode(op, a, b, c)); }
-  void emitBx(uint16_t op, uint16_t a, uint32_t bx) { D->code.push_back(encodeBx(op, a, bx)); }
+  void emit(uint16_t op, uint16_t a = 0, uint16_t b = 0, uint16_t c = 0) {
+    if (debug) notePos();
+    D->code.push_back(encode(op, a, b, c));
+  }
+  void emitBx(uint16_t op, uint16_t a, uint32_t bx) {
+    if (debug) notePos();
+    D->code.push_back(encodeBx(op, a, bx));
+  }
   void emitWord(uint64_t w) { D->code.push_back(w); }
   void emitRegList(const std::vector<uint16_t>& regs) {
     for (size_t i = 0; i < regs.size(); i += 4) {
@@ -250,6 +311,12 @@ struct Gen {
     code.insert(code.begin(), prefix.begin(), prefix.end());
     for (size_t i = 0; i + 1 < D->lines.size(); i += 2) D->lines[i] += (uint32_t)k;
     for (auto& fs : fileSegs) fs.first += (uint32_t)k;
+    for (auto& e : D->debug.pos) e.pc += (uint32_t)k;
+    for (auto& e : D->debug.stmts) e.pc += (uint32_t)k;
+    for (auto& l : D->debug.locals) {
+      l.startPc = (l.flags & kDebugLocalParam) && !(l.flags & kDebugLocalCell) ? 0 : l.startPc + (uint32_t)k;
+      l.endPc += (uint32_t)k;
+    }
   }
 
   // ---------------------------------------------------------------- registers
@@ -375,6 +442,7 @@ struct Gen {
   // expressions
   uint16_t gen(Expr* e);
   void genInto(Expr* e, uint16_t dst);
+  void genIntoImpl(Expr* e, uint16_t dst);
   void genDiscard(Expr* e);
   uint16_t genTruthy(Expr* e);
   void truthyOf(uint16_t dst, uint16_t src, Type* t);
@@ -518,6 +586,7 @@ void Gen::genInit() {
     M.funcs[P.init->funcIdx] = FuncDesc();
     genInitOnce();
   }
+  dbgCloseAll();
   finishConstants();
   appendFileSegs();
 }
@@ -531,6 +600,7 @@ void Gen::genInitOnce() {
   D = &M.funcs[f->funcIdx];
   D->name = "<init>";
   resetFileSegs();
+  dbgBegin(nullptr);
   D->sig = sig(">V");
   D->nparams = 0;
   for (auto& fl : freeRegs) fl.clear();
@@ -543,6 +613,7 @@ void Gen::genInitOnce() {
     blockEntry(file->body);
     for (Stmt* s : file->body) genStmt(s);
   }
+  wantPos = Loc();  // the final return belongs to the last statement
   emit(OP_RET_V);
 }
 
@@ -551,11 +622,16 @@ void Gen::prologue(FuncSym* f) {
   uint16_t r = 0;
   if (f->isMethod || f->isCtor) {
     newReg(K_R);
-    varReg[f->thisVar] = r++;
+    varReg[f->thisVar] = r;
+    dbgOpen(f->thisVar, r, false, true);
+    r++;
   }
   for (size_t i = 0; i < f->type->params.size(); i++) {
     newReg(K(f->type->params[i]));
-    if (i < f->paramSyms.size()) varReg[f->paramSyms[i]] = r;
+    if (i < f->paramSyms.size()) {
+      varReg[f->paramSyms[i]] = r;
+      dbgOpen(f->paramSyms[i], r, false, true);
+    }
     r++;
   }
   if (f->hasDefaults) {
@@ -590,6 +666,7 @@ void Gen::prologue(FuncSym* f) {
     static const uint16_t setOps[3] = {OP_CSET_I, OP_CSET_F, OP_CSET_R};
     emit(setOps[K(v->type)], cell, pr);
     varReg[v] = cell;
+    dbgOpen(v, cell, true, true);
   }
 }
 
@@ -638,6 +715,7 @@ void Gen::genFunction(FuncSym* f) {
     M.funcs[f->funcIdx] = FuncDesc();
     genFunctionOnce(f);
   }
+  dbgCloseAll();
   finishConstants();
   appendFileSegs();
 }
@@ -650,6 +728,7 @@ void Gen::genFunctionOnce(FuncSym* f) {
   D = &M.funcs[f->funcIdx];
   D->name = f->qualName.empty() ? f->name : f->qualName;
   resetFileSegs();
+  dbgBegin(f);
   D->sig = sig(sigOf(f));
   for (auto& fl : freeRegs) fl.clear();
   temps.clear();
@@ -680,6 +759,7 @@ void Gen::genFunctionOnce(FuncSym* f) {
   }
   if (f->isCtor && (!f->cls->parent)) genCtorFieldInits();
   if (f->exprBody) {
+    stmtBoundary(f->exprBody->loc);
     Kind rk = kindOf(f->type->ret);
     if (rk == K_V) {
       genDiscard(f->exprBody);
@@ -701,6 +781,7 @@ void Gen::genFunctionOnce(FuncSym* f) {
     }
   }
   if (f->isCtor && f->cls->parent && !emittedFieldInits) genCtorFieldInits();
+  wantPos = Loc();  // the implicit return belongs to the last statement
   Kind rk = kindOf(f->type->ret);
   if (rk == K_V) emit(OP_RET_V);
   else if (f->type->ret->t == TT::Optional && f->type->ret->hasUndef) {
@@ -721,8 +802,10 @@ void Gen::declareLocal(VarSym* v) {
     uint16_t cell = allocReg(K_R);
     emit(OP_NEWCELL, cell, vtOf(v->type ? v->type : T.unknown()));
     varReg[v] = cell;
+    dbgOpen(v, cell, true, false);
   } else {
     varReg[v] = allocReg(K(v->type ? v->type : T.unknown()));
+    dbgOpen(v, varReg[v], false, false);
   }
 }
 
@@ -768,6 +851,7 @@ void Gen::genBlock(std::vector<Stmt*>& stmts) {
     if (it != varReg.end()) {
       freeReg(it->second);
       varReg.erase(it);
+      dbgClose(v);
     }
   }
 }
@@ -880,6 +964,22 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
 }
 
 void Gen::genStmt(Stmt* s) {
+  if (debug) {
+    bool code = true;
+    switch (s->k) {
+      case SK::Func: case SK::Interface: case SK::TypeAlias: case SK::Enum: case SK::Import: case SK::Export:
+      case SK::Declare:
+        code = false;
+        break;
+      case SK::Class: {
+        code = false;
+        for (auto& m : s->members) code = code || (m.kind == ClassMember::Field && m.isStatic);
+        break;
+      }
+      default: break;
+    }
+    if (code) stmtBoundary(s->loc);
+  }
   line(s->loc);
   bool topLevel = fn->isInit && false;
   (void)topLevel;
@@ -993,7 +1093,7 @@ void Gen::genStmt(Stmt* s) {
       place(end);
       for (VarSym* v : loopVars) {
         auto it = varReg.find(v);
-        if (it != varReg.end()) { freeReg(it->second); varReg.erase(it); }
+        if (it != varReg.end()) { freeReg(it->second); varReg.erase(it); dbgClose(v); }
       }
       break;
     }
@@ -1066,6 +1166,9 @@ void Gen::genStmt(Stmt* s) {
     }
     case SK::Switch:
       genSwitch(s);
+      break;
+    case SK::Debugger:
+      emit(OP_DEBUGGER);
       break;
     case SK::Throw: {
       size_t m0 = mark();
@@ -1222,7 +1325,7 @@ void Gen::genForOf(Stmt* s) {
   place(end);
   for (VarSym* v : vars) {
     auto it = varReg.find(v);
-    if (it != varReg.end()) { freeReg(it->second); varReg.erase(it); }
+    if (it != varReg.end()) { freeReg(it->second); varReg.erase(it); dbgClose(v); }
   }
   release(m0);
 }
@@ -1516,7 +1619,32 @@ uint16_t Gen::toStringReg(uint16_t src, Type* t) {
 }
 
 void Gen::genInto(Expr* e, uint16_t dst) {
+  if (!debug) {
+    genIntoImpl(e, dst);
+    return;
+  }
+  // instructions emitted after a subexpression belong to the enclosing expression again
+  Loc saved = wantPos;
+  genIntoImpl(e, dst);
+  wantPos = saved;
+}
+
+// Position reported for an expression (like V8: a call is located at the callee's name, a property
+// access at the property name).
+static Loc debugLoc(Expr* e) {
+  Expr* x = e;
+  if (x->k == EK::Call && x->a) {
+    Expr* c = strip(x->a);
+    if (c->k == EK::Ident && c->loc.line) return c->loc;
+    if (c->k == EK::Member && c->nameLoc.line) return c->nameLoc;
+  }
+  if (x->k == EK::Member && x->nameLoc.line) return x->nameLoc;
+  return x->loc;
+}
+
+void Gen::genIntoImpl(Expr* e, uint16_t dst) {
   line(e->loc);
+  if (debug && e->loc.line) wantPos = debugLoc(e);
   // void-typed wrappers (f()!, f() as void) produce no value: just evaluate the operand
   if ((e->k == EK::NonNull || e->k == EK::As) && e->type && e->type->t == TT::Void && e->a) {
     genInto(e->a, dst);
@@ -3293,8 +3421,8 @@ std::string Gen::jsonDescriptor(Type* t) {
 
 }  // namespace
 
-bool generateModule(Program& P, Checker& C, Module& out, const std::string& moduleName) {
-  Gen g(P, C, out);
+bool generateModule(Program& P, Checker& C, Module& out, const std::string& moduleName, bool debugInfo) {
+  Gen g(P, C, out, debugInfo);
   return g.run(moduleName);
 }
 

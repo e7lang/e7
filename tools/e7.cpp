@@ -12,12 +12,14 @@
 #include "core/module.h"
 #include "e7/e7.h"
 
-int runTestCommand(int argc, char** argv);  // e7_test.cpp
+int runTestCommand(int argc, char** argv);   // e7_test.cpp
+int runDebugCommand(int argc, char** argv);  // e7_debug.cpp
 
 static int usage() {
   fprintf(stderr,
           "usage: e7 [options] <file.ts|file.e7|file.e7b>\n"
           "       e7 test [options] [files or directories...]   (run tests; see e7 test --help)\n"
+          "       e7 debug [--break file:line]... [--call fn] <file>   (command-line debugger)\n"
           "  --call <fn>        call an exported function (no arguments) and print its result\n"
           "                     (default: main, if exported)\n"
           "  --budget <n>       instruction budget (ticks)\n"
@@ -58,6 +60,7 @@ int main(int argc, char** argv) {
   _setmode(_fileno(stderr), _O_BINARY);
 #endif
   if (argc >= 2 && strcmp(argv[1], "test") == 0) return runTestCommand(argc - 2, argv + 2);
+  if (argc >= 2 && strcmp(argv[1], "debug") == 0) return runDebugCommand(argc - 2, argv + 2);
   std::string file, call, trust;
   int64_t budget = 0, slice = 0;
   size_t mem = 0;
@@ -102,7 +105,9 @@ int main(int argc, char** argv) {
     if (!readAll(file, data)) { fprintf(stderr, "e7: cannot read %s\n", file.c_str()); e7_vm_free(vm); return 1; }
     bytes.assign(data.begin(), data.end());
   } else {
-    e7::CompileOutput co = e7::compileProgram(file, e7::readFileFromDisk);
+    e7::CompileOptions copts;
+    copts.debugInfo = true;  // running from source: column numbers in stack traces
+    e7::CompileOutput co = e7::compileProgram(file, e7::readFileFromDisk, copts);
     if (!co.ok) {
       fprintf(stderr, "%s", formatCompileErrors(co, excerpt).c_str());
       e7_vm_free(vm);

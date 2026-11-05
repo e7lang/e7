@@ -50,7 +50,8 @@ typedef enum e7_status {
   E7_ERR_NOT_FOUND = 9,  /* exported function not found */
   E7_ERR_ARGS = 10,      /* argument count / type mismatch */
   E7_ERR_COMPILE = 11,   /* compilation error */
-  E7_ERR_STATE = 12      /* VM busy (suspended) or invalid state */
+  E7_ERR_STATE = 12,     /* VM busy (suspended) or invalid state */
+  E7_PAUSED = 13         /* stopped by an attached debugger (pause-to-host mode); see e7_debug_resume() */
 } e7_status;
 
 typedef enum e7_type {
@@ -102,6 +103,18 @@ E7_API e7_status e7_load(e7_vm* vm, const uint8_t* data, size_t len, e7_module**
  * malloc'ed diagnostic text. */
 E7_API e7_status e7_compile(const char* source, size_t len, const char* file_name, uint8_t** out, size_t* out_len,
                             char** errors);
+/* Extended compilation. flags: E7_COMPILE_DEBUG emits debug information (column numbers in stack
+ * traces, statement boundaries and variable names for the debugger; see docs/DEBUGGING.md).
+ * read_file (optional) resolves imports of other source files: return 0 and set *data / *len to a
+ * malloc'ed buffer (e7 frees it), or nonzero if the file does not exist. opts may be NULL. */
+#define E7_COMPILE_DEBUG 1u
+typedef struct e7_compile_options {
+  uint32_t flags;
+  int (*read_file)(void* user, const char* path, char** data, size_t* len);
+  void* read_user;
+} e7_compile_options;
+E7_API e7_status e7_compile_ex(const char* source, size_t len, const char* file_name, const e7_compile_options* opts,
+                               uint8_t** out, size_t* out_len, char** errors);
 /* Compile and load in one step (convenience for development). */
 E7_API e7_status e7_load_source(e7_vm* vm, const char* source, size_t len, const char* file_name, e7_module** out);
 E7_API void e7_free(void* p);
@@ -135,6 +148,102 @@ E7_API void e7_set_key_provider(e7_vm* vm, int (*fn)(void* user, int64_t id, con
 E7_API void e7_seed_random(e7_vm* vm, uint64_t seed);
 E7_API size_t e7_memory_used(e7_vm* vm);
 E7_API void e7_collect_garbage(e7_vm* vm);
+
+/* ---- debugging (see docs/DEBUGGING.md) ----
+ * Attach a debugger to a VM before loading modules (so that breakpoints in top-level code work).
+ * While a debugger is attached the VM runs a debug build of its interpreter; without one there is
+ * no cost at all. Breakpoints, stepping and variable names work best with modules compiled with
+ * debug information (E7_COMPILE_DEBUG, `e7c --debug`); without it, stops happen at line starts and
+ * only globals and upvalues have names.
+ *
+ * Two execution models:
+ *  - synchronous: e7_debug_attach(vm, fn, user) with a callback. At each stop the callback runs on
+ *    the VM's thread with the script frozen; it may call the inspection functions below and returns
+ *    how to continue. Works for every stop, including module initialization (e7_load) and callbacks
+ *    from natives (Array.sort comparators).
+ *  - pause-to-host: e7_debug_attach(vm, NULL, NULL). A stop makes e7_load / e7_call / e7_resume
+ *    return E7_PAUSED; inspect, then continue with e7_debug_resume(). When e7_load returns
+ *    E7_PAUSED, *out is already set; the module is usable once the initializer has finished.
+ *    Breakpoints inside callbacks from natives (sort comparators) are skipped in this model.
+ * All functions except e7_debug_pause must be called on the VM's thread. Strings returned by the
+ * inspection functions stay valid until the same function is called again or execution resumes.
+ * Variable references (ref) stay valid while the script stays paused. */
+typedef enum e7_debug_reason {
+  E7_STOP_BREAKPOINT = 1,
+  E7_STOP_STEP = 2,       /* a step finished */
+  E7_STOP_DEBUGGER = 3,   /* `debugger;` statement */
+  E7_STOP_PAUSE = 4,      /* e7_debug_pause() */
+  E7_STOP_EXCEPTION = 5,  /* a runtime error is about to terminate the script (message in e7_debug_stop) */
+  E7_STOP_ENTRY = 6       /* e7_debug_stop_on_entry() */
+} e7_debug_reason;
+
+typedef enum e7_debug_action {
+  E7_DEBUG_CONTINUE = 0,
+  E7_DEBUG_STEP_IN = 1,    /* stop at the next statement (entering calls) */
+  E7_DEBUG_STEP_OVER = 2,  /* stop at the next statement of this function or a caller */
+  E7_DEBUG_STEP_OUT = 3,   /* stop at the next statement of a caller */
+  E7_DEBUG_ABORT = 4       /* terminate the script: the call fails with E7_ERR_RUNTIME */
+} e7_debug_action;
+
+typedef struct e7_debug_frame {
+  const char* function; /* function name ("<init>" for top-level code) */
+  const char* file;     /* source file as in stack traces (relative to the entry file's directory) */
+  uint32_t line;        /* 1-based; 0 = unknown */
+  uint32_t column;      /* 1-based; 0 = unknown (no debug information) */
+} e7_debug_frame;
+
+typedef struct e7_debug_stop {
+  e7_debug_reason reason;
+  const char* message;    /* E7_STOP_EXCEPTION: the error message; otherwise "" */
+  e7_debug_frame where;   /* innermost frame */
+  const int* breakpoints; /* E7_STOP_BREAKPOINT: ids of the breakpoints hit */
+  size_t num_breakpoints;
+} e7_debug_stop;
+
+typedef struct e7_debug_scope {
+  const char* name; /* "Locals", "Closure" (captured variables), "Globals" */
+  uint32_t ref;     /* pass to e7_debug_variables() */
+  size_t count;     /* number of variables */
+} e7_debug_scope;
+
+typedef struct e7_debug_variable {
+  const char* name;
+  const char* type;  /* number, boolean, i32, ..., string, null, undefined, Array, Map, Set, Object,
+                        tuple, Uint8Array, bigint, function, Date, or the class name */
+  const char* value; /* display text (like console.log) */
+  uint32_t ref;      /* > 0: has children (elements / fields / entries), pass to e7_debug_variables() */
+  size_t count;      /* number of children */
+} e7_debug_variable;
+
+typedef e7_debug_action (*e7_debug_fn)(e7_vm* vm, const e7_debug_stop* stop, void* user);
+
+E7_API e7_status e7_debug_attach(e7_vm* vm, e7_debug_fn fn, void* user); /* fn NULL: pause-to-host */
+E7_API e7_status e7_debug_detach(e7_vm* vm);                             /* not while running or paused */
+E7_API void e7_debug_break_on_error(e7_vm* vm, int enable);              /* default 1 */
+/* Breakpoint at the first statement on or after `line` of `file` (a path that ends with the file
+ * name as shown in stack traces, e.g. "/src/lib/util.ts" for "lib/util.ts"). Returns its id (> 0),
+ * or 0 if no debugger is attached. Breakpoints in modules loaded later are resolved at load. */
+E7_API int e7_debug_set_breakpoint(e7_vm* vm, const char* file, uint32_t line);
+/* 1 if the breakpoint exists; *verified: resolved to code; *actual_line: the line it stops at. */
+E7_API int e7_debug_breakpoint_info(e7_vm* vm, int id, int* verified, uint32_t* actual_line);
+E7_API e7_status e7_debug_clear_breakpoint(e7_vm* vm, int id);
+E7_API void e7_debug_clear_breakpoints(e7_vm* vm);
+/* Stop at the next statement. Thread-safe: may be called from any thread while the VM runs. */
+E7_API void e7_debug_pause(e7_vm* vm);
+/* Stop at the first statement executed from now on (reason E7_STOP_ENTRY). */
+E7_API void e7_debug_stop_on_entry(e7_vm* vm);
+E7_API int e7_debug_is_paused(e7_vm* vm);
+/* While paused (inside the callback, or after E7_PAUSED): */
+E7_API e7_status e7_debug_stop_info(e7_vm* vm, e7_debug_stop* out);
+E7_API size_t e7_debug_stack(e7_vm* vm, const e7_debug_frame** frames);          /* frames[0] innermost */
+E7_API size_t e7_debug_scopes(e7_vm* vm, size_t frame, const e7_debug_scope** scopes);
+/* Children of a scope or variable reference; count 0 = all from `start`. */
+E7_API size_t e7_debug_variables(e7_vm* vm, uint32_t ref, size_t start, size_t count, const e7_debug_variable** vars);
+/* A variable of the frame (locals, then captured, then globals) followed by .field, [index],
+ * ['map key'], .length or .size. On failure returns E7_ERR_NOT_FOUND (e7_last_error() says why). */
+E7_API e7_status e7_debug_evaluate(e7_vm* vm, size_t frame, const char* expression, const e7_debug_variable** result);
+/* Pause-to-host mode: continue after E7_PAUSED (like e7_resume, with a step action). */
+E7_API e7_status e7_debug_resume(e7_vm* vm, e7_debug_action action, e7_value* ret);
 
 /* ---- module signing (Ed25519) ---- */
 E7_API e7_status e7_sign_module(const uint8_t* e7b, size_t len, const uint8_t secret_seed[32], uint8_t** out,

@@ -1,5 +1,7 @@
 #include "vm.h"
 
+#include "debug.h"
+
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -167,6 +169,7 @@ void VM::raise(int code, const std::string& msg) {
   std::string full = msg;
   std::string tr = stackTrace();
   if (!tr.empty()) full += "\n" + tr;
+  if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty()) dbg_->errorRaised(code, msg, full);
   throw E7Error(code, full);
 }
 void VM::error(const char* fmt, ...) {
@@ -186,14 +189,13 @@ void VM::errorCode(int code, const char* fmt, ...) {
   raise(code, buf);
 }
 
-// Source position of the instruction before `ip` in function f: line number and file name (the
-// module name unless the line-table extension names another source file).
-static uint32_t lineFor(const FuncRT* f, const uint64_t* ip, std::string* file) {
-  if (file) *file = f && f->mod ? f->mod->m.name : std::string();
-  if (!f || !ip || !f->d) return 0;
-  ptrdiff_t pc = ip - f->code - 1;
+// Source position of instruction `pc` of function f: file name (the module name unless the
+// line-table extension names another source file), line, and column (debug information only).
+SrcLoc VM::sourceAt(const FuncRT* f, ptrdiff_t pc) {
+  SrcLoc r;
+  r.file = f && f->mod ? f->mod->m.name : std::string();
+  if (!f || !f->d) return r;
   if (pc < 0) pc = 0;
-  uint32_t line = 0;
   const auto& L = f->d->lines;
   size_t i = 0;
   for (; i + 1 < L.size(); i += 2) {
@@ -202,17 +204,31 @@ static uint32_t lineFor(const FuncRT* f, const uint64_t* ip, std::string* file) 
       while (i + 1 < L.size() && L[i] != kLineExtMarker) i += 2;
       break;
     }
-    line = L[i + 1];
+    r.line = L[i + 1];
   }
-  if (file && i + 1 < L.size() && L[i] == kLineExtMarker && L[i + 1] == kLineExtFiles) {
+  if (i + 1 < L.size() && L[i] == kLineExtMarker && L[i + 1] == kLineExtFiles) {
     const auto& strs = f->mod->m.strs;
     for (size_t j = i + 2; j + 3 < L.size(); j += 4) {
       if (L[j] != kLineExtMarker || L[j + 2] != kLineExtMarker) break;
       if ((ptrdiff_t)L[j + 1] > pc) break;
-      if (L[j + 3] < strs.size()) *file = utf16ToUtf8(strs[L[j + 3]]);
+      if (L[j + 3] < strs.size()) r.file = utf16ToUtf8(strs[L[j + 3]]);
     }
   }
-  return line;
+  if (f->d->hasDebug && !f->d->debug.pos.empty()) {
+    // debug position table: the last entry at or before pc gives line and column
+    const auto& P = f->d->debug.pos;
+    size_t lo = 0, hi = P.size();
+    while (lo < hi) {
+      size_t mid = (lo + hi) / 2;
+      if ((ptrdiff_t)P[mid].pc <= pc) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo > 0) {
+      r.line = P[lo - 1].line;
+      r.col = P[lo - 1].col;
+    }
+  }
+  return r;
 }
 
 std::string VM::stackTrace() const {
@@ -225,9 +241,11 @@ std::string VM::stackTrace() const {
   size_t cb = callbackNatives_.size();
   for (size_t i = frames_.size(); i-- > 0;) {
     const Frame& fr = frames_[i];
-    std::string file;
-    uint32_t line = lineFor(fr.fn, fr.ip, &file);
-    es.push_back(Entry{fr.fn->name, file + ":" + std::to_string(line)});
+    // fr.ip is past the instruction that raised the error or made the call
+    SrcLoc loc = sourceAt(fr.fn, fr.ip ? fr.ip - fr.fn->code - 1 : 0);
+    std::string where = loc.file + ":" + std::to_string(loc.line);
+    if (loc.col) where += ":" + std::to_string(loc.col);
+    es.push_back(Entry{fr.fn->name, where});
     while (cb > 0 && callbackNatives_[cb - 1].first == i) {
       cb--;
       if (callbackNatives_[cb].second) es.push_back(Entry{callbackNatives_[cb].second->name, "native"});
@@ -646,6 +664,7 @@ ModuleRT* VM::loadModule(Module&& mod) {
   M->strs.reserve(m.strs.size());
   for (auto& s : m.strs) M->strs.push_back(newString(s));
   M->globals.assign(m.globals.size(), Slot{});
+  if (dbg_) dbg_->moduleLoaded(M);
   return M;
 }
 
@@ -667,39 +686,48 @@ int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
   frames_.push_back(Frame{f, f->code, nullptr, 0, kNoReg, true});
   resultKind_ = 'V';
   if (gcRequested_) collectGarbage();
+  return runFrames();
+}
+
+// Runs the frames on the stack until the entry frame returns, the script suspends (budget) or a
+// debugger pauses it (ERR_PAUSED: the frames are kept for inspection).
+int VM::runFrames() {
   try {
     int st = execute(0);
-    if (st == ERR_SUSPENDED) suspended_ = true;
+    if (st == ERR_SUSPENDED || st == ERR_PAUSED) suspended_ = true;
     else frames_.clear();
     return st;
+  } catch (E7Error&) {
+    if (dbg_ && dbg_->takeErrorPause()) {
+      // a debugger in pause-to-host mode reports the error first: keep the frames for inspection,
+      // the error is raised again by resume()
+      nativeDepth_ = 0;
+      gcInhibit_ = 0;
+      tempRoots_.clear();
+      curNative_ = nullptr;
+      callbackNatives_.clear();
+      suspended_ = true;
+      return ERR_PAUSED;
+    }
+    resetExecution();
+    throw;
   } catch (...) {
-    frames_.clear();
-    nativeDepth_ = 0;
-    gcInhibit_ = 0;
-    tempRoots_.clear();
-    suspended_ = false;
-    curNative_ = nullptr;
-    callbackNatives_.clear();
+    resetExecution();
     throw;
   }
 }
 
 int VM::resume() {
   if (!suspended_) errorCode(ERR_STATE, "VM is not suspended");
-  suspended_ = false;
-  try {
-    int st = execute(0);
-    if (st == ERR_SUSPENDED) suspended_ = true;
-    else frames_.clear();
-    return st;
-  } catch (...) {
-    frames_.clear();
-    nativeDepth_ = 0;
-    tempRoots_.clear();
-    curNative_ = nullptr;
-    callbackNatives_.clear();
-    throw;
+  if (dbg_ && dbg_->errorPending()) {
+    // the error reported to the debugger now terminates the call
+    E7Error e(dbg_->pendingErrorCode(), dbg_->pendingErrorMessage());
+    resetExecution();
+    throw e;
   }
+  if (dbg_ && dbg_->hostPaused()) dbg_->prepareResume(0 /* continue */);
+  suspended_ = false;
+  return runFrames();
 }
 
 void VM::resetExecution() {
@@ -710,6 +738,20 @@ void VM::resetExecution() {
   tempRoots_.clear();
   curNative_ = nullptr;
   callbackNatives_.clear();
+  if (dbg_) dbg_->reset();
+}
+
+void VM::attachDebugger(std::unique_ptr<Debugger> d) {
+  if (dbg_) detachDebugger();
+  dbg_ = std::move(d);
+  if (dbg_) dbg_->attached();
+}
+
+void VM::detachDebugger() {
+  if (!dbg_) return;
+  dbg_->detaching();
+  dbg_.reset();
+  dbgMask_.store(0);
 }
 
 Slot VM::callClosure(CloObj* c, const Slot* args, uint32_t nargs) {
@@ -745,6 +787,12 @@ bool VM::callClosureCatching(CloObj* c, std::string& errorMessage) {
   size_t cbs = callbackNatives_.size();
   size_t roots = tempRoots_.size();
   int inhibit = gcInhibit_;
+  // errors raised inside are caught here: a debugger does not report them as terminating
+  struct CatchScope {
+    int& d;
+    explicit CatchScope(int& x) : d(x) { d++; }
+    ~CatchScope() { d--; }
+  } scope(catchDepth_);
   try {
     callClosure(c, nullptr, 0);
     return true;

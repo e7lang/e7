@@ -19,6 +19,8 @@ static int runFile(const std::filesystem::path& p) {
   if (!buf.empty()) {
     buf.insert(buf.begin(), (uint8_t)1);
     LLVMFuzzerTestOneInput(buf.data(), buf.size());
+    buf[0] = 3;  // and with a debugger attached
+    LLVMFuzzerTestOneInput(buf.data(), buf.size());
   }
   return 1;
 }

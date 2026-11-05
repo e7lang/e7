@@ -8,7 +8,7 @@
 import PackageDescription
 
 let coreSources = ["utf", "numfmt", "serialize", "verify", "disasm"].map { "src/core/\($0).cpp" }
-let vmSources = ["src/vm/vm.cpp", "src/vm/interp.cpp"]
+let vmSources = ["src/vm/vm.cpp", "src/vm/interp.cpp", "src/vm/debug.cpp"]
   + ["core", "string", "array", "map", "math", "bytes", "bigint", "json", "encoding", "date", "test"].map { "src/stdlib/\($0).cpp" }
   + ["crypto", "keccak", "sign"].map { "src/crypto/\($0).cpp" }
   + ["src/capi/capi.cpp"]

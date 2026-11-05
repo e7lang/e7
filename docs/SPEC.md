@@ -69,6 +69,7 @@ utility types such as `Record/Partial/Pick`, `Promise`, `Symbol`, `RegExp`, and 
   `arr.entries()/keys()/values()`, `map.keys()/values()/entries()`), `switch` (with fall-through), `break/continue` (including labels),
   labeled blocks. **Not supported**: `for...in`, `with`, `try/catch/finally`.
 - Function declarations are hoisted; nested functions and arrow functions are closures.
+- `debugger;` stops execution when a debugger is attached ([DEBUGGING.md](DEBUGGING.md)) and does nothing otherwise (as in JS).
 - `throw new Error(msg)` / `throw "msg"`: **terminates the script** (E7 has no exception catching); the host gets `E7_ERR_RUNTIME` and a call stack with line numbers.
 
 ## 4. Expression semantics
@@ -219,7 +220,7 @@ insertion order, `Date`s by time, functions by identity. Failure messages show b
 assertEqual failed: totals
   expected: [ 1, 3 ]
   actual:   [ 1, 2 ]
-    at testTotals (cart.test.ts:8)
+    at testTotals (cart.test.ts:8:3)
 ```
 
 `assertThrows` catches the runtime errors of section 8 that are raised by the script (`throw`, `abort`, failed
@@ -238,12 +239,15 @@ tests), `--seed <n>`. The exit code is 1 if any test failed (or none ran), other
 
 ## 8. Runtime errors
 
-The following terminate the current call (the host receives an error code and a `file:line` call stack); the VM itself remains usable:
+The following terminate the current call (the host receives an error code and a `file:line[:column]` call stack); the VM itself remains usable:
 array/string/byte out-of-bounds access, null reference access, failed `!`/`as` assertions, integer division by zero, `throw`/`abort`, JSON validation failure (`JSON.parse`; `tryParse` returns `null` instead),
 failed strict `Map` lookups, instruction budget exhausted (`E7_ERR_BUDGET`, or suspend with `E7_SUSPENDED`), memory limit (`E7_ERR_MEMORY`),
 call stack too deep (`E7_ERR_STACK`), and host function errors.
 
-The stack trace lists one frame per line, innermost first, as `at <function> (<file>:<line>)`; the file is the
+The stack trace lists one frame per line, innermost first, as `at <function> (<file>:<line>:<column>)` when the
+module has debug information (always when running from source with `e7`, `e7 test`, `e7 debug`; with `e7c --debug`),
+otherwise as `at <function> (<file>:<line>)` (release bytecode). Columns are 1-based UTF-8 byte offsets; a call is
+located at the callee's name, a property access at the property name, an index expression at its `[`. The file is the
 source file relative to the entry file (also for imported modules), top-level code appears as `<init>`, and a builtin
 or host function that was running (or that called back into the script, like `Array.sort`) appears as
 `at <name> (native)`. Repeated cycles of recursion are collapsed into one line such as

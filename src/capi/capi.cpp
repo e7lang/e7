@@ -6,6 +6,7 @@
 
 #include "../crypto/sign.h"
 #include "../stdlib/util.h"
+#include "../vm/debug.h"
 #include "../vm/vm.h"
 #include "e7/e7.h"
 #ifdef E7_WITH_COMPILER
@@ -25,8 +26,27 @@ struct e7_module {
   ModuleRT* rt;
 };
 
+// debugger state of the C API: the callback and the storage behind returned pointers
+struct DebugApi {
+  e7_debug_fn fn = nullptr;
+  void* user = nullptr;
+  std::vector<DebugFrame> frames;
+  std::vector<e7_debug_frame> cframes;
+  std::vector<DebugScope> scopes;
+  std::vector<e7_debug_scope> cscopes;
+  std::vector<DebugVar> vars;
+  std::vector<e7_debug_variable> cvars;
+  DebugVar evalVar;
+  e7_debug_variable cEval{};
+  DebugFrame stopFrame;
+  std::string stopMsg;
+  std::vector<int> stopBps;
+};
+
 struct e7_vm {
   std::unique_ptr<VM> vm;
+  std::unique_ptr<DebugApi> dbg;
+  ModuleRT* pendingInit = nullptr;  // module whose initializer is paused by the debugger
   std::string lastError;
   std::string nativeError;
   std::string retStr;
@@ -134,11 +154,15 @@ static e7_status loadBytes(e7_vm* v, const uint8_t* data, size_t len, e7_module*
       throw;
     }
     v->vm->setSuspendOnBudget(susp);
-    (void)st;
     auto mod = std::make_unique<e7_module>();
     mod->rt = rt;
     if (out) *out = mod.get();
     v->modules.push_back(std::move(mod));
+    if (st == ERR_PAUSED) {  // the debugger stopped in top-level code: finished by e7_debug_resume()
+      v->pendingInit = rt;
+      v->pendingRet = 'v';
+      return E7_PAUSED;
+    }
     return E7_OK;
   } catch (E7Error& e) {
     return fail(v, (e7_status)e.code, e.msg);
@@ -150,12 +174,37 @@ static e7_status loadBytes(e7_vm* v, const uint8_t* data, size_t len, e7_module*
 e7_status e7_load(e7_vm* v, const uint8_t* data, size_t len, e7_module** out) { return loadBytes(v, data, len, out); }
 
 e7_status e7_compile(const char* source, size_t len, const char* file_name, uint8_t** out, size_t* out_len, char** errors) {
+  return e7_compile_ex(source, len, file_name, nullptr, out, out_len, errors);
+}
+
+e7_status e7_compile_ex(const char* source, size_t len, const char* file_name, const e7_compile_options* opts,
+                        uint8_t** out, size_t* out_len, char** errors) {
   if (out) *out = nullptr;
   if (out_len) *out_len = 0;
   if (errors) *errors = nullptr;
 #ifdef E7_WITH_COMPILER
+  if (!out || !out_len || (!source && len)) return E7_ERR_ARGS;
   try {
-    CompileOutput co = compileSource(file_name ? file_name : "main.ts", std::string(source, len));
+    CompileOptions co_;
+    co_.debugInfo = opts && (opts->flags & E7_COMPILE_DEBUG);
+    std::string name = file_name ? file_name : "main.ts";
+    std::string src(source ? source : "", len);
+    CompileOutput co;
+    if (opts && opts->read_file) {
+      std::string entry;  // the first file requested is the (normalized) entry file
+      co = compileProgram(name, [&](const std::string& path, std::string& content) {
+        if (entry.empty()) entry = path;
+        if (path == entry) { content = src; return true; }
+        char* data = nullptr;
+        size_t n = 0;
+        if (opts->read_file(opts->read_user, path.c_str(), &data, &n) != 0) { free(data); return false; }
+        content.assign(data ? data : "", data ? n : 0);
+        free(data);
+        return true;
+      }, co_);
+    } else {
+      co = compileSource(name, src, co_);
+    }
     if (!co.ok) {
       if (errors) {
         std::string t = co.errorText();
@@ -301,6 +350,11 @@ static void fromSlot(e7_vm* v, char code, Slot s, e7_value* out) {
 
 static e7_status finishCall(e7_vm* v, int st, e7_value* ret) {
   if (st == ERR_SUSPENDED) return E7_SUSPENDED;
+  if (st == ERR_PAUSED) return E7_PAUSED;
+  if (v->pendingInit) {  // a paused module initializer has finished
+    v->pendingInit->initialized = true;
+    v->pendingInit = nullptr;
+  }
   fromSlot(v, v->pendingRet, v->vm->result(), ret);
   return E7_OK;
 }
@@ -352,15 +406,20 @@ e7_status e7_resume(e7_vm* v, e7_value* ret) {
     int st = v->vm->resume();
     return finishCall(v, st, ret);
   } catch (E7Error& e) {
+    v->pendingInit = nullptr;
     return fail(v, (e7_status)e.code, e.msg);
   } catch (std::bad_alloc&) {
+    v->pendingInit = nullptr;
     v->vm->resetExecution();
     return fail(v, E7_ERR_MEMORY, "out of memory");
   }
 }
 
 void e7_abort_suspended(e7_vm* v) {
-  if (!v->active) v->vm->resetExecution();
+  if (!v->active) {
+    v->vm->resetExecution();
+    v->pendingInit = nullptr;
+  }
 }
 void e7_set_budget(e7_vm* v, int64_t ticks) { v->vm->setBudget(ticks); }
 const char* e7_last_error(e7_vm* v) { return v->lastError.c_str(); }
@@ -482,5 +541,186 @@ e7_status e7_sign_module(const uint8_t* e7b, size_t len, const uint8_t seed[32],
   return E7_OK;
 }
 void e7_public_key(const uint8_t seed[32], uint8_t pk[32]) { ed25519PublicKey(seed, pk); }
+
+// ---------------------------------------------------------------- debugging
+static Debugger* dbgOf(e7_vm* v) { return v ? v->vm->debugger() : nullptr; }
+
+static void fillFrame(const DebugFrame& f, e7_debug_frame& c) {
+  c.function = f.function.c_str();
+  c.file = f.loc.file.c_str();
+  c.line = f.loc.line;
+  c.column = f.loc.col;
+}
+
+static void fillStop(e7_vm* v, e7_debug_stop* out) {
+  Debugger* d = dbgOf(v);
+  DebugApi& a = *v->dbg;
+  a.stopFrame = d->frame(0);
+  a.stopMsg = d->message();
+  a.stopBps = d->hitBreakpoints();
+  memset(out, 0, sizeof *out);
+  out->reason = (e7_debug_reason)d->reason();
+  out->message = a.stopMsg.c_str();
+  fillFrame(a.stopFrame, out->where);
+  out->breakpoints = a.stopBps.data();
+  out->num_breakpoints = a.stopBps.size();
+}
+
+e7_status e7_debug_attach(e7_vm* v, e7_debug_fn fn, void* user) {
+  if (!v) return E7_ERR_ARGS;
+  if (v->active || v->vm->suspended()) return fail(v, E7_ERR_STATE, "cannot attach a debugger while the VM is running or suspended");
+  try {
+    v->dbg.reset(new DebugApi());
+    v->dbg->fn = fn;
+    v->dbg->user = user;
+    std::unique_ptr<Debugger> d(new Debugger(*v->vm));
+    if (fn) {
+      d->onStop = [v](int) -> int {
+        e7_debug_stop st;
+        fillStop(v, &st);
+        return (int)v->dbg->fn(v, &st, v->dbg->user);
+      };
+    }
+    v->vm->attachDebugger(std::move(d));
+    return E7_OK;
+  } catch (std::bad_alloc&) {
+    v->vm->detachDebugger();
+    v->dbg.reset();
+    return fail(v, E7_ERR_MEMORY, "out of memory");
+  }
+}
+
+e7_status e7_debug_detach(e7_vm* v) {
+  if (!v) return E7_ERR_ARGS;
+  if (v->active || v->vm->suspended()) return fail(v, E7_ERR_STATE, "cannot detach the debugger while the VM is running or suspended");
+  v->vm->detachDebugger();
+  v->dbg.reset();
+  return E7_OK;
+}
+
+void e7_debug_break_on_error(e7_vm* v, int enable) {
+  if (Debugger* d = dbgOf(v)) d->breakOnError = enable != 0;
+}
+
+int e7_debug_set_breakpoint(e7_vm* v, const char* file, uint32_t line) {
+  Debugger* d = dbgOf(v);
+  if (!d || !file) return 0;
+  try {
+    return d->addBreakpoint(file, line);
+  } catch (std::bad_alloc&) {
+    return 0;
+  }
+}
+
+int e7_debug_breakpoint_info(e7_vm* v, int id, int* verified, uint32_t* actual_line) {
+  Debugger* d = dbgOf(v);
+  const Breakpoint* b = d ? d->breakpoint(id) : nullptr;
+  if (verified) *verified = b && b->verified;
+  if (actual_line) *actual_line = b ? (b->verified ? b->actualLine : b->line) : 0;
+  return b != nullptr;
+}
+
+e7_status e7_debug_clear_breakpoint(e7_vm* v, int id) {
+  Debugger* d = dbgOf(v);
+  if (!d) return E7_ERR_STATE;
+  return d->removeBreakpoint(id) ? E7_OK : E7_ERR_NOT_FOUND;
+}
+
+void e7_debug_clear_breakpoints(e7_vm* v) {
+  if (Debugger* d = dbgOf(v)) d->clearBreakpoints();
+}
+
+void e7_debug_pause(e7_vm* v) {
+  if (Debugger* d = dbgOf(v)) d->requestPause(SR_PAUSE);
+}
+
+void e7_debug_stop_on_entry(e7_vm* v) {
+  if (Debugger* d = dbgOf(v)) d->requestPause(SR_ENTRY);
+}
+
+int e7_debug_is_paused(e7_vm* v) {
+  Debugger* d = dbgOf(v);
+  return d && d->paused();
+}
+
+e7_status e7_debug_stop_info(e7_vm* v, e7_debug_stop* out) {
+  Debugger* d = dbgOf(v);
+  if (!d || !d->paused() || !out) return E7_ERR_STATE;
+  fillStop(v, out);
+  return E7_OK;
+}
+
+size_t e7_debug_stack(e7_vm* v, const e7_debug_frame** frames) {
+  if (frames) *frames = nullptr;
+  Debugger* d = dbgOf(v);
+  if (!d || !d->paused()) return 0;
+  DebugApi& a = *v->dbg;
+  size_t n = d->frameCount();
+  a.frames.clear();
+  for (size_t i = 0; i < n; i++) a.frames.push_back(d->frame(i));
+  a.cframes.assign(n, e7_debug_frame{});
+  for (size_t i = 0; i < n; i++) fillFrame(a.frames[i], a.cframes[i]);
+  if (frames) *frames = a.cframes.data();
+  return n;
+}
+
+size_t e7_debug_scopes(e7_vm* v, size_t frame, const e7_debug_scope** scopes) {
+  if (scopes) *scopes = nullptr;
+  Debugger* d = dbgOf(v);
+  if (!d || !d->paused()) return 0;
+  DebugApi& a = *v->dbg;
+  a.scopes = d->scopes(frame);
+  a.cscopes.clear();
+  for (auto& s : a.scopes) a.cscopes.push_back(e7_debug_scope{s.name.c_str(), s.ref, s.count});
+  if (scopes) *scopes = a.cscopes.data();
+  return a.cscopes.size();
+}
+
+static void fillVar(const DebugVar& d, e7_debug_variable& c) {
+  c.name = d.name.c_str();
+  c.type = d.type.c_str();
+  c.value = d.value.c_str();
+  c.ref = d.ref;
+  c.count = d.count;
+}
+
+size_t e7_debug_variables(e7_vm* v, uint32_t ref, size_t start, size_t count, const e7_debug_variable** vars) {
+  if (vars) *vars = nullptr;
+  Debugger* d = dbgOf(v);
+  if (!d || !d->paused()) return 0;
+  DebugApi& a = *v->dbg;
+  a.vars = d->variables(ref, start, count);
+  a.cvars.assign(a.vars.size(), e7_debug_variable{});
+  for (size_t i = 0; i < a.vars.size(); i++) fillVar(a.vars[i], a.cvars[i]);
+  if (vars) *vars = a.cvars.data();
+  return a.cvars.size();
+}
+
+e7_status e7_debug_evaluate(e7_vm* v, size_t frame, const char* expression, const e7_debug_variable** result) {
+  if (result) *result = nullptr;
+  Debugger* d = dbgOf(v);
+  if (!d || !d->paused()) return v ? fail(v, E7_ERR_STATE, "not paused") : E7_ERR_ARGS;
+  if (!expression) return E7_ERR_ARGS;
+  DebugApi& a = *v->dbg;
+  std::string err;
+  if (!d->evaluate(frame, expression, a.evalVar, err)) return fail(v, E7_ERR_NOT_FOUND, err);
+  fillVar(a.evalVar, a.cEval);
+  if (result) *result = &a.cEval;
+  return E7_OK;
+}
+
+e7_status e7_debug_resume(e7_vm* v, e7_debug_action action, e7_value* ret) {
+  if (ret) memset(ret, 0, sizeof *ret);
+  Debugger* d = dbgOf(v);
+  if (!d || !d->hostPaused()) return v ? fail(v, E7_ERR_STATE, "the debugger is not paused") : E7_ERR_ARGS;
+  if (v->active) return fail(v, E7_ERR_STATE, kReentry);
+  if (action == E7_DEBUG_ABORT) {
+    v->vm->resetExecution();
+    v->pendingInit = nullptr;
+    return fail(v, E7_ERR_RUNTIME, "execution aborted by the debugger");
+  }
+  d->prepareResume((int)action);
+  return e7_resume(v, ret);
+}
 
 }  // extern "C"

@@ -241,7 +241,9 @@ int runTestCommand(int argc, char** argv) {
   for (const std::string& f : files) {
     FileResult fr;
     fr.file = displayPath(f);
-    e7::CompileOutput co = e7::compileProgram(f, e7::readFileFromDisk);
+    e7::CompileOptions copts;
+    copts.debugInfo = true;  // column numbers in failure traces
+    e7::CompileOutput co = e7::compileProgram(f, e7::readFileFromDisk, copts);
     if (!co.ok) {
       fr.error = formatCompileErrors(co, o.excerpt && !o.json);
       failed++;

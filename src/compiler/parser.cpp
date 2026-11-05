@@ -696,7 +696,7 @@ class Parser {
       if (w == "try") fail("try/catch is not supported in E7 (errors cannot be caught); return an error value instead, e.g. a result object or null, and validate input before using it");
       if (w == "switch") return parseSwitch();
       if (w == "with") fail("'with' is not supported");
-      if (w == "debugger") { i++; semi(); return A.stmt(SK::Empty, l); }
+      if (w == "debugger") { i++; semi(); return A.stmt(SK::Debugger, l); }
       if (peek().k == TK::Punct && peek().text == ":" && !isReserved(w)) {
         Stmt* s = A.stmt(SK::Labeled, l);
         s->label = t[i].text;
@@ -1384,6 +1384,7 @@ class Parser {
         i++;
         Expr* m = A.expr(EK::Member, cl);
         m->a = callee;
+        m->nameLoc = loc();
         m->raw = propName();
         callee = m;
       }
@@ -1408,6 +1409,7 @@ class Parser {
         if (cur().k == TK::PrivateName) fail("private names (#x) are not supported; use 'private'");
         Expr* m = A.expr(EK::Member, ml);
         m->a = e;
+        m->nameLoc = loc();
         m->raw = propName();
         e = m;
       } else if (isP("?.")) {
@@ -1430,7 +1432,8 @@ class Parser {
           Expr* m = A.expr(EK::Member, ml);
           m->a = e;
           m->optional = true;
-          m->raw = propName();
+          m->nameLoc = loc();
+        m->raw = propName();
           e = m;
         }
       } else if (isP("[")) {

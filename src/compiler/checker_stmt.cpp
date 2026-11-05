@@ -586,7 +586,7 @@ void Checker::checkStmt(Stmt* s) {
     case SK::Interface: case SK::TypeAlias: case SK::Enum:
       if (!topLevel) err(s->loc, "type declarations must be at top level");
       break;
-    case SK::Import: case SK::Export: case SK::Empty:
+    case SK::Import: case SK::Export: case SK::Empty: case SK::Debugger:
       break;
     case SK::Expr: {
       Type* t = check(s->expr, nullptr);

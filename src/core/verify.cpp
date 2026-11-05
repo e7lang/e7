@@ -325,6 +325,26 @@ bool verifyModule(const Module& m, std::string& err) {
     }
     for (uint32_t t : jumps)
       if (!isStart[t]) return F("function %zu: jump into the middle of an instruction", fi);
+    // debug information: only positions, names and register mappings, but the debugger reads
+    // registers through it, so every index and range is checked
+    if (f.hasDebug) {
+      const FuncDebug& d = f.debug;
+      for (size_t k = 0; k < d.pos.size(); k++)
+        if (d.pos[k].pc >= n || (k && d.pos[k].pc <= d.pos[k - 1].pc)) return F("function %zu: bad debug position table", fi);
+      for (size_t k = 0; k < d.stmts.size(); k++)
+        if (d.stmts[k].pc >= n || !isStart[d.stmts[k].pc] || (k && d.stmts[k].pc <= d.stmts[k - 1].pc))
+          return F("function %zu: bad debug statement table", fi);
+      for (const DebugLocal& l : d.locals) {
+        if (l.reg >= f.regKinds.size()) return F("function %zu: debug variable register out of range", fi);
+        if (l.startPc > l.endPc || l.endPc > n) return F("function %zu: bad debug variable range", fi);
+        if (l.vt >= VT__COUNT || (l.flags & ~(kDebugLocalCell | kDebugLocalParam)))
+          return F("function %zu: bad debug variable type", fi);
+        uint8_t want = (l.flags & kDebugLocalCell) ? (uint8_t)K_R : (uint8_t)kindOfVT(l.vt);
+        if (f.regKinds[l.reg] != want) return F("function %zu: debug variable kind mismatch", fi);
+      }
+      if (!d.upvalNames.empty() && d.upvalNames.size() != f.upvalKinds.size())
+        return F("function %zu: bad debug upvalue names", fi);
+    }
     uint16_t lastOp = insOp(code[lastStart]);
     if (lastOp != OP_RET_I && lastOp != OP_RET_F && lastOp != OP_RET_R && lastOp != OP_RET_V &&
         lastOp != OP_JMP && lastOp != OP_ABORT)

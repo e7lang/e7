@@ -7,7 +7,7 @@ All integers are little-endian. A string is `u32 length + UTF-8 bytes`.
 ```
 magic   "E7B\0"            4 bytes
 version u32 = 1
-flags   u32 = 0
+flags   u32                bit 0: the module carries debug information (informational; readers ignore unknown bits)
 name    str
 ints    u32 n, n × i64        integer constant pool
 nums    u32 n, n × f64        number constant pool (IEEE-754 bit patterns)
@@ -31,6 +31,21 @@ footer  "E7B$" u32 crc32       CRC32 of all preceding bytes
   `(0xFFFFFFFF, pc), (0xFFFFFFFF, strIdx)` entries meaning "from `pc` on, the source file is string constant `strIdx`"
   (a path relative to the entry file). Readers that stop at the first pair whose pc is past the instruction ignore it,
   so older VMs still load such modules; single-file programs carry no extension.
+- **debug information** (optional, `e7c --debug`; see [DEBUGGING.md](DEBUGGING.md)): after the pairs and the file
+  segments (if any), a function may append `(0xFFFFFFFF, 0x31474244 "DBG1")`, a word count `n` (< 2^31), `n` payload
+  words, and one `0` padding word if needed to keep the table a list of pairs. Older readers ignore it (their pair
+  scan stops at the first marker and their file-segment scan at the first group that is not
+  `(marker, pc, marker, index)`). Payload (all `u32`):
+  ```
+  npos,   npos  x (pc, line, col)     position of the code from pc on; pcs strictly increasing
+  nstmt,  nstmt x (pc, line, col)     statement boundaries (instruction starts, strictly increasing) and their position
+  nlocal, nlocal x (reg, startPc, endPc, vt | flags << 8, name)
+                                      a variable (or parameter) held in register reg while startPc <= pc < endPc;
+                                      flags: 1 = the register holds a cell (captured variable), 2 = parameter
+  nup,    nup x name                  names of the function's upvalues (0 or one per upvalue)
+  name = u32 byte length (<= 4096), then the UTF-8 bytes packed little-endian into ceil(length / 4) words
+  ```
+  Columns are 1-based UTF-8 byte offsets. Debug information does not change the code.
 - **kind** (register kind): `0=I` (64-bit integer/boolean), `1=F` (f64), `2=R` (reference). Each register of each function has a **fixed** kind.
 - **vt** (exact value type): `0 number, 1 boolean, 2 i8, 3 u8, 4 i16, 5 u16, 6 i32, 7 u32, 8 i64, 9 u64, 10 ref`.
   Used for array elements, fields, cells, boxed values, Map keys/values, and formatting.
@@ -236,6 +251,7 @@ Operand formats: `I/F/R` register of the given kind, `_` unused (must be 0), `v`
 | `EQ_R` | `IRR` | Reference equality |
 | `NE_R` | `IRR` | Reference inequality |
 | `ABORT` | `R__` | Abort with R[A] as the message |
+| `DEBUGGER` | `___` | `debugger;` statement: no-op, a stop when a debugger is attached |
 
 ## 3. Verification rules (at load time, `src/core/verify.cpp`)
 
@@ -247,6 +263,10 @@ Operand formats: `I/F/R` register of the given kind, `_` unused (must be 0), `v`
    indirect calls (closure/method/interface) compare the signature id again at runtime.
 5. Jump targets must be instruction start positions; the last instruction of a function must be an unconditional transfer (`RET_*`, `JMP`, `ABORT`), so execution cannot "fall off" the end of a function.
 6. Classes: the parent class index is less than the class's own index (no cycles); inherited field layouts and vtable signatures are consistent; the first parameter of a method is the receiver.
+7. Debug information: a malformed extension (counts past the payload, names over 4096 bytes, trailing words) fails the load; positions and statement
+   boundaries must be strictly increasing and inside the code (statements at instruction starts); every variable's register exists and has the kind of
+   its value type (reference kind when it holds a cell), its range lies within the code, its value type and flags are valid; upvalue names are absent
+   or one per upvalue. The debugger reads registers only through this mapping and checks object types at run time.
 
 Because register kinds are fixed, verification is a single linear pass. Verification guarantees that "an integer is never used as a pointer"; object shapes (field count and kinds, array element types,
 string/byte types) are checked by the interpreter at runtime. So even maliciously crafted bytecode can only cause a load failure or a clean runtime error, never memory corruption

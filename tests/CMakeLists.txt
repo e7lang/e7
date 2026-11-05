@@ -14,6 +14,16 @@ if(Python3_FOUND)
              --e7 $<TARGET_FILE:e7> --e7c $<TARGET_FILE:e7c> --root ${CMAKE_SOURCE_DIR})
     # `e7 test` runner and CLI diagnostics (source excerpts)
     add_test(NAME cli_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli/cli_test.py --e7 $<TARGET_FILE:e7> --e7c $<TARGET_FILE:e7c>)
+    # `e7 debug` command-line debugger, driven through stdin
+    add_test(NAME cli_debug_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/debug/cli_debug_test.py --e7 $<TARGET_FILE:e7> --e7c $<TARGET_FILE:e7c>)
+  endif()
+  if(E7_WITH_COMPILER)
+    # the WebAssembly entry points (tools/e7wasm.cpp) built natively: debugger JSON protocol
+    add_executable(e7wasm_native ${CMAKE_SOURCE_DIR}/tools/e7wasm.cpp)
+    target_compile_definitions(e7wasm_native PRIVATE E7W_NATIVE_MAIN=1)
+    target_link_libraries(e7wasm_native PRIVATE e7vm_static)
+    target_include_directories(e7wasm_native PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME wasm_debug_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/debug/wasm_debug_test.py --e7wasm $<TARGET_FILE:e7wasm_native>)
   endif()
 endif()
 
@@ -45,6 +55,15 @@ add_executable(malicious_test malicious_test.cpp)
 target_link_libraries(malicious_test PRIVATE e7vm_static)
 file(GLOB E7_MALICIOUS ${CMAKE_CURRENT_SOURCE_DIR}/malicious/*.e7b)
 add_test(NAME malicious_test COMMAND malicious_test ${E7_MALICIOUS})
+
+# debugger: C debug API, debug information in bytecode, verifier checks of debug sections
+if(E7_WITH_COMPILER)
+  find_package(Threads REQUIRED)
+  add_executable(debug_test debug_test.cpp)
+  target_link_libraries(debug_test PRIVATE e7vm_static Threads::Threads)
+  target_include_directories(debug_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  add_test(NAME debug_test COMMAND debug_test)
+endif()
 
 add_executable(capi_reentry_test capi_reentry_test.cpp)
 target_link_libraries(capi_reentry_test PRIVATE e7vm_static)

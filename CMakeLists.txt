@@ -63,7 +63,7 @@ endif()
 # ---------------------------------------------------------------- core / compiler / VM
 set(E7_CORE_SRC src/core/utf.cpp src/core/numfmt.cpp src/core/serialize.cpp src/core/verify.cpp src/core/disasm.cpp)
 set(E7_VM_SRC
-  src/vm/vm.cpp src/vm/interp.cpp
+  src/vm/vm.cpp src/vm/interp.cpp src/vm/debug.cpp
   src/stdlib/core.cpp src/stdlib/string.cpp src/stdlib/array.cpp src/stdlib/map.cpp src/stdlib/math.cpp
   src/stdlib/bytes.cpp src/stdlib/bigint.cpp src/stdlib/json.cpp src/stdlib/encoding.cpp src/stdlib/date.cpp
   src/stdlib/test.cpp
@@ -126,7 +126,7 @@ endif()
 
 # ---------------------------------------------------------------- tools
 if(E7_BUILD_TOOLS)
-  add_executable(e7 tools/e7.cpp tools/e7_test.cpp)
+  add_executable(e7 tools/e7.cpp tools/e7_test.cpp tools/e7_debug.cpp)
   target_link_libraries(e7 PRIVATE e7vm_static)
   target_include_directories(e7 PRIVATE src)
   add_executable(e7c tools/e7c.cpp)
@@ -145,8 +145,9 @@ if(EMSCRIPTEN)
     -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createE7 -sENVIRONMENT=web,worker,node
     -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=32MB -sSTACK_SIZE=4MB
     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8
-    # playground API, then the structured API used by the npm package (packages/e7)
-    -sEXPORTED_FUNCTIONS=_e7w_run,_e7w_output,_e7w_result,_e7w_error,_e7w_bytecode_size,_e7w_version,_e7w_disasm,_malloc,_free,_e7w_files_clear,_e7w_file_add,_e7w_compile,_e7w_diagnostics,_e7w_bytes_ptr,_e7w_bytes_len,_e7w_disasm_bytes,_e7w_exports,_e7w_args_clear,_e7w_arg_number,_e7w_arg_bool,_e7w_arg_null,_e7w_arg_string,_e7w_arg_bytes,_e7w_arg_int,_e7w_exec,_e7w_output_json,_e7w_result_json)
+    # playground API, then the structured API used by the npm package (packages/e7), then the
+    # debugger API (docs/DEBUGGING.md)
+    -sEXPORTED_FUNCTIONS=_e7w_run,_e7w_output,_e7w_result,_e7w_error,_e7w_bytecode_size,_e7w_version,_e7w_disasm,_malloc,_free,_e7w_files_clear,_e7w_file_add,_e7w_compile,_e7w_diagnostics,_e7w_bytes_ptr,_e7w_bytes_len,_e7w_disasm_bytes,_e7w_exports,_e7w_args_clear,_e7w_arg_number,_e7w_arg_bool,_e7w_arg_null,_e7w_arg_string,_e7w_arg_bytes,_e7w_arg_int,_e7w_exec,_e7w_output_json,_e7w_result_json,_e7w_compile_ex,_e7w_dbg_create,_e7w_dbg_set_breakpoints,_e7w_dbg_breakpoints,_e7w_dbg_break_on_error,_e7w_dbg_launch,_e7w_dbg_resume,_e7w_dbg_pause,_e7w_dbg_stack,_e7w_dbg_scopes,_e7w_dbg_variables,_e7w_dbg_evaluate,_e7w_dbg_terminate)
   set_target_properties(e7wasm PROPERTIES SUFFIX ".js")
 endif()
 

@@ -77,6 +77,106 @@ struct Rd {
   }
 };
 
+// ---- debug-information extension of the line table (see kLineExtDebug in module.h)
+void putName(std::vector<uint32_t>& w, const std::string& s) {
+  w.push_back((uint32_t)s.size());
+  for (size_t i = 0; i < s.size(); i += 4) {
+    uint32_t x = 0;
+    for (size_t k = 0; k < 4 && i + k < s.size(); k++) x |= (uint32_t)(uint8_t)s[i + k] << (8 * k);
+    w.push_back(x);
+  }
+}
+
+std::vector<uint32_t> linesWithDebug(const FuncDesc& f) {
+  std::vector<uint32_t> L = f.lines;
+  if (!f.hasDebug) return L;
+  const FuncDebug& d = f.debug;
+  std::vector<uint32_t> p;
+  p.push_back((uint32_t)d.pos.size());
+  for (auto& e : d.pos) { p.push_back(e.pc); p.push_back(e.line); p.push_back(e.col); }
+  p.push_back((uint32_t)d.stmts.size());
+  for (auto& e : d.stmts) { p.push_back(e.pc); p.push_back(e.line); p.push_back(e.col); }
+  p.push_back((uint32_t)d.locals.size());
+  for (auto& l : d.locals) {
+    p.push_back(l.reg);
+    p.push_back(l.startPc);
+    p.push_back(l.endPc);
+    p.push_back((uint32_t)l.vt | ((uint32_t)l.flags << 8));
+    putName(p, l.name);
+  }
+  p.push_back((uint32_t)d.upvalNames.size());
+  for (auto& n : d.upvalNames) putName(p, n);
+  L.push_back(kLineExtMarker);
+  L.push_back(kLineExtDebug);
+  L.push_back((uint32_t)p.size());
+  L.insert(L.end(), p.begin(), p.end());
+  if (L.size() % 2) L.push_back(0);  // the table holds pairs
+  return L;
+}
+
+// Finds and decodes the debug extension of f.lines (removing it from the table). Returns false on a
+// malformed extension. Every count is checked against the words that remain.
+bool extractDebug(FuncDesc& f) {
+  std::vector<uint32_t>& L = f.lines;
+  size_t n = L.size();
+  size_t i = 0;
+  while (i + 1 < n && L[i] != kLineExtMarker) i += 2;
+  if (i + 1 < n && L[i + 1] == kLineExtFiles) {
+    size_t j = i + 2;
+    while (j + 3 < n && L[j] == kLineExtMarker && L[j + 2] == kLineExtMarker) j += 4;
+    i = j;
+  }
+  if (!(i + 2 < n && L[i] == kLineExtMarker && L[i + 1] == kLineExtDebug)) return true;
+  uint64_t words = L[i + 2];
+  size_t at = i + 3;
+  if (words > n - at) return false;
+  size_t end = at + (size_t)words;
+  if (n - end > 1 || (n - end == 1 && L[end] != 0)) return false;  // only one padding word may follow
+  auto take = [&](uint32_t& out) {
+    if (at >= end) return false;
+    out = L[at++];
+    return true;
+  };
+  auto count = [&](uint32_t& out, size_t per) {
+    if (!take(out)) return false;
+    return (uint64_t)out * per <= (uint64_t)(end - at);
+  };
+  auto name = [&](std::string& s) {
+    uint32_t len;
+    if (!take(len) || len > 4096 || (uint64_t)(len + 3) / 4 > (uint64_t)(end - at)) return false;
+    s.resize(len);
+    for (uint32_t k = 0; k < len; k++) s[k] = (char)(uint8_t)(L[at + k / 4] >> (8 * (k % 4)));
+    at += (len + 3) / 4;
+    return true;
+  };
+  FuncDebug d;
+  uint32_t c;
+  if (!count(c, 3)) return false;
+  d.pos.resize(c);
+  for (auto& e : d.pos) { take(e.pc); take(e.line); take(e.col); }
+  if (!count(c, 3)) return false;
+  d.stmts.resize(c);
+  for (auto& e : d.stmts) { take(e.pc); take(e.line); take(e.col); }
+  if (!count(c, 5)) return false;
+  d.locals.resize(c);
+  for (auto& l : d.locals) {
+    uint32_t tf = 0;
+    if (!take(l.reg) || !take(l.startPc) || !take(l.endPc) || !take(tf) || (tf >> 16) != 0) return false;
+    l.vt = (uint8_t)tf;
+    l.flags = (uint8_t)(tf >> 8);
+    if (!name(l.name)) return false;
+  }
+  if (!count(c, 1)) return false;
+  d.upvalNames.resize(c);
+  for (auto& s : d.upvalNames)
+    if (!name(s)) return false;
+  if (at != end) return false;
+  L.resize(i);
+  f.debug = std::move(d);
+  f.hasDebug = true;
+  return true;
+}
+
 const char kMagic[4] = {'E', '7', 'B', 0};
 const char kFooter[4] = {'E', '7', 'B', '$'};
 
@@ -86,7 +186,9 @@ std::vector<uint8_t> serializeModule(const Module& m) {
   W w;
   w.b.insert(w.b.end(), kMagic, kMagic + 4);
   w.u32(kFormatVersion);
-  w.u32(0);  // flags
+  bool anyDebug = false;
+  for (auto& f : m.funcs) anyDebug = anyDebug || f.hasDebug;
+  w.u32(anyDebug ? (m.flags | kModuleFlagDebug) : (m.flags & ~kModuleFlagDebug));  // flags
   w.str(m.name);
   w.u32((uint32_t)m.ints.size());
   for (int64_t v : m.ints) w.u64((uint64_t)v);
@@ -121,8 +223,9 @@ std::vector<uint8_t> serializeModule(const Module& m) {
     for (uint32_t s : f.icNames) w.u32(s);
     w.u32((uint32_t)f.code.size());
     for (uint64_t c : f.code) w.u64(c);
-    w.u32((uint32_t)f.lines.size());
-    for (uint32_t l : f.lines) w.u32(l);
+    std::vector<uint32_t> L = linesWithDebug(f);
+    w.u32((uint32_t)L.size());
+    for (uint32_t l : L) w.u32(l);
   }
   w.u32((uint32_t)m.globals.size());
   for (auto& g : m.globals) { w.str(g.name); w.u8(g.vt); }
@@ -147,7 +250,7 @@ bool deserializeModule(const uint8_t* data, size_t len, Module& m, std::string& 
   r.pos = 4;
   uint32_t ver = r.u32();
   if (ver != kFormatVersion) { err = "unsupported e7b format version " + std::to_string(ver); return false; }
-  r.u32();  // flags
+  m.flags = r.u32();  // informational (unknown bits are ignored)
   m.name = r.str();
   uint32_t n = r.count(8);
   m.ints.resize(n);
@@ -205,6 +308,7 @@ bool deserializeModule(const uint8_t* data, size_t len, Module& m, std::string& 
     f.lines.resize(k);
     for (auto& x : f.lines) x = r.u32();
     if (!r.ok) break;
+    if (!extractDebug(f)) { err = "malformed debug information in e7b file"; return false; }
   }
   n = r.count(5);
   m.globals.resize(n);
