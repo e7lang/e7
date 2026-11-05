@@ -24,6 +24,7 @@ found = {
     "packages/e7/package.json": json.loads((root / "packages/e7/package.json").read_text())["version"],
     "packages/e7/index.js": grab("packages/e7/index.js", r'^export const version = "([^"]+)"'),
     "editors/vscode/package.json": json.loads((root / "editors/vscode/package.json").read_text())["version"],
+    ".claude-plugin/plugin.json": json.loads((root / ".claude-plugin/plugin.json").read_text())["version"],
     "platform/dotnet/E7VM/E7VM.csproj": grab("platform/dotnet/E7VM/E7VM.csproj", r"<Version>([^<]+)</Version>"),
 }
 want = sys.argv[1].lstrip("v") if len(sys.argv) > 1 else found["CMakeLists.txt"]

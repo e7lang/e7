@@ -200,6 +200,21 @@ VS Code 扩展 **E7 Language**（[editors/vscode](editors/vscode)，发布者 `e
 都附带 `.vsix`）在输入时给出 E7 编译器自己的诊断，并提供 *E7: Run File*、*E7: Compile to Bytecode*、*E7: Show Bytecode* 命令。
 它作用于 `*.e7` 文件、导入 `"e7:..."` 模块的 `.ts` 文件，以及匹配 `e7.files` 设置的文件。
 
+## 用 AI 助手编写 E7
+
+E7 看起来像 TypeScript，AI 助手很容易写出 E7 不支持的 TypeScript（`try`/`catch`、泛型、`any`、正则、联合类型等）。
+**E7 skill**（[`skills/e7`](skills/e7)）会告诉 AI：E7 支持什么、不支持的写法该怎么改、标准库有哪些，以及每次都要用
+`e7c --check` 编译检查。在我们的测试中，它把结果正确率从 88% 提升到 100%，每个任务的耗时减少约 40%。
+
+- **Claude Code**：`/plugin marketplace add e7lang/e7`，然后 `/plugin install e7@e7lang`
+  （Claude Code 2.1.275 及以上也可以直接 `/plugin install e7 --marketplace e7lang/e7`）。
+  不用插件系统的话：把 `skills/e7` 复制到 `~/.claude/skills/e7`（或项目里的 `.claude/skills/e7`）。
+- **claude.ai / Claude API / 其他工具**：使用 [最新 Release](https://github.com/e7lang/e7/releases/latest) 里的 `e7-skill.zip`。
+- **能读取网页的 AI 助手**：让它读取 [e7lang.github.io/llms.txt](https://e7lang.github.io/llms.txt)，
+  或全文 [llms-full.txt](https://e7lang.github.io/llms-full.txt)。
+
+skill 里的每个代码示例都会在 CI 中实际编译运行，因此它不会和语言本身脱节。
+
 ## 测试你的脚本
 
 把测试写在 `*.test.ts` 文件里，导出名字以 `test` 开头的函数，并使用内置模块 `e7:test` 提供的断言

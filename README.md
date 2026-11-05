@@ -204,6 +204,22 @@ attached to each [release](https://github.com/e7lang/e7/releases/latest)) adds t
 diagnostics as you type, *E7: Run File*, *E7: Compile to Bytecode* and *E7: Show Bytecode*. It works on
 `*.e7` files, `.ts` files that import `"e7:..."` modules and files matching the `e7.files` setting.
 
+## Using E7 with AI assistants
+
+E7 looks like TypeScript, so AI assistants tend to write TypeScript that E7 rejects (`try`/`catch`, generics,
+`any`, regex, union types...). The **E7 skill** ([`skills/e7`](skills/e7)) teaches them what E7 supports, how to
+rewrite what it doesn't, the standard library, and to compile-check every script with `e7c --check`. In our tests
+it raised correct results from 88% to 100% and cut the time per task by about 40%.
+
+- **Claude Code**: `/plugin marketplace add e7lang/e7`, then `/plugin install e7@e7lang`
+  (or, on Claude Code 2.1.275+, `/plugin install e7 --marketplace e7lang/e7`).
+  Without the plugin system: copy `skills/e7` to `~/.claude/skills/e7` (or `.claude/skills/e7` in your project).
+- **claude.ai / Claude API / other tools**: use `e7-skill.zip` from the [latest release](https://github.com/e7lang/e7/releases/latest).
+- **Any assistant that reads the web**: point it at [e7lang.github.io/llms.txt](https://e7lang.github.io/llms.txt)
+  or the full text at [llms-full.txt](https://e7lang.github.io/llms-full.txt).
+
+Every code example in the skill is compiled and run in CI, so the skill cannot drift from the language.
+
 ## Testing your scripts
 
 Put tests in `*.test.ts` files, export functions whose names start with `test`, and use the assertions from the

@@ -168,6 +168,11 @@ jobs:
         with: { path: dist, merge-multiple: true }
       - name: Homebrew formula and Scoop manifest
         run: python3 scripts/gen-packaging.py "${{ steps.tag.outputs.tag }}" dist dist
+      - name: AI skill (zip for claude.ai / the Claude API / other tools)
+        run: |
+          mkdir -p skillpkg && cp -R skills/e7 skillpkg/e7 && rm -rf skillpkg/e7/evals
+          (cd skillpkg && zip -qr ../dist/e7-skill.zip e7)
+          unzip -l dist/e7-skill.zip | tail -3
       - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -198,6 +203,7 @@ jobs:
           | .NET (NuGet) | \`E7VM\` \`${TAG#v}\` (\`.nupkg\` attached) |
           | JavaScript (npm) | \`@e7lang/e7@${TAG#v}\` (WebAssembly; \`.tgz\` attached) |
           | VS Code | *E7 Language* extension (\`.vsix\` attached) |
+          | AI assistants | Claude Code: \`/plugin marketplace add e7lang/e7\`, then \`/plugin install e7@e7lang\`; other tools: \`e7-skill.zip\` |
 
           Try the language without installing anything: https://e7lang.github.io/playground
           Changes: see [CHANGELOG.md](https://github.com/e7lang/e7/blob/${TAG}/CHANGELOG.md).

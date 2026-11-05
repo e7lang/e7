@@ -5,6 +5,12 @@ All notable changes to E7 / e7vm are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **E7 skill for AI assistants** (`skills/e7`): what E7 supports and rejects compared with TypeScript, with
+  rewrites, the standard library, testing, embedding, and a compile-check workflow. Every code block is checked
+  against the compiler in CI (`skill_check`). Install in Claude Code with `/plugin marketplace add e7lang/e7` and
+  `/plugin install e7@e7lang`; releases attach `e7-skill.zip` for claude.ai, the Claude API and other tools.
+
 ## [1.0.1] - 2026-11-04
 
 ### Added

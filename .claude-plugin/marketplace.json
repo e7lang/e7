@@ -1,0 +1,14 @@
+{
+  "name": "e7lang",
+  "owner": { "name": "e7lang", "url": "https://github.com/e7lang" },
+  "description": "Claude Code plugins for the E7 language (a strict TypeScript subset for scripts embedded in apps)",
+  "plugins": [
+    {
+      "name": "e7",
+      "source": "./",
+      "description": "Write, fix and review E7 scripts: what E7 supports and rejects compared with TypeScript, the standard library, and the compile-check workflow",
+      "category": "development",
+      "tags": ["e7", "typescript", "embedded-scripting", "bytecode", "crypto"]
+    }
+  ]
+}
