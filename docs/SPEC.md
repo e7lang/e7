@@ -105,10 +105,19 @@ try {
 - **What cannot be caught** (it still ends the call): checks that are specific to E7 because JavaScript would not
   throw at that point — out-of-bounds reads, failed `as` casts and `JSON.parse(...) as T` shape mismatches (use
   `tryParse`), integer division by zero, null access through a type the checker considered non-null, functions that
-  end without returning a value — and `abort()`, the instruction budget, the memory limit and the call depth limit.
+  end without returning a value, values read from the holes of `new Array<Error>(n)` (`undefined`; `instanceof` is
+  false for them, but reading `.message` or throwing them ends the call), and e7's own size limits, whose messages say
+  "an e7 limit" (JSON and array-to-string nesting deeper than 256 levels, BigInts over 262144 bits, arrays over
+  2^27 - 1 and typed arrays over 2^31 - 1 elements) — and `abort()`, the instruction budget, the memory limit and the
+  call depth limit.
   This keeps the rule "an E7 program prints the same output as on Node.js" true for programs that catch errors.
 - A handler runs in the frame of its `try`; frames above it are dropped, including script callbacks called from
   library functions such as `Array.sort`. Assignments made in the `try` block before the error are kept.
+  Catching costs instruction budget like the calls it undoes (one tick per dropped frame), and a library function
+  that fails is charged for the work it did before the error.
+- Errors convert like in JavaScript outside `catch` too: `JSON.stringify(e)` is `{}`, `String([e])` and template
+  literals give `"Name: message"`. Printing a value that contains an Error with `console.log` is a compile error
+  (Node.js prints a stack trace).
 - Debuggers stop on errors that no handler catches (and not on caught ones).
 
 ## 4. Expression semantics

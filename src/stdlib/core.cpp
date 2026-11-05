@@ -30,7 +30,7 @@ Slot boxValue(VM& vm, Slot v, uint8_t vt) {
 static thread_local std::vector<const Obj*> tlJoinStack;
 struct JoinGuard {
   explicit JoinGuard(VM& vm, const Obj* o) {
-    if (tlJoinStack.size() >= 256) vm.error("RangeError: array nesting is too deep to convert to a string");
+    if (tlJoinStack.size() >= 256) vm.error("array nesting is too deep to convert to a string (an e7 limit of 256 levels)");
     tlJoinStack.push_back(o);
   }
   ~JoinGuard() { tlJoinStack.pop_back(); }
@@ -57,6 +57,8 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::BigInt: return ascii(bigToString(static_cast<BigObj*>(o), 10));
     case OT::Array: {
       auto* a = static_cast<ArrObj*>(o);
+      StrObj *en, *em;
+      if (vm.errorParts(o, &en, &em)) return em->len ? strU16(en) + u": " + strU16(em) : strU16(en);
       if (joining(o)) return u"";
       JoinGuard g(vm, o);
       std::u16string out;
@@ -183,6 +185,9 @@ static std::string inspectRec(VM& vm, Slot v, uint8_t vt, int depth, bool top, s
     default: break;
   }
   if (seen.count(o)) return "[Circular *1]";
+  StrObj *en, *em;
+  if (vm.errorParts(o, &en, &em))  // the compiler rejects printing Errors (Node prints a stack trace)
+    return em->len ? strUtf8(en) + ": " + strUtf8(em) : strUtf8(en);
   if (o->type == OT::Array) {
     auto* a = static_cast<ArrObj*>(o);
     if (a->len == 0) return "[]";
@@ -515,6 +520,7 @@ E7_NATIVE(n_errorNew) {
   e->data[0].r = name;
   e->data[1].r = msg;
   e->len = 2;
+  e->flags |= kArrFlagError;
   r->r = e;
 }
 E7_NATIVE(n_errorName) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = nm; }
@@ -527,11 +533,12 @@ E7_NATIVE(n_errorToString) {  // String(e): "Name: message", or "Name" when the 
   std::u16string s = strU16(nm) + u": " + strU16(m);
   r->r = vm.newString(s);
 }
-E7_NATIVE(n_errorIs) {  // e instanceof TypeError (and friends): compares the name
+E7_NATIVE(n_errorIs) {  // x instanceof Error / TypeError / ...: false for anything that is not an Error
   E7_UNUSED;
   StrObj *nm, *m;
-  errParts(vm, a[0], &nm, &m);
-  r->i = strU16(nm) == strU16(S(vm, a[1])) ? 1 : 0;
+  std::u16string want = strU16(S(vm, a[1]));
+  if (!vm.errorParts(a[0].r, &nm, &m)) r->i = 0;
+  else r->i = (want == u"Error" || strU16(nm) == want) ? 1 : 0;
 }
 
 void registerCoreNatives(VM& vm) {

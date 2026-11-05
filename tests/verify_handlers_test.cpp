@@ -69,6 +69,9 @@ int main() {
   mutate("empty range", [](e7::FuncDesc& d) { d.handlers[0].end = d.handlers[0].start; });
   mutate("range past the end", [&](e7::FuncDesc& d) { d.handlers[1].end = (uint32_t)n + 1; });
   mutate("handler past the end", [&](e7::FuncDesc& d) { d.handlers[0].handler = (uint32_t)n; });
+  // a handler at or before its range would let a catch loop without a charged back edge
+  mutate("handler inside its range", [](e7::FuncDesc& d) { d.handlers[0].handler = d.handlers[0].start; });
+  mutate("handler before its range", [](e7::FuncDesc& d) { d.handlers[1].handler = 0; });
   mutate("register out of range", [](e7::FuncDesc& d) { d.handlers[0].reg = (uint32_t)d.regKinds.size(); });
   mutate("number register", [](e7::FuncDesc& d) {
     for (uint32_t r = 0; r < d.regKinds.size(); r++)

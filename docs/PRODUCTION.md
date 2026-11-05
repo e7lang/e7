@@ -106,6 +106,34 @@ with no case of "e7 accepts while Node rejects"). Conclusion: **READY WITH CAVEA
 
 Regression tests: `capi_reentry_test` adds native-loop budget and `max_frames` cases.
 
+### 3.5 Fifth security review: try/catch (0.2)
+
+A separate AI review agent (given the source, the threat model and SPEC 3.1, without our tests' conclusions) reviewed the
+try/catch added in 0.2 end to end: handler tables, THROW, the catch path in the VM, Error objects, natives and callbacks,
+suspend/resume, the debugger and the compiler. It built with ASan+UBSan, fuzzed 964 random verifier-accepted handler
+tables (no sanitizer reports) and reproduced each finding. **No memory-safety issue was found.** All eight findings are
+fixed in 0.2.1 with regression tests:
+
+| # | Severity | Issue | Fix |
+|---|---|---|---|
+| 1 | High | A crafted handler table whose target lies at or before its range made a catch loop forever without spending budget | The verifier requires every handler to come after its range, so looping needs a charged back edge |
+| 2 | High | A native raising a catchable error was never charged for its work: a loop of failing `JSON.parse` calls on 4 MB ran ~12 h on a 10M budget | Natives with a cost model are charged also when they fail |
+| 3 | High | Every throw built the full stack trace (O(frames), uncharged) before looking for a handler: 2,000 throws 19,000 frames deep took 2.3 s on ~14k ticks | The trace is built only for errors no handler takes; a catch charges one tick per frame it drops |
+| 4 | Medium | e7's own limits (JSON / join nesting 256, BigInt 262144 bits, array and typed-array length caps) carried JavaScript error names, so `catch` saw errors Node.js would not raise | They are raised without a JavaScript name ("an e7 limit") and end the call |
+| 5 | Medium | `x instanceof Error` was folded to `true` for any `Error`-typed value, including holes of `new Array<Error>(n)` | Folded only for caught values; checked at run time otherwise |
+| 6 | Medium | The internal representation of Errors leaked through `JSON.stringify`, `String([e])`, concatenation of `Error \| null` and `console.log` of containers | Error objects carry a flag; conversions match Node.js (`{}`, `"Name: message"`); printing a value containing an Error is a compile error |
+| 7 | Low | More than 65,535 `try` statements in one function gave an internal compiler error | A normal compile error |
+| 8 | High (not try-specific) | An out-of-memory error inside `Map.set` left the map's grown storage unaccounted; clearing the map wrapped the heap counter below zero, after which small allocations failed and large ones bypassed the limit | The grown storage is accounted even when the limit is exceeded; `arrayReserve` undoes its accounting if `realloc` fails |
+
+Areas the review confirmed correct: register kinds after a catch, frame and handler lookup (`ip - 1` always inside the
+raising instruction), restoring the native-call bookkeeping (`nativeDepth`, current native, callback list, temporary
+roots, GC inhibition) for nested callbacks, GC roots of the thrown object, natives interrupted by a catch (sort writes back
+only on success, RAII state), inline caches, limits never being catchable, the debugger's caught / uncaught decision and
+pause-to-host, Error forging (only data, never a safety issue), serialization and the compiler's handler relocation.
+Regression tests: `verify_handlers_test` (handlers before or inside their range), `capi_test` (budget for failing
+natives and unwinding, `Map` accounting after repeated out-of-memory), `tests/cases/lang/error_values.ts` (Node parity),
+`tests/cases/errors/rt_limit_not_catchable.ts`, `catch_console_log_nested.ts`.
+
 **Configuration the host must apply** (see EMBEDDING.md §6): enable signature checking, set an instruction budget and a memory limit. The command-line tool `e7` is for development only
 and sets no budget by default.
 

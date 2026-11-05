@@ -10,6 +10,22 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+### Security
+Fixes from an independent review of try/catch (details in [docs/PRODUCTION.md §3.5](docs/PRODUCTION.md)); no
+memory-safety issue was found.
+- The verifier rejects try/catch handlers at or before their range (a crafted module could loop without spending
+  budget).
+- Library functions that fail are charged for their work (a loop of failing `JSON.parse` calls could run for hours on
+  a small budget); catching charges one tick per dropped frame and no longer builds an unused stack trace.
+- An out-of-memory error inside `Map.set` no longer corrupts the VM's heap accounting.
+
+### Changed
+- e7's own size limits (JSON and array-to-string nesting, BigInt size, array and typed-array lengths) are no longer
+  reported as `RangeError` / `SyntaxError`, so `catch` does not see them; the messages say "an e7 limit".
+- Error values convert like in JavaScript everywhere: `JSON.stringify(e)` is `{}`, `String([e])` and `${optionalError}`
+  give `"Name: message"`; `instanceof Error` is false for holes of `new Array<Error>(n)`; `console.log` of a value
+  that contains an Error is a compile error. More than 65,535 `try` statements in a function is a compile error.
+
 ## [0.2.0] - 2026-11-05
 
 The release for production pilots: the incompatible changes we could foresee (bytecode format, C ABI, exceptions)

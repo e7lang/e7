@@ -1188,7 +1188,10 @@ void Gen::genStmt(Stmt* s) {
       uint32_t end = (uint32_t)pc();
       jump(OP_JMP, 0, after);
       uint32_t handler = (uint32_t)pc();
-      if (end > start) D->handlers.push_back(HandlerDesc{start, end, handler, er});
+      if (end > start) {
+        if (D->handlers.size() >= 65535) err(s->loc, "too many try statements in one function (at most 65535)");
+        else D->handlers.push_back(HandlerDesc{start, end, handler, er});
+      }
       VarSym* cv = s->decls.empty() ? nullptr : s->decls[0].sym;
       if (cv) bindVar(cv, er);
       genStmt(s->els);
@@ -2375,7 +2378,7 @@ void Gen::genBinary(Expr* e, uint16_t d) {
   const std::string& op = e->raw;
   if (op == "instanceof" && e->intrinsic == IN_ERROR_IS) {
     uint16_t a = gen(e->a);
-    if (e->str == u"Error") {  // every thrown or caught value is an Error
+    if (e->str == u"Error" && e->a->type && e->a->type->t == TT::Caught) {  // only Errors can be thrown
       loadInt(d, 1);
       return;
     }

@@ -89,9 +89,16 @@ struct Stringifier {
       default: break;
     }
     if (stack.count(o)) vm.error("TypeError: Converting circular structure to JSON");
-    if (++depth > 256) vm.error("RangeError: JSON.stringify: nesting deeper than 256 levels");
+    if (++depth > 256) vm.error("JSON.stringify: nesting deeper than 256 levels (an e7 limit)");
     stack.insert(o);
     std::u16string inner = indent + gap;
+    StrObj *en, *em;
+    if (vm.errorParts(o, &en, &em)) {  // an Error has no enumerable properties: "{}" as in JavaScript
+      out += u"{}";
+      stack.erase(o);
+      depth--;
+      return true;
+    }
     if (o->type == OT::Array) {
       auto* a = static_cast<ArrObj*>(o);
       if (a->len == 0) out += u"[]";
@@ -270,7 +277,8 @@ struct JParser {
     return out;
   }
   JNode value() {
-    if (++depth > 256) fail("nesting deeper than 256 levels");
+    // an e7 limit, not a syntax error (JavaScript has none): not catchable, tryParse still returns null
+    if (++depth > 256) throw JsonFail{false, "nesting deeper than 256 levels (an e7 limit) at position " + std::to_string(i)};
     account(sizeof(JNode) + 16);
     JNode v;
     if (i >= n) fail("unexpected end of input");

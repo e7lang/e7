@@ -11,7 +11,7 @@ using Mag = std::vector<uint32_t>;
 // bounded keeps the quadratic algorithms (multiply, divide, toString, parse) well under a second.
 static constexpr size_t kMaxLimbs = 1u << 13;
 static constexpr uint64_t kMaxBits = (uint64_t)kMaxLimbs * 32;
-[[noreturn]] static void tooBig(VM& vm) { vm.error("RangeError: Maximum BigInt size exceeded"); }
+[[noreturn]] static void tooBig(VM& vm) { vm.error("BigInt too large (an e7 limit of 262144 bits)"); }
 
 static void trim(Mag& m) {
   while (!m.empty() && m.back() == 0) m.pop_back();
@@ -325,7 +325,7 @@ E7_NATIVE(bi_pow) {
   if (y->mag.size() > 1) {
     if (x->mag.empty()) { r->r = mk(vm, {}, false); return; }
     if (x->mag.size() == 1 && x->mag[0] == 1) { r->r = mk(vm, {1}, x->neg && (y->mag[0] & 1)); return; }
-    vm.error("RangeError: Maximum BigInt size exceeded");
+    vm.error("BigInt too large (an e7 limit of 262144 bits)");
   }
   uint32_t e = y->mag.empty() ? 0 : y->mag[0];
   Mag result{1}, base = x->mag;
@@ -400,7 +400,7 @@ static BigObj* shiftRight(VM& vm, const BigObj* x, uint64_t s) {
 static uint64_t shiftAmount(VM& vm, const BigObj* y, bool& negative) {
   negative = y->neg;
   if (y->mag.size() > 2 || (y->mag.size() == 2 && y->mag[1])) {
-    if (!y->neg) vm.error("RangeError: Maximum BigInt size exceeded");
+    if (!y->neg) vm.error("BigInt too large (an e7 limit of 262144 bits)");
     return UINT64_MAX;
   }
   return y->mag.empty() ? 0 : y->mag[0] | (y->mag.size() > 1 ? (uint64_t)y->mag[1] << 32 : 0);

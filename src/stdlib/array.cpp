@@ -236,10 +236,17 @@ E7_NATIVE(a_sortCmp) {
   for (uint32_t i = 0; i < n0; i++) arr->data[i] = v[i];
   r->r = arr;
 }
+// JavaScript rejects lengths that are not integers in [0, 2^32 - 1] with a RangeError; e7 also
+// limits arrays to 2^27 - 1 elements, which is its own limit and therefore not catchable.
+static void checkArrayLength(VM& vm, double d) {
+  if (!(d >= 0 && d <= 4294967295.0) || std::trunc(d) != d) vm.error("RangeError: invalid array length");
+  if (d > 0x7FFFFFF) vm.error("array length %s exceeds the e7 limit of 134217727", numberToString(d).c_str());
+}
+
 E7_NATIVE(a_newLen) {
   E7_UNUSED;
   double d = a[0].f;
-  if (!(d >= 0 && d <= 0x7FFFFFF) || std::trunc(d) != d) vm.error("RangeError: invalid array length");
+  checkArrayLength(vm, d);
   int vti = immIndex(a[1].f, VT__COUNT);
   if (vti < 0) vm.error("invalid element type");
   uint8_t vt = (uint8_t)vti;
@@ -253,7 +260,7 @@ E7_NATIVE(a_setLength) {
   E7_UNUSED;
   ArrObj* arr = A(vm, a[0]);
   double d = a[1].f;
-  if (!(d >= 0 && d <= 0x7FFFFFF) || std::trunc(d) != d) vm.error("RangeError: invalid array length");
+  checkArrayLength(vm, d);
   uint32_t nl = (uint32_t)d;
   if (nl > arr->len) {
     vm.arrayReserve(arr, nl);

@@ -332,7 +332,8 @@ bool verifyModule(const Module& m, std::string& err) {
       const HandlerDesc& h = f.handlers[k];
       if (h.start >= h.end || h.end > n || !isStart[h.start] || (h.end < n && !isStart[h.end]))
         return F("function %zu: bad handler range", fi);
-      if (h.handler >= n || !isStart[h.handler]) return F("function %zu: bad handler target", fi);
+      // after the range: a catch can never re-enter code before the error without a charged back edge
+      if (h.handler >= n || h.handler < h.end || !isStart[h.handler]) return F("function %zu: bad handler target", fi);
       if (h.reg >= f.regKinds.size() || f.regKinds[h.reg] != K_R) return F("function %zu: bad handler register", fi);
       for (size_t j = 0; j < k; j++) {
         const HandlerDesc& g = f.handlers[j];  // listed earlier: inside h, or disjoint from it

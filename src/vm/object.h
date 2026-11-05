@@ -27,6 +27,9 @@ struct StrObj : Obj {
   const char16_t* chars() const { return reinterpret_cast<const char16_t*>(this + 1); }
 };
 
+// Obj::flags of an Array: an Error object, [name, message] (created only by the VM and the Error natives)
+constexpr uint16_t kArrFlagError = 2;
+
 struct ArrObj : Obj {
   uint8_t vt;
   uint32_t len;

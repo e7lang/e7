@@ -370,10 +370,10 @@ dispatch:
       nativeDepth_++;
       const NativeBinding* prevNative = curNative_;
       curNative_ = &nb;
-      nb.fn(*this, args, argc, &ret, nb.ud);
+      if (E7_UNLIKELY(nb.cost != NC_NONE)) callCharged(nb, args, argc, &ret);
+      else nb.fn(*this, args, argc, &ret, nb.ud);
       curNative_ = prevNative;
       nativeDepth_--;
-      if (E7_UNLIKELY(nb.cost != NC_NONE)) chargeNative(nb, args, argc, ret);
     } else {
       ret = invokeNativeMany(nb, R, aw, argc);
     }

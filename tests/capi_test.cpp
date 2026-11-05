@@ -600,6 +600,50 @@ int main() {
     e7_vm_free(vm);
   }
   testDetachedSignatures();
+  // try/catch security review (0.2.1): failing natives are charged, catching charges the frames it
+  // drops and builds no stack trace, a memory error in Map.set keeps the heap count consistent
+  {
+    const char* src =
+        "export function parseLoop(n: number, size: number): number {\n"
+        "  const bad = \"[\" + \"1,\".repeat(size) + \"1\";\n"
+        "  let c = 0;\n"
+        "  for (let i = 0; i < n; i++) { try { JSON.parse(bad) as number[]; } catch (e) { c++; } }\n"
+        "  return c;\n"
+        "}\n"
+        "function rec(k: number): number { if (k > 0) return rec(k - 1) + 1; throw new Error(\"deep\"); }\n"
+        "export function deepCatch(depth: number): number { try { return rec(depth); } catch (e) { return -1; } }\n"
+        "const m = new Map<number, number>();\n"
+        "export function fill(): number { for (let i = 0; ; i++) m.set(i, i); }\n"
+        "export function clear(): number { const n = m.size; m.clear(); return n; }\n";
+    std::vector<uint8_t> bc = compile(src);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.memory_limit = 64u << 20;
+    e7_vm* vm = e7_vm_new(&cfg);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_value args[2] = {num(1000), num(200000)}, r;
+    // each failed parse of 400 KB costs ~100k ticks: 1000 of them cannot fit in 5M ticks
+    e7_set_budget(vm, 5000000);
+    CHECK(e7_call(vm, m, "parseLoop", args, 2, &r) == E7_ERR_BUDGET);
+    e7_set_budget(vm, 0);
+    uint64_t t0 = e7_ticks_used(vm);
+    e7_value d = num(5000);
+    CHECK(e7_call(vm, m, "deepCatch", &d, 1, &r) == E7_OK && r.v.num == -1);
+    CHECK(e7_ticks_used(vm) - t0 >= 2 * 5000);  // the calls, and the frames the catch dropped
+    uint64_t before = e7_memory_used(vm);
+    for (int i = 0; i < 3; i++) {
+      CHECK(e7_call(vm, m, "fill", nullptr, 0, &r) == E7_ERR_MEMORY);
+      CHECK(e7_call(vm, m, "clear", nullptr, 0, &r) == E7_OK);
+      e7_collect_garbage(vm);
+      CHECK(e7_memory_used(vm) < before + 4096);  // no under-count wrapping the heap counter
+    }
+    std::vector<uint8_t> sm = compile("export function small(): number { const a: number[] = [1, 2, 3]; return a.length; }");
+    e7_module* m2 = nullptr;
+    CHECK(e7_load(vm, sm.data(), sm.size(), &m2) == E7_OK);
+    CHECK(e7_call(vm, m2, "small", nullptr, 0, &r) == E7_OK && r.v.num == 3);
+    e7_vm_free(vm);
+  }
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

@@ -1,4 +1,5 @@
 // Checker: builtin namespaces (Math, JSON, ...), global builtin functions, `new`.
+#include <set>
 #include <cmath>
 
 #include "checker.h"
@@ -36,6 +37,32 @@ static const char* kMath1[] = {"abs", "ceil", "floor", "round", "trunc", "sign",
                                "log1p", "log2", "log10", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh",
                                "tanh", "asinh", "acosh", "atanh", "fround", "clz32"};
 static const char* kMath2[] = {"atan2", "pow", "imul"};
+
+// Does a value of type t contain an Error (directly, or in an element, field, entry or tuple slot)?
+static bool containsErrorRec(Type* t, std::set<const void*>& seen) {
+  if (!t) return false;
+  switch (t->t) {
+    case TT::Error: case TT::Caught: return true;
+    case TT::Array: case TT::Set: case TT::Optional: return containsErrorRec(t->elem, seen);
+    case TT::Map: return containsErrorRec(t->key, seen) || containsErrorRec(t->val, seen);
+    case TT::Tuple:
+      for (Type* e : t->elems) if (containsErrorRec(e, seen)) return true;
+      return false;
+    case TT::Object:
+      if (!t->shape || !seen.insert(t->shape).second) return false;
+      for (auto& p : t->shape->props) if (containsErrorRec(p.type, seen)) return true;
+      return false;
+    case TT::Class:
+      if (!t->cls || !seen.insert(t->cls).second) return false;
+      for (auto& f : t->cls->fields) if (containsErrorRec(f.type, seen)) return true;
+      return false;
+    default: return false;
+  }
+}
+static bool containsError(Type* t) {
+  std::set<const void*> seen;
+  return containsErrorRec(t, seen);
+}
 
 Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string& name, bool isCall, Type* expected) {
   (void)expected;
@@ -215,8 +242,9 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
         if (a->k == EK::Spread) return errT(a->loc, "spread is not supported in console.log");
         Type* t = check(a, nullptr);
         if (t->t == TT::Void) return errT(a->loc, "cannot print a void value");
-        if (t->t == TT::Error || t->t == TT::Caught)
-          return errT(a->loc, "console.log of an Error prints a stack trace in Node.js; print String(e) or e.message instead");
+        if (containsError(t))
+          return errT(a->loc, "console.log of an Error prints a stack trace in Node.js; print String(e) or e.message instead" +
+                                  std::string(t->t == TT::Error || t->t == TT::Caught ? "" : " (this value contains an Error)"));
       }
       e->intrinsic = IN_CONSOLE_LOG;
       e->raw = (name == "warn" || name == "error") ? "error" : "log";

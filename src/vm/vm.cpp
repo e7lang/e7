@@ -182,13 +182,13 @@ static bool jsErrorName(const std::string& msg, std::string& name, std::string& 
 }
 
 void VM::raise(int code, const std::string& msg, bool allowCatch) {
-  std::string full = msg;
-  std::string tr = stackTrace();
-  if (!tr.empty()) full += "\n" + tr;
-  E7Error e(code, full);
+  E7Error e(code, msg);
   if (allowCatch && code == ERR_RUNTIME) jsErrorName(msg, e.jsName, e.text);
-  if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty())
-    dbg_->errorRaised(code, msg, full, !e.jsName.empty() && willBeCaught());
+  // a handler will take it: skip the stack trace (O(frames), and uncharged), it is never shown
+  if (!e.jsName.empty() && willBeCaught()) throw e;
+  std::string tr = stackTrace();
+  if (!tr.empty()) e.msg += "\n" + tr;
+  if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty()) dbg_->errorRaised(code, msg, e.msg, false);
   throw e;
 }
 
@@ -198,14 +198,14 @@ void VM::raiseThrown(Obj* error) {
   std::string name = strUtf8(n), text = strUtf8(m);
   // uncaught: "message" for Error (as before 0.2), "TypeError: message" for the others
   std::string msg = name == "Error" ? text : name + ": " + text;
-  std::string full = msg;
-  std::string tr = stackTrace();
-  if (!tr.empty()) full += "\n" + tr;
-  E7Error e(ERR_RUNTIME, full);
+  E7Error e(ERR_RUNTIME, msg);
   e.jsName = name.empty() ? "Error" : name;
   e.text = text;
   e.value = error;
-  if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty()) dbg_->errorRaised(ERR_RUNTIME, msg, full, willBeCaught());
+  if (willBeCaught()) throw e;  // no stack trace for a caught error (see raise)
+  std::string tr = stackTrace();
+  if (!tr.empty()) e.msg += "\n" + tr;
+  if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty()) dbg_->errorRaised(ERR_RUNTIME, msg, e.msg, false);
   throw e;
 }
 
@@ -218,13 +218,14 @@ ArrObj* VM::newErrorObject(const std::string& name, const std::string& message) 
   a->data[0].r = n;
   a->data[1].r = m;
   a->len = 2;
+  a->flags |= kArrFlagError;
   return a;
 }
 
 bool VM::errorParts(Obj* o, StrObj** name, StrObj** message) const {
   if (!o || o->type != OT::Array) return false;
   auto* a = static_cast<ArrObj*>(o);
-  if (a->vt != VT_REF || a->len != 2) return false;
+  if (!(a->flags & kArrFlagError) || a->vt != VT_REF || a->len != 2) return false;
   Obj* n = a->data[0].r;
   Obj* m = a->data[1].r;
   if (!n || n->type != OT::String || !m || m->type != OT::String) return false;
@@ -262,6 +263,9 @@ bool VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
   for (size_t k = frames_.size(); k-- > entryDepth;) {
     const HandlerDesc* h = handlerAt(k);
     if (!h) continue;
+    // unwinding is charged like the calls it undoes (one tick per dropped frame, one for the catch);
+    // an exhausted budget is reported at the next safepoint in the handler's code
+    budget_ -= (int64_t)(frames_.size() - k);
     frames_.resize(k + 1);
     nativeDepth_ = st.nativeDepth;
     curNative_ = st.curNative;
@@ -472,7 +476,10 @@ void VM::arrayReserve(ArrObj* a, uint32_t cap) {
   if (cap > 0x7FFFFFF) error("array too large");
   accountExternal((int64_t)(cap - a->cap) * 8);
   Slot* nd = static_cast<Slot*>(realloc(a->data, (size_t)cap * sizeof(Slot)));
-  if (!nd) errorCode(ERR_MEMORY, "out of memory");
+  if (!nd) {
+    accountExternal(-(int64_t)(cap - a->cap) * 8);
+    errorCode(ERR_MEMORY, "out of memory");
+  }
   memset(nd + a->cap, 0, (size_t)(cap - a->cap) * sizeof(Slot));
   a->data = nd;
   a->cap = cap;

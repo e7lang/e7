@@ -214,6 +214,9 @@ class VM {
 
   // External buffer accounting
   void accountExternal(int64_t delta);
+  // Records memory that already exists (never fails): for natives whose growth succeeded but whose
+  // accountExternal() then failed, so that the count stays equal to what is held.
+  void accountExternalUnchecked(int64_t delta) { bytes_ = (size_t)((int64_t)bytes_ + delta); }
 
   // Rooting for host-held objects
   void pin(Obj* o);
@@ -290,6 +293,7 @@ class VM {
   int runNormal();  // the interpreter (interp_loop.inc)
   int runDebug();   // the same loop with debugger checks, used only while a debugger is attached
   Slot invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32_t argc);
+  void callCharged(NativeBinding& nb, Slot* args, uint32_t argc, Slot* ret);
   StrObj* intToStringObj(Slot v, uint8_t vt);
   StrObj* numToStringObj(double d);
   void* allocRaw(OT t, size_t size);

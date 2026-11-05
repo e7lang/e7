@@ -74,6 +74,20 @@ int32_t mapFind(VM& vm, MapObj* m, Slot k) {
   return -1;
 }
 
+// Accounts a change of the map's storage that has already happened. If that exceeds the memory limit,
+// the storage is still recorded before the error propagates: the map keeps it, and freeing it later
+// subtracts it again.
+static void accountMap(VM& vm, size_t before, size_t after) {
+  if (after == before) return;
+  int64_t delta = (int64_t)after - (int64_t)before;
+  try {
+    vm.accountExternal(delta);
+  } catch (...) {
+    vm.accountExternalUnchecked(delta);
+    throw;
+  }
+}
+
 static void rehash(VM& vm, MapObj* m) {
   size_t before = mapBytes(m);
   // compact dead entries
@@ -93,8 +107,7 @@ static void rehash(VM& vm, MapObj* m) {
     e.next = m->buckets[b];
     m->buckets[b] = (int32_t)i;
   }
-  size_t after = mapBytes(m);
-  vm.accountExternal((int64_t)after - (int64_t)before);
+  accountMap(vm, before, mapBytes(m));
 }
 
 static void mapSet(VM& vm, MapObj* m, Slot k, Slot v) {
@@ -114,8 +127,7 @@ static void mapSet(VM& vm, MapObj* m, Slot k, Slot v) {
   m->entries.push_back(e);
   m->buckets[b] = (int32_t)(m->entries.size() - 1);
   m->count++;
-  size_t after = mapBytes(m);
-  if (after != before) vm.accountExternal((int64_t)after - (int64_t)before);
+  accountMap(vm, before, mapBytes(m));
 }
 
 void jsonMapSet(VM& vm, MapObj* m, Slot k, Slot v) { mapSet(vm, m, k, v); }
@@ -136,7 +148,7 @@ static bool mapDelete(VM& vm, MapObj* m, Slot k) {
     size_t before = mapBytes(m);
     m->entries.clear();
     m->buckets.assign(m->buckets.size(), -1);
-    vm.accountExternal((int64_t)mapBytes(m) - (int64_t)before);
+    accountMap(vm, before, mapBytes(m));
   }
   return true;
 }
@@ -247,7 +259,7 @@ E7_NATIVE(m_clear) {
   m->buckets.clear();
   m->buckets.shrink_to_fit();
   m->count = 0;
-  vm.accountExternal((int64_t)mapBytes(m) - (int64_t)before);
+  accountMap(vm, before, mapBytes(m));
 }
 E7_NATIVE(m_copy) {
   E7_UNUSED;

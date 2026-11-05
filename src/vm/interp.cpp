@@ -106,11 +106,25 @@ Slot VM::invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32
   nativeDepth_++;
   const NativeBinding* prevNative = curNative_;
   curNative_ = &nb;
-  nb.fn(*this, args.data(), argc, &ret, nb.ud);
+  if (nb.cost != NC_NONE) callCharged(nb, args.data(), argc, &ret);
+  else nb.fn(*this, args.data(), argc, &ret, nb.ud);
   curNative_ = prevNative;
   nativeDepth_--;
-  if (nb.cost != NC_NONE) chargeNative(nb, args.data(), argc, ret);
   return ret;
+}
+
+// Calls a native with a cost model and charges its work, also when it fails: since try/catch, a
+// script can call a failing native in a loop, so the work done before the error must count.
+void VM::callCharged(NativeBinding& nb, Slot* args, uint32_t argc, Slot* ret) {
+  try {
+    nb.fn(*this, args, argc, ret, nb.ud);
+  } catch (...) {
+    Slot none;
+    none.u = 0;
+    chargeNative(nb, args, argc, none);
+    throw;
+  }
+  chargeNative(nb, args, argc, *ret);
 }
 
 StrObj* VM::intToStringObj(Slot v, uint8_t vt) {

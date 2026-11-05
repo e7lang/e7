@@ -60,8 +60,8 @@ i64 1e400: null "integer out of range at $"
 1 55296 ""
 true expected a number at $.café
 true expected a number at $[0]
-true SyntaxError: nesting deeper than 256 levels at position 256
-true SyntaxError: nesting deeper than 256 levels at position 256
-true SyntaxError: nesting deeper than 256 levels at position 1280
+true nesting deeper than 256 levels (an e7 limit) at position 256
+true nesting deeper than 256 levels (an e7 limit) at position 256
+true nesting deeper than 256 levels (an e7 limit) at position 1280
 667 ""
 true 1 SyntaxError: unexpected end of input at position 1
