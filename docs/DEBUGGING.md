@@ -250,7 +250,7 @@ While paused (inside the callback, or after `E7_PAUSED`):
 
 Every variable has a `name`, a `type` (`number`, `boolean`, `i32`, ..., `string`, `null`, `undefined`, `Array`,
 `Map`, `Set`, `Object` (object literal), `tuple`, `Uint8Array`, `bigint`, `function`, `Date`, or the class name),
-a display `value` (the `console.log` format, nested values abbreviated), and a `ref` (> 0 when it has children:
+a display `value` (the `console.log` format on one line, nested values abbreviated), and a `ref` (> 0 when it has children:
 array elements, fields, Map entries (named by their key), Set elements, captured variables of a function) with
 the number of children in `count`. References stay valid while the script stays paused (the same object keeps
 the same reference); they are invalidated when it resumes. Returned strings stay valid until the same function

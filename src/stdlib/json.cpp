@@ -45,6 +45,8 @@ struct Stringifier {
   std::u16string out;
   std::unordered_set<Obj*> stack;
   int depth = 0;
+  bool cycleOk = false;  // console.log's %j: a cycle sets `cycle` instead of raising a TypeError
+  bool cycle = false;
 
   void nl(const std::u16string& indent) {
     if (gap.empty()) return;
@@ -88,7 +90,11 @@ struct Stringifier {
       case OT::Closure: return false;
       default: break;
     }
-    if (stack.count(o)) vm.error("TypeError: Converting circular structure to JSON");
+    if (stack.count(o)) {
+      if (!cycleOk) vm.error("TypeError: Converting circular structure to JSON");
+      cycle = true;
+      return true;
+    }
     if (++depth > 256) vm.error("JSON.stringify: nesting deeper than 256 levels (an e7 limit)");
     stack.insert(o);
     std::u16string inner = indent + gap;
@@ -165,6 +171,12 @@ static void stringifyImpl(VM& vm, Slot v, const std::u16string& gap, Slot* r) {
   Stringifier s{vm, gap, {}, {}, 0};
   if (!s.value(v, VT_REF, u"")) { r->r = vm.newStringAscii("undefined"); return; }
   r->r = vm.newString(s.out);
+}
+std::string jsonForLog(VM& vm, Slot v, uint8_t vt) {
+  Stringifier s{vm, u"", {}, {}, 0};
+  s.cycleOk = true;
+  if (!s.value(v, vt, u"")) return "undefined";
+  return s.cycle ? "[Circular]" : utf16ToUtf8(s.out);
 }
 E7_NATIVE(j_stringify) { E7_UNUSED; stringifyImpl(vm, a[0], u"", r); }
 E7_NATIVE(j_stringifyIndent) {

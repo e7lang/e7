@@ -176,6 +176,9 @@ The following behave the same as JavaScript (verified by differential testing ag
 
 - **Globals**: `parseInt parseFloat isNaN isFinite encodeURIComponent decodeURIComponent encodeURI decodeURI`,
   `Number(x) String(x) Boolean(x) BigInt(x)`, `NaN Infinity`, `console.log/info/warn/error`, `print`, `abort(msg)`.
+  `console.log` formats values like Node.js `util.inspect` (depth 2, 80 columns, long arrays grouped into aligned
+  columns, `... n more items` after 100 entries, `[Circular *1]`), including `%s %d %i %f %j %o %O %c` substitutions
+  in a first string argument.
 - **Math**: all functions and constants (`min/max/hypot` support varargs and spread), `Math.random()` (the host can set the seed for reproducibility).
 - **Number**: `isInteger isSafeInteger isFinite isNaN parseFloat parseInt`, constants; instance methods `toString(radix) toFixed toPrecision toExponential`.
 - **String**: `length charAt charCodeAt codePointAt at indexOf lastIndexOf includes startsWith endsWith slice substring substr
@@ -310,7 +313,8 @@ or host function that was running (or that called back into the script, like `Ar
 | Out-of-bounds array/string read | `undefined` | Runtime error |
 | Elements of `new Array<T>(n)` | Holes (read as `undefined`) | `0` / `false` / `null` (`undefined` for reference types) |
 | Fixed-width integer arithmetic | Floating point | Machine integers that wrap around |
-| `console.log` of long arrays/nested objects | Multi-line, columned format | Single-line format (`JSON.stringify` is identical) |
+| `console.log` of functions | `[Function: f]` (name inferred from the variable or property) | `[Function (anonymous)]` for arrow functions and function expressions; `%o` does not list their hidden properties |
+| `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }`; `x: undefined` for a property set to `undefined` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null`; an object-literal field holding `undefined` is not shown (the same as a missing optional property) |
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
 | Malformed or mismatching JSON | `JSON.parse` throws, `catch` it | `tryParse(text) as T \| null` from `e7:json` returns `null` |
 | Case conversion / `localeCompare` | Full Unicode / locale | Latin/Greek/Cyrillic / code-unit comparison |
