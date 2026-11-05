@@ -31,6 +31,35 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  # Performance gate (scripts/bench.py, CONTRIBUTING.md): instruction ticks and peak heap of every
+  # bench/*.ts must equal bench/baseline.json; machine instructions under cachegrind (Ir) may not grow
+  # by more than 3%. The measured numbers are uploaded as the bench-baseline artifact (a ready-made
+  # bench/baseline.json for intended changes). The GC pause benchmark is reported, not gated.
+  perf:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build valgrind
+      - name: Configure (Release, default gcc, as the Ir baseline)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_TESTS=OFF -DE7_BUILD_BENCH=ON
+      - name: Build
+        run: cmake --build build
+      - name: Ticks, peak heap and instruction counts vs bench/baseline.json
+        run: |
+          valgrind --version
+          python3 scripts/bench.py --check --cachegrind --output build/bench-baseline.json | tee build/bench.txt
+      - name: GC pause benchmark (report only)
+        if: ${{ !cancelled() }}
+        run: build/e7_gc_pause | tee build/gc_pause.txt
+      - name: Job summary
+        if: ${{ !cancelled() }}
+        run: |
+          { echo '### Benchmarks (scripts/bench.py)'; echo '```'; cat build/bench.txt 2>/dev/null; echo '```';
+            echo '### GC pauses (bench/gc_pause.cpp)'; cat build/gc_pause.txt 2>/dev/null; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with: { name: bench-baseline, path: build/bench-baseline.json, if-no-files-found: ignore }
+
   linux-32bit:
     runs-on: ubuntu-24.04
     steps:

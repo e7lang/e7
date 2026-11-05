@@ -15,6 +15,7 @@ option(E7_FUZZ "Build libFuzzer targets (clang only)" OFF)
 option(E7_NO_COMPUTED_GOTO "Use switch dispatch instead of computed goto" OFF)
 option(E7_BUILD_SHARED "Build e7vm as a shared library" OFF)
 option(E7_BUILD_JNI "Build the JNI binding (libe7vm_jni) for Android / JVM" OFF)
+option(E7_BUILD_BENCH "Build the C API benchmarks in bench/ (e7_gc_pause)" OFF)
 
 if(EMSCRIPTEN)
   # WebAssembly build (browser playground): no indirect goto in wasm, no CLI tools / tests.
@@ -51,6 +52,14 @@ set_target_properties(e7_bearssl PROPERTIES C_VISIBILITY_PRESET hidden)
 target_compile_definitions(e7_bearssl PRIVATE BR_LE_UNALIGNED=0 BR_BE_UNALIGNED=0)
 if(NOT MSVC)
   target_compile_options(e7_bearssl PRIVATE -w)
+endif()
+# BearSSL's hash / cipher vtables hold its functions cast to generic pointer types (C "objects");
+# calls through them trip clang's -fsanitize=function (part of UBSan in OSS-Fuzz / ClusterFuzzLite
+# and in -fsanitize=undefined with clang >= 17). Not instrumenting the callees skips that check.
+include(CheckCCompilerFlag)
+check_c_compiler_flag(-fno-sanitize=function E7_HAVE_NO_SANITIZE_FUNCTION)
+if(E7_HAVE_NO_SANITIZE_FUNCTION)
+  target_compile_options(e7_bearssl PRIVATE -fno-sanitize=function)
 endif()
 
 add_library(e7_monocypher STATIC third_party/monocypher/monocypher.c)
@@ -160,6 +169,12 @@ if(E7_BUILD_JNI)
   else()
     target_link_libraries(e7vm_jni PRIVATE log)
   endif()
+endif()
+
+if(E7_BUILD_BENCH AND E7_WITH_COMPILER)
+  # GC pause benchmark (README.md, performance); compiles its script with e7_load_source
+  add_executable(e7_gc_pause bench/gc_pause.cpp)
+  target_link_libraries(e7_gc_pause PRIVATE e7vm_static)
 endif()
 
 if(E7_BUILD_TESTS)

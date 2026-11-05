@@ -92,10 +92,19 @@ endif()
 
 # replay the libFuzzer targets (fuzz/) over the test corpora with the regular toolchain, so the fuzz
 # entry points are exercised on every platform and under the sanitizer jobs
-foreach(t load compile)
+set(E7_FUZZ_REPLAY load compile)
+if(E7_WITH_COMPILER)
+  list(APPEND E7_FUZZ_REPLAY natives)  # compiles its harness module with e7_compile
+endif()
+foreach(t ${E7_FUZZ_REPLAY})
   add_executable(e7_fuzz_${t}_replay ${CMAKE_SOURCE_DIR}/fuzz/fuzz_${t}.cpp ${CMAKE_SOURCE_DIR}/fuzz/replay_main.cpp)
   target_link_libraries(e7_fuzz_${t}_replay PRIVATE e7vm_static)
   target_include_directories(e7_fuzz_${t}_replay PRIVATE ${CMAKE_SOURCE_DIR}/src)
 endforeach()
 add_test(NAME fuzz_compile_replay COMMAND e7_fuzz_compile_replay ${CMAKE_CURRENT_SOURCE_DIR}/cases ${CMAKE_SOURCE_DIR}/examples ${CMAKE_SOURCE_DIR}/fuzz/regressions)
 add_test(NAME fuzz_load_replay COMMAND e7_fuzz_load_replay ${CMAKE_CURRENT_SOURCE_DIR}/malicious)
+if(E7_WITH_COMPILER)
+  # crafted seeds (one per native / property) plus arbitrary bytes (test sources) as operation streams
+  add_test(NAME fuzz_natives_replay COMMAND e7_fuzz_natives_replay ${CMAKE_SOURCE_DIR}/fuzz/seeds/natives
+           ${CMAKE_CURRENT_SOURCE_DIR}/cases/lib)
+endif()

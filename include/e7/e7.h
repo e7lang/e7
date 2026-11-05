@@ -155,6 +155,12 @@ E7_API e7_status e7_resume(e7_vm* vm, e7_value* ret);
 E7_API void e7_abort_suspended(e7_vm* vm);
 /* Instruction budget for subsequent execution (<= 0: unlimited). */
 E7_API void e7_set_budget(e7_vm* vm, int64_t ticks);
+/* Ticks charged since the VM was created, with any budget (also unlimited): one per call, the
+ * length of a loop body per iteration, plus the cost of natives doing size-dependent work. Counts
+ * every e7_load / e7_call / e7_resume; deterministic for a given module and input, so it is a
+ * machine-independent measure of the work a script did. When the budget runs out, the ticks of
+ * the step that exhausted it are counted up to the budget. */
+E7_API uint64_t e7_ticks_used(e7_vm* vm);
 E7_API const char* e7_last_error(e7_vm* vm);
 E7_API int e7_has_function(e7_module* mod, const char* function);
 

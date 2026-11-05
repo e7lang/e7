@@ -67,6 +67,10 @@ export function sign(msg: string, key: string): string {
 **Prebuilt binaries:** download `e7-<version>-<platform>` for Linux (x64, arm64), macOS (universal) or
 Windows (x64) from the [latest release](https://github.com/e7lang/e7/releases/latest). Each archive has
 `bin/e7`, `bin/e7c`, `include/e7/e7.h`, static libraries in `lib/`, `types/e7.d.ts` and examples.
+Every release file and package (archives, `.nupkg`, `.aar`, `.jar`, `.tgz`, `.vsix`, skill zip) has a signed
+GitHub build provenance attestation: `gh attestation verify e7-<version>-<platform>.tar.gz --repo e7lang/e7`
+checks that it was built by this repository's release workflow from the tagged commit. An SPDX SBOM
+(`e7-<version>.spdx.json`) is attached to each release.
 **.NET:** `dotnet add package E7VM` (C# binding with native libraries for Windows, Linux and macOS).
 No install at all: the [playground](https://e7lang.github.io/playground) runs the compiler and VM in your browser (WebAssembly).
 **Node.js / browsers:** `npm install @e7lang/e7` ([packages/e7](packages/e7)) is the same compiler and VM on
@@ -360,13 +364,14 @@ tests/tsc/check.sh             # every test and example type-checks with tsc --s
 build/e7 test examples/tests   # unit tests written with e7:test
 ```
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs 15 jobs on every push:
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push:
 
 - **Linux:** GCC, Clang 18, Clang 16, ASan+UBSan, switch dispatch, shared library, 32-bit.
 - **macOS:** Release and ASan.
 - **Mobile:** iOS, Android NDK, JNI.
 - **Windows:** MSVC and clang-cl.
 - **TypeScript:** `tsc` strict check.
+- **Performance:** instruction ticks / peak heap / cachegrind instruction counts against `bench/baseline.json` (see [Performance](#performance)).
 
 [`.github/workflows/maven.yml`](.github/workflows/maven.yml) builds the Maven artifacts and runs the Java
 test suite on Linux, macOS, Windows and an Android emulator.
@@ -391,6 +396,31 @@ only option on iOS) and the full JIT.
 
 In signing scripts, standard algorithms (HMAC, RSA, ECDSA, …) run natively, so a typical call takes
 well under a millisecond.
+
+`e7 --stats script.ts` prints the instruction ticks a run consumed (`e7_ticks_used()`; the same unit as
+the instruction budget, and the same on every machine), the GC collections with their longest and total
+pause, and the peak heap. CI guards against regressions with
+[`scripts/bench.py`](scripts/bench.py): ticks and peak heap of every `bench/*.ts` must equal
+[`bench/baseline.json`](bench/baseline.json), and the machine instructions executed under cachegrind may
+not grow by more than 3% (see [CONTRIBUTING.md](CONTRIBUTING.md#performance-baseline)).
+
+**GC pauses.** [`bench/gc_pause.cpp`](bench/gc_pause.cpp) builds a linked list of N nodes (a class holding a
+string, an array and the next node: 3 heap objects each) through the C API and times full collections
+(`e7_collect_garbage`) with all of it live and after the script dropped it. The collector is a
+stop-the-world mark-and-sweep, so pauses grow linearly with the live heap; size budgets and memory limits
+accordingly when scripts keep large structures alive. Apple M-series, Release, best of 4 runs:
+
+| Nodes | Heap objects | Live heap | GC, all live | GC after drop | Automatic GCs while building (longest) |
+|---:|---:|---:|---:|---:|---:|
+| 10k | 30k | 1.5 MB | 0.07 ms | 0.19 ms | 1 (0.08 ms) |
+| 100k | 300k | 15 MB | 1.3 ms | 3.4 ms | 5 (0.9 ms) |
+| 300k | 900k | 45 MB | 7.7 ms | 11.7 ms | 7 (7.1 ms) |
+| 1M | 3M | 150 MB | 29 ms | 34 ms | 9 (24 ms) |
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_BENCH=ON && cmake --build build --target e7_gc_pause
+build/e7_gc_pause                 # or: build/e7_gc_pause 50000 2000000
+```
 
 ## Repository layout
 
