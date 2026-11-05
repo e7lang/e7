@@ -42,6 +42,7 @@ enum Intrinsic : int {
   IN_STATIC_FIELD,        // ClassName.field (global var in e->var)
   IN_TYPEOF_CONST,
   IN_JSON_PARSE,
+  IN_JSON_TRY_PARSE,      // tryParse(text) as T | null (e7:json)
   IN_OBJECT_KEYS,
   IN_ABORT,
   IN_ARR_LENGTH_SET,

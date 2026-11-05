@@ -118,6 +118,18 @@ declare module "e7:crypto" {
   export function rsaSign(hash: HashName, privateKey: Uint8Array, message: Uint8Array, padding?: string | null): Uint8Array;
 }
 
+/** Non-throwing typed JSON parsing for untrusted input. Use as `tryParse(text) as T | null`:
+ *  the text is parsed and validated against T exactly like `JSON.parse(text) as T`, but a
+ *  malformed document or a value of the wrong shape gives `null` instead of stopping the script
+ *  (a document that is just `null` counts as a mismatch). The `as T | null` is required.
+ *  Budget, memory and nesting limits still apply; budget and memory exhaustion are not caught. */
+declare module "e7:json" {
+  /** Typed, validating parse that returns null on failure: `tryParse(text) as T | null`. */
+  export function tryParse(text: string): unknown;
+  /** Why the last tryParse returned null (e.g. "expected a number at $.amount"); "" after a success. */
+  export function lastError(): string;
+}
+
 /** Assertion helpers for `e7 test` (usable in any E7 program). A failed assertion is a runtime
  *  error: it stops the test (or script) with a message and a stack trace. */
 declare module "e7:test" {

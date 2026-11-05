@@ -487,10 +487,10 @@ void Checker::declareFile(FileInfo* fi) {
 void Checker::bindImports(FileInfo* fi, Stmt* s) {
   bool builtinMod = s->from.rfind("e7:", 0) == 0;
   if (builtinMod) {
-    if (s->from != "e7:crypto" && s->from != "e7:encoding" && s->from != "e7:test") {
+    if (s->from != "e7:crypto" && s->from != "e7:encoding" && s->from != "e7:json" && s->from != "e7:test") {
       std::string alt = closestName(s->from, builtinModuleNames());
       err(s->loc, "unknown builtin module '" + s->from + "'" +
-                      (alt.empty() ? "; the builtin modules are e7:crypto, e7:encoding and e7:test"
+                      (alt.empty() ? "; the builtin modules are e7:crypto, e7:encoding, e7:json and e7:test"
                                    : "; did you mean '" + alt + "'?"));
       return;
     }
@@ -725,14 +725,23 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
 
 void Checker::resolveInterface(InterfaceSym* is) {
   if (is->state == 2) return;
-  if (is->state == 1) { err(is->loc, "interface '" + is->name + "' circularly extends itself"); return; }
+  if (is->state == 1) {
+    if (is->inExtends) err(is->loc, "interface '" + is->name + "' circularly extends itself");
+    else
+      err(is->loc, "interface '" + is->name + "' refers to itself; recursive interfaces are not supported yet. "
+                   "Use a class for linked or tree-shaped data, e.g. class " + is->name + " { next: " + is->name +
+                   " | null = null; ... }");
+    return;
+  }
   is->state = 1;
   T.shapes.emplace_back(new ObjShape());
   ObjShape* sh = T.shapes.back().get();
   sh->name = is->name;
   is->type = T.objectType(sh);
   for (TypeNode* ext : is->decl->ifaceExtends) {
+    is->inExtends = true;
     Type* pt = resolveType(ext);
+    is->inExtends = false;
     if (pt->t != TT::Object) { err(ext->loc, "an interface can only extend interfaces"); continue; }
     for (auto& p : pt->shape->props) sh->props.push_back(p);
     for (auto& m : pt->shape->methods) sh->methods.push_back(m);

@@ -1,6 +1,6 @@
 ---
 name: e7
-description: Write, fix and review code in E7, the strict TypeScript subset that runs on the e7vm bytecode VM (github.com/e7lang/e7). Use this skill whenever the user works on E7 scripts, .e7 files, .ts files that import "e7:crypto", "e7:encoding" or "e7:test", code compiled with e7c or run with e7 / e7vm / @e7lang/e7, scripts embedded in Android/iOS/Windows/macOS/Linux apps through e7vm, or asks for signing / verification / algorithm scripts "for E7" — even if they just say "TypeScript". E7 looks like TypeScript but rejects many TypeScript features (any, try/catch, generics, regex, async, union types, index signatures...), so code written as ordinary TypeScript usually fails to compile; this skill explains what to write instead and how to check it.
+description: Write, fix and review code in E7, the strict TypeScript subset that runs on the e7vm bytecode VM (github.com/e7lang/e7). Use this skill whenever the user works on E7 scripts, .e7 files, .ts files that import "e7:crypto", "e7:encoding", "e7:json" or "e7:test", code compiled with e7c or run with e7 / e7vm / @e7lang/e7, scripts embedded in Android/iOS/Windows/macOS/Linux apps through e7vm, or asks for signing / verification / algorithm scripts "for E7" — even if they just say "TypeScript". E7 looks like TypeScript but rejects many TypeScript features (any, try/catch, generics, regex, async, union types, index signatures...), so code written as ordinary TypeScript usually fails to compile; this skill explains what to write instead and how to check it.
 ---
 
 # Writing E7
@@ -29,8 +29,9 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | `async`/`await`, `Promise`, `setTimeout`, `fetch` | synchronous code; the host does I/O and passes data in |
 | `for (k in obj)`, `delete`, `in` | `Object.keys(obj)`, or use a `Map` |
 | `get x()` / `set x(v)` | methods `getX()` / `setX(v)` |
+| `interface Node { next: Node \| null }` (recursive interface) | a `class` (classes may refer to themselves) |
 | `var`, `==` | `let`/`const`, `===` (`x == null` is allowed: null or undefined) |
-| `JSON.parse(text)` | `JSON.parse(text) as T` — validated against `T` while parsing |
+| `JSON.parse(text)`, `try { JSON.parse(text) } catch` | `JSON.parse(text) as T` (validated against `T`; a mismatch ends the call); for untrusted input `tryParse(text) as T \| null` from `e7:json` (`null` on bad input, `lastError()` says why) |
 | `arr.map(obj.method)` | `arr.map(x => obj.method(x))` (methods are not values) |
 | `Buffer`, `crypto.subtle`, `require("crypto")`, `fs`, `process` | `Uint8Array`, `e7:crypto`, `e7:encoding`, or a host function |
 | `Int32Array`, `Float64Array` | `number[]`, `u32[]`, or `DataView` |
@@ -120,10 +121,32 @@ Use `T | null` for "not found", a result interface for "failed with a reason", a
 `abort(msg)`) only for bugs and invalid input the caller must not send — the host receives it as an error with
 a stack trace. Remember `JSON.parse(text) as T` and `x!` also stop the call when the data does not match.
 
+For JSON that may be malformed or of the wrong shape (requests, webhooks, files, anything untrusted), use
+`tryParse` from `e7:json`. It validates exactly like `JSON.parse(text) as T` but returns `null` instead of ending
+the call; `lastError()` gives the reason. The `as T | null` is required:
+
+```ts
+import { tryParse, lastError } from "e7:json";
+
+interface Payment { id: string; amount: number; currency?: string }
+
+export function handle(body: string): string {
+  const p = tryParse(body) as Payment | null;
+  if (p === null) return "rejected: " + lastError(); // e.g. "expected a number at $.amount"
+  return `ok ${p.id} ${p.amount} ${p.currency ?? "EUR"}`;
+}
+
+export function main(): string {
+  return [handle('{"id": "p1", "amount": 5}'), handle('{"id": "p2", "amount": "5"}'), handle("{oops")].join("\n");
+}
+```
+
+A document that is just `null` also gives `null` (with an error); budget and memory exhaustion are still errors.
+
 ## More
 
 - [references/language.md](references/language.md) — complete language rules and the TypeScript features E7 rejects, with rewrites
-- [references/stdlib.md](references/stdlib.md) — standard library, `e7:crypto`, `e7:encoding`, integer helpers, and `e7.d.ts`
+- [references/stdlib.md](references/stdlib.md) — standard library, `e7:crypto`, `e7:encoding`, `e7:json`, integer helpers, and `e7.d.ts`
 - [references/testing.md](references/testing.md) — `e7:test` assertions and the `e7 test` runner
 - [references/embedding.md](references/embedding.md) — exported functions, host functions, `KeyHandle`, limits, host-side APIs
 - [examples/](examples/) — complete, compile-checked scripts: request signing, webhook verification, typed JSON, tests

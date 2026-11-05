@@ -151,13 +151,43 @@ The following behave the same as JavaScript (verified by differential testing ag
 ### 6.4 JSON.parse (type-checked)
 In E7 it must be written as `JSON.parse(text) as T`, where `T` may be a primitive type, array, tuple, interface/object type (nested), nullable and optional fields,
 or `Map<string, V>` (E7 extension: objects with dynamic keys). Parsing **validates against T**; a missing field or type mismatch terminates with a path, for example
-`JSON.parse: expected a number at $.items[0].price`. Extra fields are ignored.
+`JSON.parse: expected a number at $.items[0].price`. Extra fields are ignored. Nesting deeper than 256 levels is a syntax error.
+To handle untrusted input without terminating, use `tryParse` from `e7:json` (section 6.5).
+
+### 6.5 `e7:json` (non-throwing typed parse)
+
+```ts
+import { tryParse, lastError } from "e7:json";
+interface Config { host: string; port: number; tags?: string[] }
+const cfg = tryParse(text) as Config | null;
+if (cfg === null) console.log("bad config: " + lastError());  // e.g. "expected a number at $.port"
+```
+
+- `tryParse(text) as T | null` parses and validates exactly like `JSON.parse(text) as T` (section 6.4, same types
+  `T`), but a syntax error or a shape/type mismatch gives `null` instead of a runtime error. The `as T | null` form
+  is required: a call without `as`, or an assertion whose type does not include `null` (`as T`), is a compile error.
+  `T` may itself contain `undefined` (`as T | undefined | null`).
+- The `| null` is the failure value, so `T` is the asserted type without `null`. A document that is just `null` is
+  therefore a mismatch (`null`, with `lastError()` saying what was expected). Because `(T | null) | null` is the same
+  type as `T | null`, writing a nullable `T` does not change this: a JSON `null` document and a failure both give
+  `null`, and only `lastError()` tells them apart. Nested values may be nullable as usual (`(number | null)[] | null`).
+- `lastError(): string` is the reason the most recent `tryParse` of this VM returned `null`: the `JSON.parse` message
+  without its `JSON.parse: ` prefix, for example `expected a number at $.amount`, `missing property at $.id`, or
+  `SyntaxError: unexpected end of input at position 8`. It is `""` after a successful `tryParse` (and before the
+  first one); `JSON.parse` does not change it. The value is per VM and persists across host calls.
+- Limits are unchanged: nesting deeper than 256 levels gives `null` (a syntax error). The instruction budget and the
+  memory limit (including the temporary parse tree) still apply and are **not** turned into `null`: exhausting them
+  stops the call with `E7_ERR_BUDGET` / `E7_ERR_MEMORY` as for any other code.
+- On a JavaScript engine (the Node shim `tests/node_shim/e7-json.mjs`, used for differential tests) `tryParse` is
+  `JSON.parse` in a `try`/`catch`: only syntax errors (and a `null` document) give `null`, the shape is not
+  validated, and `lastError()` texts differ. Differential tests therefore only use shape-correct documents or syntax
+  errors; shape mismatches are tested against E7 alone (`tests/cases/lib/json_try_shape.ts` with its `.out` file).
 
 ## 7. Modules
 
 - `import { a, b as c } from "./x"`, `import * as ns from "./x"`, `import type {...}`, `export function/const/class/interface/type/enum`,
   `export { a, b as c }`. Paths are relative to the current file and the extension may be omitted (tries `.ts`, `.e7`, `/index.ts`). Circular dependencies are forbidden.
-- Built-in modules: `e7:crypto`, `e7:encoding`, `e7:test` (API in `lib/e7.d.ts`; `e7:test` is described in section 7.1).
+- Built-in modules: `e7:crypto`, `e7:encoding`, `e7:json`, `e7:test` (API in `lib/e7.d.ts`; `e7:json` is described in section 6.5, `e7:test` in section 7.1).
 - Host functions: `declare function name(a: string, n: number): string;`; parameters/return values are limited to
   `number boolean string`, fixed-width integers, `Uint8Array KeyHandle void`, and are checked against the signature registered by the host when the module is loaded.
 - `export function`s in the entry file can be called by the host (only parameters and return values of the types above can cross the boundary). Top-level code runs once at load time,
@@ -209,7 +239,7 @@ tests), `--seed <n>`. The exit code is 1 if any test failed (or none ran), other
 ## 8. Runtime errors
 
 The following terminate the current call (the host receives an error code and a `file:line` call stack); the VM itself remains usable:
-array/string/byte out-of-bounds access, null reference access, failed `!`/`as` assertions, integer division by zero, `throw`/`abort`, JSON validation failure,
+array/string/byte out-of-bounds access, null reference access, failed `!`/`as` assertions, integer division by zero, `throw`/`abort`, JSON validation failure (`JSON.parse`; `tryParse` returns `null` instead),
 failed strict `Map` lookups, instruction budget exhausted (`E7_ERR_BUDGET`, or suspend with `E7_SUSPENDED`), memory limit (`E7_ERR_MEMORY`),
 call stack too deep (`E7_ERR_STACK`), and host function errors.
 
@@ -228,6 +258,7 @@ or host function that was running (or that called back into the script, like `Ar
 | Fixed-width integer arithmetic | Floating point | Machine integers that wrap around |
 | `console.log` of long arrays/nested objects | Multi-line, columned format | Single-line format (`JSON.stringify` is identical) |
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
+| Malformed or mismatching JSON | `JSON.parse` throws, `catch` it | `tryParse(text) as T \| null` from `e7:json` returns `null` |
 | Case conversion / `localeCompare` | Full Unicode / locale | Latin/Greek/Cyrillic / code-unit comparison |
 | Inserting after many deletions during Map iteration | Order defined by the spec | May skip new elements due to table compaction (very rare) |
 | Exceptions | `try/catch` | Not supported; `throw` terminates the script |

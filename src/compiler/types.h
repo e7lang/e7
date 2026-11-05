@@ -142,6 +142,7 @@ struct InterfaceSym : Sym {
   Stmt* decl = nullptr;
   Type* type = nullptr;
   int state = 0;
+  bool inExtends = false;  // resolving the extends clause (a cycle there is a circular extends)
 };
 
 struct AliasSym : Sym {

@@ -10,6 +10,13 @@ All notable changes to E7 / e7vm are listed here. The format follows
   rewrites, the standard library, testing, embedding, and a compile-check workflow. Every code block is checked
   against the compiler in CI (`skill_check`). Install in Claude Code with `/plugin marketplace add e7lang/e7` and
   `/plugin install e7@e7lang`; releases attach `e7-skill.zip` for claude.ai, the Claude API and other tools.
+- **`e7:json` module**: `tryParse(text) as T | null` parses and validates like `JSON.parse(text) as T` but returns
+  `null` for malformed or mismatching input instead of terminating; `lastError()` gives the reason (for example
+  `expected a number at $.amount`). Budget and memory exhaustion are still errors.
+
+### Changed
+- `JSON.parse` / `tryParse`: the temporary parse tree now counts toward the VM memory limit (`E7_ERR_MEMORY`
+  instead of unbounded native memory for huge documents); type errors in `JSON.parse(...) as T` point at the expression.
 
 ## [1.0.1] - 2026-11-04
 
