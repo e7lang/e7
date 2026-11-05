@@ -1,0 +1,2 @@
+# recorded outputs of the bytecode compatibility corpus: compared byte for byte
+tests/compat/** -text

@@ -60,6 +60,10 @@ int main(int argc, char** argv) {
     } else {
       std::string want;
       if (readFile(std::string(argv[i]) + ".out", want)) {
+        std::string lf;  // a checkout may have converted the file to CRLF line endings
+        for (char c : want)
+          if (c != '\r') lf.push_back(c);
+        want.swap(lf);
         e7_value ret;
         if (e7_has_function(m, "main")) e7_call(vm, m, "main", nullptr, 0, &ret);
         if (printed != want) {
