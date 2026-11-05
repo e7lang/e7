@@ -2,10 +2,11 @@
 """Tests for the command line developer experience:
   * `e7 test` (discovery, isolation, failures, budget / memory limits, --filter, --json, exit codes)
   * compiler diagnostics with source excerpts (e7 / e7c)
+  * detached signatures (e7c --sign-file / --verify-file) and tools/manifest.py
 
 usage: cli_test.py --e7 <path/to/e7> --e7c <path/to/e7c>
 """
-import argparse, json, os, re, subprocess, sys, tempfile
+import argparse, hashlib, json, os, re, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 failures = []
@@ -128,6 +129,58 @@ def main():
         check(name + ": excerpt with caret", " 4 |   assertEqual(totl, 1);\n   |               ^\n" in err, err)
         rc, out, err = run(args + ["--no-excerpt"])
         check(name + ": --no-excerpt", rc == 1 and "|" not in err and "did you mean" in err, err)
+
+    # ---- detached signatures (e7c --sign-file / --verify-file) and tools/manifest.py
+    manifest_py = os.path.join(HERE, "..", "..", "tools", "manifest.py")
+    with tempfile.TemporaryDirectory() as d:
+        p = lambda *n: os.path.join(d, *n)
+        with open(p("seed"), "w") as f:  # seed 01..20: known-answer signature (tests/capi_test.cpp)
+            f.write(bytes(range(1, 33)).hex() + "\n")
+        with open(p("kat.json"), "w", newline="\n") as f:
+            f.write('{"version":"2","killSwitch":false}')
+        rc, out, err = run([e7c, "--sign-file", p("kat.json"), "--sign", p("seed")])
+        sig = open(p("kat.json.sig")).read() if os.path.exists(p("kat.json.sig")) else ""
+        check("--sign-file: known answer", rc == 0 and sig == "1549a30db54e6fc64e15efee8a9b5222a22be751830dd98dd5f97d30c1bc6b09"
+              "2cdaa2efdc5a609a338b827ca32a0a9d1d9212ffd3eb51bfc9eb3b073487e607\n", out + err + sig)
+        rc, out, err = run([e7c, "--keygen", p("release")])
+        rc2, out2, err2 = run([e7c, "--keygen", p("other")])
+        check("--keygen", rc == 0 and rc2 == 0, out + err + out2 + err2)
+        rc, out, err = run([e7c, "--sign-file", p("kat.json")])
+        check("--sign-file without --sign: usage error", rc == 2 and "--sign" in err, out + err)
+        rc, out, err = run([e7c, "--verify-file", p("kat.json"), "--trust", p("other.pub")])
+        check("--verify-file: untrusted key rejected", rc == 1 and "NOT valid" in err, out + err)
+        with open(p("app.ts"), "w") as f:
+            f.write("export function selfTest(): boolean { return true; }\nexport function answer(): number { return 42; }\n")
+        rc, out, err = run([e7c, p("app.ts"), "--target", "0.2", "--sign", p("release.seed"), "-o", p("app.e7b")])
+        check("compile + sign module", rc == 0, out + err)
+        rc, out, err = run([sys.executable, manifest_py, "--module", p("app.e7b"), "--version", "2026.11.1", "--url",
+                            "app-2026.11.1.e7b", "--rollout", "10", "--serial", "7", "--sign", p("release.seed"),
+                            "--e7c", e7c, "-o", p("manifest.json")])
+        check("manifest.py: exit code", rc == 0, out + err)
+        try:
+            m = json.load(open(p("manifest.json")))
+        except Exception as e:  # noqa: BLE001
+            m = {"error": str(e)}
+        want = {"version": "2026.11.1", "url": "app-2026.11.1.e7b", "rolloutPercent": 10, "killSwitch": False,
+                "minVm": "0.2.0", "serial": 7, "sha256": hashlib.sha256(open(p("app.e7b"), "rb").read()).hexdigest()}
+        check("manifest.py: fields", m == want, json.dumps(m))
+        rc, out, err = run([e7c, "--verify-file", p("manifest.json"), "--trust", p("other.pub"), "--trust", p("release.pub")])
+        check("--verify-file: manifest signature (second trusted key)", rc == 0 and "signature ok" in out, out + err)
+        text = open(p("manifest.json")).read()
+        with open(p("manifest.json"), "w", newline="\n") as f:
+            f.write(text.replace('"killSwitch": false', '"killSwitch": true'))
+        rc, out, err = run([e7c, "--verify-file", p("manifest.json"), "--trust", p("release.pub")])
+        check("--verify-file: tampered manifest rejected", rc == 1, out + err)
+        rc, out, err = run([sys.executable, manifest_py, "--kill-switch", "--serial", "8", "--sign", p("release.seed"),
+                            "--e7c", e7c, "-o", p("kill.json")])
+        k = json.load(open(p("kill.json"))) if rc == 0 else {}
+        check("manifest.py --kill-switch", k == {"killSwitch": True, "serial": 8}, out + err)
+        rc, out, err = run([e7c, "--verify-file", p("kill.json"), "--sig", p("kill.json.sig"), "--trust", p("release.pub")])
+        check("kill switch manifest signed", rc == 0, out + err)
+        rc, out, err = run([e7c, p("app.ts"), "-o", p("unsigned.e7b")])
+        rc, out, err = run([sys.executable, manifest_py, "--module", p("unsigned.e7b"), "--version", "1", "--url", "u.e7b",
+                            "-o", p("m2.json")])
+        check("manifest.py: unsigned module refused", rc != 0 and "not signed" in err, out + err)
 
     print("\n%d failed" % len(failures))
     return 1 if failures else 0

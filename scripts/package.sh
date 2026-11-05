@@ -40,7 +40,8 @@ cp "$ROOT/include/e7/e7.h" "$STAGE/include/e7/"
 cp "$ROOT/lib/e7.d.ts" "$STAGE/types/"
 cp "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/"
 cp "$ROOT/platform/windows/E7VM.cs" "$STAGE/bindings/csharp/"
-cp "$ROOT/platform/ios/E7VM/E7VM.swift" "$ROOT/platform/ios/module.modulemap" "$STAGE/bindings/swift/"
+cp "$ROOT/platform/ios/E7VM/E7VM.swift" "$ROOT/platform/ios/E7VM/E7ModuleManager.swift" "$ROOT/platform/ios/module.modulemap" \
+  "$STAGE/bindings/swift/"
 cp -R "$ROOT/platform/java/org" "$STAGE/bindings/java/org"
 cp -R "$ROOT/examples/embed" "$STAGE/examples/embed"
 for f in api_signature jwt webhook_verify license_check custom_digest; do

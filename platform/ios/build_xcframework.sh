@@ -2,7 +2,7 @@
 # Builds build-ios/e7vm.xcframework (iOS device arm64 + simulator arm64/x86_64).
 # Usage: platform/ios/build_xcframework.sh [--no-compiler]
 # Requires macOS with Xcode and CMake >= 3.16. Then add the xcframework and
-# platform/ios/E7VM/E7VM.swift to your app target and `import CE7VM` is available.
+# platform/ios/E7VM/E7VM.swift (and E7ModuleManager.swift) to your app target and `import CE7VM` is available.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$ROOT/build-ios"

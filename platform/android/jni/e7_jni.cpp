@@ -310,13 +310,15 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
 
 #define J(name) Java_org_e7vm_E7VM_##name
 
-JNIEXPORT jlong JNICALL J(nativeNew)(JNIEnv* e, jclass, jlong mem, jint stack, jint frames, jboolean suspend, jbyteArray trusted) {
+JNIEXPORT jlong JNICALL J(nativeNew)(JNIEnv* e, jclass, jlong mem, jint stack, jint frames, jboolean suspend, jbyteArray trusted,
+                                     jint gcGrowth) {
   e7_config cfg;
   e7_config_init(&cfg);
   if (mem > 0) cfg.memory_limit = (size_t)mem;
   if (stack > 0) cfg.stack_slots = (uint32_t)stack;
   if (frames > 0) cfg.max_frames = (uint32_t)frames;
   cfg.suspend_on_budget = suspend ? 1 : 0;
+  if (gcGrowth > 0) cfg.gc_growth_percent = (uint32_t)gcGrowth;
   std::vector<uint8_t> keys;
   if (trusted) {
     jsize n = e->GetArrayLength(trusted);
@@ -380,6 +382,20 @@ JNIEXPORT void JNICALL J(nativeAbortSuspended)(JNIEnv*, jclass, jlong h) { e7_ab
 JNIEXPORT void JNICALL J(nativeSetBudget)(JNIEnv*, jclass, jlong h, jlong t) { e7_set_budget(S(h)->vm, t); }
 JNIEXPORT void JNICALL J(nativeSeed)(JNIEnv*, jclass, jlong h, jlong s) { e7_seed_random(S(h)->vm, (uint64_t)s); }
 JNIEXPORT jlong JNICALL J(nativeMemoryUsed)(JNIEnv*, jclass, jlong h) { return (jlong)e7_memory_used(S(h)->vm); }
+JNIEXPORT void JNICALL J(nativeCollectGarbage)(JNIEnv*, jclass, jlong h) { e7_collect_garbage(S(h)->vm); }
+
+// {collections, total pause ns, max pause ns, heap bytes, peak heap bytes}
+JNIEXPORT jlongArray JNICALL J(nativeGcStats)(JNIEnv* e, jclass, jlong h) {
+  e7_gc_stats gs;
+  memset(&gs, 0, sizeof gs);
+  gs.struct_size = sizeof gs;
+  e7_gc_stats_get(S(h)->vm, &gs);
+  jlong v[5] = {(jlong)gs.collections, (jlong)gs.total_pause_ns, (jlong)gs.max_pause_ns, (jlong)gs.heap_bytes,
+                (jlong)gs.peak_heap_bytes};
+  jlongArray r = e->NewLongArray(5);
+  e->SetLongArrayRegion(r, 0, 5, v);
+  return r;
+}
 
 JNIEXPORT void JNICALL J(nativeRegister)(JNIEnv* e, jclass, jlong h, jstring name, jstring sig, jobject fn) {
   State* st = S(h);
@@ -463,6 +479,54 @@ JNIEXPORT jbyteArray JNICALL J(nativePublicKey)(JNIEnv* e, jclass, jbyteArray se
   jbyteArray r = e->NewByteArray(32);
   e->SetByteArrayRegion(r, 0, 32, reinterpret_cast<const jbyte*>(pk));
   return r;
+}
+
+JNIEXPORT jint JNICALL J(nativeVersionNumber)(JNIEnv*, jclass) { return (jint)e7_version_number(); }
+
+// {status, format, requires version, is signed, has debug info}; keyIdOut receives the 8-byte key id
+JNIEXPORT jlongArray JNICALL J(nativeInspect)(JNIEnv* e, jclass, jbyteArray code, jbyteArray keyIdOut) {
+  e7_module_info info;
+  memset(&info, 0, sizeof info);
+  info.struct_size = sizeof info;
+  e7_status st = E7_ERR_LOAD;
+  if (code) {
+    jsize n = e->GetArrayLength(code);
+    std::vector<uint8_t> c((size_t)n);
+    if (n) e->GetByteArrayRegion(code, 0, n, reinterpret_cast<jbyte*>(c.data()));
+    st = e7_inspect(c.data(), c.size(), &info);
+  }
+  if (keyIdOut && e->GetArrayLength(keyIdOut) >= 8)
+    e->SetByteArrayRegion(keyIdOut, 0, 8, reinterpret_cast<const jbyte*>(info.key_id));
+  jlong v[5] = {(jlong)st, (jlong)info.format, (jlong)info.requires_version, (jlong)info.is_signed, (jlong)info.has_debug_info};
+  jlongArray r = e->NewLongArray(5);
+  e->SetLongArrayRegion(r, 0, 5, v);
+  return r;
+}
+
+JNIEXPORT jbyteArray JNICALL J(nativeSignDetached)(JNIEnv* e, jclass, jbyteArray data, jbyteArray seed) {
+  if (!data || !seed || e->GetArrayLength(seed) != 32) { throwE7(e, E7_ERR_ARGS, "seed must be 32 bytes"); return nullptr; }
+  jsize n = e->GetArrayLength(data);
+  std::vector<uint8_t> d((size_t)n);
+  uint8_t sd[32], sig[64];
+  if (n) e->GetByteArrayRegion(data, 0, n, reinterpret_cast<jbyte*>(d.data()));
+  e->GetByteArrayRegion(seed, 0, 32, reinterpret_cast<jbyte*>(sd));
+  e7_status st = e7_sign_detached(d.data(), d.size(), sd, sig);
+  memset(sd, 0, sizeof sd);
+  if (st != E7_OK) { throwE7(e, st, "signing failed"); return nullptr; }
+  jbyteArray r = e->NewByteArray(64);
+  e->SetByteArrayRegion(r, 0, 64, reinterpret_cast<const jbyte*>(sig));
+  return r;
+}
+
+JNIEXPORT jboolean JNICALL J(nativeVerifyDetached)(JNIEnv* e, jclass, jbyteArray data, jbyteArray sig, jbyteArray keys) {
+  if (!data || !sig || !keys || e->GetArrayLength(sig) != 64) return JNI_FALSE;
+  jsize n = e->GetArrayLength(data), k = e->GetArrayLength(keys);
+  std::vector<uint8_t> d((size_t)n), ks((size_t)k);
+  uint8_t s[64];
+  if (n) e->GetByteArrayRegion(data, 0, n, reinterpret_cast<jbyte*>(d.data()));
+  if (k) e->GetByteArrayRegion(keys, 0, k, reinterpret_cast<jbyte*>(ks.data()));
+  e->GetByteArrayRegion(sig, 0, 64, reinterpret_cast<jbyte*>(s));
+  return e7_verify_detached(d.data(), d.size(), s, ks.data(), ks.size() / 32) == E7_OK ? JNI_TRUE : JNI_FALSE;
 }
 
 }  // extern "C"

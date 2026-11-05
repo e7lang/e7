@@ -36,7 +36,53 @@ namespace E7
     public enum E7Status
     {
         Ok = 0, Suspended = 1, Runtime = 2, Budget = 3, Memory = 4, Stack = 5, Load = 6, Verify = 7,
-        Signature = 8, NotFound = 9, Args = 10, Compile = 11, State = 12,
+        Signature = 8, NotFound = 9, Args = 10, Compile = 11, State = 12, Paused = 13,
+        /// <summary>The module's bytecode format or required e7vm version is not supported by this VM (see <see cref="E7VM.Inspect"/>).</summary>
+        Version = 14,
+    }
+
+    /// <summary>Header of a module, read without loading it (<see cref="E7VM.Inspect"/>). Mirrors e7_module_info.</summary>
+    public sealed class E7ModuleInfo
+    {
+        /// <summary>Ok: this VM can load the module; Version: format or required e7vm too new; Load: not a module.</summary>
+        public E7Status Status { get; }
+        /// <summary>Bytecode format version (this VM: 2).</summary>
+        public uint Format { get; }
+        /// <summary>Oldest e7vm that can run the module: major &lt;&lt; 16 | minor &lt;&lt; 8 | patch.</summary>
+        public uint RequiresVersion { get; }
+        /// <summary>An Ed25519 signature trailer is present (not verified by Inspect).</summary>
+        public bool IsSigned { get; }
+        /// <summary>First 8 bytes of SHA-256(public key) of the signing key (zero when unsigned).</summary>
+        public byte[] KeyId { get; }
+        public bool HasDebugInfo { get; }
+        public bool CanRun => Status == E7Status.Ok;
+        /// <summary>RequiresVersion as text, e.g. "0.2.0".</summary>
+        public string RequiresVersionString => E7VM.VersionString(RequiresVersion);
+
+        internal E7ModuleInfo(E7Status status, uint format, uint requires, bool signed, byte[] keyId, bool debug)
+        {
+            Status = status; Format = format; RequiresVersion = requires; IsSigned = signed; KeyId = keyId; HasDebugInfo = debug;
+        }
+    }
+
+    /// <summary>Garbage collector statistics since the VM was created (<see cref="E7VM.GcStats"/>). Mirrors e7_gc_stats.</summary>
+    public readonly struct E7GcStats
+    {
+        public ulong Collections { get; }
+        public ulong TotalPauseNanoseconds { get; }
+        /// <summary>Longest single collection.</summary>
+        public ulong MaxPauseNanoseconds { get; }
+        /// <summary>Currently allocated (same as <see cref="E7VM.MemoryUsed"/>).</summary>
+        public long HeapBytes { get; }
+        public long PeakHeapBytes { get; }
+
+        internal E7GcStats(ulong collections, ulong total, ulong max, long heap, long peak)
+        {
+            Collections = collections; TotalPauseNanoseconds = total; MaxPauseNanoseconds = max; HeapBytes = heap; PeakHeapBytes = peak;
+        }
+
+        public override string ToString() =>
+            $"E7GcStats(Collections={Collections}, TotalPauseNanoseconds={TotalPauseNanoseconds}, MaxPauseNanoseconds={MaxPauseNanoseconds}, HeapBytes={HeapBytes}, PeakHeapBytes={PeakHeapBytes})";
     }
 
     public sealed class E7Exception : Exception
@@ -72,9 +118,11 @@ namespace E7
             [FieldOffset(16)] public UIntPtr Len;
         }
 
+        // e7_config: must match include/e7/e7.h field by field (e7_config_init sets StructSize)
         [StructLayout(LayoutKind.Sequential)]
         private struct Config
         {
+            public UIntPtr StructSize;
             public UIntPtr MemoryLimit;
             public uint StackSlots;
             public uint MaxFrames;
@@ -82,6 +130,31 @@ namespace E7
             public int RequireSignature;
             public IntPtr TrustedKeys;
             public UIntPtr NumTrustedKeys;
+            public uint GcGrowthPercent;
+        }
+
+        // e7_module_info
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ModuleInfo
+        {
+            public UIntPtr StructSize;
+            public uint Format;
+            public uint RequiresVersion;
+            public int IsSigned;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)] public byte[] KeyId;
+            public int HasDebugInfo;
+        }
+
+        // e7_gc_stats
+        [StructLayout(LayoutKind.Sequential)]
+        private struct GcStatsNative
+        {
+            public UIntPtr StructSize;
+            public ulong Collections;
+            public ulong TotalPauseNs;
+            public ulong MaxPauseNs;
+            public UIntPtr HeapBytes;
+            public UIntPtr PeakHeapBytes;
         }
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -114,6 +187,11 @@ namespace E7
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern void e7_collect_garbage(IntPtr vm);
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern int e7_sign_module(byte[] e7b, UIntPtr len, byte[] seed, out IntPtr output, out UIntPtr outLen);
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern void e7_public_key(byte[] seed, byte[] publicKey);
+        [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern uint e7_version_number();
+        [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern int e7_inspect(byte[] data, UIntPtr len, ref ModuleInfo info);
+        [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern int e7_gc_stats_get(IntPtr vm, ref GcStatsNative stats);
+        [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern int e7_sign_detached(byte[] data, UIntPtr len, byte[] seed, byte[] sig);
+        [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern int e7_verify_detached(byte[] data, UIntPtr len, byte[] sig, byte[] trustedKeys, UIntPtr numTrustedKeys);
 
         // ------------------------------------------------------------------ state
         private IntPtr _vm;
@@ -138,12 +216,24 @@ namespace E7
         /// <param name="suspendOnBudget">budget exhaustion suspends (resume with <see cref="Resume"/>) instead of failing</param>
         /// <param name="trustedKeys">Ed25519 public keys (32 bytes each); empty: signatures are not required</param>
         public E7VM(long memoryLimit = 0, bool suspendOnBudget = false, params byte[][] trustedKeys)
+            : this(memoryLimit, suspendOnBudget, 0, trustedKeys)
+        {
+        }
+
+        /// <summary>Creates a VM with a garbage collector growth setting.</summary>
+        /// <param name="memoryLimit">heap limit in bytes (0: default 256 MiB)</param>
+        /// <param name="suspendOnBudget">budget exhaustion suspends (resume with <see cref="Resume"/>) instead of failing</param>
+        /// <param name="trustedKeys">Ed25519 public keys (32 bytes each); empty: signatures are not required</param>
+        /// <param name="gcGrowthPercent">next collection when the heap reaches this % of the live size after the
+        /// previous one (default 200, minimum 125; lower = less memory, more collections); 0 = default</param>
+        public E7VM(long memoryLimit, bool suspendOnBudget, uint gcGrowthPercent, params byte[][] trustedKeys)
         {
             if (IntPtr.Size != 8) throw new PlatformNotSupportedException("E7VM requires a 64-bit process");
             var cfg = new Config();
             e7_config_init(ref cfg);
             if (memoryLimit > 0) cfg.MemoryLimit = (UIntPtr)(ulong)memoryLimit;
             cfg.SuspendOnBudget = suspendOnBudget ? 1 : 0;
+            if (gcGrowthPercent > 0) cfg.GcGrowthPercent = gcGrowthPercent;
             IntPtr keys = IntPtr.Zero;
             try
             {
@@ -170,6 +260,20 @@ namespace E7
         }
 
         public static string Version => PtrToUtf8(e7_version(), -1);
+
+        /// <summary>Library version as major &lt;&lt; 16 | minor &lt;&lt; 8 | patch (compare with <see cref="E7ModuleInfo.RequiresVersion"/>).</summary>
+        public static uint VersionNumber => e7_version_number();
+
+        internal static string VersionString(uint v) => $"{v >> 16}.{(v >> 8) & 0xFF}.{v & 0xFF}";
+
+        /// <summary>Reads a module's header without loading it, e.g. to skip modules this VM cannot run.</summary>
+        public static E7ModuleInfo Inspect(byte[] bytecode)
+        {
+            if (bytecode == null) throw new ArgumentNullException(nameof(bytecode));
+            var info = new ModuleInfo { StructSize = (UIntPtr)(uint)Marshal.SizeOf<ModuleInfo>(), KeyId = new byte[8] };
+            int st = e7_inspect(bytecode, (UIntPtr)(uint)bytecode.Length, ref info);
+            return new E7ModuleInfo((E7Status)st, info.Format, info.RequiresVersion, info.IsSigned != 0, info.KeyId ?? new byte[8], info.HasDebugInfo != 0);
+        }
 
         public void Dispose()
         {
@@ -248,6 +352,14 @@ namespace E7
         public void SeedRandom(ulong seed) => e7_seed_random(Handle, seed);
         public long MemoryUsed => (long)(ulong)e7_memory_used(Handle);
         public void CollectGarbage() => e7_collect_garbage(Handle);
+
+        /// <summary>Garbage collector statistics (count, pause times, heap size and peak), e.g. for sizing the memory limit.</summary>
+        public E7GcStats GcStats()
+        {
+            var st = new GcStatsNative { StructSize = (UIntPtr)(uint)Marshal.SizeOf<GcStatsNative>() };
+            Check(e7_gc_stats_get(Handle, ref st));
+            return new E7GcStats(st.Collections, st.TotalPauseNs, st.MaxPauseNs, (long)(ulong)st.HeapBytes, (long)(ulong)st.PeakHeapBytes);
+        }
 
         // ------------------------------------------------------------------ host services
         /// <summary>Receives console.log output (one call per line, without the newline).</summary>
@@ -374,6 +486,32 @@ namespace E7
             var pk = new byte[32];
             e7_public_key(seed, pk);
             return pk;
+        }
+
+        /// <summary>Detached Ed25519 signature (64 bytes) of arbitrary data, e.g. an update manifest (e7_sign_detached).</summary>
+        public static byte[] SignDetached(byte[] data, byte[] seed)
+        {
+            if (data == null) throw new ArgumentNullException(nameof(data));
+            if (seed == null || seed.Length != 32) throw new ArgumentException("seed must be 32 bytes", nameof(seed));
+            var sig = new byte[64];
+            int st = e7_sign_detached(data, (UIntPtr)(uint)data.Length, seed, sig);
+            if (st != 0) throw new E7Exception((E7Status)st, "signing failed");
+            return sig;
+        }
+
+        /// <summary>True if <paramref name="signature"/> is a detached signature of <paramref name="data"/> by one of the public keys.</summary>
+        public static bool VerifyDetached(byte[] data, byte[] signature, params byte[][] trustedKeys)
+        {
+            if (data == null) throw new ArgumentNullException(nameof(data));
+            if (signature == null || signature.Length != 64 || trustedKeys == null || trustedKeys.Length == 0) return false;
+            var keys = new byte[32 * trustedKeys.Length];
+            for (int i = 0; i < trustedKeys.Length; i++)
+            {
+                if (trustedKeys[i] == null || trustedKeys[i].Length != 32)
+                    throw new ArgumentException("public keys must be 32 bytes", nameof(trustedKeys));
+                Buffer.BlockCopy(trustedKeys[i], 0, keys, 32 * i, 32);
+            }
+            return e7_verify_detached(data, (UIntPtr)(uint)data.Length, signature, keys, (UIntPtr)(uint)trustedKeys.Length) == 0;
         }
 
         // ------------------------------------------------------------------ marshaling

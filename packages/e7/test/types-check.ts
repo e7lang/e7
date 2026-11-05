@@ -1,6 +1,6 @@
 // Compile-only check of index.d.ts (CI: tsc --noEmit --strict --module nodenext).
-import e7default, { init, compile, check, run, disassemble, listExports, formatDiagnostics, version, E7Error } from "@e7lang/e7";
-import type { Diagnostic, RunResult, CompileResult, E7, ExportInfo, Status } from "@e7lang/e7";
+import e7default, { init, compile, check, run, disassemble, listExports, inspect, formatDiagnostics, version, E7Error } from "@e7lang/e7";
+import type { Diagnostic, RunResult, CompileResult, E7, ExportInfo, Status, ModuleInfo } from "@e7lang/e7";
 import { createDebugSession } from "@e7lang/e7";
 import type { DebugSession, StoppedEvent, TerminatedEvent, BreakpointInfo, StopReason, DebugVariable } from "@e7lang/e7";
 
@@ -16,6 +16,10 @@ async function main(): Promise<void> {
   const err: string | null = r.error;
   const text: string = await disassemble("src");
   const ex: ExportInfo[] = await listExports(new Uint8Array());
+  const info: ModuleInfo = await inspect(bytes ?? new Uint8Array());
+  const req: string | null = e7.inspect(new Uint8Array()).requiresVersion;
+  const t: CompileResult = await compile("", { target: "0.2", debug: true });
+  void [info.keyId, info.status, req, t];
   const v: string = version + e7.version + formatDiagnostics(d) + (await compile("")).ok;
   const e = new E7Error();
   void [line, s, out, err, text, ex, v, e.diagnostics, e7default.run];

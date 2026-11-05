@@ -82,8 +82,10 @@ jobs:
       - run: cmake --build build --target e7vm_jni
       - run: |
           mkdir -p classes
-          javac -d classes platform/java/org/e7vm/*.java platform/java/test/E7VMTest.java
+          javac -d classes platform/java/org/e7vm/*.java platform/java/test/*.java \
+            platform/android/shared-test/org/e7vm/ModuleManagerScenarios.java
           java -Djava.library.path=build -cp classes E7VMTest
+          java -Djava.library.path=build -cp classes ModuleManagerTest
 
   typescript:
     runs-on: ubuntu-24.04

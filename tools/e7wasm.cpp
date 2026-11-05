@@ -27,6 +27,10 @@
 //   const char* e7w_output_json(void)        JSON array of printed lines of the last e7w_exec
 //   const char* e7w_result_json(void)        JSON {"type":..,"value":..} of the last e7w_exec
 //   int         e7w_compile_ex(source, len, fileName, flags)       e7w_compile with flags (1 = debug information)
+//   int         e7w_compile_target(source, len, fileName, flags, target)   e7w_compile_ex for an older VM:
+//               target "0.2" / "0.2.1" ("" = this VM); 10 (bad arguments) if target is malformed
+//   const char* e7w_inspect(data, len)       JSON {"status","format","requires","signed","keyId","debug"} of a
+//               .e7b header (e7_inspect); requires is major << 16 | minor << 8 | patch
 //
 // Debugger API (one debug session at a time; JSON protocol documented in docs/DEBUGGING.md). The VM
 // runs in pause-to-host mode: every call that runs script code returns an event when the script
@@ -60,6 +64,7 @@
 #include "compiler/compiler.h"
 #include "core/module.h"
 #include "core/numfmt.h"
+#include "core/since.h"
 #include "crypto/sign.h"
 #include "e7/e7.h"
 
@@ -216,11 +221,13 @@ void onPrintLines(void* user, const char* text, size_t len) {
   gLines.emplace_back(text, len);
 }
 
-bool gCompileDebug = false;  // e7w_compile_ex flag 1
+bool gCompileDebug = false;    // e7w_compile_ex flag 1
+uint32_t gCompileTarget = 0;   // e7w_compile_target (0: this VM)
 
 e7::CompileOutput compileWithFiles(const std::string& entry, const std::string& src) {
   e7::CompileOptions opts;
   opts.debugInfo = gCompileDebug;
+  opts.target = gCompileTarget;
   return e7::compileProgram(entry, [&](const std::string& path, std::string& content) {
     if (path == entry) {
       content = src;
@@ -322,6 +329,22 @@ E7W_EXPORT int e7w_compile_ex(const char* source, double len, const char* fileNa
   gCompileDebug = false;
   return st;
 }
+E7W_EXPORT int e7w_compile_target(const char* source, double len, const char* fileName, int flags, const char* target) {
+  uint32_t t = 0;
+  if (target && *target && !e7::parseVersion(target, t)) {
+    gBytes.clear();
+    gDiag = "[{\"file\":";
+    jsonStr(gDiag, fileName && *fileName ? fileName : "main.ts");
+    gDiag += ",\"line\":0,\"col\":0,\"message\":";
+    jsonStr(gDiag, std::string("invalid target version '") + target + "' (expected e.g. 0.2)");
+    gDiag += "}]";
+    return E7_ERR_ARGS;
+  }
+  gCompileTarget = t;
+  int st = e7w_compile_ex(source, len, fileName, flags);
+  gCompileTarget = 0;
+  return st;
+}
 E7W_EXPORT const char* e7w_diagnostics(void) { return gDiag.c_str(); }
 E7W_EXPORT const uint8_t* e7w_bytes_ptr(void) { return gBytes.data(); }
 E7W_EXPORT double e7w_bytes_len(void) { return (double)gBytes.size(); }
@@ -352,6 +375,23 @@ E7W_EXPORT const char* e7w_exports(const uint8_t* data, double len) {
     gTmp += '}';
   }
   gTmp += ']';
+  return gTmp.c_str();
+}
+
+E7W_EXPORT const char* e7w_inspect(const uint8_t* data, double len) {
+  e7_module_info info;
+  memset(&info, 0, sizeof info);
+  info.struct_size = sizeof info;
+  e7_status st = data && len > 0 ? e7_inspect(data, (size_t)len, &info) : E7_ERR_LOAD;
+  static const char* hx = "0123456789abcdef";
+  std::string keyId;
+  for (uint8_t b : info.key_id) {
+    keyId += hx[b >> 4];
+    keyId += hx[b & 15];
+  }
+  gTmp = "{\"status\":" + std::to_string((int)st) + ",\"format\":" + std::to_string(info.format) +
+         ",\"requires\":" + std::to_string(info.requires_version) + ",\"signed\":" + (info.is_signed ? "true" : "false") +
+         ",\"keyId\":\"" + (info.is_signed ? keyId : "") + "\",\"debug\":" + (info.has_debug_info ? "true" : "false") + "}";
   return gTmp.c_str();
 }
 
@@ -803,6 +843,13 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
+  if (argc > 3 && std::string(argv[2]) == "--target") {  // --target VERSION: compile only
+    std::string src = ss.str();
+    int cs = e7w_compile_target(src.c_str(), (double)src.size(), argv[1], 0, argv[3]);
+    printf("compile=%d diagnostics=%s\n", cs, e7w_diagnostics());
+    if (cs == 0) printf("inspect=%s\n", e7w_inspect(e7w_bytes_ptr(), e7w_bytes_len()));
+    return 0;
+  }
   if (argc > 2 && std::string(argv[2]) == "--json") {  // structured API: --json [fn [string args...]]
     std::string src = ss.str();
     int cs = e7w_compile(src.c_str(), (double)src.size(), argv[1]);
@@ -810,6 +857,7 @@ int main(int argc, char** argv) {
     if (cs != 0) return 0;
     std::vector<uint8_t> bc(e7w_bytes_ptr(), e7w_bytes_ptr() + (size_t)e7w_bytes_len());
     printf("exports=%s\n", e7w_exports(bc.data(), (double)bc.size()));
+    printf("inspect=%s\n", e7w_inspect(bc.data(), (double)bc.size()));
     e7w_args_clear();
     for (int i = 4; i < argc; i++) e7w_arg_string(argv[i], (double)strlen(argv[i]));
     int st = e7w_exec(bc.data(), (double)bc.size(), argc > 3 ? argv[3] : "", 1e9, 64.0 * 1024 * 1024, 1);

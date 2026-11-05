@@ -277,6 +277,60 @@ final class E7VMTests: XCTestCase {
     XCTAssertNotNil(expectE7Error(try vm.load(Data())))
   }
 
+  func testVersionNumberAndInspect() throws {
+    let vn = E7VM.versionNumber
+    XCTAssertEqual(E7VM.version, "\(vn >> 16).\((vn >> 8) & 0xFF).\(vn & 0xFF)")
+    let code = try E7VM.compile(signSource, fileName: "sign.ts")
+    var info = E7VM.inspect(try E7VM.sign(code, seed: seed(1)))
+    XCTAssertTrue(info.canRun)
+    XCTAssertEqual(info.format, 2)
+    XCTAssertEqual(info.requiresVersionString, "0.2.0")
+    XCTAssertTrue(info.isSigned)
+    XCTAssertEqual(info.keyId.count, 8)
+    XCTAssertNotEqual(info.keyId, Data(count: 8))
+    XCTAssertFalse(info.hasDebugInfo)
+    XCTAssertFalse(E7VM.inspect(code).isSigned)
+    let newer = withRequires(code, 0x63_0000)
+    info = E7VM.inspect(newer)
+    XCTAssertEqual(info.status, status(E7_ERR_VERSION))
+    XCTAssertEqual(info.requiresVersionString, "99.0.0")
+    XCTAssertEqual(expectE7Error(try E7VM().load(newer))?.status, status(E7_ERR_VERSION))
+    XCTAssertEqual(E7VM.inspect(Data([1, 2, 3])).status, status(E7_ERR_LOAD))
+    XCTAssertEqual(E7VM.inspect(Data()).status, status(E7_ERR_LOAD))
+  }
+
+  func testGcStatsAndGrowth() throws {
+    let vm = try E7VM(gcGrowthPercent: 150)
+    let m = try vm.loadSource(
+      "let keep: number[][] = [];\nexport function churn(): number { for (let i = 0; i < 20000; i++) { keep.push([i]); if (keep.length > 500) keep = []; } return keep.length; }"
+    )
+    try vm.call(m, "churn")
+    vm.collectGarbage()
+    let gs = vm.gcStats()
+    XCTAssertGreaterThanOrEqual(gs.collections, 1)
+    XCTAssertGreaterThan(gs.maxPauseNanoseconds, 0)
+    XCTAssertGreaterThanOrEqual(gs.totalPauseNanoseconds, gs.maxPauseNanoseconds)
+    XCTAssertEqual(gs.heapBytes, vm.memoryUsed)
+    XCTAssertGreaterThanOrEqual(gs.peakHeapBytes, gs.heapBytes)
+  }
+
+  func testDetachedSignatures() throws {
+    let manifest = Data("{\"version\":\"2\",\"killSwitch\":false}".utf8)
+    let sig = try E7VM.signDetached(manifest, seed: seed(1))
+    XCTAssertEqual(
+      sig.map { String(format: "%02x", $0) }.joined(),
+      "1549a30db54e6fc64e15efee8a9b5222a22be751830dd98dd5f97d30c1bc6b09"
+        + "2cdaa2efdc5a609a338b827ca32a0a9d1d9212ffd3eb51bfc9eb3b073487e607")
+    let pub = try E7VM.publicKey(seed: seed(1)), other = try E7VM.publicKey(seed: seed(100))
+    XCTAssertTrue(E7VM.verifyDetached(manifest, signature: sig, trustedKeys: [pub]))
+    XCTAssertTrue(E7VM.verifyDetached(manifest, signature: sig, trustedKeys: [other, pub]))
+    XCTAssertFalse(E7VM.verifyDetached(manifest, signature: sig, trustedKeys: [other]))
+    XCTAssertFalse(E7VM.verifyDetached(manifest, signature: sig, trustedKeys: []))
+    XCTAssertFalse(E7VM.verifyDetached(Data("x".utf8), signature: sig, trustedKeys: [pub]))
+    XCTAssertTrue(E7VM.verifyDetached(Data(), signature: try E7VM.signDetached(Data(), seed: seed(1)), trustedKeys: [pub]))
+    XCTAssertEqual(expectE7Error(try E7VM.signDetached(manifest, seed: Data([1])))?.status, status(E7_ERR_ARGS))
+  }
+
   func testSeparateVMsAreIndependent() throws {
     let code = try E7VM.compile("let n = 0;\nexport function next(): number { n++; return n; }")
     let a = try E7VM(), b = try E7VM()

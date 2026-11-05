@@ -78,6 +78,35 @@ public class E7VMTest {
         check(e.status == E7Exception.ARGS, "args status");
       }
     }
+    // 0.2 API: version number, inspect, GC statistics and growth setting, detached signatures
+    int vn = E7VM.versionNumber();
+    check(E7VM.version().equals((vn >> 16) + "." + ((vn >> 8) & 255) + "." + (vn & 255)) && vn >= 0x000200, "versionNumber");
+    E7VM.ModuleInfo info = E7VM.inspect(signed);
+    check(info.canRun() && info.format == 2 && info.requiresVersion == 0x000200 && info.isSigned && !info.hasDebugInfo,
+        "inspect signed module");
+    check("0.2.0".equals(info.requiresVersionString()) && info.keyId.length == 8 && (info.keyId[0] | info.keyId[7]) != 0, "inspect key id");
+    check(!E7VM.inspect(code).isSigned, "inspect unsigned module");
+    check(E7VM.inspect(new byte[] {1, 2, 3}).status == E7Exception.LOAD, "inspect garbage");
+    try (E7VM vm = new E7VM(new E7VM.Config().gcGrowthPercent(150))) {
+      E7VM.Module m = vm.loadSource("let keep: number[][] = [];\n"
+          + "export function churn(): number { for (let i = 0; i < 20000; i++) { keep.push([i]); if (keep.length > 500) keep = []; } return keep.length; }",
+          "gc.ts");
+      vm.call(m, "churn");
+      vm.collectGarbage();
+      E7VM.GcStats gs = vm.gcStats();
+      check(gs.collections >= 1 && gs.maxPauseNanos > 0 && gs.totalPauseNanos >= gs.maxPauseNanos, "gc stats: " + gs);
+      check(gs.heapBytes == vm.memoryUsed() && gs.peakHeapBytes >= gs.heapBytes, "gc stats heap");
+    }
+    byte[] manifest = "{\"version\":\"2\",\"killSwitch\":false}".getBytes(StandardCharsets.UTF_8);
+    byte[] dsig = E7VM.signDetached(manifest, seed);
+    StringBuilder hex = new StringBuilder();
+    for (byte b : dsig) hex.append(String.format("%02x", b & 0xff));
+    check(hex.toString().equals("1549a30db54e6fc64e15efee8a9b5222a22be751830dd98dd5f97d30c1bc6b09"
+        + "2cdaa2efdc5a609a338b827ca32a0a9d1d9212ffd3eb51bfc9eb3b073487e607"), "signDetached known answer");
+    byte[] otherPub = E7VM.publicKey(new byte[32]);
+    check(E7VM.verifyDetached(manifest, dsig, pub) && E7VM.verifyDetached(manifest, dsig, otherPub, pub), "verifyDetached");
+    check(!E7VM.verifyDetached(manifest, dsig, otherPub) && !E7VM.verifyDetached("x".getBytes(), dsig, pub), "verifyDetached rejects");
+
     if (failures > 0) { System.err.println(failures + " failure(s)"); System.exit(1); }
     System.out.println("E7VMTest: all checks passed");
   }

@@ -23,6 +23,35 @@ public struct KeyHandle: Equatable, Hashable {
   public init(_ id: Int64) { self.id = id }
 }
 
+/// Header of a module, read without loading it (`E7VM.inspect`). Mirrors e7_module_info.
+public struct E7ModuleInfo: Equatable {
+  /// `E7_OK`: this VM can load it; `E7_ERR_VERSION`: format or required e7vm too new; `E7_ERR_LOAD`: not a module.
+  public let status: Int32
+  /// Bytecode format version (this VM: 2).
+  public let format: UInt32
+  /// Oldest e7vm that can run the module: major << 16 | minor << 8 | patch.
+  public let requiresVersion: UInt32
+  /// An Ed25519 signature trailer is present (not verified by `inspect`).
+  public let isSigned: Bool
+  /// First 8 bytes of SHA-256(public key) of the signing key (zero when unsigned).
+  public let keyId: Data
+  public let hasDebugInfo: Bool
+  public var canRun: Bool { status == Int32(E7_OK.rawValue) }
+  /// `requiresVersion` as text, e.g. "0.2.0".
+  public var requiresVersionString: String { E7VM.versionString(requiresVersion) }
+}
+
+/// Garbage collector statistics since the VM was created (`E7VM.gcStats()`). Mirrors e7_gc_stats.
+public struct E7GcStats: Equatable {
+  public let collections: UInt64
+  public let totalPauseNanoseconds: UInt64
+  /// Longest single collection.
+  public let maxPauseNanoseconds: UInt64
+  /// Currently allocated (same as `memoryUsed`).
+  public let heapBytes: Int
+  public let peakHeapBytes: Int
+}
+
 public enum E7Value: Equatable {
   case number(Double), int(Int64), uint(UInt64), bool(Bool), string(String), bytes(Data), handle(KeyHandle), void
 }
@@ -90,10 +119,15 @@ public final class E7VM {
   }
 
   /// - Parameter trustedKeys: Ed25519 public keys (32 bytes each). When non-empty only signed modules load.
-  public init(memoryLimit: Int = 0, suspendOnBudget: Bool = false, trustedKeys: [Data] = []) throws {
+  /// - Parameter gcGrowthPercent: next collection when the heap reaches this % of the live size after the previous
+  ///   one (default 200, minimum 125; lower = less memory, more collections). 0 = default.
+  public init(memoryLimit: Int = 0, suspendOnBudget: Bool = false, trustedKeys: [Data] = [], gcGrowthPercent: UInt32 = 0)
+    throws
+  {
     var cfg = e7_config()
     e7_config_init(&cfg)
     if memoryLimit > 0 { cfg.memory_limit = memoryLimit }
+    if gcGrowthPercent > 0 { cfg.gc_growth_percent = gcGrowthPercent }
     cfg.suspend_on_budget = suspendOnBudget ? 1 : 0
     var keys = [UInt8]()
     for k in trustedKeys {
@@ -122,6 +156,36 @@ public final class E7VM {
 
   /// Library version, e.g. "0.2.0".
   public static var version: String { String(cString: e7_version()) }
+
+  /// Library version as major << 16 | minor << 8 | patch (compare with `E7ModuleInfo.requiresVersion`).
+  public static var versionNumber: UInt32 { e7_version_number() }
+
+  static func versionString(_ v: UInt32) -> String { "\(v >> 16).\((v >> 8) & 0xFF).\(v & 0xFF)" }
+
+  /// Reads a module's header without loading it, e.g. to skip modules this VM cannot run.
+  public static func inspect(_ bytecode: Data) -> E7ModuleInfo {
+    var info = e7_module_info()
+    info.struct_size = MemoryLayout<e7_module_info>.size
+    let bytes = [UInt8](bytecode)
+    let st = bytes.withUnsafeBufferPointer { b -> e7_status in
+      guard let base = b.baseAddress else { return E7_ERR_LOAD }
+      return e7_inspect(base, b.count, &info)
+    }
+    let keyId = withUnsafeBytes(of: info.key_id) { Data($0) }
+    return E7ModuleInfo(
+      status: Int32(st.rawValue), format: info.format, requiresVersion: info.requires_version,
+      isSigned: info.is_signed != 0, keyId: keyId, hasDebugInfo: info.has_debug_info != 0)
+  }
+
+  /// Garbage collector statistics (count, pause times, heap size and peak), e.g. for sizing the memory limit.
+  public func gcStats() -> E7GcStats {
+    var st = e7_gc_stats()
+    st.struct_size = MemoryLayout<e7_gc_stats>.size
+    _ = e7_gc_stats_get(vm, &st)
+    return E7GcStats(
+      collections: st.collections, totalPauseNanoseconds: st.total_pause_ns, maxPauseNanoseconds: st.max_pause_ns,
+      heapBytes: st.heap_bytes, peakHeapBytes: st.peak_heap_bytes)
+  }
 
   private func check(_ st: e7_status) throws {
     if st != E7_OK { throw E7Error(status: Int32(st.rawValue), message: String(cString: e7_last_error(vm))) }
@@ -152,6 +216,12 @@ public final class E7VM {
 
   @discardableResult
   public func call(_ module: E7Module, _ function: String, _ args: E7Value...) throws -> E7Value {
+    try call(module, function, arguments: args)
+  }
+
+  /// `call` with the arguments as an array.
+  @discardableResult
+  public func call(_ module: E7Module, _ function: String, arguments args: [E7Value]) throws -> E7Value {
     let bufs = ArgBuffers()
     var vals = args.map { E7VM.toC($0, bufs) }
     var ret = e7_value()
@@ -233,6 +303,36 @@ public final class E7VM {
     var pk = [UInt8](repeating: 0, count: 32)
     sd.withUnsafeBufferPointer { s in pk.withUnsafeMutableBufferPointer { p in e7_public_key(s.baseAddress, p.baseAddress) } }
     return Data(pk)
+  }
+
+  /// Detached Ed25519 signature (64 bytes) of arbitrary data, e.g. an update manifest (e7_sign_detached).
+  public static func signDetached(_ data: Data, seed: Data) throws -> Data {
+    guard seed.count == 32 else {
+      throw E7Error(status: Int32(E7_ERR_ARGS.rawValue), message: "seed must be 32 bytes")
+    }
+    let d = [UInt8](data), sd = [UInt8](seed)
+    var sig = [UInt8](repeating: 0, count: 64)
+    let st = d.withUnsafeBufferPointer { db in
+      sd.withUnsafeBufferPointer { s in
+        sig.withUnsafeMutableBufferPointer { o in e7_sign_detached(db.baseAddress, db.count, s.baseAddress, o.baseAddress) }
+      }
+    }
+    guard st == E7_OK else { throw E7Error(status: Int32(st.rawValue), message: "signing failed") }
+    return Data(sig)
+  }
+
+  /// True if `signature` is a detached signature of `data` by one of the public keys (32 bytes each).
+  public static func verifyDetached(_ data: Data, signature: Data, trustedKeys: [Data]) -> Bool {
+    guard signature.count == 64, !trustedKeys.isEmpty, trustedKeys.allSatisfy({ $0.count == 32 }) else { return false }
+    let d = [UInt8](data), sig = [UInt8](signature), keys = trustedKeys.flatMap { [UInt8]($0) }
+    let st = d.withUnsafeBufferPointer { db in
+      sig.withUnsafeBufferPointer { sb in
+        keys.withUnsafeBufferPointer { kb in
+          e7_verify_detached(db.baseAddress, db.count, sb.baseAddress, kb.baseAddress, trustedKeys.count)
+        }
+      }
+    }
+    return st == E7_OK
   }
 
   // MARK: - marshaling

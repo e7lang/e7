@@ -815,3 +815,41 @@ e7_status e7_debug_resume(e7_vm* v, e7_debug_action action, e7_value* ret) {
 }
 
 }  // extern "C"
+
+// ---------------------------------------------------------------- detached signatures
+// Ed25519 over "e7-detached-v1\0" || data (the NUL is part of the prefix).
+static const char kDetachedDomain[] = "e7-detached-v1";  // sizeof includes the terminating NUL
+
+static bool detachedMessage(const uint8_t* data, size_t len, std::vector<uint8_t>& msg) {
+  try {
+    msg.reserve(sizeof kDetachedDomain + len);
+    msg.assign((const uint8_t*)kDetachedDomain, (const uint8_t*)kDetachedDomain + sizeof kDetachedDomain);
+    if (len) msg.insert(msg.end(), data, data + len);
+    return true;
+  } catch (std::bad_alloc&) {
+    return false;
+  }
+}
+
+extern "C" {
+
+e7_status e7_sign_detached(const uint8_t* data, size_t len, const uint8_t seed[32], uint8_t sig_out[64]) {
+  if ((!data && len) || !seed || !sig_out) return E7_ERR_ARGS;
+  std::vector<uint8_t> msg;
+  if (!detachedMessage(data, len, msg)) return E7_ERR_MEMORY;
+  ed25519Sign(seed, msg.data(), msg.size(), sig_out);
+  return E7_OK;
+}
+
+e7_status e7_verify_detached(const uint8_t* data, size_t len, const uint8_t sig[64], const uint8_t* trusted_keys,
+                             size_t num_trusted_keys) {
+  if ((!data && len) || !sig || (!trusted_keys && num_trusted_keys)) return E7_ERR_ARGS;
+  if (!num_trusted_keys) return E7_ERR_SIGNATURE;
+  std::vector<uint8_t> msg;
+  if (!detachedMessage(data, len, msg)) return E7_ERR_MEMORY;
+  for (size_t i = 0; i < num_trusted_keys; i++)
+    if (ed25519Verify(trusted_keys + 32 * i, msg.data(), msg.size(), sig)) return E7_OK;
+  return E7_ERR_SIGNATURE;
+}
+
+}  // extern "C"

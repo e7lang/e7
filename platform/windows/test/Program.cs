@@ -18,6 +18,17 @@ static class Program
         if (!cond) failures++;
     }
 
+    static uint Crc32(byte[] p, int n)
+    {
+        uint c = 0xFFFFFFFFu;
+        for (int i = 0; i < n; i++)
+        {
+            c ^= p[i];
+            for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1)));
+        }
+        return ~c;
+    }
+
     static E7Exception Throws(Action a)
     {
         try { a(); } catch (E7Exception e) { return e; }
@@ -166,6 +177,42 @@ export function nothing(): void {}
             var st = Throws(() => vm.Load(tampered)).Status;
             Check(st == E7Status.Load || st == E7Status.Verify, "tampered bytecode rejected");
         }
+
+        // 0.2 API: version number, inspect, GC statistics and growth setting, detached signatures
+        uint vn = E7VM.VersionNumber;
+        Check(E7VM.Version == $"{vn >> 16}.{(vn >> 8) & 0xFF}.{vn & 0xFF}" && vn >= 0x000200, "VersionNumber");
+        var info = E7VM.Inspect(signedCode);
+        Check(info.CanRun && info.Format == 2 && info.RequiresVersionString == "0.2.0" && info.IsSigned && !info.HasDebugInfo
+              && info.KeyId.Length == 8 && Array.Exists(info.KeyId, b => b != 0), "Inspect signed module");
+        Check(!E7VM.Inspect(code).IsSigned, "Inspect unsigned module");
+        var newer = (byte[])code.Clone();
+        BitConverter.GetBytes(0x630000u).CopyTo(newer, 12);  // `requires` header field: e7vm 99.0.0
+        BitConverter.GetBytes(Crc32(newer, newer.Length - 8)).CopyTo(newer, newer.Length - 4);
+        info = E7VM.Inspect(newer);
+        Check(info.Status == E7Status.Version && info.RequiresVersionString == "99.0.0", "Inspect: module needs a newer VM");
+        using (var vm = new E7VM())
+        {
+            Check(Throws(() => vm.Load(newer)).Status == E7Status.Version, "Load: module needs a newer VM -> Version");
+        }
+        Check(E7VM.Inspect(new byte[] { 1, 2, 3 }).Status == E7Status.Load, "Inspect garbage -> Load");
+        using (var vm = new E7VM(0, false, 150u))
+        {
+            var m = vm.LoadSource("let keep: number[][] = [];\nexport function churn(): number { for (let i = 0; i < 20000; i++) { keep.push([i]); if (keep.length > 500) keep = []; } return keep.length; }");
+            vm.Call(m, "churn");
+            vm.CollectGarbage();
+            var gs = vm.GcStats();
+            Check(gs.Collections >= 1 && gs.MaxPauseNanoseconds > 0 && gs.TotalPauseNanoseconds >= gs.MaxPauseNanoseconds, $"GcStats {gs}");
+            Check(gs.HeapBytes == vm.MemoryUsed && gs.PeakHeapBytes >= gs.HeapBytes, "GcStats heap");
+        }
+        var katSeed = new byte[32];
+        for (int i = 0; i < 32; i++) katSeed[i] = (byte)(i + 1);
+        var manifest = Encoding.UTF8.GetBytes("{\"version\":\"2\",\"killSwitch\":false}");
+        var dsig = E7VM.SignDetached(manifest, katSeed);
+        Check(Convert.ToHexString(dsig).ToLowerInvariant() == "1549a30db54e6fc64e15efee8a9b5222a22be751830dd98dd5f97d30c1bc6b09"
+              + "2cdaa2efdc5a609a338b827ca32a0a9d1d9212ffd3eb51bfc9eb3b073487e607", "SignDetached known answer");
+        var katPub = E7VM.PublicKey(katSeed);
+        Check(E7VM.VerifyDetached(manifest, dsig, katPub) && E7VM.VerifyDetached(manifest, dsig, pub, katPub), "VerifyDetached (any trusted key)");
+        Check(!E7VM.VerifyDetached(manifest, dsig, pub) && !E7VM.VerifyDetached(Encoding.UTF8.GetBytes("x"), dsig, katPub), "VerifyDetached rejects");
 
         if (failures > 0) { Console.WriteLine($"{failures} check(s) failed"); return 1; }
         Console.WriteLine("all C# binding tests passed");
