@@ -40,9 +40,10 @@ Source file extension is `.ts` (recommended, supported directly by IDEs) or `.e7
 | `void`, `never`, `null`, `undefined` | | |
 
 **Not supported** (compile error with a hint): `any`, `unknown`, `object`, union types other than with `null/undefined`, intersection types,
-user-defined generics (functions/classes/interfaces/aliases), index signatures (use `Map<K, V>`), `keyof`/`typeof` type operators, conditional/mapped types,
+index signatures (use `Map<K, V>`), `keyof`/`typeof` type operators, conditional/mapped types,
 utility types such as `Record/Partial/Pick`, `Promise`, `Symbol`, `RegExp`, and typed arrays other than `Uint8Array`, such as `Int32Array`
 (use `u32[]` or `DataView`). String literal types (`"a" | "b"`) are treated as `string`.
+User-defined generics are supported (section 2.3).
 
 ### 2.1 Assignment compatibility
 - Identical types; `null`/`undefined` → the corresponding nullable type; `T` → `T | null | undefined`.
@@ -58,6 +59,42 @@ utility types such as `Record/Partial/Pick`, `Promise`, `Symbol`, `RegExp`, and 
 - Narrowing: `x === null`, `x !== undefined`, `x == null`, truthiness checks `if (x)`, `instanceof`, combinations with `&&`/`||`/`!`,
   early `return/throw/break/continue`, `x ??= v`, and assignment. Property paths are supported (after `this.head !== null`, `this.head.next` can be used directly).
   Variables reassigned inside a loop are re-checked at the loop condition; inside closures, narrowing is kept only for `const` variables (same as TS).
+
+### 2.3 Generics
+
+Generic functions (`function first<T>(xs: T[]): T`), generic arrow functions assigned to a `const`
+(`const pair = <A, B>(a: A, b: B): [A, B] => [a, b]`), generic classes (`class Box<T>`) with generic methods
+(`map<U>(f: (x: T) => U): Box<U>`), generic interfaces and type aliases (`interface Pair<A, B>`,
+`type Result<T> = { ok: boolean; value: T | null }`) are compiled by **monomorphization**: each distinct list of
+type arguments gets its own copy of the function, class or type, checked and compiled with the concrete types
+(no runtime type information, no VM support needed).
+
+- **Type arguments** are written explicitly (`first<string>(xs)`, `new Box<number>(1)`, `Pair<number, string>`) or
+  inferred like `tsc` does in the common cases: from the arguments (function literal arguments are typed from what
+  the other arguments determine, then contribute their return type), from the expected type of the result
+  (`const b: Box<string[]> = new Box([])`), and from default type parameters (`<T = number>`). A type parameter
+  that cannot be inferred is a compile error (TypeScript would infer `unknown`). Inference unifies `T` with
+  `null`/`undefined` into a nullable type; conflicting candidates are reported as argument type errors.
+- **Constraints** (`<T extends Shape>`, `<T extends Comparable<T>>`) are checked for every instantiation; inside the
+  generic code a type parameter *is* its concrete type, so the body only needs to type-check for the arguments
+  actually used (it must still pass `tsc`). `keyof` constraints are not supported.
+- **Generic classes**: `Box<number>` and `Box<string>` are separate classes (named `Box` at run time, so
+  `console.log` prints `Box { ... }`); a generic class can extend and be extended by generic and plain classes
+  and implement generic interfaces. Static members belong to the class itself, not to an instantiation (one
+  copy shared by all instances, as in TypeScript; they cannot use the type parameters). Instances with different
+  type arguments are not assignable to each other (`Box<Circle>` is not a `Box<Shape>`; TypeScript compares them
+  structurally), and `x instanceof Box` is not supported for a generic class.
+- **Generic methods** (instance and static) are called directly, not through the class: they cannot override or
+  be overridden, and cannot be abstract. Generic methods in interfaces, object types and object literals, and
+  generic function types (`<T>(x: T) => T`) are not supported.
+- A generic function used as a value needs a contextual function type that determines its type arguments
+  (`xs.map(identity)`); a generic arrow function must be assigned to a `const` (each instantiation is its own
+  closure, created where the `const` is declared).
+- Stack traces and debug information name instances with their type arguments (`first<string>`,
+  `Box<number>.map<string>`), and compile errors in generic code name the instantiation: `... (in first<string>)`.
+- The number of instantiations is bounded (500 per generic declaration, 4000 per program), and so is their
+  nesting: a generic that instantiates itself with ever larger type arguments (`f<T>(x: T) { f<T[]>([x]) }`,
+  polymorphic recursion) is a compile error.
 
 ## 3. Declarations and statements
 
@@ -207,7 +244,7 @@ try {
   (`get #x()`), `#x in obj` and redeclaring a base class's private name in a subclass are not supported.
 - **Static blocks** `static { ... }` run with the static field initializers, in source order, when the class
   declaration is executed; they can use the class's private static members.
-- **Not supported**: generic classes, class expressions, decorators, methods as values (use arrow functions).
+- **Not supported**: class expressions, decorators, methods as values (use arrow functions). Generic classes: section 2.3.
 - Object literals can have **methods** (`{ n: 2, twice(x: number): number { return x * this.n; } }`): `this` is
   the object (or the contextual interface type), and the methods are own properties holding functions, as in
   JavaScript. The literal's type has methods, so it can be passed as an interface with methods; such an
@@ -313,7 +350,7 @@ Assertion helpers used by the `e7 test` runner; they work in any program. A fail
 | `fail(message?): never` | always |
 
 `assertEqual` / `assertNotEqual` accept any one type for both operands (the checker treats them as a builtin
-generic `<T>(actual: T, expected: T)`; user-defined generics are not supported). The second operand is checked
+generic `<T>(actual: T, expected: T)`). The second operand is checked
 against the type of the first, unless the first is a literal whose type depends on context (an integer literal,
 `null`, `undefined`, `[]`). Structural equality: numbers by value with `NaN` equal to `NaN` (and `0` equal to `-0`),
 integers, booleans and enum values by value, strings / bigints / `Uint8Array`s by content, arrays element-wise,
@@ -375,3 +412,5 @@ or host function that was running (or that called back into the script, like `Ar
 | E7's own runtime checks (out of bounds, failed `as`, limits) | — | Not catchable; `finally` blocks do not run |
 | `Object.values` / `entries` of an object with more properties than its type | All own properties | E7 error (the extra property's type is unknown) |
 | `Object.assign` with an object having more properties than its type | Copies them all | Copies the properties of the static type (like spread) |
+| Instances of a generic class with different type arguments | Structurally compatible | Different classes (`Box<Circle>` is not a `Box<Shape>`) |
+| `console.log` of an instantiated generic function value | `[Function: f]` | `[Function: f<number>]` |

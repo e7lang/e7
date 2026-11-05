@@ -34,7 +34,7 @@ Type* Checker::checkInner(Expr* e, Type* expected) {
     case EK::Bool: return T.boolean();
     case EK::Null: return T.nullT();
     case EK::Undefined: return T.undef();
-    case EK::Ident: return checkIdent(e);
+    case EK::Ident: return checkIdent(e, expected);
     case EK::This: {
       Sym* s = lookup("this");
       if (!s || s->k != SymK::Var) return errT(e->loc, "'this' is only allowed in methods and constructors");
@@ -167,7 +167,7 @@ Type* Checker::checkTemplate(Expr* e) {
 }
 
 // ------------------------------------------------------------------ identifiers
-Type* Checker::checkIdent(Expr* e) {
+Type* Checker::checkIdent(Expr* e, Type* expected) {
   Sym* s = lookup(e->raw);
   if (!s) return errT(e->loc, "cannot find name '" + e->raw + "'" + suggestName(e->raw, false));
   switch (s->k) {
@@ -193,6 +193,19 @@ Type* Checker::checkIdent(Expr* e) {
         if (f->checking) return errT(e->loc, "'" + f->name + "' is referenced recursively; add an explicit return type");
         checkFunction(f);
       }
+      if (f->hasDefaults) return errT(e->loc, "functions with default parameters cannot be used as values; wrap it in an arrow function");
+      e->callee = f;
+      if (f->selfVar) markCapture(f->selfVar);
+      return f->type;
+    }
+    case SymK::Generic: {
+      GenericSym* g = static_cast<GenericSym*>(s);
+      if (g->kind == GenericSym::Class) return errT(e->loc, "class '" + e->raw + "' cannot be used as a value");
+      if (g->kind != GenericSym::Func && g->kind != GenericSym::Arrow)
+        return errT(e->loc, "'" + e->raw + "' is a type, not a value");
+      FuncSym* f = genericFuncValue(g, e, expected);
+      if (!f) return T.unknown();
+      if (f->inferRet && !f->checking) checkFunction(f);
       if (f->hasDefaults) return errT(e->loc, "functions with default parameters cannot be used as values; wrap it in an arrow function");
       e->callee = f;
       if (f->selfVar) markCapture(f->selfVar);
@@ -709,7 +722,7 @@ std::string Checker::memberWriteError(Expr* target) {
   if (target->intrinsic == IN_STATIC_FIELD) {
     Expr* base = strip(target->a);
     Sym* s = base->k == EK::Ident ? lookup(base->raw) : nullptr;
-    if (!s || s->k != SymK::Class) return "cannot assign to '" + n + "' because it is an import";
+    if (!classOf(s)) return "cannot assign to '" + n + "' because it is an import";
     if (target->var && target->var->isConst) return "cannot assign to '" + n + "' because it is a read-only property";
     return "";
   }
@@ -768,6 +781,9 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
       return T.boolean();
     }
     Sym* s = lookup(r->raw);
+    if (s && s->k == SymK::Generic && static_cast<GenericSym*>(s)->kind == GenericSym::Class)
+      return errT(e->b->loc, "'instanceof " + r->raw + "' is not supported: '" + r->raw +
+                                 "' is a generic class, and e7 compiles one class per type argument list");
     if (!s || s->k != SymK::Class) return errT(e->b->loc, "'" + r->raw + "' is not a class");
     Type* b = baseOf(lt);
     if (b->t != TT::Class && b->t != TT::Object && b->t != TT::Unknown)
@@ -1152,6 +1168,7 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
     Param& p = e->params[i];
     Type* t = nullptr;
     Type* ctx = exp && i < exp->params.size() ? exp->params[i] : nullptr;
+    if (ctx && ctx->t == TT::Unknown) ctx = nullptr;  // not known yet (type argument inference)
     // `(x: unknown) => ...` as a callback: TypeScript lets the body do nothing type-specific with x,
     // so it takes the contextual parameter type (e.g. Array.from({ length: n }, (_: unknown, i) => i))
     bool unknownAnn = p.type && p.type->k == TNK::Ref && p.type->name == "unknown" && p.type->args.empty();
@@ -1291,8 +1308,7 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
       for (auto& m : en->members) names.push_back(m.name);
       return errT(e->loc, "enum '" + en->name + "' has no member '" + name + "'" + didYouMean(name, names));
     }
-    if (s && s->k == SymK::Class) {
-      ClassSym* c = static_cast<ClassSym*>(s);
+    if (ClassSym* c = classOf(s)) {
       resolveClass(c);
       if (name[0] == '#' && !checkPrivateAccess(e->nameLoc, name, c)) return T.unknown();
       auto it = c->staticFields.find(name);

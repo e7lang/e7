@@ -176,8 +176,10 @@ static const char* intName(uint8_t vt) {
   }
 }
 
-std::string typeName(const Type* t) {
+// bounded: generic instances can nest types whose full names would grow exponentially
+static std::string typeNameB(const Type* t, int& budget) {
   if (!t) return "?";
+  if (--budget < 0) return "...";
   switch (t->t) {
     case TT::Number: return "number";
     case TT::Bool: return "boolean";
@@ -190,38 +192,38 @@ std::string typeName(const Type* t) {
     case TT::Unknown: case TT::Caught: return "unknown";
     case TT::Int: return intName(t->vt);
     case TT::Array: {
-      std::string e = typeName(t->elem);
+      std::string e = typeNameB(t->elem, budget);
       if (t->elem->t == TT::Optional || t->elem->t == TT::Func) e = "(" + e + ")";
       return e + "[]";
     }
     case TT::Bytes: return "Uint8Array";
     case TT::ArrayBuffer: return "ArrayBuffer";
     case TT::DataView: return "DataView";
-    case TT::Map: return "Map<" + typeName(t->key) + ", " + typeName(t->val) + ">";
-    case TT::Set: return "Set<" + typeName(t->elem) + ">";
+    case TT::Map: return "Map<" + typeNameB(t->key, budget) + ", " + typeNameB(t->val, budget) + ">";
+    case TT::Set: return "Set<" + typeNameB(t->elem, budget) + ">";
     case TT::Func: {
       std::string s = "(";
       for (size_t i = 0; i < t->params.size(); i++) {
         if (i) s += ", ";
         if (t->restParam && i + 1 == t->params.size()) s += "...";
-        s += "p" + std::to_string(i) + (t->optParams[i] ? "?: " : ": ") + typeName(t->params[i]);
+        s += "p" + std::to_string(i) + (t->optParams[i] ? "?: " : ": ") + typeNameB(t->params[i], budget);
       }
-      return s + ") => " + typeName(t->ret);
+      return s + ") => " + typeNameB(t->ret, budget);
     }
     case TT::Class: return t->cls->name;
     case TT::Object: {
       if (!t->shape->name.empty()) return t->shape->name;
       std::string s = "{ ";
-      for (auto& p : t->shape->props) s += p.name + (p.optional ? "?: " : ": ") + typeName(p.type) + "; ";
+      for (auto& p : t->shape->props) s += p.name + (p.optional ? "?: " : ": ") + typeNameB(p.type, budget) + "; ";
       return s + "}";
     }
     case TT::Tuple: {
       std::string s = "[";
-      for (size_t i = 0; i < t->elems.size(); i++) s += (i ? ", " : "") + typeName(t->elems[i]);
+      for (size_t i = 0; i < t->elems.size(); i++) s += (i ? ", " : "") + typeNameB(t->elems[i], budget);
       return s + "]";
     }
     case TT::Optional: {
-      std::string s = typeName(t->elem);
+      std::string s = typeNameB(t->elem, budget);
       if (t->elem->t == TT::Func) s = "(" + s + ")";
       if (t->hasNull) s += " | null";
       if (t->hasUndef) s += " | undefined";
@@ -235,6 +237,11 @@ std::string typeName(const Type* t) {
     case TT::Date: return "Date";
   }
   return "?";
+}
+
+std::string typeName(const Type* t) {
+  int budget = 400;
+  return typeNameB(t, budget);
 }
 
 }  // namespace e7

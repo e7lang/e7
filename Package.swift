@@ -13,7 +13,7 @@ let vmSources = ["src/vm/vm.cpp", "src/vm/interp.cpp", "src/vm/debug.cpp"]
   + ["crypto", "keccak", "sign"].map { "src/crypto/\($0).cpp" }
   + ["src/capi/capi.cpp"]
 let compilerSources = [
-  "parser", "types", "checker", "checker_stmt", "checker_expr", "checker_builtins", "checker_ns", "codegen", "compiler",
+  "parser", "types", "checker", "checker_stmt", "checker_expr", "checker_builtins", "checker_ns", "checker_generic", "codegen", "compiler",
 ].map { "src/compiler/\($0).cpp" }
 
 let package = Package(

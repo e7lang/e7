@@ -84,6 +84,36 @@ class Checker {
     lvalueMode = savedM;
     return t;
   }
+  // ---- generics (checker_generic.cpp): monomorphization
+  std::vector<std::string> instCtx;  // instantiations being checked ("first<string>"), for messages
+  int instCount = 0;                 // instances created (bounded)
+  int instNest = 0;                  // instantiation depth of the code being checked
+  std::vector<std::unique_ptr<ClassMember>> memberPool;
+  Expr* cloneExpr(Expr* e);
+  Stmt* cloneStmt(Stmt* s);
+  VarDecl cloneDecl(const VarDecl& d);
+  void cloneParams(std::vector<Param>& ps);
+  ClassMember cloneMember(const ClassMember& m);
+  Sym* lookupFrom(Scope* s, const std::string& name);
+  GenericSym* newGeneric(GenericSym::Kind k, const std::string& name, std::vector<TypeParam>* params, Loc l);
+  Scope* bindTypeParams(GenericSym* g, const std::vector<Type*>& args);
+  std::string instanceName(GenericSym* g, const std::vector<Type*>& args);
+  int curInstDepth();
+  bool instLimits(GenericSym* g, Loc l, const std::string& name);
+  bool explicitTypeArgs(GenericSym* g, const std::vector<TypeNode*>& nodes, Loc l, std::vector<Type*>& out);
+  int completeTypeArgs(GenericSym* g, std::vector<Type*>& bound, Loc l);
+  bool inferCall(GenericSym* g, std::vector<Param>* params, TypeNode* ret, std::vector<Expr*>& args,
+                 const std::vector<TypeNode*>& explicitArgs, Type* expected, Loc l, std::vector<Type*>& out);
+  void inferMatch(GenericSym* g, std::vector<Type*>& bound, TypeNode* n, Type* t, int depth = 0);
+  bool mentionsParams(GenericSym* g, TypeNode* n);
+  Type* substPartial(GenericSym* g, const std::vector<Type*>& bound, TypeNode* n);
+  FuncSym* instantiateFunc(GenericSym* g, const std::vector<Type*>& args, Loc l);
+  ClassSym* instantiateClass(GenericSym* g, const std::vector<Type*>& args, Loc l);
+  Type* instantiateType(GenericSym* g, const std::vector<Type*>& args, Loc l);
+  Type* genericNamedType(GenericSym* g, const std::vector<TypeNode*>& args, Loc l);
+  FuncSym* genericFuncValue(GenericSym* g, Expr* e, Type* expected);
+  ClassSym* classOf(Sym* s);  // a class, or the static holder of a generic class
+
   ClassSym* staticInitClass = nullptr;  // class whose static initializers / blocks are being checked
   ClassSym* lexicalClass();             // class whose body contains the code being checked
   bool checkPrivateAccess(Loc l, const std::string& name, ClassSym* owner);
@@ -154,7 +184,7 @@ class Checker {
   Type* checkCond(Expr* e);  // condition context, applies narrowing in scope chain via returned facts
   Type* checkInner(Expr* e, Type* expected);
   Type* checkNum(Expr* e, Type* expected);
-  Type* checkIdent(Expr* e);
+  Type* checkIdent(Expr* e, Type* expected = nullptr);
   Type* checkArray(Expr* e, Type* expected);
   Type* checkObject(Expr* e, Type* expected);
   Type* checkUnary(Expr* e, Type* expected);
