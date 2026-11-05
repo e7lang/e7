@@ -1,4 +1,5 @@
 // Date natives. E7 has no local time zone: every Date behaves as in JavaScript with TZ=UTC.
+#include <cstdlib>
 #include <chrono>
 #include <cstdio>
 #include <cstring>

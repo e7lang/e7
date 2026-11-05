@@ -1,4 +1,5 @@
 // JSON.stringify (JavaScript semantics) and typed JSON.parse (validating, descriptor-driven).
+#include <cstdlib>
 #include <algorithm>
 #include <unordered_set>
 

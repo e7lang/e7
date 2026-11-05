@@ -66,6 +66,9 @@ export function sign(msg: string, key: string): string {
 **预编译版本：** 从 [最新 Release](https://github.com/e7lang/e7/releases/latest) 下载对应平台的 `e7-<版本>-<平台>`：
 Linux（x64、arm64）、macOS（通用二进制）、Windows（x64）。压缩包内含 `bin/e7`、`bin/e7c`、`include/e7/e7.h`、
 `lib/` 静态库、`types/e7.d.ts` 和示例。
+每个发布文件和语言包（压缩包、`.nupkg`、`.aar`、`.jar`、`.tgz`、`.vsix`、skill zip）都带有 GitHub 构建来源证明：
+`gh attestation verify e7-<版本>-<平台>.tar.gz --repo e7lang/e7` 可以验证它确实由本仓库的发布流程从对应标签构建。
+每个 Release 还附有 SPDX 格式的 SBOM（`e7-<版本>.spdx.json`）。
 **.NET：** `dotnet add package E7VM`（C# 绑定，内含 Windows、Linux、macOS 原生库）。
 什么都不想装：[Playground](https://e7lang.github.io/playground) 直接在浏览器里运行编译器和虚拟机（WebAssembly）。
 **Node.js / 浏览器：** `npm install @e7lang/e7`（[packages/e7](packages/e7)）是同一套编译器和虚拟机的 WebAssembly 版本，
@@ -380,6 +383,21 @@ build/e7 test examples/tests   # 用 e7:test 编写的单元测试
 | 字符串拼接/拆分/Map | 384 | 293 | 243 |
 
 在签名类脚本中，标准算法（HMAC、RSA、ECDSA 等）由原生代码执行，单次调用通常远低于 1 毫秒。
+
+`e7 --stats script.ts` 会打印一次运行消耗的指令数（`e7_ticks_used()`，与指令预算同一单位，在任何机器上都相同）、
+GC 次数及最长和累计暂停时间、堆峰值。CI 用 [`scripts/bench.py`](scripts/bench.py) 防止性能退化：每个 `bench/*.ts`
+的指令数和堆峰值必须与 [`bench/baseline.json`](bench/baseline.json) 完全一致，cachegrind 统计的机器指令数增长不得超过 3%。
+
+**GC 暂停。** [`bench/gc_pause.cpp`](bench/gc_pause.cpp) 通过 C API 建一条 N 个节点的链表（每个节点含一个字符串、一个数组
+和下一个节点，共 3 个堆对象），分别计时全部存活时和脚本丢弃后的完整回收。回收器是停顿式标记-清除，暂停时间随存活堆线性增长。
+Apple M 系列、Release 构建、4 次取最好：
+
+| 节点数 | 堆对象 | 存活堆 | 全部存活时 GC | 丢弃后 GC |
+|---:|---:|---:|---:|---:|
+| 1 万 | 3 万 | 1.5 MB | 0.07 ms | 0.19 ms |
+| 10 万 | 30 万 | 15 MB | 1.3 ms | 3.4 ms |
+| 30 万 | 90 万 | 45 MB | 7.7 ms | 11.7 ms |
+| 100 万 | 300 万 | 150 MB | 29 ms | 34 ms |
 
 ## 目录结构
 
