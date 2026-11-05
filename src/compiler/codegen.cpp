@@ -2022,6 +2022,21 @@ uint16_t Gen::toStringReg(uint16_t src, Type* t) {
       callNative("Error.toString", {src}, r, 'R');
       return r;
     }
+    case TT::Class: {  // a class (or a base class) with its own toString(): string is called, as in JavaScript
+      auto it = t->cls ? t->cls->methodIdx.find("toString") : decltype(t->cls->methodIdx)::iterator();
+      if (t->cls && it != t->cls->methodIdx.end()) {
+        FuncSym* f = t->cls->vtable[it->second].fn;
+        if (f && f->type && f->type->params.empty() && f->type->ret && f->type->ret->t == TT::String) {
+          uint16_t r = temp(K_R);
+          emit(OP_CALLM, r, src, 0);
+          emitWord((uint64_t)(uint32_t)it->second | ((uint64_t)sig(sigOf(f)) << 32));
+          return r;
+        }
+      }
+      uint16_t r = temp(K_R);
+      callNative("Value.toString", {src}, r, 'R');
+      return r;
+    }
     default: {
       uint16_t r = temp(K_R);
       if (kindOf(t) != K_R) {

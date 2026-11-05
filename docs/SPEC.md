@@ -369,6 +369,7 @@ or host function that was running (or that called back into the script, like `Ar
 | `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }`; `x: undefined` for a property set to `undefined` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null`; an object-literal field holding `undefined` is not shown (the same as a missing optional property) |
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
 | JSON of the wrong shape | Accepted (no validation) | `JSON.parse(text) as T` ends the call (not catchable); `tryParse(text) as T \| null` from `e7:json` returns `null`. Syntax errors are a catchable `SyntaxError` in both |
+| `Array.join` / `console.log("%s")` of class instances | Calls the class's `toString()` | `"[object Object]"` (`String(x)`, template literals and `+` do call `toString()`) |
 | Case conversion / `localeCompare` | Full Unicode / locale | Latin/Greek/Cyrillic / code-unit comparison |
 | Exceptions | Every error is catchable | `try`/`catch` catches the errors Node.js also throws; E7-specific checks and resource limits end the call (section 3.1) |
 | E7's own runtime checks (out of bounds, failed `as`, limits) | — | Not catchable; `finally` blocks do not run |
