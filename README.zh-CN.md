@@ -216,7 +216,7 @@ VS Code 扩展 **E7 Language**（[editors/vscode](editors/vscode)，发布者 `e
 
 ## 用 AI 助手编写 E7
 
-E7 看起来像 TypeScript，AI 助手很容易写出 E7 不支持的 TypeScript（`finally`、泛型、`any`、正则、联合类型等）。
+E7 看起来像 TypeScript，AI 助手很容易写出 E7 不支持的 TypeScript（`any`、正则、联合类型、索引签名等）。
 **E7 skill**（[`skills/e7`](skills/e7)）会告诉 AI：E7 支持什么、不支持的写法该怎么改、标准库有哪些，以及每次都要用
 `e7c --check` 编译检查。在我们的测试中，它把结果正确率从 88% 提升到 100%，每个任务的耗时减少约 40%。
 
@@ -280,10 +280,13 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 
 - **语言。**
   - 声明与函数：`let`/`const`、函数、箭头函数、闭包。
-  - 类：单继承、`super`、静态成员、参数属性。
-  - 类型：接口、类型别名、枚举、元组。
-  - 语法：解构、对象展开、`?.`、`??`/`??=`、模板字符串、`for...of`、`switch`、标签语句。
+  - 类：单继承、`super`、静态成员（可继承）、参数属性、getter/setter、`abstract`、`#private` 字段和方法、`static {}` 块。
+  - 类型：接口、类型别名、枚举、元组，以及**泛型**（函数、类、接口、类型别名；按类型参数分别编译）。
+  - 语法：带默认值和剩余元素的解构、对象展开、`?.`（整条链短路）、`??`/`??=`、模板字符串、`for...of`、`switch`、标签语句。
+  - 错误处理：`try`/`catch`/`finally`，捕获 Node.js 也会抛出的错误。
   - 多文件 `import`/`export`，以及类型收窄。
+- **输出与 Node.js 一致。** 每个测试程序的输出都与 Node.js 逐字节比对；`console.log` 的格式与 Node 的 `util.inspect`
+  相同，Math 函数在所有平台上逐位一致（采用 V8 的 fdlibm）。
 - **严格类型。**
   - 没有 `any`；可空类型写作 `T | null | undefined`。
   - 编译期完成全部名字解析与类型检查。

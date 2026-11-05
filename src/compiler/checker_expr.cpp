@@ -502,6 +502,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       }
       const ObjShape::Prop* sp = exp && exp->t == TT::Object ? exp->shape->findProp(p.key) : nullptr;
       Type* t = check(p.value, sp ? sp->type : nullptr);
+      if (sp && t->t == TT::Void) { err(p.loc, "property value cannot be void: a void function returns no value in E7 (return a value, or make the field optional and leave it out)"); continue; }
       if (sp) coerce(p.value, sp->type);
       else if (t->t == TT::Null || t->t == TT::Undefined || t->t == TT::Void) {
         err(p.loc, "cannot infer the type of property '" + p.key + "'");
@@ -570,7 +571,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       const ObjShape::Method* sm = sp ? nullptr : sh->findMethod(p.key);
       if (sp) {
         if (p.method) checkMethod(p, self, sp->type);
-        else check(p.value, sp->type);
+        else if (check(p.value, sp->type)->t == TT::Void) { err(p.loc, "property value cannot be void: a void function returns no value in E7 (return a value, or make the field optional and leave it out)"); continue; }
         coerce(p.value, sp->type);
         fields.push_back({p.key, sp->type});
       } else if (sm) {

@@ -10,6 +10,11 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+### Fixed
+- A generic instantiated with `void` (for example `run(() => { ... })` with `run<T>(f: () => T)`) could store or pass
+  the void result and crash the compiler with an internal error; storing it in a property or passing it as an
+  argument is now a compile error, since E7 has no void values.
+
 ## [0.2.5] - 2026-11-06
 
 Stability, reliability and TypeScript compatibility ([docs/ROADMAP.md](docs/ROADMAP.md), section 0.2.5). Compatible

@@ -112,7 +112,12 @@ void Checker::checkArgs(Expr* call, Type* ft, std::vector<Expr*>& args, size_t s
   expandSpreads(args);
   const char* spreadMsg = "a spread argument must either have a tuple type or be passed to a rest parameter";
   auto checkArg = [&](Expr*& a, Type* pt) {
-    if (!a->type) check(a, pt);
+    Type* t = a->type ? a->type : check(a, pt);
+    // a void call has no value to pass (a parameter of type T instantiated with void)
+    if (t->t == TT::Void) {
+      err(a->loc, "a void value cannot be passed as an argument (the function returns nothing in E7)");
+      return;
+    }
     coerce(a, pt);
   };
   size_t np = ft->params.size();

@@ -288,10 +288,16 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 
 - **Language.**
   - Declarations and functions: `let`/`const`, functions, arrow functions and closures.
-  - Classes: single inheritance, `super`, static members and parameter properties.
-  - Types: interfaces, type aliases, enums and tuples.
-  - Syntax: destructuring, object spread, `?.`, `??`/`??=`, template strings, `for...of`, `switch` and labels.
+  - Classes: single inheritance, `super`, static members (inherited), parameter properties, getters and setters,
+    `abstract`, `#private` fields and methods, `static {}` blocks.
+  - Types: interfaces, type aliases, enums, tuples, and **generics** (functions, classes, interfaces, aliases;
+    compiled per type argument).
+  - Syntax: destructuring with defaults and rest, object spread, `?.` (short-circuiting chains), `??`/`??=`,
+    template strings, `for...of`, `switch` and labels.
+  - Errors: `try`/`catch`/`finally` for the errors Node.js also throws.
   - Multi-file `import`/`export`, and type narrowing.
+- **Same output as Node.js.** Every test program is compared with Node.js byte for byte; `console.log` formats
+  like Node's `util.inspect`, and Math functions are bit-identical (V8's fdlibm) on every platform.
 - **Strict types.**
   - There is no `any`; nullable types use `T | null | undefined`.
   - All names and types are resolved at compile time.

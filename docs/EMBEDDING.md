@@ -260,7 +260,8 @@ targets: [
 
 Then `import E7VM`. The C API is also available as `import CE7VM` (e.g. for the `E7_ERR_*` status codes).
 
-**XCFramework (manual integration).** `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` (CMake + Xcode);
+**XCFramework (manual integration).** `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` (CMake + Xcode;
+iOS 15.0 by default, `IOS_DEPLOYMENT_TARGET=13.0` with an Xcode that still supports it);
 add it together with `platform/ios/E7VM/E7VM.swift` (and `E7ModuleManager.swift` for over-the-air updates) to the app target.
 
 ```swift
