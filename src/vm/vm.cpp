@@ -815,9 +815,14 @@ ModuleRT* VM::loadModule(Module&& mod) {
   }
   // string constants (rooted through the module)
   modules.push_back(std::move(mrt));
-  M->strs.reserve(m.strs.size());
-  for (auto& s : m.strs) M->strs.push_back(newString(s));
-  M->globals.assign(m.globals.size(), Slot{});
+  try {
+    M->strs.reserve(m.strs.size());
+    for (auto& s : m.strs) M->strs.push_back(newString(s));
+    M->globals.assign(m.globals.size(), Slot{});
+  } catch (...) {
+    modules.pop_back();  // out of memory: the constants made so far become garbage
+    throw;
+  }
   if (dbg_) dbg_->moduleLoaded(M);
   return M;
 }
@@ -827,6 +832,16 @@ int VM::runInit(ModuleRT* mod) {
   int st = callEntry(&mod->funcs[mod->m.initFunc], nullptr, 0);
   if (st == ERR_OK) mod->initialized = true;
   return st;
+}
+
+void VM::unloadModule(ModuleRT* mod) {
+  if (!frames_.empty() || suspended_) return;
+  for (size_t i = modules.size(); i-- > 0;) {
+    if (modules[i].get() != mod) continue;
+    if (dbg_) dbg_->moduleUnloading(mod);
+    modules.erase(modules.begin() + (std::ptrdiff_t)i);
+    return;
+  }
 }
 
 // ------------------------------------------------------------------ entry

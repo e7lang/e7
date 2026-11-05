@@ -688,6 +688,47 @@ int main() {
     }
     e7_vm_free(vm);
   }
+  // 0.2.5 (allocation-failure injection): a module whose initializer failed (memory error, runtime
+  // error) stayed in the VM with its constants and the globals it had set: no handle to it exists, so
+  // that memory was lost for the life of the VM, a little more with every failed e7_load. It is
+  // dropped now; a debugger forgets its functions (a breakpoint in it is unverified again).
+  {
+    const char* src =
+        "const big: string[] = [];\n"
+        "for (let i = 0; i < 2000; i++) big.push(\"item \" + i);\n"
+        "const n: number = big.length;\n"
+        "if (n > 0) throw new Error(\"init failed after \" + n);\n"
+        "export function f(): number { return n; }\n";
+    std::vector<uint8_t> bc = compile(src);
+    for (int withDebugger = 0; withDebugger < 2; withDebugger++) {
+      e7_vm* vm = e7_vm_new(nullptr);
+      int bp = 0;
+      if (withDebugger) {
+        CHECK(e7_debug_attach(vm, [](e7_vm*, const e7_debug_stop*, void*) { return E7_DEBUG_CONTINUE; }, nullptr) == E7_OK);
+        e7_debug_break_on_error(vm, 0);
+        bp = e7_debug_set_breakpoint(vm, "test.ts", 3);
+      }
+      e7_collect_garbage(vm);
+      size_t base = e7_memory_used(vm);
+      for (int i = 0; i < 20; i++) {
+        e7_module* m = nullptr;
+        CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_ERR_RUNTIME && m == nullptr);
+        CHECK(strstr(e7_last_error(vm), "init failed after 2000") != nullptr);
+      }
+      e7_collect_garbage(vm);
+      CHECK(e7_memory_used(vm) == base);
+      if (withDebugger) {
+        int verified = 1;
+        CHECK(e7_debug_breakpoint_info(vm, bp, &verified, nullptr) == 1 && verified == 0);
+      }
+      std::vector<uint8_t> ok = compile("export function g(): number { return 7; }\n");
+      e7_module* m2 = nullptr;
+      e7_value r;
+      CHECK(e7_load(vm, ok.data(), ok.size(), &m2) == E7_OK && e7_call(vm, m2, "g", nullptr, 0, &r) == E7_OK &&
+            r.v.num == 7);
+      e7_vm_free(vm);
+    }
+  }
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

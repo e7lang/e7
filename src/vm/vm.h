@@ -134,6 +134,10 @@ class VM {
   // Takes ownership of module; verifies, links natives. Throws E7Error.
   ModuleRT* loadModule(Module&& m);
   int runInit(ModuleRT* mod);  // runs module initializer (may suspend)
+  // Drops a module whose loading failed before a handle to it was given out (its initializer failed):
+  // its constants, globals and the objects only they reach become garbage. Not while a call is running
+  // or suspended.
+  void unloadModule(ModuleRT* mod);
 
   // ---- execution ----
   // Call function (entry from host). Returns ERR_OK / ERR_SUSPENDED or throws E7Error.

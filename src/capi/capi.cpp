@@ -181,6 +181,9 @@ static e7_status loadBytes(e7_vm* v, const uint8_t* data, size_t len, e7_module*
       st = v->vm->runInit(rt);
     } catch (...) {
       v->vm->setSuspendOnBudget(susp);
+      // no handle to the module was given out: drop it, or its constants and the globals its
+      // initializer set so far would stay allocated for the life of the VM
+      v->vm->unloadModule(rt);
       throw;
     }
     v->vm->setSuspendOnBudget(susp);
