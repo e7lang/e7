@@ -21,6 +21,12 @@ if(Python3_FOUND)
     add_test(NAME difffuzz_smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/difffuzz/run.py
              --e7 $<TARGET_FILE:e7> --node ${NODE_EXECUTABLE} --seed 1 --count 40 --min-time 60
              --out ${CMAKE_CURRENT_BINARY_DIR}/difffuzz)
+    if(TARGET e7c)
+      # TypeScript feature coverage (docs/TYPESCRIPT.md): supported samples print the same as Node.js,
+      # unsupported ones are rejected with the stated error (tests/ts-features/check.py)
+      add_test(NAME ts_features COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/ts-features/check.py
+               --e7 $<TARGET_FILE:e7> --e7c $<TARGET_FILE:e7c> --node ${NODE_EXECUTABLE})
+    endif()
   endif()
   if(TARGET e7 AND TARGET e7c)
     # the AI skill (skills/e7): every code block / example must behave as the skill claims

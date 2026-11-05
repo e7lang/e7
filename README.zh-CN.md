@@ -313,7 +313,9 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 - **绑定。** C API（[`include/e7/e7.h`](include/e7/e7.h)）、Java/Kotlin（JNI）、Swift、C#，以及
   JavaScript/WebAssembly（[`@e7lang/e7`](packages/e7)）。
 
-完整的语言规范见 [docs/SPEC.md](docs/SPEC.md)。
+完整的语言规范见 [docs/SPEC.md](docs/SPEC.md)。[docs/TYPESCRIPT.md](docs/TYPESCRIPT.md)（英文）逐项列出 TypeScript 的特性
+（TypeScript 手册的各章，以及 TypeScript 程序会用到的 JavaScript 语法与标准库）：E7 支持哪些、其余为何不支持、应改用什么写法；
+每一项都对应一个示例程序，并由编译器、Node.js 和 `tsc` 验证。
 
 ## 平台
 
@@ -422,6 +424,7 @@ tests/ bench/ docs/                            third_party/     BearSSL（MIT）
 以下文档均为英文：
 
 - [docs/SPEC.md](docs/SPEC.md)：语言规范（语法、类型系统、数值语义、标准库、与 TS 的差异）
+- [docs/TYPESCRIPT.md](docs/TYPESCRIPT.md)：TypeScript 特性支持对照表（支持、部分支持、不支持，以及 E7 中的替代写法）
 - [docs/EMBEDDING.md](docs/EMBEDDING.md)：C API、Android/iOS/Windows 集成、安全建议
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)：向 App 下发模块：密钥管理与轮换、签名清单（manifest）、灰度发布、紧急开关（kill switch）、回滚、按客户端 VM 版本使用 `--target`、依据实测设定指令预算和内存上限、错误上报、上线前的影子运行（shadow run）
 - [docs/BYTECODE.md](docs/BYTECODE.md)：`.e7b` 格式、指令集、验证规则、签名格式

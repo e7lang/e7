@@ -324,7 +324,10 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 - **Bindings.** C API ([`include/e7/e7.h`](include/e7/e7.h)), Java/Kotlin (JNI), Swift, C#, and
   JavaScript/WebAssembly ([`@e7lang/e7`](packages/e7)).
 
-The full language reference is in [docs/SPEC.md](docs/SPEC.md).
+The full language reference is in [docs/SPEC.md](docs/SPEC.md). [docs/TYPESCRIPT.md](docs/TYPESCRIPT.md) lists
+TypeScript feature by feature (the handbook chapters plus the JavaScript syntax and library a TypeScript program
+uses) with what E7 supports, why the rest is left out and what to write instead; every row is a sample program
+checked against the compiler, Node.js and `tsc`.
 
 ## Platforms
 
@@ -446,6 +449,7 @@ tests/ bench/ docs/                            third_party/     BearSSL (MIT), M
 ## Documentation
 
 - [docs/SPEC.md](docs/SPEC.md): language specification (syntax, types, numeric semantics, standard library, differences from TS)
+- [docs/TYPESCRIPT.md](docs/TYPESCRIPT.md): TypeScript feature coverage table (supported, partial, unsupported, and the E7 alternative)
 - [docs/EMBEDDING.md](docs/EMBEDDING.md): C API, Android/iOS/Windows integration, security guidance
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): delivering modules to apps: keys and rotation, signed manifests, staged rollout, kill switch, rollback, `--target`, limits, error reporting, shadow runs
 - [docs/BYTECODE.md](docs/BYTECODE.md): `.e7b` format, instruction set, verification rules, signature format

@@ -3,6 +3,8 @@
 E7 is a **strict subset** of TypeScript: every program accepted by the E7 compiler is also accepted by `tsc --strict` (with `lib/e7.d.ts`),
 and produces the same result when run on a JavaScript engine (except for fixed-width integers, see §4.2). The converse does not hold: E7 rejects TS
 constructs whose types cannot be determined statically, or that cannot be compiled efficiently/safely.
+[TYPESCRIPT.md](TYPESCRIPT.md) lists TypeScript feature by feature with its status in E7, the reason for each
+restriction and the E7 alternative; every row is a sample program checked against the compiler (tests/ts-features).
 
 Source file extension is `.ts` (recommended, supported directly by IDEs) or `.e7`; the compiled output is `.e7b`.
 
