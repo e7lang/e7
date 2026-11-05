@@ -142,7 +142,10 @@ e7_vm* vm = e7_vm_new(NULL);
 e7_debug_attach(vm, on_stop, &my_state);    // before e7_load: breakpoints in top-level code work too
 e7_debug_set_breakpoint(vm, "/src/app/main.ts", 12);
 uint8_t* bc; size_t len; char* errs;
-e7_compile_options o = {E7_COMPILE_DEBUG, read_file, NULL};
+e7_compile_options o;
+e7_compile_options_init(&o);
+o.flags = E7_COMPILE_DEBUG;
+o.read_file = read_file;
 e7_compile_ex(src, src_len, "main.ts", &o, &bc, &len, &errs);
 e7_load(vm, bc, len, &mod);                 // stops (calls on_stop) as the script runs
 ```

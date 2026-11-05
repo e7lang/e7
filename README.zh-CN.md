@@ -213,7 +213,7 @@ VS Code 扩展 **E7 Language**（[editors/vscode](editors/vscode)，发布者 `e
 
 ## 用 AI 助手编写 E7
 
-E7 看起来像 TypeScript，AI 助手很容易写出 E7 不支持的 TypeScript（`try`/`catch`、泛型、`any`、正则、联合类型等）。
+E7 看起来像 TypeScript，AI 助手很容易写出 E7 不支持的 TypeScript（`finally`、泛型、`any`、正则、联合类型等）。
 **E7 skill**（[`skills/e7`](skills/e7)）会告诉 AI：E7 支持什么、不支持的写法该怎么改、标准库有哪些，以及每次都要用
 `e7c --check` 编译检查。在我们的测试中，它把结果正确率从 88% 提升到 100%，每个任务的耗时减少约 40%。
 

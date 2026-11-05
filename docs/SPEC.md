@@ -1,4 +1,4 @@
-# E7 Language Specification (0.1)
+# E7 Language Specification (0.2)
 
 E7 is a **strict subset** of TypeScript: every program accepted by the E7 compiler is also accepted by `tsc --strict` (with `lib/e7.d.ts`),
 and produces the same result when run on a JavaScript engine (except for fixed-width integers, see §4.2). The converse does not hold: E7 rejects TS
@@ -67,10 +67,49 @@ utility types such as `Record/Partial/Pick`, `Promise`, `Symbol`, `RegExp`, and 
   The property order of the result is fixed at compile time: a possibly missing property that is later assigned by an explicit property is placed at the end (consistent with JS when that property is missing).
 - `if / else`, `while`, `do...while`, `for(;;)`, `for...of` (arrays, strings by code point, `Uint8Array`, `Map`, `Set`,
   `arr.entries()/keys()/values()`, `map.keys()/values()/entries()`), `switch` (with fall-through), `break/continue` (including labels),
-  labeled blocks. **Not supported**: `for...in`, `with`, `try/catch/finally`.
+  labeled blocks, `try`/`catch` (section 3.1). **Not supported**: `for...in`, `with`, `finally`.
 - Function declarations are hoisted; nested functions and arrow functions are closures.
 - `debugger;` stops execution when a debugger is attached ([DEBUGGING.md](DEBUGGING.md)) and does nothing otherwise (as in JS).
-- `throw new Error(msg)` / `throw "msg"`: **terminates the script** (E7 has no exception catching); the host gets `E7_ERR_RUNTIME` and a call stack with line numbers.
+- `throw` takes an Error: `throw new Error(msg)` (also `TypeError`, `RangeError`, `SyntaxError`, `URIError`), an
+  `Error` value, or a caught value (rethrow). Throwing strings or other values is a compile error. An error that no
+  `catch` handles ends the call; the host gets `E7_ERR_RUNTIME` with the message and a call stack.
+
+### 3.1 `try` / `catch`
+
+```ts
+try {
+  const order = JSON.parse(body) as Order;
+  process(order);
+} catch (e) {
+  if (e instanceof SyntaxError) return "malformed JSON";
+  if (e instanceof Error) return "failed: " + e.message;
+}
+```
+
+- `catch (e)` and `catch` without a binding. The catch variable has type `unknown` (as with TypeScript `--strict`);
+  the annotation `catch (e: unknown)` is allowed. Narrow it with `e instanceof Error` (or `TypeError`, `RangeError`,
+  `SyntaxError`, `URIError`) to read `e.message` and `e.name`; `String(e)` and `` `${e}` `` give `"Name: message"`
+  (just `"Name"` when the message is empty). Compare caught values with `===`, rethrow them with `throw e`.
+  `console.log(e)` is rejected (Node.js prints a stack trace there); `e.stack` is not supported.
+- `finally` is not supported yet; run the cleanup after the `try` statement.
+- **What can be caught**: errors that Node.js also throws as exceptions, with the same error name:
+  - every `throw` in the script;
+  - errors raised by the standard library whose JavaScript counterpart throws: `JSON.parse` syntax errors
+    (`SyntaxError`), `RangeError`s (BigInt division by zero, `toFixed` / `toPrecision` / `toString(radix)` arguments,
+    invalid array or string lengths, `String.repeat` counts, invalid dates, typed-array offsets, ...), `TypeError`s
+    (`reduce` of an empty array without an initial value, `JSON.stringify` of cyclic structures or BigInts), `URIError`s
+    (`decodeURIComponent` and friends);
+  - errors from host functions whose message starts with one of the error names above (`"RangeError: ..."`).
+
+  The message text of built-in errors is E7's own and can differ from Node.js; the name (and `instanceof`) matches.
+- **What cannot be caught** (it still ends the call): checks that are specific to E7 because JavaScript would not
+  throw at that point — out-of-bounds reads, failed `as` casts and `JSON.parse(...) as T` shape mismatches (use
+  `tryParse`), integer division by zero, null access through a type the checker considered non-null, functions that
+  end without returning a value — and `abort()`, the instruction budget, the memory limit and the call depth limit.
+  This keeps the rule "an E7 program prints the same output as on Node.js" true for programs that catch errors.
+- A handler runs in the frame of its `try`; frames above it are dropped, including script callbacks called from
+  library functions such as `Array.sort`. Assignments made in the `try` block before the error are kept.
+- Debuggers stop on errors that no handler catches (and not on caught ones).
 
 ## 4. Expression semantics
 
@@ -225,8 +264,8 @@ assertEqual failed: totals
 
 `assertThrows` catches the runtime errors of section 8 that are raised by the script (`throw`, `abort`, failed
 assertions, out-of-bounds access, failed `JSON.parse` validation, ...), so code that rejects bad input can be
-tested; instruction budget, memory limit and call depth errors are not caught. Outside `assertThrows`, errors still
-cannot be caught (there is no `try`/`catch`).
+tested; instruction budget, memory limit and call depth errors are not caught. In script code, `try`/`catch`
+(section 3.1) catches the subset of these errors that Node.js also throws.
 
 Test runner: `e7 test [files or directories...]` compiles each `*.test.ts` / `*.test.e7` file (default: all of them
 under the current directory, skipping `node_modules`, `build*` and hidden directories) and calls every exported
@@ -239,7 +278,8 @@ tests), `--seed <n>`. The exit code is 1 if any test failed (or none ran), other
 
 ## 8. Runtime errors
 
-The following terminate the current call (the host receives an error code and a `file:line[:column]` call stack); the VM itself remains usable:
+The following terminate the current call unless a `catch` handles them (only the catchable errors of section 3.1
+can be caught); the host receives an error code and a `file:line[:column]` call stack, and the VM itself remains usable:
 array/string/byte out-of-bounds access, null reference access, failed `!`/`as` assertions, integer division by zero, `throw`/`abort`, JSON validation failure (`JSON.parse`; `tryParse` returns `null` instead),
 failed strict `Map` lookups, instruction budget exhausted (`E7_ERR_BUDGET`, or suspend with `E7_SUSPENDED`), memory limit (`E7_ERR_MEMORY`),
 call stack too deep (`E7_ERR_STACK`), and host function errors.

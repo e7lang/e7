@@ -134,6 +134,19 @@ StrObj* VM::numToStringObj(double d) { return newStringAscii(numberToString(d).c
 #undef E7_INTERP_NAME
 #undef E7_INTERP_DBG
 
-int VM::execute(size_t /*entryDepth*/) { return E7_UNLIKELY(dbg_ != nullptr) ? runDebug() : runNormal(); }
+// Runs until the entry frame at entryDepth returns. A catchable error (try/catch) raised in a frame
+// of this call with a handler continues at the handler; other errors propagate to the caller (the
+// host, or the native that called back into script). The C++ try block costs nothing until an
+// error is actually thrown.
+int VM::execute(size_t entryDepth) {
+  const ExecState st{nativeDepth_, curNative_, callbackNatives_.size(), tempRoots_.size(), gcInhibit_};
+  for (;;) {
+    try {
+      return E7_UNLIKELY(dbg_ != nullptr) ? runDebug() : runNormal();
+    } catch (E7Error& e) {
+      if (e.jsName.empty() || !catchError(e, entryDepth, st)) throw;
+    }
+  }
+}
 
 }  // namespace e7

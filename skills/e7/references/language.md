@@ -86,16 +86,39 @@ function area(s: Shape): number {
 console.log(area({ kind: ShapeKind.Rect, w: 2, h: 3 }));
 ```
 
-### Exceptions: `try` / `catch` / `finally`
+### Exceptions: `try` / `catch` (no `finally`)
 
-```ts e7-reject
+`try`/`catch` catches errors that Node.js also throws (with the same name): `throw`, `JSON.parse` syntax errors,
+standard-library `RangeError` / `TypeError` / `URIError`s. The catch variable is `unknown` (narrow it with
+`instanceof Error` before reading `.message`), only Errors can be thrown, and there is no `finally`:
+
+```ts
 function parse(text: string): number {
-  try { return JSON.parse(text) as number; } catch (e) { return 0; }
+  try {
+    return JSON.parse(text) as number;
+  } catch (e) {
+    if (e instanceof SyntaxError) return 0;
+    throw e;
+  }
 }
+console.log(parse("41") + 1, parse("{"));
 ```
 
-`throw` ends the call (the host gets the error and a stack trace); nothing in the script can catch it.
-Validate before acting, and return failures as values:
+```ts e7-reject
+try { console.log(1); } catch (e) { console.log(e.message); } // narrow first: if (e instanceof Error)
+```
+
+```ts e7-reject
+throw "failed"; // throw new Error("failed")
+```
+
+```ts e7-reject
+try { console.log(1); } finally { console.log(2); } // no finally yet
+```
+
+E7's own runtime checks are not catchable, because JavaScript would not throw there: an out-of-bounds read,
+`JSON.parse(text) as T` with JSON of the wrong shape, integer division by zero, `abort()`, and the budget and
+memory limits. Validate before acting, and return expected failures as values:
 
 ```ts
 function parsePort(text: string): number | null {
@@ -106,8 +129,8 @@ const port = parsePort("8080");
 console.log(port === null ? "invalid" : `port ${port}`);
 ```
 
-The `try { JSON.parse(...) } catch` habit becomes `tryParse` from `e7:json`, which returns `null` for malformed
-or mismatching JSON:
+For JSON that may have the wrong shape, use `tryParse` from `e7:json`, which returns `null` for malformed or
+mismatching JSON:
 
 ```ts
 import { tryParse, lastError } from "e7:json";

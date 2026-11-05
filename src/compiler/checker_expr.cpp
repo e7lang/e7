@@ -566,6 +566,14 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
     Type* lt = check(e->a, nullptr);
     Expr* r = strip(e->b);
     if (r->k != EK::Ident) return errT(e->b->loc, "right side of 'instanceof' must be a class name");
+    if ((r->raw == "Error" || r->raw == "TypeError" || r->raw == "RangeError" || r->raw == "SyntaxError" ||
+         r->raw == "URIError") && (!lookup(r->raw) || lookup(r->raw)->k == SymK::Namespace)) {
+      if (lt->t != TT::Caught && lt->t != TT::Error && lt->t != TT::Unknown)
+        return errT(e->a->loc, "'instanceof " + r->raw + "' applies to a caught value or an Error");
+      e->intrinsic = IN_ERROR_IS;
+      e->str = utf8ToUtf16(r->raw);
+      return T.boolean();
+    }
     Sym* s = lookup(r->raw);
     if (!s || s->k != SymK::Class) return errT(e->b->loc, "'" + r->raw + "' is not a class");
     Type* b = baseOf(lt);
@@ -606,6 +614,7 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
     if (isStringy(lt) || isStringy(rt)) {
       Type* other = isStringy(lt) ? rt : lt;
       if (other->t == TT::Void) return errT(e->loc, "cannot concatenate a void value");
+      if (other->t == TT::Caught) return errT(e->loc, "the caught value is of type 'unknown'; use String(e) or narrow it with 'instanceof Error'");
       e->intrinsic = IN_STR_CONCAT;
       return T.string();
     }
@@ -664,6 +673,8 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
     Type* lb = baseOf(lt);
     Type* rb = baseOf(rt);
     if (lb == rb) return T.boolean();
+    // a caught value (always an Error at run time) compared with an Error: reference equality
+    if ((lb->t == TT::Caught || lb->t == TT::Error) && (rb->t == TT::Caught || rb->t == TT::Error)) return T.boolean();
     if (isNumberish(lb) && isNumberish(rb)) return T.boolean();
     if (isStringy(lb) && isStringy(rb)) return T.boolean();
     if (kindOf(lb) == K_R && kindOf(rb) == K_R && (assignable(lb, rb) || assignable(rb, lb))) return T.boolean();
@@ -883,6 +894,12 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
     if (eq != whenTrue) out.push_back({key, notLit});
     return;
   }
+  if (c->k == EK::Binary && c->raw == "instanceof" && c->intrinsic == IN_ERROR_IS) {
+    if (!whenTrue) return;
+    std::string key = pathKey(c->a);
+    if (!key.empty()) out.push_back({key, T.error()});
+    return;
+  }
   if (c->k == EK::Binary && c->raw == "instanceof") {
     if (!whenTrue || !c->cls) return;
     std::string key = pathKey(c->a);
@@ -993,6 +1010,9 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
   }
   Type* ot = check(e->a, nullptr);
   if (ot->t == TT::Unknown) return T.unknown();
+  if (ot->t == TT::Caught)
+    return errT(e->loc, "the caught value is of type 'unknown'; narrow it first: if (" + std::string(obj->k == EK::Ident ? obj->raw : "e") +
+                            " instanceof Error) { ... ." + name + " ... }");
   Type* bt = ot;
   if (ot->t == TT::Optional) {
     if (!e->optional) return errT(e->loc, "object is possibly '" + std::string(ot->hasNull ? "null" : "undefined") + "'; use '?.' or a check");

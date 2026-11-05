@@ -653,7 +653,12 @@ dispatch:
   CASE(ABORT) {
     Obj* o = R[A].r;
     std::string msg = (o && o->type == OT::String) ? strUtf8(static_cast<StrObj*>(o)) : "abort";
-    THROW("%s", msg.c_str());
+    fr->ip = ip;
+    raise(ERR_RUNTIME, msg, false);  // abort() and compiler-inserted checks are never catchable
+  }
+  CASE(THROW) {
+    fr->ip = ip;
+    raiseThrown(R[A].r);
   }
   // `debugger;`: the debug interpreter has already stopped here (DF_DEBUGGER) when appropriate
   CASE(DEBUGGER) DISPATCH();

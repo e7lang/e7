@@ -101,7 +101,9 @@ namespace e7 {
   X(EQ_R, "IRR", '-') X(NE_R, "IRR", '-') \
   X(ABORT, "R__", '-') \
   /* `debugger;` statement: no-op unless a debugger is attached */ \
-  X(DEBUGGER, "___", '-')
+  X(DEBUGGER, "___", '-') \
+  /* throw R[A] (an Error object); try/catch handlers are in the function's handler table */ \
+  X(THROW, "R__", '-')
 
 enum Op : uint16_t {
 #define E7_X(name, fmt, kind) OP_##name,

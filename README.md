@@ -218,7 +218,7 @@ variable names and columns in `.e7b` files; runtime errors then report `at f (fi
 
 ## Using E7 with AI assistants
 
-E7 looks like TypeScript, so AI assistants tend to write TypeScript that E7 rejects (`try`/`catch`, generics,
+E7 looks like TypeScript, so AI assistants tend to write TypeScript that E7 rejects (`finally`, generics,
 `any`, regex, union types...). The **E7 skill** ([`skills/e7`](skills/e7)) teaches them what E7 supports, how to
 rewrite what it doesn't, the standard library, and to compile-check every script with `e7c --check`. In our tests
 it raised correct results from 88% to 100% and cut the time per task by about 40%.

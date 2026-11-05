@@ -121,7 +121,7 @@ std::string Checker::suggestMember(Type* t, const std::string& name) {
     case TT::Set: add({"add", "clear", "delete", "entries", "forEach", "has", "keys", "size", "values"}); break;
     case TT::TextEncoder: add({"encode", "encoding"}); break;
     case TT::TextDecoder: add({"decode", "encoding"}); break;
-    case TT::Error: add({"message"}); break;
+    case TT::Error: add({"message", "name", "toString"}); break;
     case TT::Date:
       add({"getTime", "valueOf", "getTimezoneOffset", "setTime", "toISOString", "toJSON", "toString", "toUTCString",
            "toDateString", "toTimeString"});

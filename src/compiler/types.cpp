@@ -21,6 +21,7 @@ Types::Types() {
   tenc_ = mk(TT::TextEncoder);
   tdec_ = mk(TT::TextDecoder);
   error_ = mk(TT::Error);
+  caught_ = mk(TT::Caught);
   date_ = mk(TT::Date);
   for (uint8_t v = VT_I8; v <= VT_U64; v++) {
     ints_[v] = mk(TT::Int);
@@ -186,7 +187,7 @@ std::string typeName(const Type* t) {
     case TT::Null: return "null";
     case TT::Undefined: return "undefined";
     case TT::Never: return "never";
-    case TT::Unknown: return "unknown";
+    case TT::Unknown: case TT::Caught: return "unknown";
     case TT::Int: return intName(t->vt);
     case TT::Array: {
       std::string e = typeName(t->elem);

@@ -291,7 +291,8 @@ void Debugger::prepareResume(int action) {
   updateMask();
 }
 
-void Debugger::errorRaised(int code, const std::string& msg, const std::string& full) {
+void Debugger::errorRaised(int code, const std::string& msg, const std::string& full, bool caught) {
+  if (caught) return;  // a try/catch handler takes it: not a stop
   if (!breakOnError || inHandler_ || aborting_ || paused_ || vm_.catchDepth_ > 0 || vm_.frames_.empty()) return;
   if (code != ERR_RUNTIME && code != ERR_BUDGET && code != ERR_MEMORY && code != ERR_STACK) return;
   message_ = msg;

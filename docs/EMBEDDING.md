@@ -21,7 +21,9 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
   On the command line, `e7 --trust release.pub app.e7b` is the equivalent of the last row.
 - Generate keys: `e7c --keygen release` produces `release.seed` (32-byte private key seed, hex, **keep secret**) and `release.pub` (public key, built into the app).
 - Multiple public keys are supported (key rotation): pass N×32 bytes in `trusted_keys`.
-- `.e7b` carries a format version; the VM rejects versions it does not recognize. The server can deliver the matching build for each client VM version.
+- `.e7b` carries a format version and the minimum e7vm version it needs; a VM rejects a module it cannot run with
+  `E7_ERR_VERSION`. Build with `e7c --target <version>` for the oldest app version you still serve, or keep one
+  build per VM version and pick it with `e7_inspect` / `e7c --info` (see [BYTECODE.md](BYTECODE.md#5-compatibility)).
 - Source can also be compiled on the device (`e7_compile` / `e7_load_source`, requires `E7_WITH_COMPILER=ON`);
   if you only need to run `.e7b`, use `-DE7_WITH_COMPILER=OFF` to reduce size.
 
@@ -29,10 +31,13 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 
 | Function | Description |
 |---|---|
-| `e7_config_init` / `e7_vm_new` / `e7_vm_free` | Create/destroy a VM. Config: `memory_limit`, `stack_slots`, `max_frames`, `suspend_on_budget`, `require_signature`, `trusted_keys` |
-| `e7_load(vm, data, len, &module)` | Verify signature → parse → verify → link native functions → run module top-level code |
+| `e7_config_init` / `e7_vm_new` / `e7_vm_free` | Create/destroy a VM. Config: `memory_limit`, `stack_slots`, `max_frames`, `suspend_on_budget`, `require_signature`, `trusted_keys`, `gc_growth_percent`. Always fill the struct with `e7_config_init` first: it sets `struct_size`, which lets newer libraries add fields |
+| `e7_load(vm, data, len, &module)` | Verify signature → parse → verify → link native functions → run module top-level code (`E7_ERR_VERSION` for a module of another bytecode format or one that needs a newer e7vm) |
+| `e7_inspect(data, len, &info)` | Read a module's format, required e7vm version (`requires_version`) and signature key id without loading it |
+| `e7_version` / `e7_version_number` | Library version (`"0.2.0"` / `0x000200`) |
+| `e7_gc_stats_get(vm, &stats)` | Garbage collections, total and longest pause, heap size and peak |
 | `e7_compile` / `e7_load_source` | Compile source (errors are formatted as `file:line:col: error: ...`) |
-| `e7_compile_ex(src, len, name, &opts, ...)` | Compile with options: `E7_COMPILE_DEBUG` (debug information) and a `read_file` callback for imports |
+| `e7_compile_ex(src, len, name, &opts, ...)` | Compile with options (`e7_compile_options_init` first): `E7_COMPILE_DEBUG` (debug information), a `read_file` callback for imports, `target_version` (oldest e7vm that must run the module) |
 | `e7_call(vm, module, "fn", args, n, &ret)` | Call an `export function` |
 | `e7_set_budget(vm, ticks)` | Instruction budget for subsequent execution (≤0 means unlimited) |
 | `e7_resume` / `e7_abort_suspended` | Resume / abandon a suspended call |
@@ -52,7 +57,8 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 
 **Error codes**: `E7_OK`, `E7_SUSPENDED`, `E7_ERR_RUNTIME` (script error/throw/abort), `E7_ERR_BUDGET`, `E7_ERR_MEMORY`,
 `E7_ERR_STACK`, `E7_ERR_LOAD`, `E7_ERR_VERIFY`, `E7_ERR_SIGNATURE`, `E7_ERR_NOT_FOUND`, `E7_ERR_ARGS`, `E7_ERR_COMPILE`, `E7_ERR_STATE`,
-and `E7_PAUSED` (only with a debugger attached in pause-to-host mode).
+`E7_ERR_VERSION` (bytecode format or required e7vm version not supported: deliver a module built with
+`e7c --target <app's e7vm version>`), and `E7_PAUSED` (only with a debugger attached in pause-to-host mode).
 The VM remains usable after any error; module globals are preserved.
 
 ### 2.1 Host functions
@@ -123,7 +129,9 @@ static e7_debug_action on_stop(e7_vm* vm, const e7_debug_stop* st, void* user) {
   return E7_DEBUG_STEP_OVER;                                   // or block here until the user decides
 }
 
-e7_compile_options opts = {E7_COMPILE_DEBUG, NULL, NULL};
+e7_compile_options opts;
+e7_compile_options_init(&opts);
+opts.flags = E7_COMPILE_DEBUG;
 e7_compile_ex(src, len, "main.ts", &opts, &bc, &bc_len, &errs);
 e7_debug_attach(vm, on_stop, NULL);                           // NULL callback: pause-to-host (E7_PAUSED)
 e7_debug_set_breakpoint(vm, "main.ts", 12);

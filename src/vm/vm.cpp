@@ -166,12 +166,118 @@ double VM::randomDouble() {
 }
 
 // ------------------------------------------------------------------ errors
-void VM::raise(int code, const std::string& msg) {
+// Errors that Node.js throws as catchable exceptions carry the JavaScript error name as a message
+// prefix ("RangeError: invalid count value: -1"); see docs/SPEC.md (try/catch).
+static bool jsErrorName(const std::string& msg, std::string& name, std::string& text) {
+  static const char* const kNames[] = {"Error", "TypeError", "RangeError", "SyntaxError", "URIError"};
+  for (const char* n : kNames) {
+    size_t l = strlen(n);
+    if (msg.size() > l + 1 && msg.compare(0, l, n) == 0 && msg[l] == ':' && msg[l + 1] == ' ') {
+      name = n;
+      text = msg.substr(l + 2);
+      return true;
+    }
+  }
+  return false;
+}
+
+void VM::raise(int code, const std::string& msg, bool allowCatch) {
   std::string full = msg;
   std::string tr = stackTrace();
   if (!tr.empty()) full += "\n" + tr;
-  if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty()) dbg_->errorRaised(code, msg, full);
-  throw E7Error(code, full);
+  E7Error e(code, full);
+  if (allowCatch && code == ERR_RUNTIME) jsErrorName(msg, e.jsName, e.text);
+  if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty())
+    dbg_->errorRaised(code, msg, full, !e.jsName.empty() && willBeCaught());
+  throw e;
+}
+
+void VM::raiseThrown(Obj* error) {
+  StrObj *n, *m;
+  if (!errorParts(error, &n, &m)) raise(ERR_RUNTIME, "throw: not an Error object", false);
+  std::string name = strUtf8(n), text = strUtf8(m);
+  // uncaught: "message" for Error (as before 0.2), "TypeError: message" for the others
+  std::string msg = name == "Error" ? text : name + ": " + text;
+  std::string full = msg;
+  std::string tr = stackTrace();
+  if (!tr.empty()) full += "\n" + tr;
+  E7Error e(ERR_RUNTIME, full);
+  e.jsName = name.empty() ? "Error" : name;
+  e.text = text;
+  e.value = error;
+  if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty()) dbg_->errorRaised(ERR_RUNTIME, msg, full, willBeCaught());
+  throw e;
+}
+
+ArrObj* VM::newErrorObject(const std::string& name, const std::string& message) {
+  StrObj* n = newStringUtf8(name);
+  TempRoot rn(*this, n);
+  StrObj* m = newStringUtf8(message);
+  TempRoot rm(*this, m);
+  ArrObj* a = newArray(VT_REF, 2);
+  a->data[0].r = n;
+  a->data[1].r = m;
+  a->len = 2;
+  return a;
+}
+
+bool VM::errorParts(Obj* o, StrObj** name, StrObj** message) const {
+  if (!o || o->type != OT::Array) return false;
+  auto* a = static_cast<ArrObj*>(o);
+  if (a->vt != VT_REF || a->len != 2) return false;
+  Obj* n = a->data[0].r;
+  Obj* m = a->data[1].r;
+  if (!n || n->type != OT::String || !m || m->type != OT::String) return false;
+  *name = static_cast<StrObj*>(n);
+  *message = static_cast<StrObj*>(m);
+  return true;
+}
+
+const HandlerDesc* VM::handlerAt(size_t k) const {
+  const Frame& f = frames_[k];
+  const FuncDesc* d = f.fn->d;
+  if (!d || d->handlers.empty() || !f.ip) return nullptr;
+  // the frame's ip is past the current instruction (the raising instruction, or the call that is
+  // running in the frames above); ip - 1 lies inside it
+  size_t pc = (size_t)(f.ip - f.fn->code);
+  if (pc == 0) return nullptr;
+  pc--;
+  for (const HandlerDesc& h : d->handlers)  // innermost first
+    if (pc >= h.start && pc < h.end) return &h;
+  return nullptr;
+}
+
+bool VM::willBeCaught() const {
+  if (catchDepth_ > 0) return true;
+  for (size_t k = frames_.size(); k-- > 0;)
+    if (handlerAt(k)) return true;
+  return false;
+}
+
+// try/catch: called by execute() for a catchable error. Finds the innermost frame of this
+// execute() call (frames >= entryDepth) whose handler covers its current instruction, drops the
+// frames above it, restores the native-call state to what it was while that frame ran, stores the
+// Error object in the handler's register and continues at the handler.
+bool VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
+  for (size_t k = frames_.size(); k-- > entryDepth;) {
+    const HandlerDesc* h = handlerAt(k);
+    if (!h) continue;
+    frames_.resize(k + 1);
+    nativeDepth_ = st.nativeDepth;
+    curNative_ = st.curNative;
+    callbackNatives_.resize(st.callbacks);
+    tempRoots_.resize(st.tempRoots);
+    gcInhibit_ = st.gcInhibit;
+    Frame& f = frames_[k];
+    Obj* v = e.value;
+    if (!v) v = newErrorObject(e.jsName, e.text);  // may collect: frames and registers are consistent
+    Frame& g = frames_[k];
+    stack_[g.base + h->reg].r = v;
+    g.ip = g.fn->code + h->handler;
+    (void)f;
+    return true;
+  }
+  return false;
 }
 void VM::error(const char* fmt, ...) {
   char buf[512];

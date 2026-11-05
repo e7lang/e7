@@ -115,5 +115,5 @@ GCC 290 ms, switch fallback ~380 ms).
 
 ## 5. Known limitations (by design, not defects)
 
-See the "Not supported" list in SPEC.md: no `try/catch` (`throw` terminates the script), no user generics, no regular expressions, no `any`; out-of-bounds array reads are runtime
+See the "Not supported" list in SPEC.md: `try`/`catch` catches only errors that Node.js also throws (E7-specific checks such as out-of-bounds reads end the call), no `finally`, no user generics, no regular expressions, no `any`; out-of-bounds array reads are runtime
 errors; Date has UTC semantics; the key order of optional properties after object spread is fixed at compile time.

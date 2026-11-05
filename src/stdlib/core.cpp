@@ -503,7 +503,43 @@ E7_NATIVE(n_textDecode) {
   r->r = vm.newString(utf8DecodeWhatwg(b->ptr(), b->len));
 }
 
+// Error objects (see VM::newErrorObject): [name, message]
+static void errParts(VM& vm, Slot s, StrObj** name, StrObj** msg) {
+  if (!vm.errorParts(s.r, name, msg)) vm.error("expected an Error object");
+}
+E7_NATIVE(n_errorNew) {
+  E7_UNUSED;
+  StrObj* name = S(vm, a[0]);
+  StrObj* msg = S(vm, a[1]);
+  ArrObj* e = vm.newArray(VT_REF, 2);
+  e->data[0].r = name;
+  e->data[1].r = msg;
+  e->len = 2;
+  r->r = e;
+}
+E7_NATIVE(n_errorName) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = nm; }
+E7_NATIVE(n_errorMessage) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = m; }
+E7_NATIVE(n_errorToString) {  // String(e): "Name: message", or "Name" when the message is empty
+  E7_UNUSED;
+  StrObj *nm, *m;
+  errParts(vm, a[0], &nm, &m);
+  if (m->len == 0) { r->r = nm; return; }
+  std::u16string s = strU16(nm) + u": " + strU16(m);
+  r->r = vm.newString(s);
+}
+E7_NATIVE(n_errorIs) {  // e instanceof TypeError (and friends): compares the name
+  E7_UNUSED;
+  StrObj *nm, *m;
+  errParts(vm, a[0], &nm, &m);
+  r->i = strU16(nm) == strU16(S(vm, a[1])) ? 1 : 0;
+}
+
 void registerCoreNatives(VM& vm) {
+  vm.registerNative("Error.new", "RR>R", n_errorNew);
+  vm.registerNative("Error.name", "R>R", n_errorName);
+  vm.registerNative("Error.message", "R>R", n_errorMessage);
+  vm.registerNative("Error.toString", "R>R", n_errorToString);
+  vm.registerNative("Error.is", "RR>I", n_errorIs);
   vm.registerNative("Value.toString", "R>R", n_valueToString);
   vm.registerNative("Value.truthy", "R>I", n_valueTruthy);
   vm.registerNative("Value.strictEq", "RR>I", n_strictEq);

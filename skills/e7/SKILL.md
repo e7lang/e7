@@ -1,6 +1,6 @@
 ---
 name: e7
-description: Write, fix and review code in E7, the strict TypeScript subset that runs on the e7vm bytecode VM (github.com/e7lang/e7). Use this skill whenever the user works on E7 scripts, .e7 files, .ts files that import "e7:crypto", "e7:encoding", "e7:json" or "e7:test", code compiled with e7c or run with e7 / e7vm / @e7lang/e7, scripts embedded in Android/iOS/Windows/macOS/Linux apps through e7vm, or asks for signing / verification / algorithm scripts "for E7" — even if they just say "TypeScript". E7 looks like TypeScript but rejects many TypeScript features (any, try/catch, generics, regex, async, union types, index signatures...), so code written as ordinary TypeScript usually fails to compile; this skill explains what to write instead and how to check it.
+description: Write, fix and review code in E7, the strict TypeScript subset that runs on the e7vm bytecode VM (github.com/e7lang/e7). Use this skill whenever the user works on E7 scripts, .e7 files, .ts files that import "e7:crypto", "e7:encoding", "e7:json" or "e7:test", code compiled with e7c or run with e7 / e7vm / @e7lang/e7, scripts embedded in Android/iOS/Windows/macOS/Linux apps through e7vm, or asks for signing / verification / algorithm scripts "for E7" — even if they just say "TypeScript". E7 looks like TypeScript but rejects many TypeScript features (any, generics, regex, async, union types, index signatures, finally...), so code written as ordinary TypeScript usually fails to compile; this skill explains what to write instead and how to check it.
 ---
 
 # Writing E7
@@ -21,7 +21,7 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | TypeScript habit | Write in E7 |
 |---|---|
 | `any`, `unknown`, `object` | a concrete type, an `interface`, or `T \| null` |
-| `try { } catch { }` | validate first and return an error value (`T \| null`, or `{ ok, value, error }`); `throw` only for fatal errors — it ends the call and cannot be caught |
+| `throw "text"`, `catch (e) { e.message }`, `finally` | `throw new Error("text")`; narrow first: `if (e instanceof Error) e.message`; no `finally` (clean up after the `try` statement) |
 | `function f<T>(x: T)`, generic classes/interfaces | concrete types; one function per type if needed (built-in `Array<T>`, `Map<K, V>`, `Set<T>` are fine) |
 | `string \| number`, discriminated unions | one interface with a `kind` field (string or enum) and optional fields |
 | `{ [key: string]: V }`, `Record<K, V>`, `Partial`, `Pick` | `Map<string, V>`, or write the interface out |
@@ -31,7 +31,7 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | `get x()` / `set x(v)` | methods `getX()` / `setX(v)` |
 | `interface Node { next: Node \| null }` (recursive interface) | a `class` (classes may refer to themselves) |
 | `var`, `==` | `let`/`const`, `===` (`x == null` is allowed: null or undefined) |
-| `JSON.parse(text)`, `try { JSON.parse(text) } catch` | `JSON.parse(text) as T` (validated against `T`; a mismatch ends the call); for untrusted input `tryParse(text) as T \| null` from `e7:json` (`null` on bad input, `lastError()` says why) |
+| `JSON.parse(text)` | `JSON.parse(text) as T` (validated against `T`; a shape mismatch ends the call and cannot be caught, a syntax error is a catchable `SyntaxError`); for untrusted input `tryParse(text) as T \| null` from `e7:json` (`null` on bad input, `lastError()` says why) |
 | `arr.map(obj.method)` | `arr.map(x => obj.method(x))` (methods are not values) |
 | `Buffer`, `crypto.subtle`, `require("crypto")`, `fs`, `process` | `Uint8Array`, `e7:crypto`, `e7:encoding`, or a host function |
 | `Int32Array`, `Float64Array` | `number[]`, `u32[]`, or `DataView` |
@@ -99,7 +99,27 @@ playground at https://e7lang.github.io/playground to verify the code.
 
 ## Error handling patterns
 
-There is no `try`/`catch`. Design APIs so failure is a value:
+`try`/`catch` exists (since 0.2), but it only catches errors that Node.js also throws: `throw`, `JSON.parse`
+syntax errors, `RangeError`s and the like from the standard library. E7's own checks — out-of-bounds reads,
+`as T` / `JSON.parse(...) as T` shape mismatches, integer division by zero — and budget / memory limits still end
+the call. The catch variable is `unknown`; narrow it before use:
+
+```ts
+function safeDiv(a: bigint, b: bigint): string {
+  try {
+    return (a / b).toString();
+  } catch (e) {
+    if (e instanceof RangeError) return "division by zero";
+    throw e;
+  }
+}
+
+export function main(): string {
+  return safeDiv(10n, 2n) + ", " + safeDiv(1n, 0n);
+}
+```
+
+For expected failures, prefer returning a value:
 
 ```ts
 interface ParseResult { ok: boolean; value: number; error: string }
@@ -117,9 +137,9 @@ export function main(): string {
 }
 ```
 
-Use `T | null` for "not found", a result interface for "failed with a reason", and `throw new Error(msg)` (or
-`abort(msg)`) only for bugs and invalid input the caller must not send — the host receives it as an error with
-a stack trace. Remember `JSON.parse(text) as T` and `x!` also stop the call when the data does not match.
+Use `T | null` for "not found", a result interface for "failed with a reason", and `throw new Error(msg)` for
+errors a caller may handle with `catch`. `abort(msg)` cannot be caught. An error no `catch` handles reaches the host
+with a stack trace. Remember `JSON.parse(text) as T` and `x!` also stop the call when the data does not match.
 
 For JSON that may be malformed or of the wrong shape (requests, webhooks, files, anything untrusted), use
 `tryParse` from `e7:json`. It validates exactly like `JSON.parse(text) as T` but returns `null` instead of ending

@@ -10,6 +10,39 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-05
+
+The release for production pilots: the incompatible changes we could foresee (bytecode format, C ABI, exceptions)
+are made now, so that the 0.2.x line can stay compatible. See [docs/ROADMAP.md](docs/ROADMAP.md).
+
+### Added
+- **`try` / `catch`** ([SPEC.md 3.1](docs/SPEC.md)). `catch (e)` (an `unknown`, narrowed with `e instanceof Error`,
+  `TypeError`, `RangeError`, `SyntaxError`, `URIError`) and `catch` without a binding. Catches the errors Node.js
+  also throws: `throw`, `JSON.parse` syntax errors and the standard library's `RangeError` / `TypeError` /
+  `URIError`s; E7-specific checks (out-of-bounds reads, `as T` shape mismatches, ...), `abort()` and resource
+  limits still end the call, so programs keep printing what Node.js prints. `Error` values have `.name` and
+  `.message`; `String(e)` gives `"Name: message"`; `new SyntaxError` / `new URIError` are available.
+  Bytecode: a per-function handler table (checked by the verifier) and a `THROW` instruction. Debuggers stop only
+  on errors no handler catches.
+- **Version targeting**: modules record the minimum e7vm version they need (`requires`, computed from the
+  instructions and natives they use); `e7c --target 0.2` refuses newer features; `e7c --info` prints a module's
+  format, required version, signature key id and exports.
+- C API: `E7_ERR_VERSION` (format or required version not supported), `e7_inspect()` (header, required version and
+  signature without loading), `e7_version_number()`, `e7_gc_stats_get()` (collections, total and longest pause,
+  heap size and peak), `e7_config.gc_growth_percent` (heap growth before the next collection, default 200),
+  `e7_compile_options.target_version`, `e7_compile_options_init()`.
+- Compatibility corpus `tests/compat/`: 0.1 modules must be rejected with `E7_ERR_VERSION`; modules from 0.2.x
+  releases must keep running with the same output.
+
+### Changed (incompatible)
+- **Bytecode format 2.** 0.1 modules are rejected with `E7_ERR_VERSION`: recompile them with e7c 0.2.
+- **`throw` takes Errors only**: `throw "text"` is a compile error; write `throw new Error("text")`. An uncaught
+  `TypeError` / `RangeError` / ... reports `"TypeError: message"`; an uncaught `Error` still reports the message.
+- **C ABI**: `e7_config` and `e7_compile_options` start with a `struct_size` field. Initialize them with
+  `e7_config_init()` / `e7_compile_options_init()` before setting fields (a struct without a valid `struct_size`
+  is rejected: `e7_vm_new` returns NULL, `e7_compile_ex` returns `E7_ERR_ARGS`). The bindings are updated.
+- `Array.reduce` on an empty array without an initial value throws a catchable `TypeError` (as in JavaScript).
+
 ## [0.1.0] - 2026-11-05
 
 First public release. Earlier builds were published as 1.0.0–1.0.2 and have been withdrawn: E7 has been
@@ -58,5 +91,6 @@ tested and hardened but has not yet run in production, so it is versioned 0.x un
   on an Android emulator, the iOS simulator, JVMs and .NET; libFuzzer targets for the loader and compiler with
   ClusterFuzzLite (ASan + UBSan) on pull requests and nightly. See [docs/PRODUCTION.md](docs/PRODUCTION.md).
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/e7lang/e7/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/e7lang/e7/releases/tag/v0.1.0

@@ -86,9 +86,13 @@ struct Frame {
   bool entry;  // returning from this frame leaves execute()
 };
 
+struct Obj;
 struct E7Error : std::exception {
   int code;
-  std::string msg;
+  std::string msg;     // message and stack trace (reported to the host when nothing catches it)
+  std::string jsName;  // "Error", "TypeError", ...: catchable by try/catch; empty: terminates the script
+  std::string text;    // the Error's message (without the name prefix and the trace)
+  Obj* value = nullptr;  // the thrown Error object (THROW), or nullptr: created when caught
   E7Error(int c, std::string m) : code(c), msg(std::move(m)) {}
   const char* what() const noexcept override { return msg.c_str(); }
 };
@@ -181,6 +185,11 @@ class VM {
   StrObj* newStringAscii(const char* s);
   StrObj* allocString(size_t len);  // uninitialized chars
   ArrObj* newArray(uint8_t vt, uint32_t cap);
+  // An Error object: an array of two strings [name, message] (only the e7 Error natives and the
+  // try/catch machinery create and read them; they check the shape at run time)
+  ArrObj* newErrorObject(const std::string& name, const std::string& message);
+  // name / message of an Error object; false if o is not one
+  bool errorParts(Obj* o, StrObj** name, StrObj** message) const;
   void arrayReserve(ArrObj* a, uint32_t cap);
   void arrayPush(ArrObj* a, Slot v);
   BufObj* newBuffer(uint32_t len);
@@ -285,7 +294,21 @@ class VM {
   void traceAll();
   void sweep();
   void freeObj(Obj* o);
-  [[noreturn]] void raise(int code, const std::string& msg);
+  // allowCatch: a message starting with a JavaScript error name ("RangeError: ...") makes the error
+  // catchable by try/catch (errors that Node.js also throws); ABORT and resource limits never are
+  [[noreturn]] void raise(int code, const std::string& msg, bool allowCatch = true);
+  [[noreturn]] void raiseThrown(Obj* error);  // THROW: a script-created Error object
+  // try/catch: the handler of frame k covering its current instruction, or nullptr
+  const HandlerDesc* handlerAt(size_t k) const;
+  bool willBeCaught() const;
+  struct ExecState {
+    uint32_t nativeDepth;
+    const NativeBinding* curNative;
+    size_t callbacks, tempRoots;
+    int gcInhibit;
+  };
+  bool catchError(E7Error& e, size_t entryDepth, const ExecState& st);
+
 
   VMConfig cfg_;
   Obj* objects_ = nullptr;

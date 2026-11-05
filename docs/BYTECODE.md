@@ -1,4 +1,4 @@
-# e7vm bytecode (.e7b v1)
+# e7vm bytecode (.e7b format 2)
 
 ## 1. File format
 
@@ -6,8 +6,9 @@ All integers are little-endian. A string is `u32 length + UTF-8 bytes`.
 
 ```
 magic   "E7B\0"            4 bytes
-version u32 = 1
+version u32 = 2            bytecode format (e7 0.2.x)
 flags   u32                bit 0: the module carries debug information (informational; readers ignore unknown bits)
+requires u32               minimum e7vm version: major << 16 | minor << 8 | patch (see "Compatibility")
 name    str
 ints    u32 n, n × i64        integer constant pool
 nums    u32 n, n × f64        number constant pool (IEEE-754 bit patterns)
@@ -17,7 +18,9 @@ natives u32 n, n × (str name, u32 sig)          native function imports (linked
 classes u32 n, n × (str name, i32 parent, u8 kind(0 class/1 record/2 tuple),
                     u32 nf × (str name, u8 vt), u32 nm × (u32 func, str methodName))
 funcs   u32 n, n × (str name, u32 sig, u16 nparams, u32 nregs × u8 kind, u32 nup × u8 kind,
-                    u32 nic × u32 strIdx, u32 ncode × u64, u32 nlines × u32 (pc, line pairs))
+                    u32 nic × u32 strIdx, u32 ncode × u64,
+                    u32 nhandlers × (u32 start, u32 end, u32 handler, u32 reg),
+                    u32 nlines × u32 (pc, line pairs))
 globals u32 n, n × (str name, u8 vt)
 exports u32 n, n × (str name, u32 func, str hostSig)
 init    u32                    module init function (signature must be ">V")
@@ -252,6 +255,13 @@ Operand formats: `I/F/R` register of the given kind, `_` unused (must be 0), `v`
 | `NE_R` | `IRR` | Reference inequality |
 | `ABORT` | `R__` | Abort with R[A] as the message |
 | `DEBUGGER` | `___` | `debugger;` statement: no-op, a stop when a debugger is attached |
+| `THROW` | `R__` | Throw the Error object R[A] (catchable; see the handler table) |
+
+`ABORT` is never catchable. `THROW` and the standard-library errors that carry a JavaScript error name
+(`"RangeError: ..."`) are: when one is raised, the VM looks for the innermost frame (of the current entry from the
+host or from a native callback) whose handler range `[start, end)` contains that frame's current instruction, drops
+the frames above it, stores the Error object (an array `[name, message]` of two strings) in register `reg` and
+continues at `handler`. Handlers are listed innermost first.
 
 ## 3. Verification rules (at load time, `src/core/verify.cpp`)
 
@@ -261,7 +271,10 @@ Operand formats: `I/F/R` register of the given kind, `_` unused (must be 0), `v`
    global and upvalue kinds match the instruction; unused fields are 0.
 4. Calls: the argument count matches the target signature, each argument register kind matches, and the return destination kind matches (a void call cannot have a destination);
    indirect calls (closure/method/interface) compare the signature id again at runtime.
-5. Jump targets must be instruction start positions; the last instruction of a function must be an unconditional transfer (`RET_*`, `JMP`, `ABORT`), so execution cannot "fall off" the end of a function.
+5. Jump targets must be instruction start positions; the last instruction of a function must be an unconditional transfer (`RET_*`, `JMP`, `ABORT`, `THROW`), so execution cannot "fall off" the end of a function.
+   Handler tables: `start < end <= code length`, `start`, `end` (unless it is the code length) and `handler` at
+   instruction starts, `reg` a reference register, at most 65535 entries, and every handler listed after the ones it
+   encloses, with ranges either nested or disjoint.
 6. Classes: the parent class index is less than the class's own index (no cycles); inherited field layouts and vtable signatures are consistent; the first parameter of a method is the receiver.
 7. Debug information: a malformed extension (counts past the payload, names over 4096 bytes, trailing words) fails the load; positions and statement
    boundaries must be strictly increasing and inside the code (statements at instruction starts); every variable's register exists and has the kind of
@@ -278,3 +291,16 @@ string/byte types) are checked by the interpreter at runtime. So even maliciousl
 - Garbage collection: precise mark-sweep. Roots are reference registers in call frames, global variables, constant strings, and pinned objects. Collection happens only at safepoints (loop back edges, calls) or
   under memory pressure; no collection happens while a native function is running.
 - Instruction budget: each back edge deducts the loop body length, and each call deducts 1; on exhaustion the VM reports an error or suspends.
+
+## 5. Compatibility
+
+- The `version` field is the bytecode format. e7 0.2.x reads and writes format 2 only; a module of another format is
+  rejected at load time with `E7_ERR_VERSION` (0.1 modules must be recompiled).
+- `requires` is the oldest e7vm that can run the module. The compiler computes it from the instructions and native
+  functions the module uses (each has a "since" version, `src/core/since.h`); a VM older than `requires` rejects the
+  module with `E7_ERR_VERSION` instead of failing verification. `e7c --target 0.2` makes newer features compile
+  errors, so a server can build modules for the VM versions of the apps in the field.
+- `e7_inspect()` (and `e7c --info`) read the format, `requires` and signature without loading a module.
+- Promise: within a minor release line (0.2.x), every VM runs every module compiled by any 0.2.x compiler, with
+  the same results. `tests/compat/<version>/` keeps modules compiled by released compilers; CI checks that the 0.1
+  ones are rejected with `E7_ERR_VERSION` and that the 0.2.x ones load and print the recorded output.

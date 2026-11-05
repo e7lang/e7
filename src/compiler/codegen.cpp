@@ -311,6 +311,7 @@ struct Gen {
     code.insert(code.begin(), prefix.begin(), prefix.end());
     for (size_t i = 0; i + 1 < D->lines.size(); i += 2) D->lines[i] += (uint32_t)k;
     for (auto& fs : fileSegs) fs.first += (uint32_t)k;
+    for (auto& h : D->handlers) { h.start += (uint32_t)k; h.end += (uint32_t)k; h.handler += (uint32_t)k; }
     for (auto& e : D->debug.pos) e.pc += (uint32_t)k;
     for (auto& e : D->debug.stmts) e.pc += (uint32_t)k;
     for (auto& l : D->debug.locals) {
@@ -1172,12 +1173,35 @@ void Gen::genStmt(Stmt* s) {
       break;
     case SK::Throw: {
       size_t m0 = mark();
-      Expr* e = s->expr;
-      uint16_t msg;
-      if (e->k == EK::New) msg = gen(e->list[0]);
-      else msg = gen(e);
-      emit(OP_ABORT, msg);
+      uint16_t err = gen(s->expr);
+      emit(OP_THROW, err);
       release(m0);
+      break;
+    }
+    case SK::Try: {
+      // try range [start, end) -> handler; the VM stores the Error object in `er` (reserved for the
+      // whole statement). Handlers of try statements nested in the body are recorded first.
+      uint16_t er = allocReg(K_R);
+      Label* after = newLabel();
+      uint32_t start = (uint32_t)pc();
+      genStmt(s->body);
+      uint32_t end = (uint32_t)pc();
+      jump(OP_JMP, 0, after);
+      uint32_t handler = (uint32_t)pc();
+      if (end > start) D->handlers.push_back(HandlerDesc{start, end, handler, er});
+      VarSym* cv = s->decls.empty() ? nullptr : s->decls[0].sym;
+      if (cv) bindVar(cv, er);
+      genStmt(s->els);
+      if (cv) {
+        auto it = varReg.find(cv);
+        if (it != varReg.end()) {
+          freeReg(it->second);
+          varReg.erase(it);
+          dbgClose(cv);
+        }
+      }
+      place(after);
+      freeReg(er);
       break;
     }
     case SK::Class: {
@@ -1602,6 +1626,11 @@ uint16_t Gen::toStringReg(uint16_t src, Type* t) {
       uint16_t r = temp(K_R), radix = temp(K_F);
       loadNum(radix, 10);
       callNative("BigInt.toString", {src, radix}, r, 'R');
+      return r;
+    }
+    case TT::Error: case TT::Caught: {  // String(e): "Name: message"
+      uint16_t r = temp(K_R);
+      callNative("Error.toString", {src}, r, 'R');
       return r;
     }
     default: {
@@ -2344,6 +2373,17 @@ void Gen::binaryOp(const std::string& op, Type* lt, Type* rt, uint16_t d, uint16
 
 void Gen::genBinary(Expr* e, uint16_t d) {
   const std::string& op = e->raw;
+  if (op == "instanceof" && e->intrinsic == IN_ERROR_IS) {
+    uint16_t a = gen(e->a);
+    if (e->str == u"Error") {  // every thrown or caught value is an Error
+      loadInt(d, 1);
+      return;
+    }
+    uint16_t nm = temp(K_R);
+    loadStr(nm, e->str);
+    callNative("Error.is", {a, nm}, d, 'I');
+    return;
+  }
   if (op == "instanceof") {
     uint16_t a = gen(e->a);
     emit(OP_INSTOF, d, a, (uint16_t)e->cls->classIdx);
@@ -3119,9 +3159,11 @@ void Gen::genCallbackLoop(Expr* e, uint16_t dst) {
       loadInt(z, 0);
       emit(OP_LT_I, c, z, n);
       jump(OP_JT, c, ok);
-      uint16_t msg = temp(K_R);
+      uint16_t nm = temp(K_R), msg = temp(K_R), err = temp(K_R);
+      loadStr(nm, u"TypeError");
       loadStr(msg, u"Reduce of empty array with no initial value");
-      emit(OP_ABORT, msg);
+      callNative("Error.new", {nm, msg}, err, 'R');
+      emit(OP_THROW, err);
       place(ok);
       if (reverse) {
         emit(OP_ADDI_I, i, n, (uint16_t)(int16_t)-1);
@@ -3248,7 +3290,6 @@ void Gen::genNew(Expr* e, uint16_t d) {
     return;
   }
   const std::string& nm = e->native;
-  if (nm == "Error.new") { genInto(e->list[0], d); return; }
   std::vector<uint16_t> args;
   for (Expr* a : e->list) args.push_back(gen(a));
   auto num = [&](double v) {
@@ -3313,7 +3354,6 @@ void Gen::genMember(Expr* e, uint16_t d) {
     }
     case IN_NATIVE: {
       uint16_t obj = gen(e->a);
-      if (e->native == "Error.message") { mov(d, obj, K_R); return; }
       callNative(e->native, {obj}, d, kindChar(K(e->type)));
       return;
     }

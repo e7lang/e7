@@ -284,6 +284,7 @@ bool Checker::exits(Stmt* s) {
       for (Stmt* x : s->stmts) if (exits(x)) return true;
       return false;
     case SK::If: return s->els && exits(s->then) && exits(s->els);
+    case SK::Try: return exits(s->body) && exits(s->els);
     case SK::While: {
       bool infinite = s->expr->k == EK::Bool && s->expr->bval;
       return infinite && !containsBreakFor(s->body, "", 0);
@@ -329,6 +330,7 @@ static bool containsBreakFor(Stmt* s, const std::string& label, int depth) {
       for (Stmt* x : s->stmts) if (containsBreakFor(x, label, depth)) return true;
       return false;
     case SK::If: return containsBreakFor(s->then, label, depth) || containsBreakFor(s->els, label, depth);
+    case SK::Try: return containsBreakFor(s->body, label, depth) || containsBreakFor(s->els, label, depth);
     case SK::While: case SK::DoWhile: case SK::For: case SK::ForOf:
       return containsBreakFor(s->body, label, depth + 1);
     case SK::Switch:
@@ -788,19 +790,37 @@ void Checker::checkStmt(Stmt* s) {
       break;
     }
     case SK::Throw: {
-      Expr* e = s->expr;
-      if (e->k == EK::New && e->a->k == EK::Ident && (e->a->raw == "Error" || e->a->raw == "TypeError" || e->a->raw == "RangeError")) {
-        if (e->list.size() > 1) err(e->loc, "Error takes at most one argument");
-        if (!e->list.empty()) {
-          check(e->list[0], T.string());
-          coerce(e->list[0], T.string());
-        }
-        e->type = T.error();
-      } else {
-        Type* t = check(e, T.string());
-        if (t->t != TT::String && t->t != TT::Unknown && t->t != TT::Error)
-          err(e->loc, "only 'throw new Error(message)' or 'throw <string>' is supported (throw aborts the script)");
+      // throw an Error (new Error / TypeError / RangeError / SyntaxError(message), an Error value, or a
+      // caught error to rethrow it); try/catch can catch it
+      Type* t = check(s->expr, nullptr);
+      if (t->t != TT::Error && t->t != TT::Caught && t->t != TT::Unknown) {
+        if (t->t == TT::String)
+          err(s->expr->loc, "throwing a string is not supported; throw new Error(message) instead");
+        else
+          err(s->expr->loc, "only Error objects can be thrown (throw new Error(message)); got '" + typeName(t) + "'");
       }
+      break;
+    }
+    case SK::Try: {
+      // try { } catch (e) { }: the catch variable is 'unknown' (TypeScript --strict), narrowed with
+      // `e instanceof Error`. Variables assigned in the try block may hold any of the values they had
+      // in it when the error happened, so their narrowings are dropped for the catch block.
+      pushScope();
+      checkStmt(s->body);
+      popScope();
+      invalidateAssigned(s->body);
+      pushScope();
+      if (!s->decls.empty()) {
+        VarDecl& d = s->decls[0];
+        if (d.type && !(d.type->k == TNK::Ref && d.type->name == "unknown" && d.type->args.empty()))
+          err(d.type->loc, "a catch variable can only be annotated as 'unknown'");
+        d.type = nullptr;
+        bindPattern(d, T.caught(), false, false, d.loc);
+      }
+      checkStmt(s->els);
+      popScope();
+      invalidateAssigned(s->body);
+      invalidateAssigned(s->els);
       break;
     }
     case SK::ForIn:

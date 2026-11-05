@@ -13,7 +13,8 @@ namespace e7 {
 enum class TT : uint8_t {
   Number, Bool, String, BigInt, Void, Null, Undefined, Never, Int,
   Array, Bytes, ArrayBuffer, DataView, Map, Set, Func, Class, Object, Tuple, Optional, Enum,
-  Handle, TextEncoder, TextDecoder, Error, Date, Unknown
+  Handle, TextEncoder, TextDecoder, Error, Date, Unknown,
+  Caught  // a catch variable: 'unknown' in TypeScript; narrow with instanceof Error
 };
 
 struct ObjShape;
@@ -194,6 +195,7 @@ class Types {
   Type* textEncoder() { return tenc_; }
   Type* textDecoder() { return tdec_; }
   Type* error() { return error_; }
+  Type* caught() { return caught_; }
   Type* date() { return date_; }
   Type* intT(uint8_t vt) { return ints_[vt]; }
   Type* array(Type* e);
@@ -212,7 +214,7 @@ class Types {
   Type* mk(TT t);
   std::vector<std::unique_ptr<Type>> all_;
   Type *number_, *bool_, *string_, *bigint_, *void_, *null_, *undef_, *never_, *unknown_, *bytes_, *abuf_, *dview_,
-      *handle_, *tenc_, *tdec_, *error_, *date_;
+      *handle_, *tenc_, *tdec_, *error_, *date_, *caught_;
   Type* ints_[VT__COUNT] = {};
   std::map<std::string, Type*> interned_;
 };

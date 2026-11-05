@@ -45,6 +45,7 @@ enum Intrinsic : int {
   IN_JSON_TRY_PARSE,      // tryParse(text) as T | null (e7:json)
   IN_OBJECT_KEYS,
   IN_ABORT,
+  IN_ERROR_IS,  // x instanceof TypeError (and the other Error names): compares the Error's name
   IN_ARR_LENGTH_SET,
   IN_DATE_CMP,           // relational comparison of two Dates (by time value)
 };

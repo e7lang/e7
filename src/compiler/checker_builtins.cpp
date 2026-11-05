@@ -861,6 +861,13 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
     }
     case TT::Error: {
       if (prop("message")) { native("Error.message"); return str; }
+      if (prop("name")) { native("Error.name"); return str; }
+      if (prop("stack")) return errT(e->loc, "Error.stack is not supported (stack traces differ between engines)");
+      if (meth("toString")) {
+        if (!argsMatch(e, args, {}, 0, "toString")) return T.unknown();
+        native("Error.toString");
+        return str;
+      }
       return noSuch();
     }
     case TT::Date: {

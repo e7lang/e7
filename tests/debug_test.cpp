@@ -466,6 +466,46 @@ static void testStopOnEntryAndExceptions() {
   e7_vm_free(vm);
 }
 
+// try/catch: a caught error is not a stop; the same error uncaught is (sync and pause-to-host)
+static void testCaughtErrors() {
+  const char* src =
+      "function risky(n: number): number {\n"
+      "  if (n > 1) throw new RangeError(\"big \" + n);\n"
+      "  return n;\n"
+      "}\n"
+      "export function handled(): number {\n"
+      "  let total = 0;\n"
+      "  for (let i = 0; i < 4; i++) {\n"
+      "    try { total += risky(i); } catch (e) { total += 100; }\n"
+      "  }\n"
+      "  return total;\n"
+      "}\n"
+      "export function unhandled(): number { return risky(5); }\n";
+  std::vector<uint8_t> bc = compileProgram(src, true);
+  e7_vm* vm = newVm();
+  Driver d;
+  e7_debug_attach(vm, driverFn, &d);
+  e7_module* mod = nullptr;
+  CHECK(e7_load(vm, bc.data(), bc.size(), &mod) == E7_OK);
+  e7_value ret;
+  CHECK(e7_call(vm, mod, "handled", nullptr, 0, &ret) == E7_OK && ret.v.num == 201);
+  CHECK(d.stops.empty());
+  CHECK(e7_call(vm, mod, "unhandled", nullptr, 0, &ret) == E7_ERR_RUNTIME);
+  CHECK(d.stops.size() == 1 && d.stops[0] == "exception risky@main.ts:2");
+  e7_vm_free(vm);
+
+  // pause-to-host mode
+  vm = newVm();
+  e7_debug_attach(vm, nullptr, nullptr);
+  CHECK(e7_load(vm, bc.data(), bc.size(), &mod) == E7_OK);
+  CHECK(e7_call(vm, mod, "handled", nullptr, 0, &ret) == E7_OK && ret.v.num == 201);
+  CHECK(e7_call(vm, mod, "unhandled", nullptr, 0, &ret) == E7_PAUSED);
+  e7_debug_stop st;
+  CHECK(e7_debug_stop_info(vm, &st) == E7_OK && st.reason == E7_STOP_EXCEPTION);
+  CHECK(e7_debug_resume(vm, E7_DEBUG_CONTINUE, &ret) == E7_ERR_RUNTIME);
+  e7_vm_free(vm);
+}
+
 static void testSortCallbackSync() {
   std::vector<uint8_t> bc = compileProgram(kMain, true);
   e7_vm* vm = newVm();
@@ -845,6 +885,7 @@ int main() {
   testClosuresAndImports();
   testBreakpointResolution();
   testStopOnEntryAndExceptions();
+  testCaughtErrors();
   testSortCallbackSync();
   testPauseFromThread();
   testHostMode();

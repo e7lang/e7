@@ -5,7 +5,10 @@
 > - Strings are always stored as UTF-16 (no dual Latin-1 representation; concatenation in loops is kept correct by a native implementation; see the README for performance).
 > - Instructions are fixed-width 64-bit (`op:16 A:16 B:16 C:16`) with up to 65535 registers, which is roomier than the originally planned 32-bit encoding.
 > - The planned "runtime quickening" was replaced by emitting typed instructions directly from static types; compare-and-jump fusion, constant register hoisting and loop inversion were also added.
-> - `throw new Error(msg)` is supported, with the semantics of terminating the script (there is still no `try/catch`).
+> - `throw new Error(msg)` is supported. Since 0.2 there is `try`/`catch` for the errors that Node.js also throws
+>   (per-function handler tables in the bytecode, checked by the verifier; see SPEC.md 3.1). E7-specific checks and
+>   resource limits still terminate the call; `finally` is not supported yet. Sections 1.x and 3.4 below describe the
+>   original no-exceptions plan.
 > - User-defined generics, getters/setters and coroutine syntax are deferred to E8; the VM already supports suspend/resume (`e7_resume`).
 > - Crypto libraries: BearSSL (RSA, ECDSA, AES, ChaCha20-Poly1305, SHA-1/2, HMAC, HKDF) + Monocypher (Ed25519/X25519);
 >   SHA-3/Keccak, PBKDF2 and RSA-PSS are in-house implementations. All are cross-checked against Node.js `node:crypto`. The Chinese national (SM) algorithms SM2/3/4 are not included.

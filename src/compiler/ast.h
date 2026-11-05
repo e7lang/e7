@@ -118,7 +118,8 @@ struct Expr {
 // ------------------------------------------------------------------ statements
 enum class SK {
   Var, Func, Class, Interface, TypeAlias, Enum, Expr, Block, If, While, DoWhile, For, ForOf, ForIn,
-  Return, Break, Continue, Switch, Labeled, Throw, Empty, Import, Export, Declare, Debugger
+  Return, Break, Continue, Switch, Labeled, Throw, Empty, Import, Export, Declare, Debugger,
+  Try  // body = try block, els = catch block, decls[0] = catch variable (if any)
 };
 
 struct VarDecl {

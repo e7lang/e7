@@ -693,7 +693,27 @@ class Parser {
         semi();
         return s;
       }
-      if (w == "try") fail("try/catch is not supported in E7 (errors cannot be caught); return an error value instead, e.g. a result object or null, and validate input before using it");
+      if (w == "try") {
+        i++;
+        Stmt* s = A.stmt(SK::Try, l);
+        s->body = parseBlock();
+        const char* noFinally =
+            "'finally' is not supported yet; run the cleanup after the try statement (and in the catch block)";
+        if (isKw("finally")) fail(noFinally);
+        if (!eatKw("catch")) fail("expected 'catch' after the try block");
+        if (eatP("(")) {
+          VarDecl d;
+          d.loc = loc();
+          if (isP("{") || isP("[")) fail("destructuring a caught error is not supported; use catch (e)");
+          d.name = ident();
+          if (eatP(":")) d.type = parseType();
+          expectP(")");
+          s->decls.push_back(d);
+        }
+        s->els = parseBlock();
+        if (isKw("finally")) fail(noFinally);
+        return s;
+      }
       if (w == "switch") return parseSwitch();
       if (w == "with") fail("'with' is not supported");
       if (w == "debugger") { i++; semi(); return A.stmt(SK::Debugger, l); }

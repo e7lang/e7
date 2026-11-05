@@ -105,7 +105,7 @@ class Debugger {
   void detaching();
   void moduleLoaded(ModuleRT* m);
   int check(const uint64_t* ip);  // debug interpreter slow path; returns 0 or ERR_PAUSED
-  void errorRaised(int code, const std::string& msg, const std::string& full);
+  void errorRaised(int code, const std::string& msg, const std::string& full, bool caught);
   bool takeErrorPause();  // host mode: an error stop is pending (VM keeps the frames)
   bool errorPending() const { return errorPending_; }
   int pendingErrorCode() const { return errCode_; }

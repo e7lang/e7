@@ -363,7 +363,7 @@ bool verifyModule(const Module& m, std::string& err) {
     }
     uint16_t lastOp = insOp(code[lastStart]);
     if (lastOp != OP_RET_I && lastOp != OP_RET_F && lastOp != OP_RET_R && lastOp != OP_RET_V &&
-        lastOp != OP_JMP && lastOp != OP_ABORT)
+        lastOp != OP_JMP && lastOp != OP_ABORT && lastOp != OP_THROW)
       return F("function %zu: code may fall off the end", fi);
   }
   return true;

@@ -12,7 +12,8 @@ std::string disassemble(const Module& m) {
   std::string out;
   char buf[512];
   auto add = [&](const char* fmt, auto... a) { snprintf(buf, sizeof buf, fmt, a...); out += buf; };
-  add("module %s\n", m.name.c_str());
+  add("module %s (requires e7vm %u.%u.%u)\n", m.name.c_str(), (unsigned)(m.minVm >> 16), (unsigned)((m.minVm >> 8) & 0xFF),
+      (unsigned)(m.minVm & 0xFF));
   for (size_t i = 0; i < m.natives.size(); i++)
     add("  native #%zu %s %s\n", i, m.natives[i].name.c_str(), m.sigs[m.natives[i].sig].c_str());
   for (size_t i = 0; i < m.globals.size(); i++) add("  global #%zu %s vt=%u\n", i, m.globals[i].name.c_str(), m.globals[i].vt);
@@ -26,6 +27,7 @@ std::string disassemble(const Module& m) {
     for (auto k : f.regKinds) kinds += "IFR"[k % 3];
     add("\nfunc #%zu %s sig=%s regs=%s up=%zu\n", fi, f.name.c_str(),
         f.sig < m.sigs.size() ? m.sigs[f.sig].c_str() : "?", kinds.c_str(), f.upvalKinds.size());
+    for (auto& h : f.handlers) add("  try [%u, %u) -> %u, error in r%u\n", h.start, h.end, h.handler, h.reg);
     size_t pc = 0;
     while (pc < f.code.size()) {
       uint64_t w = f.code[pc];

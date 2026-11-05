@@ -215,6 +215,8 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
         if (a->k == EK::Spread) return errT(a->loc, "spread is not supported in console.log");
         Type* t = check(a, nullptr);
         if (t->t == TT::Void) return errT(a->loc, "cannot print a void value");
+        if (t->t == TT::Error || t->t == TT::Caught)
+          return errT(a->loc, "console.log of an Error prints a stack trace in Node.js; print String(e) or e.message instead");
       }
       e->intrinsic = IN_CONSOLE_LOG;
       e->raw = (name == "warn" || name == "error") ? "error" : "log";
@@ -884,10 +886,14 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     e->intrinsic = IN_CONST_NUM;
     return T.textDecoder();
   }
-  if (name == "Error" || name == "TypeError" || name == "RangeError") {
+  if (name == "Error" || name == "TypeError" || name == "RangeError" || name == "SyntaxError" || name == "URIError") {
     if (args.size() == 1) { check(args[0], T.string()); coerce(args[0], T.string()); }
-    else if (!args.empty()) return errT(l, "Error takes at most one argument");
+    else if (!args.empty()) return errT(l, name + " takes at most one argument (options such as { cause } are not supported)");
     if (args.empty()) { Expr* sx = P.arena.expr(EK::Str, l); sx->type = T.string(); args.push_back(sx); }
+    Expr* nx = P.arena.expr(EK::Str, l);
+    nx->type = T.string();
+    nx->str = utf8ToUtf16(name);
+    args.insert(args.begin(), nx);
     nat("Error.new");
     return T.error();
   }
