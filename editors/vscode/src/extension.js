@@ -3,6 +3,7 @@ const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
 const { init, formatDiagnostics } = require("@e7lang/e7");
+const { activateDebug } = require("./debug");
 
 const E7_IMPORT = /\bfrom\s*["']e7:|\bimport\s*["']e7:/;
 const SCHEME = "e7-bytecode";
@@ -239,6 +240,7 @@ function activate(context) {
       if (e.affectsConfiguration("e7")) vscode.workspace.textDocuments.forEach((d) => checker.schedule(d, 0));
     }),
   );
+  activateDebug(context, { isE7Document });
   vscode.workspace.textDocuments.forEach((d) => checker.schedule(d, 0));
   status.update();
   return { isE7Document, getE7 };

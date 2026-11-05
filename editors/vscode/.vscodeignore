@@ -1,5 +1,6 @@
 **
 !dist/extension.js
+!dist/debugWorker.js
 !dist/e7wasm.wasm
 !syntaxes/**
 !language-configuration.json

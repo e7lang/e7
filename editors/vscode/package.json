@@ -1,7 +1,7 @@
 {
   "name": "e7",
   "displayName": "E7 Language",
-  "description": "E7 (strict TypeScript subset) diagnostics, run and bytecode commands, powered by the E7 compiler and VM on WebAssembly",
+  "description": "E7 (strict TypeScript subset) diagnostics, debugger, run and bytecode commands, powered by the E7 compiler and VM on WebAssembly",
   "version": "1.0.1",
   "publisher": "e7lang",
   "license": "MIT",
@@ -16,13 +16,14 @@
   "engines": {
     "vscode": "^1.90.0"
   },
-  "categories": ["Programming Languages", "Linters"],
-  "keywords": ["e7", "typescript", "sandbox", "bytecode", "vm"],
+  "categories": ["Programming Languages", "Linters", "Debuggers"],
+  "keywords": ["e7", "typescript", "sandbox", "bytecode", "vm", "debugger"],
   "main": "./dist/extension.js",
   "activationEvents": [
     "onLanguage:e7",
     "onLanguage:typescript",
-    "workspaceContains:**/*.e7"
+    "workspaceContains:**/*.e7",
+    "onDebugResolve:e7"
   ],
   "capabilities": {
     "untrustedWorkspaces": { "supported": true },
@@ -46,23 +47,103 @@
     ],
     "commands": [
       { "command": "e7.runFile", "title": "Run File", "category": "E7", "icon": "$(play)" },
+      { "command": "e7.debugFile", "title": "Debug File", "category": "E7", "icon": "$(debug-alt)" },
       { "command": "e7.compileFile", "title": "Compile to Bytecode", "category": "E7" },
       { "command": "e7.showBytecode", "title": "Show Bytecode", "category": "E7" }
     ],
     "menus": {
       "commandPalette": [
         { "command": "e7.runFile", "when": "e7.isE7File" },
+        { "command": "e7.debugFile", "when": "e7.isE7File" },
         { "command": "e7.compileFile", "when": "e7.isE7File" },
         { "command": "e7.showBytecode", "when": "e7.isE7File" }
       ],
       "editor/title/run": [
-        { "command": "e7.runFile", "when": "e7.isE7File", "group": "navigation" }
+        { "command": "e7.runFile", "when": "e7.isE7File", "group": "navigation@1" },
+        { "command": "e7.debugFile", "when": "e7.isE7File", "group": "navigation@2" }
       ],
       "editor/context": [
         { "command": "e7.runFile", "when": "e7.isE7File", "group": "e7@1" },
+        { "command": "e7.debugFile", "when": "e7.isE7File", "group": "e7@1" },
         { "command": "e7.showBytecode", "when": "e7.isE7File", "group": "e7@2" }
       ]
     },
+    "breakpoints": [
+      { "language": "e7" },
+      { "language": "typescript" }
+    ],
+    "debuggers": [
+      {
+        "type": "e7",
+        "label": "E7",
+        "languages": ["e7", "typescript"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "E7 script to debug (.e7 or .ts). Relative imports are resolved from its directory.",
+                "default": "${file}"
+              },
+              "call": {
+                "type": "string",
+                "description": "Exported function to call after the top-level statements. Default: main() if it is exported.",
+                "default": ""
+              },
+              "args": {
+                "type": "array",
+                "description": "Arguments for `call` (JSON values: numbers, strings, booleans, null).",
+                "default": []
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at the first statement.",
+                "default": false
+              },
+              "budget": {
+                "type": "number",
+                "description": "Instruction budget (0 = unlimited). Counted in time slices of 200,000 instructions.",
+                "default": 0
+              },
+              "memoryLimit": {
+                "type": "number",
+                "description": "VM heap limit in bytes.",
+                "default": 67108864
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "e7",
+            "request": "launch",
+            "name": "Debug E7 file",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "E7: Debug file",
+            "description": "Debug the current E7 file",
+            "body": { "type": "e7", "request": "launch", "name": "Debug E7 file", "program": "^\"\\${file}\"" }
+          },
+          {
+            "label": "E7: Debug a function",
+            "description": "Debug an exported function of an E7 script with arguments",
+            "body": {
+              "type": "e7",
+              "request": "launch",
+              "name": "Debug ${1:function}",
+              "program": "^\"\\${workspaceFolder}/${2:main.ts}\"",
+              "call": "${1:function}",
+              "args": [],
+              "stopOnEntry": true
+            }
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "E7",
       "properties": {
@@ -104,6 +185,7 @@
     "package": "node scripts/build.mjs && vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@vscode/debugadapter": "1.68.0",
     "@vscode/test-electron": "2.5.2",
     "@vscode/vsce": "3.9.2",
     "esbuild": "0.25.10",

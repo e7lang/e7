@@ -198,7 +198,8 @@ class E7 {
     m._e7w_files_clear();
     try {
       for (const [k, v] of files) this._withString(k, (kp) => this._withString(v, (vp, vl) => m._e7w_file_add(kp, vp, vl)));
-      const st = this._withString(source, (sp, sl) => this._withString(fileName, (np) => m._e7w_compile(sp, sl, np)));
+      const st = this._withString(source, (sp, sl) =>
+        this._withString(fileName, (np) => (options.debug ? m._e7w_compile_ex(sp, sl, np, 1) : m._e7w_compile(sp, sl, np))));
       if (st === 0) {
         const ptr = m._e7w_bytes_ptr();
         const len = m._e7w_bytes_len();
@@ -279,9 +280,7 @@ class E7 {
 
     return this._withBytes(bytes, (bp, bl) => {
       // host signature of the called function: decides integer / bigint conversions
-      let sig = null;
-      const list = this._json(m._e7w_exports(bp, bl));
-      if (list) sig = list.find((e) => e.name === (call || "main"))?.sig ?? null;
+      const sig = this._signature(bp, bl, call || "main");
       const params = sig ? sig.split(">")[0] : "";
       m._e7w_args_clear();
       args.forEach((a, i) => this._pushArg(a, params[i]));
@@ -297,6 +296,12 @@ class E7 {
       };
       return out;
     });
+  }
+
+  // host signature ("nn>n") of an exported function of a module, or null
+  _signature(bp, bl, name) {
+    const list = this._json(this._m._e7w_exports(bp, bl));
+    return list ? list.find((e) => e.name === name)?.sig ?? null : null;
   }
 
   _pushArg(a, code) {
@@ -348,6 +353,275 @@ export function formatDiagnostics(diagnostics) {
   return diagnostics.map((d) => `${d.file}:${d.line}:${d.column}: ${d.severity}: ${d.message}`).join("\n");
 }
 
+// ------------------------------------------------------------------ debugger
+// A debug session drives the JSON debugger protocol of tools/e7wasm.cpp (docs/DEBUGGING.md §7) on its
+// own WebAssembly instance. Script code runs in time slices: between two slices the session yields to
+// the event loop, so pause() / terminate() / setBreakpoints() calls get in while a script runs.
+
+export const DEFAULT_DEBUG_SLICE = 200_000;
+
+const yieldToEventLoop = () =>
+  new Promise((r) => (typeof setImmediate === "function" ? setImmediate(r) : setTimeout(r, 0)));
+
+class DebugSession {
+  constructor(e7, bytecode, options) {
+    this._e7 = e7;
+    this._m = e7._m;
+    this._bytecode = bytecode;
+    this._call = options.call ?? "";
+    this._args = options.args ?? [];
+    this._slice = options.slice > 0 && Number.isFinite(options.slice) ? Math.floor(options.slice) : DEFAULT_DEBUG_SLICE;
+    this._budget = options.budget > 0 && Number.isFinite(options.budget) ? options.budget : 0;
+    this._listeners = new Map();
+    this._state = "idle";
+    this._used = 0;
+    this._busy = null;
+    this._final = null;
+    this._autoEntry = false;
+    this.entry = options.entry;
+    const mem = options.memoryLimit ?? DEFAULT_MEMORY_LIMIT;
+    const seed = options.seed == null ? -1 : Number(options.seed);
+    this._m._e7w_dbg_create(mem > 0 && Number.isFinite(mem) ? mem : 0, seed, this._slice);
+    if (options.breakOnError === false) this._m._e7w_dbg_break_on_error(0);
+  }
+
+  /** "idle" (not launched), "running", "stopped" or "terminated". */
+  get state() {
+    return this._state;
+  }
+
+  on(event, listener) {
+    if (!this._listeners.has(event)) this._listeners.set(event, new Set());
+    this._listeners.get(event).add(listener);
+    return this;
+  }
+  off(event, listener) {
+    this._listeners.get(event)?.delete(listener);
+    return this;
+  }
+  _emit(event, value) {
+    for (const l of this._listeners.get(event) ?? []) {
+      try {
+        l(value);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }
+
+  _live() {
+    if (this._state === "terminated") throw new E7Error("the debug session has terminated");
+    return this._m;
+  }
+  _dbg(fn, ...strings) {
+    const m = this._live();
+    const go = (i, ptrs) =>
+      i === strings.length ? this._e7._json(m[fn](...ptrs)) : this._e7._withString(strings[i], (p) => go(i + 1, [...ptrs, p]));
+    return go(0, []);
+  }
+
+  /** Replaces the breakpoints of `file` (a path relative to the entry file's directory, or an absolute path). */
+  setBreakpoints(file, lines) {
+    if (this._state === "terminated") return lines.map((l) => ({ id: 0, requestedLine: l, line: l, verified: false }));
+    const list = (lines ?? []).map((l) => Math.floor(Number(l))).filter((l) => l > 0);
+    return this._dbg("_e7w_dbg_set_breakpoints", String(file), list.join(","));
+  }
+
+  /** All breakpoints with their current state (breakpoints set before launch() are verified once the code is loaded). */
+  breakpoints() {
+    return this._state === "terminated" ? [] : this._dbg("_e7w_dbg_breakpoints");
+  }
+
+  /** Stop on runtime errors that are about to terminate the script (default: on). */
+  setBreakOnError(enable) {
+    if (this._state !== "terminated") this._m._e7w_dbg_break_on_error(enable ? 1 : 0);
+  }
+
+  /** Loads the module and runs it until it stops or terminates. */
+  launch(options = {}) {
+    if (this._state !== "idle") return Promise.reject(new E7Error("launch(): the session was already launched"));
+    const e7 = this._e7;
+    const m = this._m;
+    let call = this._call;
+    const args = this._args;
+    if (!Array.isArray(args)) return Promise.reject(new TypeError("args must be an array"));
+    if (args.length && !call) call = "main";
+    // The script always starts with a stop at its first statement, so that top-level code runs in time
+    // slices too (pausable); unless stopOnEntry was asked for, that stop is skipped.
+    this._autoEntry = !options.stopOnEntry;
+    this._retCode = "";
+    return this._run(() =>
+      e7._withBytes(this._bytecode, (bp, bl) => {
+        const sig = e7._signature(bp, bl, call || "main");
+        this._retCode = sig ? sig.split(">")[1] : "";
+        const params = sig ? sig.split(">")[0] : "";
+        m._e7w_args_clear();
+        try {
+          args.forEach((a, i) => e7._pushArg(a, params[i]));
+          return e7._withString(call, (cp) => e7._json(m._e7w_dbg_launch(bp, bl, cp, 1)));
+        } finally {
+          m._e7w_args_clear();
+        }
+      }),
+    );
+  }
+
+  continue() {
+    return this._resume("continue");
+  }
+  next() {
+    return this._resume("next");
+  }
+  stepIn() {
+    return this._resume("stepIn");
+  }
+  stepOut() {
+    return this._resume("stepOut");
+  }
+
+  _resume(action) {
+    if (this._state === "terminated") return Promise.resolve(this._final);
+    if (this._state !== "stopped") return Promise.reject(new E7Error(`${action}(): the script is not stopped`));
+    return this._run(() => this._dbg("_e7w_dbg_resume", action));
+  }
+
+  /** Requests a stop at the next statement (takes effect between two time slices). */
+  pause() {
+    if (this._state === "running") this._m._e7w_dbg_pause();
+  }
+
+  async _run(first) {
+    this._state = "running";
+    this._emit("continued");
+    let p;
+    this._busy = p = this._loop(first);
+    try {
+      return await p;
+    } finally {
+      if (this._busy === p) this._busy = null;
+    }
+  }
+
+  async _loop(first) {
+    let ev;
+    try {
+      ev = first();
+    } catch (e) {
+      return this._finish({ event: "terminated", status: 12, result: { type: "void" }, error: String(e?.message ?? e), output: [] });
+    }
+    for (;;) {
+      if (this._state === "terminated") return this._final;
+      for (const line of ev.output ?? []) this._emit("output", line);
+      if (ev.event === "running") {
+        this._used += this._slice;
+        if (this._budget && this._used >= this._budget) {
+          const t = this._dbg("_e7w_dbg_terminate");
+          return this._finish({ ...t, status: 3, error: "instruction budget exhausted" });
+        }
+        await yieldToEventLoop();
+        if (this._state === "terminated") return this._final;
+        ev = this._dbg("_e7w_dbg_resume", "continue");
+      } else if (ev.event === "stopped") {
+        if (this._autoEntry && ev.reason === "entry") {
+          // the module is loaded (breakpoints are resolved): let the caller see that before the script runs
+          this._autoEntry = false;
+          await yieldToEventLoop();
+          if (this._state === "terminated") return this._final;
+          ev = this._dbg("_e7w_dbg_resume", "continue");
+          continue;
+        }
+        this._autoEntry = false;
+        this._state = "stopped";
+        const stop = { event: "stopped", reason: ev.reason, message: ev.message, breakpoints: ev.breakpoints, frame: ev.frame, output: ev.output ?? [] };
+        this._emit("stopped", stop);
+        return stop;
+      } else {
+        return this._finish(ev, true);
+      }
+    }
+  }
+
+  _finish(ev, outputEmitted = false) {
+    if (this._state === "terminated") return this._final;
+    if (!outputEmitted) for (const line of ev.output ?? []) this._emit("output", line);
+    const code = ev.status ?? 0;
+    this._final = {
+      event: "terminated",
+      ok: code === 0,
+      status: code === -1 ? "aborted" : STATUS[code] ?? `status_${code}`,
+      code,
+      result: code === 0 && ev.result ? fromValue(ev.result, this._retCode ?? "") : undefined,
+      error: code === 0 ? null : ev.error || null,
+      output: ev.output ?? [],
+    };
+    this._state = "terminated";
+    this._m = null;
+    this._emit("terminated", this._final);
+    return this._final;
+  }
+
+  /** Call stack, innermost frame first (id 0). Empty unless stopped. */
+  stack() {
+    return this._state === "stopped" ? this._dbg("_e7w_dbg_stack") : [];
+  }
+  /** Scopes of a frame: Locals, Closure, Globals ({ name, ref, count }). */
+  scopes(frameId = 0) {
+    return this._state === "stopped" ? this._json(this._m._e7w_dbg_scopes(Number(frameId))) : [];
+  }
+  /** Children of a scope or of an expandable value (ref > 0). count 0 = all. */
+  variables(ref, start = 0, count = 0) {
+    if (this._state !== "stopped") return [];
+    return this._json(this._m._e7w_dbg_variables(Number(ref), Number(start) || 0, Number(count) || 0));
+  }
+  /** Evaluates a variable path (`a.b[0]['k'].length`) in a frame. Throws E7Error when it cannot. */
+  evaluate(frameId, expression) {
+    if (this._state !== "stopped") throw new E7Error("evaluate(): the script is not stopped");
+    const m = this._m;
+    const r = this._e7._withString(String(expression), (p) => this._e7._json(m._e7w_dbg_evaluate(Number(frameId) || 0, p)));
+    if (!r.ok) throw new E7Error(r.error || "cannot evaluate");
+    const { ok: _ok, ...v } = r;
+    return v;
+  }
+  _json(p) {
+    return this._e7._json(p);
+  }
+
+  /** Ends the session; a script that is still running or stopped is aborted. */
+  terminate() {
+    if (this._state === "terminated") return this._final;
+    const idle = this._state === "idle";
+    const ev = this._dbg("_e7w_dbg_terminate");
+    return this._finish(idle ? ev : { ...ev, status: -1, error: "terminated by the debugger" });
+  }
+}
+
+function initArgs(options) {
+  const args = {};
+  if (options.wasmBinary) args.wasmBinary = options.wasmBinary;
+  if (options.locateFile) args.locateFile = options.locateFile;
+  if (options.wasmURL) args.locateFile = (f) => (f.endsWith(".wasm") ? String(options.wasmURL) : f);
+  return args;
+}
+
+/**
+ * Compiles a program with debug information and creates a debug session for it on a new WebAssembly
+ * instance. Throws E7Error (with diagnostics) on compile errors.
+ */
+export async function createDebugSession(options = {}) {
+  const entry = options.entry || options.fileName || "main.ts";
+  let source = options.source;
+  if (source == null && options.files) source = options.files[entry];
+  if (source == null && typeof options.readFile === "function") source = options.readFile(entry);
+  if (typeof source !== "string") throw new TypeError(`createDebugSession(): no source for ${entry}`);
+  const files = { ...(options.files || {}) };
+  delete files[entry];
+  const m = await createE7(initArgs(options));
+  const e7 = new E7(m);
+  const r = e7.compile(source, { fileName: entry, files, readFile: options.readFile, debug: true });
+  if (!r.ok) throw new E7Error(formatDiagnostics(r.diagnostics), r.diagnostics);
+  return new DebugSession(e7, r.bytecode, { ...options, entry });
+}
+
 // ------------------------------------------------------------------ module-level (lazy) API
 let pending = null;
 
@@ -357,11 +631,7 @@ let pending = null;
  */
 export function init(options = {}) {
   if (!pending) {
-    const args = {};
-    if (options.wasmBinary) args.wasmBinary = options.wasmBinary;
-    if (options.locateFile) args.locateFile = options.locateFile;
-    if (options.wasmURL) args.locateFile = (f) => (f.endsWith(".wasm") ? String(options.wasmURL) : f);
-    pending = createE7(args).then((m) => new E7(m));
+    pending = createE7(initArgs(options)).then((m) => new E7(m));
     pending.catch(() => {
       pending = null;
     });
@@ -388,4 +658,4 @@ export const run = (input, options) => call("run", [input, options]);
 export const disassemble = (input, options) => call("disassemble", [input, options]);
 export const listExports = (input, options) => call("listExports", [input, options]);
 
-export default { init, compile, check, run, disassemble, listExports, formatDiagnostics, version };
+export default { init, compile, check, run, disassemble, listExports, formatDiagnostics, createDebugSession, version };

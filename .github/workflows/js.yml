@@ -13,7 +13,7 @@ name: JS
 #       permissions: { contents: write, id-token: write }
 on:
   push:
-    branches: [main]
+    branches: [main, feat/vscode-debug]
   pull_request:
   workflow_call:
     inputs:
@@ -118,7 +118,7 @@ jobs:
           ls node_modules/@e7lang/e7 node_modules/@e7lang/e7/wasm
       - name: Tests against the installed package
         working-directory: ${{ runner.temp }}/consumer
-        run: node --test test/api.test.mjs test/cli.test.mjs
+        run: node --test test/api.test.mjs test/cli.test.mjs test/debug.test.mjs
       - name: CLI from node_modules/.bin
         working-directory: ${{ runner.temp }}/consumer
         run: |
