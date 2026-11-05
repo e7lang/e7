@@ -384,7 +384,7 @@ console.log(first, second, rest.join(","));
 | `throw` | catchable | ends the call |
 | `Date` local time | host time zone | UTC |
 | `toUpperCase` / `localeCompare` | full Unicode / locale | Latin, Greek, Cyrillic / code units |
-| `console.log` of nested values | multi-line | single line |
+| `console.log` of an arrow function | `[Function: f]` | `[Function (anonymous)]` |
 
 Runtime errors (out of bounds, `null` access, failed `!`/`as`, integer division by zero, `throw`,
 `abort(msg)`, failed `JSON.parse` validation, exhausted instruction budget or memory) stop the current call; the

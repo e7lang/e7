@@ -297,7 +297,7 @@ static void testVariables() {
                  "m:Map=Map(1) { 'k1' => 1 };st:Set=Set(2) { 7, 8 };arr:Array=[ [Array], [Array] ];"
                  "rec:Object={ name: 'r', inner: [Object] };tup:tuple=[ 1, 't' ];"
                  "bytes:Uint8Array=Uint8Array(3) [ 0, 0, 0 ];nothing:null=null;"
-                 "c:function=[Function: <anonymous>];r:number=8;");
+                 "c:function=[Function (anonymous)];r:number=8;");
     // expand: class instance
     const Var* p = find(loc, "p");
     CHECK(p && p->ref && p->count == 2);

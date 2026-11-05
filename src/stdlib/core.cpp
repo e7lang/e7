@@ -1,7 +1,8 @@
 // Core natives: value conversion / formatting, console, globals, Number, Text, Object, Date.
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
-#include <unordered_set>
+#include <unordered_map>
 
 #include "util.h"
 
@@ -126,153 +127,664 @@ bool sameValueZero(VM& vm, Slot a, Slot b, uint8_t vt) {
   return strictEquals(vm, a, b, vt);
 }
 
-static bool isIdent(const std::string& s) {
-  if (s.empty()) return false;
-  if (!(isalpha((unsigned char)s[0]) || s[0] == '_' || s[0] == '$')) return false;
-  for (char c : s)
-    if (!(isalnum((unsigned char)c) || c == '_' || c == '$')) return false;
-  return true;
+// ------------------------------------------------------------------ util.inspect / console.log
+// A port of Node.js util.inspect (lib/internal/util/inspect.js) with the options console.log uses: depth 2,
+// breakLength 80, compact 3, maxArrayLength 100, maxStringLength 10000, no colors. The text is built as
+// UTF-8; the lengths Node.js measures in UTF-16 code units are computed with len16, display widths (used to
+// align grouped array columns) with textWidth.
+namespace {
+
+struct WidthRange {
+  uint32_t lo, hi;
+  uint8_t w;
+};
+const WidthRange kWidthRanges[] = {
+#include "inspect_width.inc"
+};
+
+int cpWidth(uint32_t cp) {
+  if (cp < 0x7F) return cp >= 0x20 ? 1 : 0;
+  size_t lo = 0, hi = sizeof kWidthRanges / sizeof kWidthRanges[0];
+  while (lo < hi) {
+    size_t mid = (lo + hi) / 2;
+    if (kWidthRanges[mid].hi < cp) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < sizeof kWidthRanges / sizeof kWidthRanges[0] && kWidthRanges[lo].lo <= cp ? kWidthRanges[lo].w : 1;
 }
 
-static std::string quoteSingle(const std::u16string& s) {
-  std::string body = utf16ToUtf8(s);
-  bool hasSingle = body.find('\'') != std::string::npos;
-  bool hasDouble = body.find('"') != std::string::npos;
-  char q = (hasSingle && !hasDouble) ? '"' : '\'';
-  std::string out(1, q);
-  for (char c : body) {
-    if (c == q) { out += '\\'; out += c; }
-    else if (c == '\n') out += "\\n";
-    else if (c == '\t') out += "\\t";
-    else if (c == '\r') out += "\\r";
-    else if (c == '\\') out += "\\\\";
-    else if ((unsigned char)c < 0x20) { char b[8]; snprintf(b, sizeof b, "\\x%02X", (unsigned char)c); out += b; }
-    else out += c;
+// UTF-16 length of UTF-8 text
+size_t len16(const std::string& s) {
+  size_t n = 0;
+  for (unsigned char c : s)
+    if ((c & 0xC0) != 0x80) n += c >= 0xF0 ? 2 : 1;
+  return n;
+}
+
+// display width (Node.js getStringWidth, code point by code point)
+size_t textWidth(const std::string& s) {
+  size_t w = 0;
+  for (size_t i = 0; i < s.size();) {
+    unsigned char c = (unsigned char)s[i];
+    if (c < 0x80) {
+      w += cpWidth(c);
+      i++;
+      continue;
+    }
+    int n = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : 2;
+    uint32_t cp = c & (n == 2 ? 0x1F : n == 3 ? 0x0F : 0x07);
+    for (int k = 1; k < n && i + k < s.size(); k++) cp = (cp << 6) | ((unsigned char)s[i + k] & 0x3F);
+    w += cpWidth(cp);
+    i += n;
+  }
+  return w;
+}
+
+void appendUtf8(std::string& out, uint32_t cp) {
+  if (cp < 0x80) out += (char)cp;
+  else if (cp < 0x800) {
+    out += (char)(0xC0 | (cp >> 6));
+    out += (char)(0x80 | (cp & 0x3F));
+  } else if (cp < 0x10000) {
+    out += (char)(0xE0 | (cp >> 12));
+    out += (char)(0x80 | ((cp >> 6) & 0x3F));
+    out += (char)(0x80 | (cp & 0x3F));
+  } else {
+    out += (char)(0xF0 | (cp >> 18));
+    out += (char)(0x80 | ((cp >> 12) & 0x3F));
+    out += (char)(0x80 | ((cp >> 6) & 0x3F));
+    out += (char)(0x80 | (cp & 0x3F));
+  }
+}
+
+// Node.js strEscape: single quotes unless the text contains one (then double quotes, or backticks when it
+// also contains a double quote), escapes for control characters, the quote and the backslash, \uXXXX for
+// lone surrogates.
+std::string quoteJS(const char16_t* p, size_t n) {
+  bool sq = false, dq = false, bt = false;
+  for (size_t i = 0; i < n; i++) {
+    char16_t c = p[i];
+    if (c == '\'') sq = true;
+    else if (c == '"') dq = true;
+    else if (c == '`' || (c == '$' && i + 1 < n && p[i + 1] == '{')) bt = true;
+  }
+  char q = '\'';
+  if (sq) q = !dq ? '"' : !bt ? '`' : '\'';
+  std::string out;
+  out.reserve(n + 2);
+  out += q;
+  char b[16];
+  for (size_t i = 0; i < n; i++) {
+    char16_t c = p[i];
+    if (c < 0x20 || (c >= 0x7F && c <= 0x9F)) {
+      switch (c) {
+        case '\b': out += "\\b"; break;
+        case '\t': out += "\\t"; break;
+        case '\n': out += "\\n"; break;
+        case '\f': out += "\\f"; break;
+        case '\r': out += "\\r"; break;
+        default: snprintf(b, sizeof b, "\\x%02X", (unsigned)c); out += b;
+      }
+    } else if (c == '\\') {
+      out += "\\\\";
+    } else if (c == '\'' && q == '\'') {
+      out += "\\'";
+    } else if (c < 0x80) {
+      out += (char)c;
+    } else if (c >= 0xD800 && c <= 0xDFFF) {
+      if (c <= 0xDBFF && i + 1 < n && p[i + 1] >= 0xDC00 && p[i + 1] <= 0xDFFF) {
+        appendUtf8(out, 0x10000 + ((uint32_t)(c - 0xD800) << 10) + (p[i + 1] - 0xDC00));
+        i++;
+      } else {
+        snprintf(b, sizeof b, "\\u%x", (unsigned)c);
+        out += b;
+      }
+    } else {
+      appendUtf8(out, c);
+    }
   }
   out += q;
   return out;
 }
 
-static std::string inspectRec(VM& vm, Slot v, uint8_t vt, int depth, bool top, std::unordered_set<Obj*>& seen) {
-  if (vt == VT_NUMBER) {
-    if (v.f == 0 && std::signbit(v.f)) return "-0";
-    return numberToString(v.f);
-  }
-  if (vt != VT_REF) return utf16ToUtf8(intToU16(v.i, vt));
-  Obj* o = v.r;
-  if (!o) return "null";
-  if (o == vm.undef()) return "undefined";
-  switch (o->type) {
-    case OT::String: {
-      auto* s = static_cast<StrObj*>(o);
-      return top ? strUtf8(s) : quoteSingle(strU16(s));
-    }
-    case OT::Box: {
-      auto* b = static_cast<BoxObj*>(o);
-      if (b->flags & 1) return b->v.f != b->v.f ? "Invalid Date" : dateToISO(b->v.f);
-      return inspectRec(vm, b->v, b->vt, depth, top, seen);
-    }
-    case OT::BigInt: return bigToString(static_cast<BigObj*>(o), 10) + "n";
-    case OT::Closure: {
-      std::string nm = static_cast<CloObj*>(o)->fn->name;
-      if (nm.empty() || nm[0] == '<') return "[Function (anonymous)]";
-      size_t dot = nm.find_last_of('.');
-      if (dot != std::string::npos) nm = nm.substr(dot + 1);
-      return "[Function: " + nm + "]";
-    }
-    case OT::Handle: return "KeyHandle {}";
-    case OT::Buffer: return "ArrayBuffer { byteLength: " + std::to_string(static_cast<BufObj*>(o)->len) + " }";
-    default: break;
-  }
-  if (seen.count(o)) return "[Circular *1]";
-  StrObj *en, *em;
-  if (vm.errorParts(o, &en, &em))  // the compiler rejects printing Errors (Node prints a stack trace)
-    return em->len ? strUtf8(en) + ": " + strUtf8(em) : strUtf8(en);
-  if (o->type == OT::Array) {
-    auto* a = static_cast<ArrObj*>(o);
-    if (a->len == 0) return "[]";
-    if (depth > 2) return "[Array]";
-    seen.insert(o);
-    std::string out = "[ ";
-    uint32_t shown = a->len > 100 ? 100 : a->len;
-    for (uint32_t i = 0; i < shown; i++) {
-      if (i) out += ", ";
-      out += inspectRec(vm, a->data[i], a->vt, depth + 1, false, seen);
-    }
-    if (a->len > shown) out += ", ... " + std::to_string(a->len - shown) + " more items";
-    out += " ]";
-    seen.erase(o);
-    return out;
-  }
-  if (o->type == OT::Bytes) {
-    auto* b = static_cast<BytesObj*>(o);
-    std::string out = "Uint8Array(" + std::to_string(b->len) + ") [";
-    if (b->len == 0) return out + "]";
-    out += " ";
-    uint32_t shown = b->len > 100 ? 100 : b->len;
-    for (uint32_t i = 0; i < shown; i++) {
-      if (i) out += ", ";
-      out += std::to_string(b->ptr()[i]);
-    }
-    if (b->len > shown) out += ", ... " + std::to_string(b->len - shown) + " more items";
-    return out + " ]";
-  }
-  if (o->type == OT::Map) {
-    auto* m = static_cast<MapObj*>(o);
-    std::string out = std::string(m->isSet ? "Set(" : "Map(") + std::to_string(m->count) + ") {";
-    if (m->count == 0) return out + "}";
-    if (depth > 2) return m->isSet ? "[Set]" : "[Map]";
-    seen.insert(o);
-    out += " ";
-    bool first = true;
-    for (auto& e : m->entries) {
-      if (!e.live) continue;
-      if (!first) out += ", ";
-      first = false;
-      out += inspectRec(vm, e.k, m->kvt, depth + 1, false, seen);
-      if (!m->isSet) out += " => " + inspectRec(vm, e.v, m->vvt, depth + 1, false, seen);
-    }
-    seen.erase(o);
-    return out + " }";
-  }
-  if (o->type == OT::Instance && static_cast<InstObj*>(o)->cls->isTuple) {
-    auto* in = static_cast<InstObj*>(o);
-    if (in->cls->nfields == 0) return "[]";
-    if (depth > 2) return "[Array]";
-    seen.insert(o);
-    std::string out = "[ ";
-    for (uint32_t i = 0; i < in->cls->nfields; i++) {
-      if (i) out += ", ";
-      out += inspectRec(vm, in->fields()[i], in->cls->fieldVT[i], depth + 1, false, seen);
-    }
-    seen.erase(o);
-    return out + " ]";
-  }
-  if (o->type == OT::Instance) {
-    auto* in = static_cast<InstObj*>(o);
-    ClassRT* c = in->cls;
-    std::string prefix = c->isRecord ? "" : c->name + " ";
-    if (c->nfields == 0) return prefix + "{}";
-    if (depth > 2) return c->isRecord ? "[Object]" : "[" + c->name + "]";
-    seen.insert(o);
-    std::string out = prefix + "{ ";
-    bool first = true;
-    for (uint32_t i = 0; i < c->nfields; i++) {
-      Slot fv = in->fields()[i];
-      if (!first) out += ", ";
-      first = false;
-      const std::string& k = c->fieldNames[i];
-      out += (isIdent(k) ? k : quoteSingle(utf8ToUtf16(k))) + ": " + inspectRec(vm, fv, c->fieldVT[i], depth + 1, false, seen);
-    }
-    seen.erase(o);
-    return out + " }";
-  }
-  return "[object]";
+// property names printed without quotes (Node.js keyStrRegExp: no '$')
+bool isPlainKey(const std::string& s) {
+  if (s.empty() || !(isalpha((unsigned char)s[0]) || s[0] == '_')) return false;
+  for (char c : s)
+    if (!(isalnum((unsigned char)c) || c == '_')) return false;
+  return true;
 }
 
+// canonical array index ("0", "17", up to 2^32 - 2): JavaScript lists such keys first, in ascending order
+bool arrayIndexKey(const std::string& s, uint64_t& v) {
+  if (s.empty() || s.size() > 10 || (s.size() > 1 && s[0] == '0')) return false;
+  v = 0;
+  for (char c : s) {
+    if (c < '0' || c > '9') return false;
+    v = v * 10 + (uint64_t)(c - '0');
+  }
+  return v <= 0xFFFFFFFEull;
+}
+
+std::string formatNumber(double d) {
+  if (d == 0 && std::signbit(d)) return "-0";
+  return numberToString(d);
+}
+
+std::string remainingText(uint64_t n) { return "... " + std::to_string(n) + " more item" + (n > 1 ? "s" : ""); }
+
+std::string functionBase(const CloObj* c) {
+  std::string nm = c->fn->name;
+  size_t dot = nm.find_last_of('.');
+  if (dot != std::string::npos) nm = nm.substr(dot + 1);
+  if (nm.empty() || nm[0] == '<') return "[Function (anonymous)]";
+  return "[Function: " + nm + "]";
+}
+
+constexpr uint32_t kMaxArrayLength = 100;
+constexpr size_t kMaxStringLength = 10000;
+constexpr long kBreakLength = 80;
+constexpr int kCompact = 3;
+
+struct Inspector {
+  VM& vm;
+  int depth = 2;            // levels of nested objects shown (deeper ones print as [Array], [Object], ...)
+  bool lines = true;        // false: everything on one line, no column grouping (messages, debugger)
+  bool showHidden = false;  // console.log's %o
+  long indent = 0;          // Node.js ctx.indentationLvl
+  int currentDepth = 0;
+  std::vector<Obj*> seen;   // objects being formatted (ancestors)
+  std::unordered_map<Obj*, size_t> circular;  // targets of [Circular *n] -> n
+  size_t produced = 0;      // bytes of text built so far (bounded by the memory limit)
+
+  explicit Inspector(VM& v) : vm(v) {}
+
+  void account(size_t n) {
+    produced += n;
+    vm.checkTemp(produced);
+  }
+
+  std::string value(Slot v, uint8_t vt, int rt, bool typedArray = false) {
+    if (vt == VT_NUMBER) return formatNumber(v.f);
+    if (vt != VT_REF) return utf16ToUtf8(intToU16(v.i, vt));
+    Obj* o = v.r;
+    if (!o) return "null";
+    if (o == vm.undef()) return "undefined";
+    switch (o->type) {
+      case OT::String: return string(static_cast<StrObj*>(o));
+      case OT::Box: {
+        auto* b = static_cast<BoxObj*>(o);
+        if (b->flags & 1) return b->v.f != b->v.f ? "Invalid Date" : dateToISO(b->v.f);
+        return value(b->v, b->vt, rt, typedArray);
+      }
+      case OT::BigInt: return bigToString(static_cast<BigObj*>(o), 10) + "n";
+      case OT::Closure: return functionBase(static_cast<CloObj*>(o));
+      case OT::Handle: return "KeyHandle {}";
+      default: break;
+    }
+    for (Obj* s : seen)
+      if (s == o) {
+        auto it = circular.find(o);
+        size_t idx = it != circular.end() ? it->second : circular.size() + 1;
+        if (it == circular.end()) circular[o] = idx;
+        return "[Circular *" + std::to_string(idx) + "]";
+      }
+    return raw(o, rt, typedArray);
+  }
+
+  // Node.js formatPrimitive for strings: truncated after maxStringLength; a long string with line breaks is
+  // split after each '\n' into quoted pieces joined with " +".
+  std::string string(const StrObj* s) {
+    const char16_t* p = s->chars();
+    size_t n = s->len;
+    std::string trailer;
+    if (n > kMaxStringLength) {
+      size_t rem = n - kMaxStringLength;
+      n = kMaxStringLength;
+      trailer = "... " + std::to_string(rem) + " more character" + (rem > 1 ? "s" : "");
+    }
+    std::string r;
+    if (lines && n > 16 && (long)n > kBreakLength - indent - 4) {
+      std::string sep = " +\n" + std::string((size_t)(indent + 2), ' ');
+      size_t start = 0;
+      for (size_t i = 0; i < n; i++)
+        if (p[i] == '\n') {
+          if (start) r += sep;
+          r += quoteJS(p + start, i + 1 - start);
+          start = i + 1;
+        }
+      if (start < n) {
+        if (start) r += sep;
+        r += quoteJS(p + start, n - start);
+      }
+    } else {
+      r = quoteJS(p, n);
+    }
+    r += trailer;
+    account(r.size());
+    return r;
+  }
+
+  static bool numericSlot(Slot v, uint8_t vt) {
+    if (vt == VT_BOOL) return false;
+    if (vt != VT_REF) return true;
+    Obj* o = v.r;
+    if (!o) return false;
+    if (o->type == OT::BigInt) return true;
+    if (o->type != OT::Box || (o->flags & 1)) return false;
+    auto* b = static_cast<BoxObj*>(o);
+    return numericSlot(b->v, b->vt);
+  }
+
+  std::string raw(Obj* o, int rt, bool typedArray) {
+    StrObj *en, *em;
+    if (vm.errorParts(o, &en, &em))  // the compiler rejects printing Errors (Node.js prints a stack trace)
+      return em->len ? strUtf8(en) + ": " + strUtf8(em) : strUtf8(en);
+    std::string brace0, ctor;
+    const char* brace1 = "}";
+    bool arrayLike = false;
+    std::vector<uint32_t> fields;  // visible fields of an instance, in JavaScript property order
+    switch (o->type) {
+      case OT::Array: {
+        if (static_cast<ArrObj*>(o)->len == 0 && !showHidden) return "[]";
+        brace0 = "[", brace1 = "]", ctor = "Array", arrayLike = true;
+        break;
+      }
+      case OT::Bytes: {
+        uint32_t len = static_cast<BytesObj*>(o)->len;
+        brace0 = "Uint8Array(" + std::to_string(len) + ") [", brace1 = "]", ctor = "Uint8Array", arrayLike = true;
+        if (len == 0 && !showHidden) return brace0 + "]";
+        break;
+      }
+      case OT::Buffer: {
+        if (typedArray) return "ArrayBuffer { [byteLength]: " + std::to_string(static_cast<BufObj*>(o)->len) + " }";
+        brace0 = "ArrayBuffer {", ctor = "ArrayBuffer";
+        break;
+      }
+      case OT::Map: {
+        auto* m = static_cast<MapObj*>(o);
+        ctor = m->isSet ? "Set" : "Map";
+        brace0 = ctor + "(" + std::to_string(m->count) + ") {";
+        if (m->count == 0) return brace0 + "}";
+        break;
+      }
+      case OT::Instance: {
+        ClassRT* c = static_cast<InstObj*>(o)->cls;
+        if (c->isTuple) {
+          if (c->nfields == 0 && !showHidden) return "[]";
+          brace0 = "[", brace1 = "]", ctor = "Array", arrayLike = true;
+          break;
+        }
+        Slot* fv = static_cast<InstObj*>(o)->fields();
+        bool numericKeys = false;
+        for (uint32_t i = 0; i < c->nfields; i++) {
+          // a record field holding undefined is a missing optional property (JSON.stringify and spread
+          // treat it the same way); class fields are always own properties in JavaScript
+          if (c->isRecord && c->fieldVT[i] == VT_REF && fv[i].r == vm.undef()) continue;
+          fields.push_back(i);
+          if (!c->fieldNames[i].empty() && c->fieldNames[i][0] >= '0' && c->fieldNames[i][0] <= '9') numericKeys = true;
+        }
+        if (numericKeys) {
+          std::vector<std::pair<uint64_t, uint32_t>> idx;
+          std::vector<uint32_t> rest;
+          for (uint32_t i : fields) {
+            uint64_t k;
+            if (arrayIndexKey(c->fieldNames[i], k)) idx.push_back({k, i});
+            else rest.push_back(i);
+          }
+          std::stable_sort(idx.begin(), idx.end(), [](auto& x, auto& y) { return x.first < y.first; });
+          fields.clear();
+          for (auto& e : idx) fields.push_back(e.second);
+          fields.insert(fields.end(), rest.begin(), rest.end());
+        }
+        std::string prefix = c->isRecord ? "" : c->name + " ";
+        if (fields.empty()) return prefix + "{}";
+        brace0 = prefix + "{", ctor = c->isRecord ? "Object" : c->name;
+        break;
+      }
+      default: return "[object]";
+    }
+    if (rt > depth) return "[" + ctor + "]";
+    rt++;
+    seen.push_back(o);
+    currentDepth = rt;
+    std::vector<std::string> out;
+    bool numeric = false;  // grouped columns are right-aligned when every entry is a number or bigint
+    switch (o->type) {
+      case OT::Array: {
+        auto* a = static_cast<ArrObj*>(o);
+        uint32_t shown = std::min(a->len, kMaxArrayLength);
+        for (uint32_t i = 0; i < shown; i++) out.push_back(item(a->data[i], a->vt, rt));
+        if (a->len > shown) out.push_back(remainingText(a->len - shown));
+        if (showHidden) out.push_back("[length]: " + std::to_string(a->len));
+        numeric = true;
+        for (size_t i = 0; i < out.size() && numeric; i++) numeric = i < a->len && numericSlot(a->data[i], a->vt);
+        break;
+      }
+      case OT::Bytes: {
+        auto* b = static_cast<BytesObj*>(o);
+        uint32_t shown = std::min(b->len, kMaxArrayLength);
+        for (uint32_t i = 0; i < shown; i++) out.push_back(std::to_string(b->ptr()[i]));
+        if (b->len > shown) out.push_back(remainingText(b->len - shown));
+        if (showHidden) {
+          out.push_back("[BYTES_PER_ELEMENT]: 1");
+          out.push_back("[length]: " + std::to_string(b->len));
+          out.push_back("[byteLength]: " + std::to_string(b->len));
+          out.push_back("[byteOffset]: " + std::to_string(b->off));
+          indent += 2;
+          out.push_back("[buffer]: " + value(slotR(b->buf), VT_REF, rt, true));
+          indent -= 2;
+        }
+        numeric = out.size() <= b->len;
+        break;
+      }
+      case OT::Buffer: {
+        auto* b = static_cast<BufObj*>(o);
+        static const char* hex = "0123456789abcdef";
+        uint32_t shown = std::min(b->len, kMaxArrayLength);
+        std::string s = "[Uint8Contents]: <";
+        for (uint32_t i = 0; i < shown; i++) {
+          if (i) s += ' ';
+          s += hex[b->data[i] >> 4];
+          s += hex[b->data[i] & 15];
+        }
+        if (b->len > shown) {
+          uint32_t rem = b->len - shown;
+          s += " ... " + std::to_string(rem) + " more byte" + (rem > 1 ? "s" : "");
+        }
+        out.push_back(s + ">");
+        out.push_back("[byteLength]: " + std::to_string(b->len));
+        break;
+      }
+      case OT::Map: {
+        auto* m = static_cast<MapObj*>(o);
+        indent += 2;
+        uint32_t i = 0;
+        for (size_t k = 0; k < m->entries.size() && i < kMaxArrayLength; k++) {
+          const MapEntry& e = m->entries[k];
+          if (!e.live) continue;
+          i++;
+          if (m->isSet) out.push_back(value(e.k, m->kvt, rt));
+          else {
+            std::string key = value(e.k, m->kvt, rt);
+            out.push_back(key + " => " + value(e.v, m->vvt, rt));
+          }
+        }
+        if (m->count > i) out.push_back(remainingText(m->count - i));
+        indent -= 2;
+        break;
+      }
+      case OT::Instance: {
+        auto* in = static_cast<InstObj*>(o);
+        ClassRT* c = in->cls;
+        if (c->isTuple) {
+          for (uint32_t i = 0; i < c->nfields; i++) out.push_back(item(in->fields()[i], c->fieldVT[i], rt));
+          if (showHidden) out.push_back("[length]: " + std::to_string(c->nfields));
+          numeric = true;
+          for (size_t i = 0; i < out.size() && numeric; i++)
+            numeric = i < c->nfields && numericSlot(in->fields()[i], c->fieldVT[i]);
+          break;
+        }
+        for (uint32_t i : fields) {
+          const std::string& k = c->fieldNames[i];
+          std::u16string k16 = isPlainKey(k) ? std::u16string() : utf8ToUtf16(k);
+          std::string name = isPlainKey(k) ? k : quoteJS(k16.data(), k16.size());
+          out.push_back(name + ": " + item(in->fields()[i], c->fieldVT[i], rt));
+        }
+        break;
+      }
+      default: break;
+    }
+    seen.pop_back();
+    std::string base;
+    auto it = circular.find(o);
+    if (it != circular.end()) base = "<ref *" + std::to_string(it->second) + ">";
+    std::string res = reduce(out, base, brace0, brace1, arrayLike, rt, numeric);
+    account(res.size());
+    return res;
+  }
+
+  // an array element or property value (Node.js formatProperty: two more columns of indentation)
+  std::string item(Slot v, uint8_t vt, int rt) {
+    indent += 2;
+    std::string s = value(v, vt, rt);
+    indent -= 2;
+    return s;
+  }
+
+  // Node.js groupArrayElements: more than 6 short entries are laid out in aligned columns
+  std::vector<std::string> group(std::vector<std::string>& out, bool numeric) {
+    size_t total = 0, maxLen = 0, outLen = out.size();
+    if (kMaxArrayLength < out.size()) outLen--;  // the "... more items" entry
+    const size_t sep = 2;
+    std::vector<size_t> dataLen(outLen);
+    for (size_t i = 0; i < outLen; i++) {
+      size_t len = textWidth(out[i]);
+      dataLen[i] = len;
+      total += len + sep;
+      if (maxLen < len) maxLen = len;
+    }
+    size_t actualMax = maxLen + sep;
+    std::vector<std::string> tmp;
+    if ((long)(actualMax * 3) + indent < kBreakLength && ((double)total / (double)actualMax > 5 || maxLen <= 6)) {
+      double averageBias = std::sqrt((double)actualMax - (double)total / (double)out.size());
+      double biasedMax = std::max((double)actualMax - 3 - averageBias, 1.0);
+      double columns = std::min({std::floor(std::sqrt(2.5 * biasedMax * (double)outLen) / biasedMax + 0.5),
+                                 std::floor((double)(kBreakLength - indent) / (double)actualMax),
+                                 (double)kCompact * 4, 15.0});
+      if (columns <= 1) return std::move(out);
+      size_t cols = (size_t)columns;
+      std::vector<size_t> maxLineLength(cols);
+      for (size_t i = 0; i < cols; i++) {
+        size_t lineMax = 0;
+        for (size_t j = i; j < outLen; j += cols)
+          if (dataLen[j] > lineMax) lineMax = dataLen[j];
+        maxLineLength[i] = lineMax + sep;
+      }
+      for (size_t i = 0; i < outLen; i += cols) {
+        size_t max = std::min(i + cols, outLen);
+        std::string str;
+        size_t j = i;
+        for (; j < max - 1; j++) {
+          std::string cell = out[j] + ", ";
+          size_t target = maxLineLength[j - i] + len16(out[j]) - dataLen[j], have = len16(cell);
+          if (have < target) {
+            if (numeric) cell.insert(0, target - have, ' ');
+            else cell.append(target - have, ' ');
+          }
+          str += cell;
+        }
+        if (numeric) {
+          size_t target = maxLineLength[j - i] + len16(out[j]) - dataLen[j] - sep, have = len16(out[j]);
+          if (have < target) str.append(target - have, ' ');
+        }
+        str += out[j];
+        tmp.push_back(std::move(str));
+      }
+      if (kMaxArrayLength < out.size()) tmp.push_back(out[outLen]);
+      return tmp;
+    }
+    return std::move(out);
+  }
+
+  bool belowBreakLength(const std::vector<std::string>& out, size_t start, const std::string& base) {
+    size_t total = out.size() + start;
+    if (total + out.size() > (size_t)kBreakLength) return false;
+    for (const std::string& s : out) {
+      total += len16(s);
+      if (total > (size_t)kBreakLength) return false;
+    }
+    return base.find('\n') == std::string::npos;
+  }
+
+  // Node.js reduceToSingleString: one line when the entries fit in breakLength, otherwise one entry per line
+  std::string reduce(std::vector<std::string>& out, const std::string& base, const std::string& brace0,
+                     const char* brace1, bool arrayLike, int rt, bool numeric) {
+    std::string head = base.empty() ? brace0 : base + " " + brace0;
+    if (lines) {
+      size_t entries = out.size();
+      if (arrayLike && entries > 6) out = group(out, numeric);
+      if (currentDepth - rt < kCompact && entries == out.size()) {
+        size_t start = out.size() + (size_t)indent + len16(brace0) + len16(base) + 10;
+        if (belowBreakLength(out, start, base)) {
+          std::string joined = join(out, ", ");
+          if (joined.find('\n') == std::string::npos) return head + " " + joined + " " + brace1;
+        }
+      }
+    } else {
+      return head + " " + join(out, ", ") + " " + brace1;
+    }
+    std::string ind = "\n" + std::string((size_t)indent, ' ');
+    return head + ind + "  " + join(out, "," + ind + "  ") + ind + brace1;
+  }
+
+  static std::string join(const std::vector<std::string>& v, const std::string& sep) {
+    size_t n = 0;
+    for (auto& s : v) n += s.size() + sep.size();
+    std::string r;
+    r.reserve(n);
+    for (size_t i = 0; i < v.size(); i++) {
+      if (i) r += sep;
+      r += v[i];
+    }
+    return r;
+  }
+};
+
+std::string inspectArg(VM& vm, Slot v, uint8_t vt, int depth, bool hidden) {
+  Inspector in(vm);
+  in.depth = depth;
+  in.showHidden = hidden;
+  return in.value(v, vt, 0);
+}
+
+// unwrap boxed primitives (nullable numbers / integers)
+void unbox(Slot& v, uint8_t& vt) {
+  while (vt == VT_REF && v.r && v.r->type == OT::Box && !(v.r->flags & 1)) {
+    auto* b = static_cast<BoxObj*>(v.r);
+    v = b->v;
+    vt = b->vt;
+  }
+}
+
+// JavaScript Number(x)
+double toNumberJS(VM& vm, Slot v, uint8_t vt) {
+  if (vt == VT_NUMBER) return v.f;
+  if (vt == VT_U64) return (double)(uint64_t)v.i;
+  if (vt != VT_REF) return (double)v.i;
+  Obj* o = v.r;
+  if (!o) return 0;
+  if (o == vm.undef()) return NAN;
+  switch (o->type) {
+    case OT::String: return stringToNumber(strU16(static_cast<StrObj*>(o)));
+    case OT::Box: return static_cast<BoxObj*>(o)->v.f;  // a Date (unboxed before otherwise)
+    case OT::BigInt: return bigToDouble(static_cast<BigObj*>(o));
+    case OT::Array:
+    case OT::Bytes: return stringToNumber(valueToString(vm, v, vt));
+    case OT::Instance:
+      if (static_cast<InstObj*>(o)->cls->isTuple) return stringToNumber(valueToString(vm, v, vt));
+      return NAN;
+    default: return NAN;
+  }
+}
+
+bool hasToStringMethod(const ClassRT* c) {
+  for (; c; c = c->parent)
+    if (c->methodIndex.count("toString")) return true;
+  return false;
+}
+
+// one console.log substitution (%s %d %i %f %j %o %O)
+std::string substitute(VM& vm, char16_t conv, Slot v, uint8_t vt) {
+  unbox(v, vt);
+  bool big = vt == VT_REF && v.r && v.r->type == OT::BigInt;
+  switch (conv) {
+    case 's': {
+      if (vt == VT_NUMBER) return formatNumber(v.f);
+      if (big) return bigToString(static_cast<BigObj*>(v.r), 10) + "n";
+      Obj* o = vt == VT_REF ? v.r : nullptr;
+      // String(x) unless x has the toString of a global built-in (Node.js hasBuiltInToString): Uint8Array's
+      // comes from %TypedArray%, a class's own toString method is its own
+      if (!o || o == vm.undef() || o->type == OT::String || o->type == OT::Closure || o->type == OT::Bytes ||
+          (o->type == OT::Instance && hasToStringMethod(static_cast<InstObj*>(o)->cls)))
+        return utf16ToUtf8(valueToString(vm, v, vt));
+      return inspectArg(vm, v, vt, 0, false);
+    }
+    case 'd':
+      if (big) return bigToString(static_cast<BigObj*>(v.r), 10) + "n";
+      return formatNumber(toNumberJS(vm, v, vt));
+    case 'i':
+      if (big) return bigToString(static_cast<BigObj*>(v.r), 10) + "n";
+      return formatNumber(parseIntJS(valueToString(vm, v, vt), 0));
+    case 'f': return formatNumber(parseFloatJS(valueToString(vm, v, vt)));
+    case 'j': return jsonForLog(vm, v, vt);
+    case 'O': return inspectArg(vm, v, vt, 2, false);
+    default: return inspectArg(vm, v, vt, 4, true);  // 'o'
+  }
+}
+
+// console.log arguments (Node.js formatWithOptions): printf-style substitutions in a first string argument,
+// other strings as they are, other values inspected, separated by spaces
+std::string formatLog(VM& vm, ArrObj* a) {
+  std::string str;
+  uint32_t i = 0;
+  bool join = false;
+  auto isString = [&](uint32_t k) { return a->vt == VT_REF && a->data[k].r && a->data[k].r->type == OT::String; };
+  if (a->len > 0 && isString(0)) {
+    auto* first = static_cast<StrObj*>(a->data[0].r);
+    if (a->len == 1) return strUtf8(first);
+    const char16_t* p = first->chars();
+    size_t n = first->len, lastPos = 0;
+    for (size_t k = 0; k + 1 < n; k++) {
+      if (p[k] != '%') continue;
+      char16_t next = p[++k];
+      if (i + 1 != a->len) {
+        std::string tmp;
+        switch (next) {
+          case 's': case 'd': case 'i': case 'f': case 'j': case 'o': case 'O':
+            i++;
+            tmp = substitute(vm, next, a->data[i], a->vt);
+            break;
+          case 'c': i++; break;
+          case '%':
+            str += utf16ToUtf8(p + lastPos, k - lastPos);
+            lastPos = k + 1;
+            continue;
+          default: continue;
+        }
+        if (lastPos != k - 1) str += utf16ToUtf8(p + lastPos, k - 1 - lastPos);
+        str += tmp;
+        lastPos = k + 1;
+        vm.checkTemp(str.size());
+      } else if (next == '%') {
+        str += utf16ToUtf8(p + lastPos, k - lastPos);
+        lastPos = k + 1;
+      }
+    }
+    if (lastPos != 0) {
+      i++;
+      join = true;
+      if (lastPos < n) str += utf16ToUtf8(p + lastPos, n - lastPos);
+    }
+  }
+  for (; i < a->len; i++) {
+    if (join) str += ' ';
+    str += isString(i) ? strUtf8(static_cast<StrObj*>(a->data[i].r)) : inspectArg(vm, a->data[i], a->vt, 2, false);
+    join = true;
+    vm.checkTemp(str.size());
+  }
+  return str;
+}
+
+}  // namespace
+
+// one value on a single line (assertion messages, debugger): `depth` nested levels are already used up
 std::string inspectValue(VM& vm, Slot v, uint8_t vt, int depth, bool top) {
-  std::unordered_set<Obj*> seen;
-  return inspectRec(vm, v, vt, depth, top, seen);
+  if (top && vt == VT_REF && v.r && v.r->type == OT::String) return strUtf8(static_cast<StrObj*>(v.r));
+  Inspector in(vm);
+  in.depth = 2 - depth;
+  in.lines = false;
+  return in.value(v, vt, 0);
 }
 
 // ------------------------------------------------------------------ natives
@@ -294,12 +806,7 @@ E7_NATIVE(n_valueTruthy) {
 E7_NATIVE(n_strictEq) { E7_UNUSED; r->i = strictEquals(vm, a[0], a[1], VT_REF); }
 
 static void logImpl(VM& vm, Slot arr, bool err) {
-  ArrObj* a = A(vm, arr);
-  std::string line;
-  for (uint32_t i = 0; i < a->len; i++) {
-    if (i) line += ' ';
-    line += inspectValue(vm, a->data[i], a->vt, 0, true);
-  }
+  std::string line = formatLog(vm, A(vm, arr));
   if (err && !vm.printFn) {
     fwrite(line.data(), 1, line.size(), stderr);
     fputc('\n', stderr);
