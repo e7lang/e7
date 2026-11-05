@@ -644,6 +644,224 @@ int main() {
     CHECK(e7_call(vm, m2, "small", nullptr, 0, &r) == E7_OK && r.v.num == 3);
     e7_vm_free(vm);
   }
+  // 0.2.5 (equivalence runs, budget slice 1): with suspension enabled, a native that charges its work
+  // up front (pbkdf2) failed with E7_ERR_BUDGET whenever the rest of the current slice was smaller than
+  // its work; it must complete and the call suspend at the next check instead. Without suspension the
+  // budget still stops it.
+  {
+    const char* src =
+        "import { pbkdf2 } from \"e7:crypto\";\n"
+        "import { hexEncode } from \"e7:encoding\";\n"
+        "export function derive(n: number): string {\n"
+        "  let t = 0;\n"
+        "  for (let i = 0; i < n; i++) t += i;\n"
+        "  const k = pbkdf2(\"sha256\", new TextEncoder().encode(\"pw\"), new TextEncoder().encode(\"salt\"), 3000, 32);\n"
+        "  for (let i = 0; i < n; i++) t += i;\n"
+        "  return hexEncode(k) + \":\" + t;\n"
+        "}\n";
+    std::vector<uint8_t> bc = compile(src);
+    e7_vm* plain = e7_vm_new(nullptr);
+    e7_module* pm = nullptr;
+    CHECK(e7_load(plain, bc.data(), bc.size(), &pm) == E7_OK);
+    e7_value n = num(50), r;
+    CHECK(e7_call(plain, pm, "derive", &n, 1, &r) == E7_OK && r.type == E7_STRING);
+    std::string want = r.type == E7_STRING ? std::string(r.v.str.ptr, r.v.str.len) : "";
+    e7_set_budget(plain, 1000);  // no suspension: the budget still stops the native
+    CHECK(e7_call(plain, pm, "derive", &n, 1, &r) == E7_ERR_BUDGET);
+    e7_vm_free(plain);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.suspend_on_budget = 1;
+    e7_vm* vm = e7_vm_new(&cfg);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    for (int64_t slice : {1, 7, 100, 2999}) {
+      e7_set_budget(vm, slice);
+      e7_status st = e7_call(vm, m, "derive", &n, 1, &r);
+      int slices = 1;
+      while (st == E7_SUSPENDED && slices < 100000) {
+        e7_set_budget(vm, slice);
+        st = e7_resume(vm, &r);
+        slices++;
+      }
+      CHECK(st == E7_OK && r.type == E7_STRING && std::string(r.v.str.ptr, r.v.str.len) == want);
+    }
+    e7_vm_free(vm);
+  }
+  // 0.2.5 (coverage report): host natives receiving booleans, sized integers, Uint8Array and
+  // KeyHandle arguments; integer parameters of exported functions given numbers / booleans; argument
+  // types that cannot convert
+  {
+    const char* src =
+        "import type { KeyHandle } from \"e7:crypto\";\n"
+        "declare function describe(b: boolean, i: i32, u: u64, s: i8, y: Uint8Array, h: KeyHandle): string;\n"
+        "export function run(h: KeyHandle, n: i32, w: u16): string {\n"
+        "  return describe(n > 0, n, u64(18446744073709551615), i8(-128), new Uint8Array([7, 8, 9]), h) + \"/\" + w;\n"
+        "}\n";
+    std::vector<uint8_t> bc = compile(src);
+    e7_vm* vm = e7_vm_new(nullptr);
+    CHECK(e7_register_native(vm, "describe", "b581yh>s",
+                             [](e7_vm*, const e7_value* a, size_t n, e7_value* ret, void* user) -> e7_status {
+                               auto* out = static_cast<std::string*>(user);
+                               if (n != 6 || a[0].type != E7_BOOL || a[1].type != E7_INT || a[2].type != E7_UINT ||
+                                   a[3].type != E7_INT || a[4].type != E7_BYTES || a[5].type != E7_HANDLE)
+                                 return E7_ERR_RUNTIME;
+                               char b[160];
+                               snprintf(b, sizeof b, "%d %lld %llu %lld %zu:%d%d%d %lld", a[0].v.boolean,
+                                        (long long)a[1].v.i, (unsigned long long)a[2].v.u, (long long)a[3].v.i,
+                                        a[4].v.bytes.len, a[4].v.bytes.ptr[0], a[4].v.bytes.ptr[1],
+                                        a[4].v.bytes.ptr[2], (long long)a[5].v.handle);
+                               *out = b;
+                               ret->type = E7_STRING;
+                               ret->v.str.ptr = out->c_str();
+                               ret->v.str.len = out->size();
+                               return E7_OK;
+                             },
+                             &printed) == E7_OK);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_value args[3], r;
+    args[0].type = E7_HANDLE;
+    args[0].v.handle = 42;
+    args[1].type = E7_NUMBER;  // a number for an i32 parameter: converted like i32()
+    args[1].v.num = 4294967301.0;
+    args[2].type = E7_BOOL;  // a boolean for an integer parameter: 0 / 1
+    args[2].v.boolean = 1;
+    CHECK(e7_call(vm, m, "run", args, 3, &r) == E7_OK && r.type == E7_STRING &&
+          std::string(r.v.str.ptr, r.v.str.len) == "1 5 18446744073709551615 -128 3:789 42/1");
+    args[1].type = E7_INT;
+    args[1].v.i = -3;
+    args[2].type = E7_UINT;
+    args[2].v.u = 65537;  // wraps to u16
+    CHECK(e7_call(vm, m, "run", args, 3, &r) == E7_OK && r.type == E7_STRING &&
+          std::string(r.v.str.ptr, r.v.str.len) == "0 -3 18446744073709551615 -128 3:789 42/1");
+    args[2].type = E7_STRING;  // not an integer
+    args[2].v.str.ptr = "x";
+    args[2].v.str.len = 1;
+    CHECK(e7_call(vm, m, "run", args, 3, &r) == E7_ERR_ARGS && strstr(e7_last_error(vm), "expected an integer"));
+    args[2].type = E7_UINT;
+    args[0].type = E7_NUMBER;  // not a key handle
+    CHECK(e7_call(vm, m, "run", args, 3, &r) == E7_ERR_ARGS && strstr(e7_last_error(vm), "expected a key handle"));
+    e7_vm_free(vm);
+  }
+  // 0.2.5 (coverage report): the frame limit reached by a callback from a native (a sort comparator)
+  // ends the call with E7_ERR_STACK; the VM stays usable
+  {
+    const char* src =
+        "function deep(n: number): number {\n"
+        "  if (n > 0) return deep(n - 1) + 1;\n"
+        "  const a = [3, 1, 2];\n"
+        "  a.sort((x: number, y: number): number => x - y);\n"
+        "  return a[0];\n"
+        "}\n"
+        "export function run(n: number): number { return deep(n); }\n";
+    std::vector<uint8_t> bc = compile(src);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.max_frames = 16;
+    e7_vm* vm = e7_vm_new(&cfg);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    int ok = 0, inCallback = 0;
+    for (int n = 0; n < 20; n++) {
+      e7_value a = num(n), r;
+      e7_status st = e7_call(vm, m, "run", &a, 1, &r);
+      if (st == E7_OK) {
+        CHECK(r.v.num == n + 1);
+        ok++;
+      } else {
+        CHECK(st == E7_ERR_STACK && strstr(e7_last_error(vm), "stack overflow"));
+        if (strstr(e7_last_error(vm), "(native)")) inCallback++;
+      }
+    }
+    CHECK(ok > 5 && inCallback >= 1);
+    e7_value a = num(1), r;
+    CHECK(e7_call(vm, m, "run", &a, 1, &r) == E7_OK && r.v.num == 2);
+    e7_vm_free(vm);
+  }
+  // 0.2.5 (GC stress review): the garbage made inside a callback from a native (a sort comparator)
+  // was never collected before the native returned: sorting 50,000 numbers with a comparator that
+  // builds a string peaked at 150 MB and failed with an 8 MB limit. The collector now also runs during
+  // callbacks; the elements being sorted stay rooted even when the comparator empties the array.
+  {
+    const char* src =
+        "export function sortWithGarbage(n: number): number {\n"
+        "  const a: number[] = [];\n"
+        "  for (let i = 0; i < n; i++) a.push((i * 7919) % n);\n"
+        "  a.sort((x: number, y: number): number => { const s = \"cmp-\" + x + \"-\" + y; return s.length > 0 ? x - y : 0; });\n"
+        "  return a[0] + a[n - 1];\n"
+        "}\n"
+        "export function sortMutating(): string {\n"
+        "  const a: string[] = [];\n"
+        "  for (let i = 0; i < 300; i++) a.push(\"s\" + ((i * 37) % 300));\n"
+        "  let calls = 0;\n"
+        "  a.sort((x: string, y: string): number => {\n"
+        "    calls++;\n"
+        "    if (calls === 50) a.length = 0;\n"
+        "    if (calls === 60) for (let k = 0; k < 100; k++) a.push(\"new\" + k + \"-\" + calls);\n"
+        "    const t = x + \"|\" + y;\n"
+        "    return t.length > 0 && x < y ? -1 : x > y ? 1 : 0;\n"
+        "  });\n"
+        "  return a.length + \":\" + a[0] + \":\" + a[99];\n"
+        "}\n";
+    std::vector<uint8_t> bc = compile(src);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.memory_limit = 8u << 20;
+    e7_vm* vm = e7_vm_new(&cfg);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_value n = num(50000), r;
+    e7_status st = e7_call(vm, m, "sortWithGarbage", &n, 1, &r);
+    CHECK(st == E7_OK && r.v.num == 49999);
+    if (st != E7_OK) fprintf(stderr, "  %s\n", e7_last_error(vm));
+    for (int i = 0; i < 3; i++) {
+      CHECK(e7_call(vm, m, "sortMutating", nullptr, 0, &r) == E7_OK && r.type == E7_STRING);
+      e7_collect_garbage(vm);
+    }
+    e7_vm_free(vm);
+  }
+  // 0.2.5 (allocation-failure injection): a module whose initializer failed (memory error, runtime
+  // error) stayed in the VM with its constants and the globals it had set: no handle to it exists, so
+  // that memory was lost for the life of the VM, a little more with every failed e7_load. It is
+  // dropped now; a debugger forgets its functions (a breakpoint in it is unverified again).
+  {
+    const char* src =
+        "const big: string[] = [];\n"
+        "for (let i = 0; i < 2000; i++) big.push(\"item \" + i);\n"
+        "const n: number = big.length;\n"
+        "if (n > 0) throw new Error(\"init failed after \" + n);\n"
+        "export function f(): number { return n; }\n";
+    std::vector<uint8_t> bc = compile(src);
+    for (int withDebugger = 0; withDebugger < 2; withDebugger++) {
+      e7_vm* vm = e7_vm_new(nullptr);
+      int bp = 0;
+      if (withDebugger) {
+        CHECK(e7_debug_attach(vm, [](e7_vm*, const e7_debug_stop*, void*) { return E7_DEBUG_CONTINUE; }, nullptr) == E7_OK);
+        e7_debug_break_on_error(vm, 0);
+        bp = e7_debug_set_breakpoint(vm, "test.ts", 3);
+      }
+      e7_collect_garbage(vm);
+      size_t base = e7_memory_used(vm);
+      for (int i = 0; i < 20; i++) {
+        e7_module* m = nullptr;
+        CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_ERR_RUNTIME && m == nullptr);
+        CHECK(strstr(e7_last_error(vm), "init failed after 2000") != nullptr);
+      }
+      e7_collect_garbage(vm);
+      CHECK(e7_memory_used(vm) == base);
+      if (withDebugger) {
+        int verified = 1;
+        CHECK(e7_debug_breakpoint_info(vm, bp, &verified, nullptr) == 1 && verified == 0);
+      }
+      std::vector<uint8_t> ok = compile("export function g(): number { return 7; }\n");
+      e7_module* m2 = nullptr;
+      e7_value r;
+      CHECK(e7_load(vm, ok.data(), ok.size(), &m2) == E7_OK && e7_call(vm, m2, "g", nullptr, 0, &r) == E7_OK &&
+            r.v.num == 7);
+      e7_vm_free(vm);
+    }
+  }
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

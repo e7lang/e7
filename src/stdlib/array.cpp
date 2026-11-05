@@ -221,6 +221,10 @@ E7_NATIVE(a_sortCmp) {
   std::string want = std::string(1, k) + k + ">F";
   if (vm.sigString(c->fn->sigId) != want) vm.error("sort comparator has the wrong signature");
   std::vector<Slot> v(arr->data, arr->data + arr->len);
+  // the comparator runs script code, during which the collector may run: the elements being sorted
+  // stay reachable even if the comparator empties or shrinks the array (arr and c are reachable
+  // through the caller's registers)
+  VM::TempRootSlots keep(vm, v.data(), v.size(), arr->vt == VT_REF);
   bool undefLast = arr->vt == VT_REF;
   Obj* und = vm.undef();
   mergeSort(v, [&](const Slot& x, const Slot& y) {

@@ -105,6 +105,7 @@ class Debugger {
   void attached();
   void detaching();
   void moduleLoaded(ModuleRT* m);
+  void moduleUnloading(ModuleRT* m);  // VM::unloadModule: forget its functions (breakpoints re-resolve)
   int check(const uint64_t* ip);  // debug interpreter slow path; returns 0 or ERR_PAUSED
   void errorRaised(int code, const std::string& msg, const std::string& full, bool caught);
   // pause-to-host stop for a caught error, before its handler runs (the frames of the throw are kept)

@@ -12,6 +12,14 @@
 
 namespace e7 {
 
+// E7_GC_STRESS (testing only, CMake option): a collection at every safepoint and at every allocation
+// where a collection is allowed, so that a missing root shows up at once (under ASan) instead of
+// depending on when the heap happens to reach its next collection threshold.
+#ifndef E7_GC_STRESS
+#define E7_GC_STRESS 0
+#endif
+constexpr bool kGCStress = E7_GC_STRESS != 0;
+
 class VM;
 struct ModuleRT;
 class Debugger;  // debug.h
@@ -134,6 +142,10 @@ class VM {
   // Takes ownership of module; verifies, links natives. Throws E7Error.
   ModuleRT* loadModule(Module&& m);
   int runInit(ModuleRT* mod);  // runs module initializer (may suspend)
+  // Drops a module whose loading failed before a handle to it was given out (its initializer failed):
+  // its constants, globals and the objects only they reach are freed (a collection runs). Not while a
+  // call is running or suspended.
+  void unloadModule(ModuleRT* mod);
 
   // ---- execution ----
   // Call function (entry from host). Returns ERR_OK / ERR_SUSPENDED or throws E7Error.
@@ -152,9 +164,16 @@ class VM {
   uint64_t ticksUsed() const { return ticksBase_ + ticksSinceBudget(); }
   // Natives doing work proportional to a script-chosen parameter charge it against the instruction
   // budget up front (a native cannot be suspended halfway), so the budget also bounds them.
+  // With suspension enabled, a native called directly by script code cannot fail for want of budget
+  // (whether it did would depend on where the slice boundary falls): the work is charged, the budget
+  // may go negative, and the next budget check suspends, as for the costs charged after a call.
   void chargeWork(uint64_t ticks) {
     if (ticks > (uint64_t)budget_) {
       if (budgetStart_ == INT64_MAX) return;  // unlimited budget: never fails
+      if (cfg_.suspendOnBudget && nativeDepth_ <= 1) {
+        budget_ -= (int64_t)(ticks > (1ull << 40) ? (1ull << 40) : ticks);
+        return;
+      }
       budget_ = 0;
       errorCode(ERR_BUDGET, "instruction budget exhausted");
     }
@@ -163,7 +182,10 @@ class VM {
   void setSuspendOnBudget(bool b) { cfg_.suspendOnBudget = b; }
   void resetExecution();  // abandon a suspended call
 
-  // Re-entrant call from native code (cannot suspend).
+  // Re-entrant call from native code (cannot suspend). The garbage collector may run during the
+  // callback: the calling native must keep every object it still uses reachable (its arguments are,
+  // through the caller's registers; anything else it holds in C++ variables needs a TempRoot or
+  // TempRootSlots).
   Slot callClosure(CloObj* c, const Slot* args, uint32_t nargs);
   // Calls a parameterless closure from native code; a runtime error (throw, abort, ...) raised by
   // it is caught: returns false with the error message. Other errors (budget, memory, stack)
@@ -229,6 +251,17 @@ class VM {
     TempRoot(VM& v, Obj* o) : vm(v), n(v.tempRoots_.size()) { v.tempRoots_.push_back(o); }
     ~TempRoot() { vm.tempRoots_.resize(n); }
   };
+  // The references among `count` slots (when `refs`), e.g. a native's copy of array elements.
+  struct TempRootSlots {
+    VM& vm;
+    size_t n;
+    TempRootSlots(VM& v, const Slot* s, size_t count, bool refs) : vm(v), n(v.tempRoots_.size()) {
+      if (refs)
+        for (size_t i = 0; i < count; i++)
+          if (s[i].r) v.tempRoots_.push_back(s[i].r);
+    }
+    ~TempRootSlots() { vm.tempRoots_.resize(n); }
+  };
 
   void collectGarbage();
   size_t bytesAllocated() const { return bytes_; }
@@ -273,9 +306,32 @@ class VM {
   // Natives building large temporary (non-heap) buffers call this so that transient memory is also
   // bounded by the configured memory limit.
   void checkTemp(size_t bytes) {
+    if (E7_UNLIKELY(injectFailure())) errorCode(ERR_MEMORY, "out of memory (injected failure)");
     if (bytes > cfg_.memoryLimit || bytes_ + bytes > cfg_.memoryLimit)
       errorCode(ERR_MEMORY, "out of memory (limit %zu bytes)", cfg_.memoryLimit);
   }
+
+  // ---- testing hooks (tests only, through src/capi/testing.h; not part of the C API) ----
+  // Makes the n-th heap allocation, positive external-memory charge or checkTemp() from now on
+  // fail with ERR_MEMORY (n = 1: the next one), once or, if `persistent`, together with every later
+  // one; 0 disables. allocationCount() counts all of them since the VM was created (also without an
+  // injected failure).
+  void injectAllocationFailure(uint64_t n, bool persistent = false) {
+    failAt_ = n ? allocSeq_ + n : UINT64_MAX;
+    failPersistent_ = persistent;
+    failFired_ = false;
+  }
+  uint64_t allocationCount() const { return allocSeq_; }
+  bool injectedFailureFired() const { return failFired_; }
+  // Budget exhausted inside a callback from a native (which cannot suspend): refill it with `ticks`
+  // instead of failing with ERR_BUDGET (0 = off). Lets the equivalence runs (tests/equiv_test.cpp)
+  // use a budget slice of 1 with programs that pass callbacks to natives.
+  void setCallbackBudgetRefill(int64_t ticks) { testCallbackRefill_ = ticks; }
+  // Heap consistency: bytesAllocated() equals the sum of the sizes of all objects plus their
+  // external buffers, every reference held by an object or a root points to a live object, no
+  // object is left marked, and (when no call is running or suspended) the per-call execution state
+  // is reset. Returns false with a description of the first problem.
+  bool checkHeap(std::string* why) const;
   // RAII: no collection while host code holds fresh objects only in C++ locals
   struct GCPause {
     VM& v;
@@ -297,6 +353,16 @@ class VM {
   StrObj* intToStringObj(Slot v, uint8_t vt);
   StrObj* numToStringObj(double d);
   void* allocRaw(OT t, size_t size);
+  // allocation-failure injection (testing hooks above): true for the allocation chosen to fail
+  bool injectFailure() {
+    if (E7_LIKELY(++allocSeq_ < failAt_)) return false;
+    if (!failPersistent_) failAt_ = UINT64_MAX;
+    failFired_ = true;
+    return true;
+  }
+  uint64_t allocSeq_ = 0, failAt_ = UINT64_MAX;
+  bool failFired_ = false, failPersistent_ = false;
+  int64_t testCallbackRefill_ = 0;
   void maybeGC();
   void markRoots();
   void mark(Obj* o) {
@@ -313,7 +379,7 @@ class VM {
   const HandlerDesc* handlerAt(size_t k) const;
   bool willBeCaught() const;
   struct ExecState {
-    uint32_t nativeDepth;
+    uint32_t nativeDepth, gcBlockers;
     const NativeBinding* curNative;
     size_t callbacks, tempRoots;
     int gcInhibit;
@@ -354,6 +420,10 @@ class VM {
   uint64_t ticksBase_ = 0;
   uint64_t ticksSinceBudget() const { return (uint64_t)budgetStart_ - (uint64_t)budget_; }
   uint32_t nativeDepth_ = 0;
+  // natives running that may hold references the collector cannot see: no collection while > 0.
+  // A native waiting for a callback it made does not count (callClosure: it roots what it holds), so
+  // the garbage of long callback loops (sort comparators) is collected.
+  uint32_t gcBlockers_ = 0;
   // native currently executing (nullptr while script code runs) and, for each callback from a
   // native into script, the frame index of the callback and the calling native (stack traces)
   const NativeBinding* curNative_ = nullptr;

@@ -23,12 +23,14 @@ def main():
     ap.add_argument("--e7", default=os.path.join(ROOT, "..", "build", "e7"))
     ap.add_argument("--node", default="node")
     ap.add_argument("--update", action="store_true", help="write .out files from Node output")
+    ap.add_argument("--exclude", action="append", default=[], help="skip files whose path contains this")
     ap.add_argument("filter", nargs="*")
     a = ap.parse_args()
     files = sorted(glob.glob(os.path.join(ROOT, "cases", "**", "*.ts"), recursive=True))
     files = [f for f in files if not any(part.startswith("_") for part in os.path.relpath(f, ROOT).split(os.sep))]
     if a.filter:
         files = [f for f in files if any(x in f for x in a.filter)]
+    files = [f for f in files if not any(x in f for x in a.exclude)]
     # --import takes a URL (a bare "D:\\..." path is rejected on Windows)
     shim = pathlib.Path(ROOT, "node_shim", "register.mjs").resolve().as_uri()
     passed = failed = skipped = 0

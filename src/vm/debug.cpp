@@ -101,6 +101,11 @@ void Debugger::moduleLoaded(ModuleRT* m) {
   applyFlags();
 }
 
+void Debugger::moduleUnloading(ModuleRT* m) {
+  for (FuncRT& f : m->funcs) info_.erase(&f);
+  applyFlags();  // breakpoint locations in m's functions are dropped (they resolve again on a later load)
+}
+
 void Debugger::resolve(Breakpoint& bp) {
   bp.locs.clear();
   bp.verified = false;

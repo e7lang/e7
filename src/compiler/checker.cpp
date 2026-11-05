@@ -1090,8 +1090,7 @@ void Checker::resolveClass(ClassSym* c) {
       vd->type = m.type;
       vd->init = m.init;
       vd->loc = m.loc;
-      static std::vector<std::unique_ptr<VarDecl>> keep;
-      keep.emplace_back(vd);
+      P.arena.decls.emplace_back(vd);  // owned by this compilation (was a static vector: a data race, and a leak)
       v->decl = vd;
       if (c->staticFields.count(m.name) || c->staticMethods.count(m.name) || c->staticMethods.count("get " + m.name) ||
           c->staticMethods.count("set " + m.name))

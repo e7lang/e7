@@ -181,6 +181,19 @@ def main():
         rc, out, err = run([sys.executable, manifest_py, "--module", p("unsigned.e7b"), "--version", "1", "--url", "u.e7b",
                             "-o", p("m2.json")])
         check("manifest.py: unsigned module refused", rc != 0 and "not signed" in err, out + err)
+        # e7c --disasm (src/core/disasm.cpp; no other test reached it, 0.2.5 coverage report)
+        with open(p("dis.ts"), "w") as f:
+            f.write("class P { constructor(public x: number) {} get(): number { return this.x; } }\n"
+                    "const m = new Map<string, number>([[\"a\", 1]]);\n"
+                    "let s = 0;\n"
+                    "for (let i = 0; i < 3; i++) { try { s += new P(i).get() + m.get(\"a\")!; } catch (e) { s = -1; } }\n"
+                    "const f = (k: number): string => \"k\" + k + s;\n"
+                    "console.log(f(1), [1n, 2n].length, u32(7) >>> u32(1));\n")
+        rc, out, err = run([e7c, p("dis.ts"), "--disasm", "--debug"])
+        check("--disasm: exit code and header", rc == 0 and "module dis.ts (requires e7vm" in out, out + err)
+        check("--disasm: natives, globals, classes, functions",
+              all(x in out for x in ("native #", "global #", "class #0 P", "func #0 <init>", "CALLN", "CLOSURE")), out)
+        check("--disasm: no output file without -o", not os.path.exists(p("dis.e7b")), "")
 
     # ---- 0.2.x compatibility of the TypeScript features added in 0.2.5: the compiler-only ones
     # still run on 0.2.0 VMs; #private fields need a 0.2.5 VM (it hides them from Object.keys,
