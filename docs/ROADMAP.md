@@ -62,6 +62,41 @@ compatibility with 0.1: `.e7b` files must be recompiled.
 Incremental GC (decided from pilot measurements), `finally`, OSS-Fuzz (after a pilot), a third-party security
 audit, and code-signing certificates / registry accounts (owner actions).
 
+## 0.2.5: stability, reliability and TypeScript compatibility
+
+A compatible 0.2.x release: modules from 0.2.0 / 0.2.1 keep running, and modules the 0.2.5 compiler builds without
+new library functions still run on 0.2.0 / 0.2.1 VMs (`requires` stays 0.2.0). New natives are marked "since 0.2.5"
+(`src/core/since.h`), so an older VM rejects a module that needs them with `E7_ERR_VERSION`.
+
+A probe of 59 common TypeScript patterns before this release: 26 compiled and printed the same as Node.js, 33 were
+rejected (about 17 of them are compiler-only work, listed under P1).
+
+### P0. Stability and reliability
+1. GC stress mode (`E7_GC_STRESS`): a collection at every safepoint and allocation; the test suite runs under it
+   with ASan in CI.
+2. Allocation-failure injection: fail the N-th allocation for every N; each run must end cleanly with
+   `E7_ERR_MEMORY` and the heap count must return to its baseline.
+3. Equivalence runs: the whole suite with a budget slice of 1 (suspend/resume at every check), with a debugger
+   stepping through everything, and with switch dispatch; output identical to the normal run.
+4. Soak test: one VM, 100,000 calls; memory and GC statistics stay flat.
+5. Threads: several VMs on several threads under TSan.
+6. Forward compatibility in CI: modules compiled by the new compiler run on a VM built from the previous release tag.
+7. Coverage report (llvm-cov) and tests for uncovered natives and error paths.
+8. Known differences: Map insertion during iteration after many deletions; stale rows in SPEC section 9.
+
+### P1. TypeScript compatibility (compiler only)
+- Default parameters in arrow functions, defaults in destructuring, rest elements in array and object
+  destructuring, `a?.[i]`, spreading tuples into calls, `Array.from({ length: n }, fn)`.
+- Classes: `abstract`, `#private` fields and methods, `static {}` blocks, getters and setters.
+- `finally` (runs on normal completion, `return` / `break` / `continue` and catchable errors).
+- `flatMap` / `flat`, `Object.entries` / `values` / `assign`, `replace` / `replaceAll` with a callback.
+- Method shorthand in object literals.
+
+### P2. Further
+- Differential fuzzing: random programs in the E7 subset, run on e7 and Node.js, outputs compared (nightly).
+- `console.log` of long arrays and nested objects formatted like Node.js (multi-line).
+- Generics: generic functions, classes, interfaces and type aliases, compiled by monomorphization (no VM change).
+
 ## 0.3 (planned)
 
 - `finally`.
