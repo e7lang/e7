@@ -30,7 +30,7 @@ function run(promise) {
 }
 
 const methods = {
-  async create({ program, overlay = {}, call, args, memoryLimit, budget, slice, breakOnError }) {
+  async create({ program, overlay = {}, call, args, memoryLimit, budget, slice, breakOnError, breakOnCaught }) {
     const dir = path.dirname(program);
     session = await createDebugSession({
       entry: path.basename(program),
@@ -41,6 +41,7 @@ const methods = {
       budget,
       slice,
       breakOnError,
+      breakOnCaught,
       wasmBinary: fs.readFileSync(workerData.wasmPath),
     });
     session.on("output", (line) => post("output", line));
@@ -51,6 +52,7 @@ const methods = {
   setBreakpoints: ({ file, lines }) => session.setBreakpoints(file, lines),
   breakpoints: () => session.breakpoints(),
   setBreakOnError: ({ enable }) => session.setBreakOnError(enable),
+  setBreakOnCaught: ({ enable }) => session.setBreakOnCaught(enable),
   launch({ stopOnEntry }) {
     run(session.launch({ stopOnEntry }));
     // the module is loaded synchronously by launch(): breakpoints are resolved now

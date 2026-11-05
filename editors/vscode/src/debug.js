@@ -21,6 +21,7 @@ const {
 const TYPE = "e7";
 const THREAD_ID = 1;
 const ERROR_FILTER = "runtimeErrors";
+const CAUGHT_FILTER = "caughtErrors";
 const INDEXED_TYPES = new Set(["Array", "tuple", "Uint8Array", "Set"]);
 
 /** Request/response channel to the worker thread. */
@@ -93,6 +94,7 @@ class E7DebugSession extends DebugSession {
     this.configured = null;
     this.configurationDone = new Promise((r) => (this.configured = r));
     this.breakOnError = true;
+    this.breakOnCaught = false;
     this.lastStop = null;
     this.breakpointState = new Map(); // id -> "line:verified"
     this.lineCache = new Map();
@@ -110,7 +112,8 @@ class E7DebugSession extends DebugSession {
       supportsDelayedStackTraceLoading: false,
       supportsSingleThreadExecutionRequests: false,
       exceptionBreakpointFilters: [
-        { filter: ERROR_FILTER, label: "Runtime errors", description: "Stop when a runtime error is about to terminate the script", default: true },
+        { filter: ERROR_FILTER, label: "Uncaught errors", description: "Stop when a runtime error is about to terminate the script", default: true },
+        { filter: CAUGHT_FILTER, label: "Caught errors", description: "Also stop on errors that a try/catch handler takes, before the handler runs", default: false },
       ],
     };
     this.sendResponse(response);
@@ -224,6 +227,7 @@ class E7DebugSession extends DebugSession {
         memoryLimit: args.memoryLimit,
         budget: args.budget,
         breakOnError: this.breakOnError,
+        breakOnCaught: this.breakOnCaught,
       });
     } catch (e) {
       const text = e.diagnostics?.length
@@ -282,13 +286,17 @@ class E7DebugSession extends DebugSession {
 
   async setExceptionBreakPointsRequest(response, args) {
     this.breakOnError = (args.filters || []).includes(ERROR_FILTER);
-    if (this.client) await this.client.call("setBreakOnError", { enable: this.breakOnError }).catch(() => {});
+    this.breakOnCaught = (args.filters || []).includes(CAUGHT_FILTER);
+    if (this.client) {
+      await this.client.call("setBreakOnError", { enable: this.breakOnError }).catch(() => {});
+      await this.client.call("setBreakOnCaught", { enable: this.breakOnCaught }).catch(() => {});
+    }
     this.sendResponse(response);
   }
 
   exceptionInfoRequest(response) {
     const msg = this.lastStop?.reason === "exception" ? this.lastStop.message : "";
-    response.body = { exceptionId: "RuntimeError", description: msg, breakMode: this.breakOnError ? "unhandled" : "never" };
+    response.body = { exceptionId: "RuntimeError", description: msg, breakMode: this.breakOnCaught ? "always" : this.breakOnError ? "unhandled" : "never" };
     this.sendResponse(response);
   }
 

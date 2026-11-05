@@ -3,7 +3,7 @@
 import createE7 from "./wasm/e7wasm.js";
 
 /** Version of this npm package. */
-export const version = "0.2.0";
+export const version = "0.2.1";
 
 const STATUS = [
   "ok", "suspended", "runtime_error", "budget_exceeded", "out_of_memory", "stack_overflow", "load_error",
@@ -422,6 +422,7 @@ class DebugSession {
     const seed = options.seed == null ? -1 : Number(options.seed);
     this._m._e7w_dbg_create(mem > 0 && Number.isFinite(mem) ? mem : 0, seed, this._slice);
     if (options.breakOnError === false) this._m._e7w_dbg_break_on_error(0);
+    if (options.breakOnCaught === true) this._m._e7w_dbg_break_on_caught(1);
   }
 
   /** "idle" (not launched), "running", "stopped" or "terminated". */
@@ -472,6 +473,10 @@ class DebugSession {
   }
 
   /** Stop on runtime errors that are about to terminate the script (default: on). */
+  setBreakOnCaught(enable) {
+    if (this._state !== "terminated") this._m._e7w_dbg_break_on_caught(enable ? 1 : 0);
+  }
+
   setBreakOnError(enable) {
     if (this._state !== "terminated") this._m._e7w_dbg_break_on_error(enable ? 1 : 0);
   }

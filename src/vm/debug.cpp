@@ -292,7 +292,9 @@ void Debugger::prepareResume(int action) {
 }
 
 void Debugger::errorRaised(int code, const std::string& msg, const std::string& full, bool caught) {
-  if (caught) return;  // a try/catch handler takes it: not a stop
+  // a try/catch handler takes it: a stop only when asked for, and here only for the synchronous handler
+  // (pause-to-host stops for caught errors happen in VM::catchError, where the C++ frames are gone)
+  if (caught && (!breakOnCaught || !onStop)) return;
   if (!breakOnError || inHandler_ || aborting_ || paused_ || vm_.catchDepth_ > 0 || vm_.frames_.empty()) return;
   if (code != ERR_RUNTIME && code != ERR_BUDGET && code != ERR_MEMORY && code != ERR_STACK) return;
   message_ = msg;
@@ -314,6 +316,23 @@ void Debugger::errorRaised(int code, const std::string& msg, const std::string& 
 }
 
 bool Debugger::takeErrorPause() { return errorPending_ && hostPaused_; }
+
+bool Debugger::wantsCaughtHostStop() const {
+  return breakOnCaught && !onStop && !inHandler_ && !aborting_ && !paused_ && vm_.catchDepth_ == 0;
+}
+
+void Debugger::caughtHostStop(const std::string& msg) {
+  message_ = msg;
+  hits_.clear();
+  paused_ = hostPaused_ = true;
+  reason_ = SR_EXCEPTION;
+  exact_ = false;
+  stepMode_ = DA_CONTINUE;
+  vm_.dbgRetDepth_ = 0;
+  skipIp_ = nullptr;
+  clearRefs();
+  updateMask();
+}
 
 void Debugger::reset() {
   paused_ = hostPaused_ = inHandler_ = aborting_ = false;

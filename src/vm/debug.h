@@ -69,6 +69,7 @@ class Debugger {
   // Synchronous stop handler (empty: pause-to-host mode). Returns a DebugAction.
   std::function<int(int reason)> onStop;
   bool breakOnError = true;  // stop when a runtime error is about to terminate the script
+  bool breakOnCaught = false;  // also stop on errors that a try/catch handler will take
 
   // ---- breakpoints (by source file and line; resolved now and when modules are loaded later)
   int addBreakpoint(const std::string& file, uint32_t line);
@@ -106,6 +107,9 @@ class Debugger {
   void moduleLoaded(ModuleRT* m);
   int check(const uint64_t* ip);  // debug interpreter slow path; returns 0 or ERR_PAUSED
   void errorRaised(int code, const std::string& msg, const std::string& full, bool caught);
+  // pause-to-host stop for a caught error, before its handler runs (the frames of the throw are kept)
+  bool wantsCaughtHostStop() const;
+  void caughtHostStop(const std::string& msg);
   bool takeErrorPause();  // host mode: an error stop is pending (VM keeps the frames)
   bool errorPending() const { return errorPending_; }
   int pendingErrorCode() const { return errCode_; }

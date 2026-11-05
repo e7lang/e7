@@ -318,7 +318,14 @@ class VM {
     size_t callbacks, tempRoots;
     int gcInhibit;
   };
-  bool catchError(E7Error& e, size_t entryDepth, const ExecState& st);
+  int catchError(E7Error& e, size_t entryDepth, const ExecState& st);  // 0 not caught, 1 caught, 2 paused
+  struct PendingCatch {
+    bool active = false;
+    size_t frame = 0;
+    const HandlerDesc* handler = nullptr;
+  };
+  PendingCatch pendingCatch_;
+  void finishPendingCatch();
 
 
   VMConfig cfg_;

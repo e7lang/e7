@@ -118,7 +118,8 @@ try {
 - Errors convert like in JavaScript outside `catch` too: `JSON.stringify(e)` is `{}`, `String([e])` and template
   literals give `"Name: message"`. Printing a value that contains an Error with `console.log` is a compile error
   (Node.js prints a stack trace).
-- Debuggers stop on errors that no handler catches (and not on caught ones).
+- Debuggers stop on errors that no handler catches; stopping on caught errors too is an option
+  (`e7_debug_break_on_caught_errors`, the *Caught errors* exception breakpoint in VS Code).
 
 ## 4. Expression semantics
 

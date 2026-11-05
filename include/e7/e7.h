@@ -32,7 +32,7 @@ extern "C" {
 
 #define E7_VERSION_MAJOR 0
 #define E7_VERSION_MINOR 2
-#define E7_VERSION_PATCH 0
+#define E7_VERSION_PATCH 1
 
 typedef struct e7_vm e7_vm;
 typedef struct e7_module e7_module;
@@ -101,7 +101,7 @@ E7_API void e7_config_init(e7_config* cfg);
 /* cfg may be NULL (defaults). Returns NULL on allocation failure or an invalid cfg->struct_size. */
 E7_API e7_vm* e7_vm_new(const e7_config* cfg);
 E7_API void e7_vm_free(e7_vm* vm);
-E7_API const char* e7_version(void);            /* "0.2.0" */
+E7_API const char* e7_version(void);            /* e.g. "0.2.1" */
 E7_API uint32_t e7_version_number(void);        /* major << 16 | minor << 8 | patch */
 
 /* ---- modules ---- */
@@ -265,6 +265,11 @@ typedef e7_debug_action (*e7_debug_fn)(e7_vm* vm, const e7_debug_stop* stop, voi
 E7_API e7_status e7_debug_attach(e7_vm* vm, e7_debug_fn fn, void* user); /* fn NULL: pause-to-host */
 E7_API e7_status e7_debug_detach(e7_vm* vm);                             /* not while running or paused */
 E7_API void e7_debug_break_on_error(e7_vm* vm, int enable);              /* default 1 */
+/* Also stop (E7_STOP_EXCEPTION) on runtime errors that a try/catch handler will take (default 0). The
+ * synchronous handler stops where the error is raised; pause-to-host stops before the handler runs, with
+ * the frames of the error still on the stack (not for errors caught inside a native callback, such as an
+ * Array.sort comparator). Continuing (or stepping) then runs the catch block. */
+E7_API void e7_debug_break_on_caught_errors(e7_vm* vm, int enable);
 /* Breakpoint at the first statement on or after `line` of `file` (a path that ends with the file
  * name as shown in stack traces, e.g. "/src/lib/util.ts" for "lib/util.ts"). Returns its id (> 0),
  * or 0 if no debugger is attached. Breakpoints in modules loaded later are resolved at load. */

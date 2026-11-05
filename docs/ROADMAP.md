@@ -2,7 +2,8 @@
 
 ## 0.2.0: ready for a production pilot (released 2026-11-05)
 
-Everything below shipped in 0.2.0 (see [CHANGELOG.md](../CHANGELOG.md)), with two adjustments: `URIError` is
+Everything below shipped in 0.2.0 (see [CHANGELOG.md](../CHANGELOG.md)) and 0.2.1 (the debugger option to stop on
+caught errors, and the fixes of the try/catch security review), with two adjustments: `URIError` is
 catchable too, and detached Ed25519 signatures (`e7_sign_detached` / `e7_verify_detached`, `e7c --sign-file`) were
 added for update manifests.
 

@@ -172,7 +172,7 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 Swift 项目可直接通过 Swift Package Manager 引入：
 
 ```swift
-// Package.swift：.package(url: "https://github.com/e7lang/e7.git", from: "0.2.0")
+// Package.swift：.package(url: "https://github.com/e7lang/e7.git", from: "0.2.1")
 //                .product(name: "E7VM", package: "e7")
 import E7VM
 
@@ -186,7 +186,7 @@ Android 直接从 Maven 引入 AAR：
 
 ```kotlin
 dependencies {
-    implementation("org.e7vm:e7vm-android:0.2.0")   // 桌面 JVM 用 org.e7vm:e7vm:0.2.0
+    implementation("org.e7vm:e7vm-android:0.2.1")   // 桌面 JVM 用 org.e7vm:e7vm:0.2.1
 }
 ```
 
@@ -319,7 +319,7 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
 | Android | Maven `org.e7vm:e7vm-android`（AAR），或 `cd platform/android && ./gradlew :library:assembleRelease`，或 `ANDROID_NDK_HOME=... platform/android/build_android.sh` | Java/Kotlin：`platform/java/org/e7vm` |
 | JVM（桌面） | Maven `org.e7vm:e7vm`（jar 内含 Linux、macOS、Windows 的 JNI 库） | Java/Kotlin：`platform/java/org/e7vm` |
-| iOS / macOS（Swift） | Swift Package Manager：`.package(url: "https://github.com/e7lang/e7.git", from: "0.2.0")`，或 `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`.product(name: "E7VM", package: "e7")`（`platform/ios/E7VM/E7VM.swift`） |
+| iOS / macOS（Swift） | Swift Package Manager：`.package(url: "https://github.com/e7lang/e7.git", from: "0.2.1")`，或 `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`.product(name: "E7VM", package: "e7")`（`platform/ios/E7VM/E7VM.swift`） |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]`（VS 2022） | C/C++、C#：`platform/windows/E7VM.cs` |
 | .NET（Windows / Linux / macOS） | `dotnet add package E7VM` | C#：NuGet 包 [`E7VM`](https://www.nuget.org/packages/E7VM) |
 | WebAssembly（Node.js、浏览器） | `emcmake cmake -S . -B build-wasm && cmake --build build-wasm` → `e7wasm.js` + `e7wasm.wasm` | JavaScript：npm `@e7lang/e7`（[packages/e7](packages/e7)） |

@@ -158,7 +158,10 @@ int VM::execute(size_t entryDepth) {
     try {
       return E7_UNLIKELY(dbg_ != nullptr) ? runDebug() : runNormal();
     } catch (E7Error& e) {
-      if (e.jsName.empty() || !catchError(e, entryDepth, st)) throw;
+      if (e.jsName.empty()) throw;
+      int c = catchError(e, entryDepth, st);
+      if (c == 0) throw;
+      if (c == 2) return ERR_PAUSED;  // a debugger stop before the handler (pause-to-host)
     }
   }
 }

@@ -227,7 +227,14 @@ past the end of the top-level code stops at the first statement of `main`).
 - `e7_debug_stop_on_entry(vm)` stops at the next statement executed (`E7_STOP_ENTRY`).
 - With `e7_debug_break_on_error(vm, 1)` (the default), a runtime error that is about to terminate the script
   stops first (`E7_STOP_EXCEPTION`, `stop->message` is the error message) with all frames intact; continuing (any
-  action) lets the error terminate the call as usual. Errors caught by `assertThrows` do not stop.
+  action) lets the error terminate the call as usual. Errors that a `try`/`catch` handler or `assertThrows` takes
+  do not stop.
+- With `e7_debug_break_on_caught_errors(vm, 1)` (default off), errors that a `try`/`catch` handler will take stop
+  too (`E7_STOP_EXCEPTION`, `stop->message` is `"Name: message"`). The synchronous handler stops where the error is
+  raised; pause-to-host stops before the handler runs, with the frames of the error still on the stack, and
+  continuing or stepping then runs the catch block (a step stops at its first statement). In pause-to-host mode an
+  error caught inside a native callback (such as an `Array.sort` comparator) does not stop, since the native's
+  C++ frames cannot be kept.
 
 ### 5.4 Inspection
 
@@ -280,7 +287,8 @@ returned `const char*` stays valid until the next `e7w_*` call.
 | `void e7w_dbg_create(memLimit, seed, slice)` | new session (ends the previous one). `slice > 0`: run at most `slice` instructions per call, then return a `running` event |
 | `const char* e7w_dbg_set_breakpoints(file, lines)` | replace all breakpoints of `file`; `lines` = `"3,17,42"`. Returns `[{"id","requestedLine","line","verified"}]` |
 | `const char* e7w_dbg_breakpoints()` | `[{"id","file","line","verified"}]`: breakpoints set before launch become verified when the module loads |
-| `void e7w_dbg_break_on_error(enable)` | stop on runtime errors (default on) |
+| `void e7w_dbg_break_on_error(enable)` | stop on runtime errors that end the call (default on) |
+| `void e7w_dbg_break_on_caught(enable)` | also stop on errors that a `try`/`catch` handler takes (default off) |
 | `const char* e7w_dbg_launch(data, len, call, stopOnEntry)` | load the `.e7b`, run top-level code, then call `call` (`""` = `main` if exported) with the `e7w_arg_*` arguments. Returns an event |
 | `const char* e7w_dbg_resume(action)` | `"continue"`, `"next"`, `"stepIn"`, `"stepOut"`. Returns an event |
 | `void e7w_dbg_pause()` | stop at the next statement (takes effect in the next slice) |
@@ -341,8 +349,8 @@ function and its arguments:
 
 `program` is the entry file; `call` the exported function to run after the top-level code (default `main` if it
 is exported); `args` JSON arguments for `call`; `budget` an instruction budget (0 = unlimited); `memoryLimit`
-the VM heap limit in bytes. The *Runtime errors* exception breakpoint (on by default) maps to
-`e7w_dbg_break_on_error`.
+the VM heap limit in bytes. The *Uncaught errors* exception breakpoint (on by default) maps to
+`e7w_dbg_break_on_error`, *Caught errors* (off by default) to `e7w_dbg_break_on_caught`.
 
 ### 8.1 Design
 
@@ -360,10 +368,10 @@ the VM heap limit in bytes. The *Runtime errors* exception breakpoint (on by def
 
 | DAP request / event | E7 |
 |---|---|
-| `initialize` | capabilities: `configurationDone`, hover evaluation, `terminate`, `exceptionInfo`, the `runtimeErrors` filter |
+| `initialize` | capabilities: `configurationDone`, hover evaluation, `terminate`, `exceptionInfo`, the `runtimeErrors` and `caughtErrors` filters |
 | `launch` | compiles (errors go to the Debug Console and fail the launch), sends `initialized`, waits for `configurationDone`, then `e7w_dbg_launch`; `breakpoint` events report the breakpoints resolved by the load |
 | `setBreakpoints` | `e7w_dbg_set_breakpoints` (verified + adjusted lines) |
-| `setExceptionBreakpoints` | `e7w_dbg_break_on_error` |
+| `setExceptionBreakpoints` | `e7w_dbg_break_on_error`, `e7w_dbg_break_on_caught` |
 | `threads` | one thread, `E7` |
 | `stackTrace` / `scopes` / `variables` | `e7w_dbg_stack` / `_scopes` / `_variables` (frame id = index + 1, `ref` = `variablesReference`; arrays, tuples, `Uint8Array` and `Set` report `indexedVariables` and are paged) |
 | `evaluate` (watch, hover, repl) | `e7w_dbg_evaluate` |

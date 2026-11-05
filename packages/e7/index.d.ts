@@ -154,6 +154,8 @@ export interface DebugSessionOptions extends InitOptions {
   budget?: number;
   /** Stop on runtime errors that are about to terminate the script. Default true. */
   breakOnError?: boolean;
+  /** Also stop on errors that a try/catch handler will take (default false). */
+  breakOnCaught?: boolean;
 }
 
 export type StopReason = "entry" | "breakpoint" | "step" | "debugger" | "pause" | "exception";
@@ -239,6 +241,8 @@ export interface DebugSession {
   setBreakpoints(file: string, lines: number[]): BreakpointInfo[];
   breakpoints(): BreakpointInfo[];
   setBreakOnError(enable: boolean): void;
+  /** Also stop on errors that a try/catch handler will take (before the handler runs). */
+  setBreakOnCaught(enable: boolean): void;
   /** Runs top-level code, then `call`, until the script stops or terminates. */
   launch(options?: { stopOnEntry?: boolean }): Promise<StoppedEvent | TerminatedEvent>;
   continue(): Promise<StoppedEvent | TerminatedEvent>;

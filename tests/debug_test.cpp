@@ -504,6 +504,41 @@ static void testCaughtErrors() {
   CHECK(e7_debug_stop_info(vm, &st) == E7_OK && st.reason == E7_STOP_EXCEPTION);
   CHECK(e7_debug_resume(vm, E7_DEBUG_CONTINUE, &ret) == E7_ERR_RUNTIME);
   e7_vm_free(vm);
+
+  // break on caught errors, synchronous: stops where the error is raised, then the catch runs
+  vm = newVm();
+  Driver d2;
+  e7_debug_attach(vm, driverFn, &d2);
+  e7_debug_break_on_caught_errors(vm, 1);
+  std::vector<std::string> msgs;
+  d2.inspect = [&](e7_vm*, const e7_debug_stop* st, size_t) { msgs.push_back(st->message); };
+  CHECK(e7_load(vm, bc.data(), bc.size(), &mod) == E7_OK);
+  CHECK(e7_call(vm, mod, "handled", nullptr, 0, &ret) == E7_OK && ret.v.num == 201);
+  CHECK(d2.stops.size() == 2 && d2.stops[0] == "exception risky@main.ts:2" && d2.stops[1] == "exception risky@main.ts:2");
+  CHECK(msgs.size() == 2 && msgs[0] == "RangeError: big 2" && msgs[1] == "RangeError: big 3");
+  e7_vm_free(vm);
+
+  // break on caught errors, pause-to-host: stops before the handler with the throw's frames, continue
+  // and step run the catch block
+  vm = newVm();
+  e7_debug_attach(vm, nullptr, nullptr);
+  e7_debug_break_on_caught_errors(vm, 1);
+  CHECK(e7_load(vm, bc.data(), bc.size(), &mod) == E7_OK);
+  CHECK(e7_call(vm, mod, "handled", nullptr, 0, &ret) == E7_PAUSED);
+  CHECK(e7_debug_stop_info(vm, &st) == E7_OK && st.reason == E7_STOP_EXCEPTION);
+  CHECK(std::string(st.message) == "RangeError: big 2");
+  CHECK(stackText(vm).rfind("risky@main.ts:2", 0) == 0);
+  CHECK(e7_debug_resume(vm, E7_DEBUG_STEP_OVER, &ret) == E7_PAUSED);  // lands in the catch block
+  CHECK(e7_debug_stop_info(vm, &st) == E7_OK && st.reason == E7_STOP_STEP && st.where.line == 8);
+  CHECK(e7_debug_resume(vm, E7_DEBUG_CONTINUE, &ret) == E7_PAUSED);   // the second caught error
+  CHECK(e7_debug_stop_info(vm, &st) == E7_OK && std::string(st.message) == "RangeError: big 3");
+  CHECK(e7_debug_resume(vm, E7_DEBUG_CONTINUE, &ret) == E7_OK && ret.v.num == 201);
+  // abandoning a stop before a handler leaves the VM usable
+  CHECK(e7_call(vm, mod, "handled", nullptr, 0, &ret) == E7_PAUSED);
+  CHECK(e7_debug_resume(vm, E7_DEBUG_ABORT, &ret) == E7_ERR_RUNTIME);
+  e7_debug_break_on_caught_errors(vm, 0);
+  CHECK(e7_call(vm, mod, "handled", nullptr, 0, &ret) == E7_OK && ret.v.num == 201);
+  e7_vm_free(vm);
 }
 
 static void testSortCallbackSync() {

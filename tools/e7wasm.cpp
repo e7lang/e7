@@ -43,6 +43,7 @@
 //   const char* e7w_dbg_breakpoints(void)               all breakpoints [{"id","file","line","verified"}]
 //                                                       (verification changes when modules load)
 //   void        e7w_dbg_break_on_error(enable)
+//   void        e7w_dbg_break_on_caught(enable)   also stop on errors a try/catch handler takes
 //   const char* e7w_dbg_launch(data, len, call, stopOnEntry)   load a .e7b (debug information
 //                                                       recommended), run its top level, then call
 //                                                       `call` with the e7w_arg_* arguments ("" = main)
@@ -665,6 +666,10 @@ E7W_EXPORT const char* e7w_dbg_breakpoints(void) {
 
 E7W_EXPORT void e7w_dbg_break_on_error(int enable) {
   if (gDbg.vm) e7_debug_break_on_error(gDbg.vm, enable);
+}
+
+E7W_EXPORT void e7w_dbg_break_on_caught(int enable) {
+  if (gDbg.vm) e7_debug_break_on_caught_errors(gDbg.vm, enable);
 }
 
 E7W_EXPORT const char* e7w_dbg_launch(const uint8_t* data, double len, const char* call, int stopOnEntry) {

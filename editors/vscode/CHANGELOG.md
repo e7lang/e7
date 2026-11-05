@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- *Caught errors* exception breakpoint: stop on errors that a `try`/`catch` handler takes, before the handler runs.
+  The existing breakpoint is now called *Uncaught errors*.
+- Bundles `@e7lang/e7` 0.2.1 (security fixes for `try`/`catch`).
+
 ## 0.2.0
 
 - Bundles `@e7lang/e7` 0.2.0: `try` / `catch`, bytecode format 2 (modules built with 0.1 must be recompiled).

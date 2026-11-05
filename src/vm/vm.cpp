@@ -185,7 +185,10 @@ void VM::raise(int code, const std::string& msg, bool allowCatch) {
   E7Error e(code, msg);
   if (allowCatch && code == ERR_RUNTIME) jsErrorName(msg, e.jsName, e.text);
   // a handler will take it: skip the stack trace (O(frames), and uncharged), it is never shown
-  if (!e.jsName.empty() && willBeCaught()) throw e;
+  if (!e.jsName.empty() && willBeCaught()) {
+    if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty()) dbg_->errorRaised(code, msg, msg, true);
+    throw e;
+  }
   std::string tr = stackTrace();
   if (!tr.empty()) e.msg += "\n" + tr;
   if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty()) dbg_->errorRaised(code, msg, e.msg, false);
@@ -202,7 +205,10 @@ void VM::raiseThrown(Obj* error) {
   e.jsName = name.empty() ? "Error" : name;
   e.text = text;
   e.value = error;
-  if (willBeCaught()) throw e;  // no stack trace for a caught error (see raise)
+  if (willBeCaught()) {  // no stack trace for a caught error (see raise)
+    if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty()) dbg_->errorRaised(ERR_RUNTIME, msg, msg, true);
+    throw e;
+  }
   std::string tr = stackTrace();
   if (!tr.empty()) e.msg += "\n" + tr;
   if (E7_UNLIKELY(dbg_ != nullptr) && !frames_.empty()) dbg_->errorRaised(ERR_RUNTIME, msg, e.msg, false);
@@ -259,10 +265,26 @@ bool VM::willBeCaught() const {
 // execute() call (frames >= entryDepth) whose handler covers its current instruction, drops the
 // frames above it, restores the native-call state to what it was while that frame ran, stores the
 // Error object in the handler's register and continues at the handler.
-bool VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
+int VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
   for (size_t k = frames_.size(); k-- > entryDepth;) {
     const HandlerDesc* h = handlerAt(k);
     if (!h) continue;
+    // a debugger in pause-to-host mode that stops on caught errors: stop before the handler runs,
+    // with the frames of the throw still in place; resume() completes the catch (only from the
+    // top level: the C++ frames of a native cannot be kept for a pause)
+    if (E7_UNLIKELY(dbg_ != nullptr) && st.nativeDepth == 0 && dbg_->wantsCaughtHostStop()) {
+      nativeDepth_ = st.nativeDepth;
+      curNative_ = st.curNative;
+      callbackNatives_.resize(st.callbacks);
+      tempRoots_.resize(st.tempRoots);
+      gcInhibit_ = st.gcInhibit;
+      Obj* v = e.value;
+      if (!v) v = newErrorObject(e.jsName, e.text);
+      stack_[frames_[k].base + h->reg].r = v;  // a GC root while paused
+      pendingCatch_ = PendingCatch{true, k, h};
+      dbg_->caughtHostStop(e.text.empty() ? e.jsName : e.jsName + ": " + e.text);
+      return 2;
+    }
     // unwinding is charged like the calls it undoes (one tick per dropped frame, one for the catch);
     // an exhausted budget is reported at the next safepoint in the handler's code
     budget_ -= (int64_t)(frames_.size() - k);
@@ -279,9 +301,20 @@ bool VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
     stack_[g.base + h->reg].r = v;
     g.ip = g.fn->code + h->handler;
     (void)f;
-    return true;
+    return 1;
   }
-  return false;
+  return 0;
+}
+
+// Completes a catch that a pause-to-host debugger stop interrupted (see catchError).
+void VM::finishPendingCatch() {
+  if (!pendingCatch_.active) return;
+  PendingCatch pc = pendingCatch_;
+  pendingCatch_ = PendingCatch{};
+  budget_ -= (int64_t)(frames_.size() - pc.frame);
+  frames_.resize(pc.frame + 1);
+  Frame& g = frames_[pc.frame];
+  g.ip = g.fn->code + pc.handler->handler;  // the Error object is already in the handler's register
 }
 void VM::error(const char* fmt, ...) {
   char buf[512];
@@ -847,11 +880,13 @@ int VM::resume() {
     throw e;
   }
   if (dbg_ && dbg_->hostPaused()) dbg_->prepareResume(0 /* continue */);
+  finishPendingCatch();
   suspended_ = false;
   return runFrames();
 }
 
 void VM::resetExecution() {
+  pendingCatch_ = PendingCatch{};
   frames_.clear();
   gcInhibit_ = 0;
   suspended_ = false;

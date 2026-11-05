@@ -93,7 +93,7 @@ static bool copySized(const T* in, T& out) {
 
 extern "C" {
 
-const char* e7_version(void) { return "0.2.0"; }
+const char* e7_version(void) { return "0.2.1"; }
 uint32_t e7_version_number(void) { return kVmVersion; }
 
 void e7_config_init(e7_config* cfg) {
@@ -687,6 +687,10 @@ e7_status e7_debug_detach(e7_vm* v) {
   v->vm->detachDebugger();
   v->dbg.reset();
   return E7_OK;
+}
+
+void e7_debug_break_on_caught_errors(e7_vm* v, int enable) {
+  if (Debugger* d = dbgOf(v)) d->breakOnCaught = enable != 0;
 }
 
 void e7_debug_break_on_error(e7_vm* v, int enable) {

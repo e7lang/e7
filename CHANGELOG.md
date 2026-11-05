@@ -10,6 +10,14 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-05
+
+### Added
+- Debuggers can stop on errors that a `try`/`catch` handler takes: `e7_debug_break_on_caught_errors()`,
+  `e7w_dbg_break_on_caught()`, `breakOnCaught` / `setBreakOnCaught()` in `@e7lang/e7`, and the *Caught errors*
+  exception breakpoint in VS Code (the existing one is now called *Uncaught errors*). The synchronous handler stops
+  where the error is raised; pause-to-host stops before the handler with the error's frames still on the stack.
+
 ### Security
 Fixes from an independent review of try/catch (details in [docs/PRODUCTION.md §3.5](docs/PRODUCTION.md)); no
 memory-safety issue was found.
@@ -121,6 +129,7 @@ tested and hardened but has not yet run in production, so it is versioned 0.x un
   on an Android emulator, the iOS simulator, JVMs and .NET; libFuzzer targets for the loader and compiler with
   ClusterFuzzLite (ASan + UBSan) on pull requests and nightly. See [docs/PRODUCTION.md](docs/PRODUCTION.md).
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/e7lang/e7/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/e7lang/e7/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/e7lang/e7/releases/tag/v0.1.0
