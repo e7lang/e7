@@ -65,6 +65,35 @@ and requires identical output. Programs that must fail go in `tests/cases/errors
 message in a leading comment: `// @error: <text>` for compile errors, `// @runtime-error: <text>` for
 runtime errors (the text must appear in the message).
 
+## Differential fuzzing
+
+[`tests/difffuzz`](tests/difffuzz) generates random, deterministic, well-typed programs inside the E7
+subset (`gen.py`: numbers and their formatting, strings, template literals, arrays, tuples, `Map`/`Set`,
+interfaces, classes with inheritance, closures, loops/`switch`/labels, `?.`/`??`, `try`/`catch`,
+`JSON.stringify`, BigInt, fixed-width integers, `Math`, UTC dates), runs each with e7 (instruction budget
+and memory limit) and with Node.js (the `tests/node_shim`, `TZ=UTC`), and compares stdout and the exit
+behaviour. Each mismatch is saved under `--out` (default `build/difffuzz/<name>/`: `prog.ts`, both outputs,
+`info.json`) and minimized by delta debugging to `min.ts`, which keeps the same kind of mismatch (and, with
+`--tsc`, stays valid strict TypeScript).
+
+```bash
+python3 tests/difffuzz/run.py --seed 7 --count 2000                # programs 0..1999 of seed 7
+python3 tests/difffuzz/run.py --seed 7 --count 2000 --tsc tsc      # also tsc --strict every program
+python3 tests/difffuzz/run.py --seed 7 --start 123 --count 1 --keep   # one program, kept in build/difffuzz/programs
+python3 tests/difffuzz/run.py --minimize prog.ts --tsc tsc         # minimize a mismatch in any file
+python3 tests/difffuzz/gen.py --seed 7 --index 123                 # print one program
+```
+
+Programs depend only on the seed and the index. ctest runs 40 programs (`difffuzz_smoke`), the nightly
+workflow [`difffuzz.yml`](.github/workflows/difffuzz.yml) runs 5,000 with a new seed each night and
+uploads the mismatches as an artifact. When it finds one, decide which it is: an e7 bug (fix it and add
+the reproducer to `tests/cases/lang/`), a documented difference (SPEC section 9; the generator must not
+produce it), or a generator bug (an invalid or nondeterministic program; fix `gen.py`). The generator
+already stays away from the documented differences: indexes go through a bounds helper, fixed-width
+integer operations are wrapped in their conversion (`u32(a + b)`), structures are printed with
+`JSON.stringify`, and results of the `Math` functions that come from the C library (`sin`, `exp`, `log`,
+...; V8 uses fdlibm) are rounded to 12 digits unless `--exact-math` is given.
+
 ## Commit style
 
 Short imperative subject line (`vm: reject negative jump targets`), a body explaining *why* when it isn't

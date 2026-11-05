@@ -52,6 +52,7 @@ E7_NATIVE(m_pow) {
   if (y != y) r->f = NAN;
   else if (y == 0) r->f = 1;
   else if ((x == 1 || x == -1) && std::isinf(y)) r->f = NAN;
+  else if (y == 0.5 && !std::signbit(x)) r->f = std::sqrt(x);  // as V8 (fdlibm): C libraries may be 1 ulp off
   else r->f = std::pow(x, y);
 }
 E7_NATIVE(m_imul) {

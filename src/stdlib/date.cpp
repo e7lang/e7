@@ -72,6 +72,7 @@ static Parts split(double t) {
   p.ms = std::fmod(ms, 1000.0);
   p.wd = std::fmod(day + 4, 7);
   if (p.wd < 0) p.wd += 7;
+  p.wd += 0.0;  // fmod(-7, 7) is -0: getDay() is +0 (V8)
   return p;
 }
 
@@ -81,8 +82,9 @@ static std::string yearStr(double y, bool iso) {
     if (y >= 0 && y <= 9999) snprintf(b, sizeof b, "%04d", (int)y);
     else snprintf(b, sizeof b, "%c%06d", y < 0 ? '-' : '+', (int)std::fabs(y));
   } else {
+    // DateString / UTCString: the sign and at least 4 digits ("-0001", "10000")
     if (y >= 0) snprintf(b, sizeof b, "%04d", (int)y);
-    else snprintf(b, sizeof b, "-%06d", (int)-y);
+    else snprintf(b, sizeof b, "-%04d", (int)-y);
   }
   return b;
 }
@@ -200,6 +202,14 @@ static double parseDate(const std::string& s0) {
     for (int k = 0; k < 12; k++)
       if (strncmp(mon, kMonths[k], 3) == 0) mIdx = k;
     if (mIdx < 0) return NAN;
+    // as V8's legacy parser: no sign before the time (a "-" there is not a negative year), day 1..31,
+    // time fields in range (24:00:00 allowed), years 0..49 / 50..99 are 2000.. / 1900..
+    size_t colon = s.find(':');
+    if (s.find_first_of("+-") < colon) return NAN;
+    if (dd < 1 || dd > 31 || hh < 0 || mm < 0 || ss < 0 || mm > 59 || ss > 59 || hh > 24 || (hh == 24 && (mm || ss)))
+      return NAN;
+    if (yy >= 0 && yy <= 49) yy += 2000;
+    else if (yy >= 50 && yy <= 99) yy += 1900;
     double off = 0;
     if (strncmp(tz, "GMT", 3) == 0 && (tz[3] == '+' || tz[3] == '-') && strlen(tz) >= 8) {
       int v = atoi(tz + 4);
@@ -265,15 +275,16 @@ E7_NATIVE(d_toISOString) {
 }
 E7_NATIVE(d_toString) { E7_UNUSED; r->r = vm.newStringAscii(dateToString(D(vm, a[0])->v.f).c_str()); }
 E7_NATIVE(d_toUTCString) { E7_UNUSED; r->r = vm.newStringAscii(dateToUTCString(D(vm, a[0])->v.f).c_str()); }
+// toString() is "<date part> <time part>"; the date part has no fixed length (years beyond 9999 or before 0)
 E7_NATIVE(d_toDateString) {
   E7_UNUSED;
   std::string s = dateToString(D(vm, a[0])->v.f);
-  r->r = vm.newStringAscii(s == "Invalid Date" ? s.c_str() : s.substr(0, 15).c_str());
+  r->r = vm.newStringAscii(s == "Invalid Date" ? s.c_str() : s.substr(0, s.find(' ', 11)).c_str());
 }
 E7_NATIVE(d_toTimeString) {
   E7_UNUSED;
   std::string s = dateToString(D(vm, a[0])->v.f);
-  r->r = vm.newStringAscii(s == "Invalid Date" ? s.c_str() : s.substr(16).c_str());
+  r->r = vm.newStringAscii(s == "Invalid Date" ? s.c_str() : s.substr(s.find(' ', 11) + 1).c_str());
 }
 
 void registerDateNatives(VM& vm) {

@@ -55,22 +55,43 @@ int64_t doubleToInt64Bits(double d) {
 
 // Shortest round-trip decimal digits of a positive finite double.
 // Produces digits (no leading zeros) and decimal exponent n such that value = 0.d1d2... * 10^n.
+// The shortest length p is the first one for which some p-digit decimal lies in the rounding interval of v.
+// That decimal is the correctly rounded one (printf) or, when the interval is asymmetric (v a power of
+// two), its neighbour one unit away: 2^122 is "5.316911983139664e+36" although "%.15e" gives ...663e+36.
+// Among candidates the closest to v wins, as in V8.
 static void shortestDigits(double v, std::string& digits, int& n) {
-  std::string sbuf;
-  for (int p = 1; p <= 17; p++) {
-    sbuf = formatDoubleC("%.*e", p - 1, v);
-    double back = parseDoubleC(sbuf);
-    if (back == v || p == 17) break;
-  }
-  // sbuf like "d.ddde+XX"
-  digits.clear();
-  const char* c = sbuf.c_str();
-  while (*c && *c != 'e' && *c != 'E') {
-    if (*c >= '0' && *c <= '9') digits.push_back(*c);
-    c++;
-  }
+  uint64_t mant = 0;
   int e = 0;
-  if (*c) e = atoi(c + 1);
+  for (int p = 1; p <= 17; p++) {
+    std::string sbuf = formatDoubleC("%.*e", p - 1, v);  // "d.ddde+XX", correctly rounded
+    uint64_t m = 0;
+    const char* c = sbuf.c_str();
+    while (*c && *c != 'e' && *c != 'E') {
+      if (*c >= '0' && *c <= '9') m = m * 10 + (uint64_t)(*c - '0');
+      c++;
+    }
+    int ex = *c ? atoi(c + 1) : 0;
+    mant = m;
+    e = ex;
+    if (p == 17) break;
+    uint64_t pow10 = 1;
+    for (int i = 1; i < p; i++) pow10 *= 10;  // 10^(p-1): the smallest p-digit mantissa
+    auto roundTrips = [&](uint64_t cm, int cex) {
+      char b[48];
+      snprintf(b, sizeof b, "%llue%d", (unsigned long long)cm, cex - (p - 1));
+      return parseDoubleC(b) == v;
+    };
+    if (roundTrips(m, ex)) break;
+    uint64_t up = m + 1;
+    int upEx = ex;
+    if (up == pow10 * 10) { up = pow10; upEx++; }
+    uint64_t down = m - 1;
+    int downEx = ex;
+    if (down < pow10) { down = pow10 * 10 - 1; downEx--; }
+    if (roundTrips(up, upEx)) { mant = up; e = upEx; break; }
+    if (roundTrips(down, downEx)) { mant = down; e = downEx; break; }
+  }
+  digits = std::to_string((unsigned long long)mant);
   while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
   n = e + 1;
 }
@@ -128,51 +149,66 @@ std::string uint64ToString(uint64_t v, int radix) {
   return std::string(buf + i);
 }
 
+// The algorithm of V8's DoubleToRadixCString (src/numbers/conversions.cc), so that the digits match
+// Node.js: fraction digits only up to the precision of the input, rounded half to even with the carry
+// propagated into earlier digits (and into the integer part); integer digits below the precision of the
+// double (where integer / radix >= 2^53) are zeros.
 std::string numberToStringRadix(double d, int radix) {
   if (radix == 10) return numberToString(d);
   if (d != d) return "NaN";
   if (std::isinf(d)) return d < 0 ? "-Infinity" : "Infinity";
-  if (d == 0) return "0";
+  static const char chars[] = "0123456789abcdefghijklmnopqrstuvwxyz";
   bool neg = d < 0;
   if (neg) d = -d;
-  double ip = std::floor(d);
-  double fp = d - ip;
-  std::string intPart;
-  if (ip == 0) intPart = "0";
-  while (ip > 0) {
-    double q = std::floor(ip / radix);
-    int dgt = (int)(ip - q * radix);
-    if (dgt < 0) dgt = 0;
-    if (dgt >= radix) dgt = radix - 1;
-    intPart.push_back((char)(dgt < 10 ? '0' + dgt : 'a' + dgt - 10));
-    ip = q;
-  }
-  std::string out(intPart.rbegin(), intPart.rend());
-  if (fp > 0) {
-    out += '.';
-    // Emit digits until the fraction is exactly represented or precision is exhausted
-    // (approximation of V8's algorithm; exact for dyadic fractions in power-of-two radices).
-    double delta = 0.5 * (std::nextafter(d, INFINITY) - d);
-    if (delta <= 0) delta = 1e-300;
-    int count = 0;
+  double integer = std::floor(d);
+  double fraction = d - integer;
+  double delta = 0.5 * (std::nextafter(d, INFINITY) - d);
+  double minDelta = std::nextafter(0.0, 1.0);
+  if (!(delta > minDelta)) delta = minDelta;
+  std::string frac;  // "." followed by the fraction digits
+  if (fraction >= delta) {
+    frac += '.';
     do {
-      fp *= radix;
+      fraction *= radix;
       delta *= radix;
-      int dgt = (int)std::floor(fp);
-      fp -= dgt;
-      if (fp > 0.5 || (fp == 0.5 && (dgt & 1))) {
-        if (fp + delta > 1) {
-          // round up and stop
-          dgt++;
-          out.push_back((char)(dgt < 10 ? '0' + dgt : 'a' + dgt - 10));
+      int digit = (int)fraction;
+      frac += chars[digit];
+      fraction -= digit;
+      if (fraction > 0.5 || (fraction == 0.5 && (digit & 1))) {
+        if (fraction + delta > 1) {
+          // round up: back trace the digits already written in case of a carry
+          while (true) {
+            if (frac.size() == 1) {  // only the '.' is left: carry into the integer part
+              frac.clear();
+              integer += 1;
+              break;
+            }
+            char c = frac.back();
+            int dg = c > '9' ? (c - 'a' + 10) : (c - '0');
+            if (dg + 1 < radix) {
+              frac.back() = chars[dg + 1];
+              break;
+            }
+            frac.pop_back();
+          }
           break;
         }
       }
-      out.push_back((char)(dgt < 10 ? '0' + dgt : 'a' + dgt - 10));
-      count++;
-    } while (fp >= delta && count < 1100);
+    } while (fraction >= delta);
   }
-  return neg ? "-" + out : out;
+  std::string ip;  // integer digits, least significant first
+  while (integer / radix >= 9007199254740992.0) {  // 2^53: the remaining low digits are not represented
+    integer /= radix;
+    ip += '0';
+  }
+  do {
+    double rem = std::fmod(integer, (double)radix);
+    ip += chars[(int)rem];
+    integer = (integer - rem) / radix;
+  } while (integer > 0);
+  std::string out = neg ? "-" : "";
+  out.append(ip.rbegin(), ip.rend());
+  return out + frac;
 }
 
 // Exact decimal expansion of |d| using printf("%.Nf") (exact in glibc, Apple, bionic, UCRT).
@@ -182,6 +218,7 @@ static std::string exactFixed(double d, int frac) { return formatDoubleC("%.*f",
 std::string numberToFixed(double x, int f) {
   if (x != x) return "NaN";
   if (std::fabs(x) >= 1e21) return numberToString(x);
+  if (x == 0) x = 0.0;  // -0 is not negative here: (-0).toFixed(2) === "0.00"
   bool neg = x < 0;
   if (neg) x = -x;
   std::string s = exactFixed(x, 1100);
@@ -399,14 +436,61 @@ double parseIntJS(const std::u16string& s, int radix) {
     i++;
   }
   if (i == start) return NAN;
+  auto digitAt = [&](size_t k) {
+    char c = digits[k];
+    return (c >= '0' && c <= '9') ? c - '0' : (tolower((unsigned char)c) - 'a' + 10);
+  };
+  // Beyond 2^53 the result depends on the algorithm; these are V8's (NumberParseIntHelper in
+  // src/numbers/conversions.cc), so that large values match Node.js.
   double v;
   if (radix == 10) {
     v = parseDoubleC(digits);  // correctly rounded
+  } else if ((radix & (radix - 1)) == 0) {
+    // powers of two: exact, rounded half to even (InternalStringToIntDouble)
+    int log2r = 0;
+    while ((1 << log2r) < radix) log2r++;
+    size_t k = 0, n = digits.size();
+    while (k < n && digits[k] == '0') k++;
+    int64_t number = 0;
+    int exponent = 0;
+    for (; k < n; k++) {
+      number = number * radix + digitAt(k);
+      int overflow = (int)(number >> 53);
+      if (overflow != 0) {
+        int bits = 1;
+        while (overflow > 1) { bits++; overflow >>= 1; }
+        int dropped = (int)number & ((1 << bits) - 1);
+        number >>= bits;
+        exponent = bits;
+        bool zeroTail = true;
+        for (k++; k < n; k++) {
+          zeroTail = zeroTail && digits[k] == '0';
+          exponent += log2r;
+        }
+        int middle = 1 << (bits - 1);
+        if (dropped > middle || (dropped == middle && ((number & 1) != 0 || !zeroTail))) number++;
+        if ((number & ((int64_t)1 << 53)) != 0) { exponent++; number >>= 1; }
+        break;
+      }
+    }
+    v = std::ldexp((double)number, exponent);
   } else {
+    // other radices: 32-bit chunks combined in doubles (rounding errors accumulate as in V8)
+    const uint32_t kMaximumMultiplier = 0xFFFFFFFFu / 36;
+    size_t k = 0, n = digits.size();
+    while (k < n && digits[k] == '0') k++;  // leading zeros do not start a chunk
+    bool done = k == n;
     v = 0;
-    for (char c : digits) {
-      int dgt = (c >= '0' && c <= '9') ? c - '0' : (tolower((unsigned char)c) - 'a' + 10);
-      v = v * radix + dgt;
+    while (!done) {
+      uint32_t part = 0, multiplier = 1;
+      while (true) {
+        uint32_t m = multiplier * (uint32_t)radix;
+        if (m > kMaximumMultiplier) break;
+        part = part * (uint32_t)radix + (uint32_t)digitAt(k);
+        multiplier = m;
+        if (++k == n) { done = true; break; }
+      }
+      v = v * multiplier + part;
     }
   }
   return neg ? -v : v;

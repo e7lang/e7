@@ -42,6 +42,7 @@ static double jsPow(double x, double y) {
   if (y != y) return NAN;
   if (y == 0) return 1;
   if ((x == 1 || x == -1) && std::isinf(y)) return NAN;
+  if (y == 0.5 && !std::signbit(x)) return std::sqrt(x);  // as V8 (fdlibm): C libraries may be 1 ulp off
   return std::pow(x, y);
 }
 

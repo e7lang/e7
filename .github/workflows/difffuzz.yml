@@ -1,0 +1,56 @@
+name: Differential fuzzing
+
+# Random programs in the E7 subset (tests/difffuzz/gen.py) run on e7 and on Node.js; stdout and the exit
+# behaviour must be the same, and every program must pass `tsc --strict`. Each mismatch is minimized to a
+# small reproducer; all of them are uploaded as the `difffuzz-mismatches` artifact. The seed is the run
+# number (a nightly run never repeats an earlier one); a failing run is reproduced locally with
+# `python3 tests/difffuzz/run.py --seed <seed> --start <index> --count 1` (see CONTRIBUTING.md).
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "number of programs"
+        default: "5000"
+      seed:
+        description: "seed (default: the run number)"
+        default: ""
+
+permissions: read-all
+
+jobs:
+  difffuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target e7
+      - name: TypeScript (tsc --strict for every generated program)
+        run: npm install --prefix "$RUNNER_TEMP/ts" typescript@5.6
+      - name: Fuzz
+        env:
+          COUNT: ${{ inputs.count || '5000' }}
+          SEED: ${{ inputs.seed || github.run_number }}
+        run: |
+          echo "seed $SEED, $COUNT programs"
+          python3 tests/difffuzz/run.py --seed "$SEED" --count "$COUNT" --jobs 4 \
+            --tsc "$RUNNER_TEMP/ts/node_modules/.bin/tsc" --out build/difffuzz | tee build/difffuzz.txt
+      - name: Job summary
+        if: ${{ !cancelled() }}
+        run: |
+          { echo '### Differential fuzzing (tests/difffuzz)'; echo '```'; tail -n 60 build/difffuzz.txt 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: difffuzz-mismatches
+          path: |
+            build/difffuzz/
+            !build/difffuzz/programs/
+          if-no-files-found: ignore

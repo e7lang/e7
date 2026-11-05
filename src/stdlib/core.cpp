@@ -857,7 +857,7 @@ static std::u16string uriEncode(VM& vm, const StrObj* s, const char* unreserved)
   const char16_t* c = s->chars();
   for (uint32_t i = 0; i < s->len; i++) {
     char16_t ch = c[i];
-    if (ch < 128 && (isalnum(ch) || strchr(unreserved, (char)ch))) { out += ch; continue; }
+    if (ch > 0 && ch < 128 && (isalnum(ch) || strchr(unreserved, (char)ch))) { out += ch; continue; }  // strchr finds the NUL
     uint32_t cp = ch;
     if (ch >= 0xDC00 && ch <= 0xDFFF) vm.error("URIError: URI malformed");
     if (ch >= 0xD800 && ch <= 0xDBFF) {

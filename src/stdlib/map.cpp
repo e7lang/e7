@@ -114,6 +114,7 @@ static void rehash(VM& vm, MapObj* m) {
 }
 
 static void mapSet(VM& vm, MapObj* m, Slot k, Slot v) {
+  if (m->km == KM_NUM && k.f == 0) k.f = 0.0;  // Map.set / Set.add store a -0 key as +0 (as in JS)
   int32_t idx = mapFind(vm, m, k);
   if (idx >= 0) { m->entries[idx].v = v; return; }
   if (m->count >= 0x7FFFFFF) vm.error("RangeError: Map maximum size exceeded");
