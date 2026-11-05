@@ -122,15 +122,28 @@ endif()
 # CONTRIBUTING.md, "Stability checks". Under E7_GC_STRESS (a collection at every safepoint and every
 # allocation) tests/cases/lib/gc_stress.ts is left out: 374,000 allocations with ~12,000 live objects
 # would take hours, and every other program exercises the collector under stress.
+# Instrumented and unoptimized builds (sanitizers, coverage, Debug) test fewer injection points, inspect
+# the debugger's variables at fewer stops and make fewer soak calls, so that the sequential ctest runs of
+# the sanitizer jobs stay within minutes; Release builds check every point.
 if(E7_WITH_COMPILER)
   find_package(Threads REQUIRED)
   set(E7_STRESS_EXCLUDE "")
   set(E7_ALLOC_STRIDE 4000)
   set(E7_ALLOC_LIB_STRIDE 20)
-  if(E7_GC_STRESS)
-    set(E7_STRESS_EXCLUDE gc_stress)
+  set(E7_ALLOC_DBG_STRIDE 4000)
+  set(E7_INSPECT_LIMIT 5000)
+  set(E7_SOAK_CALLS 100000)
+  if(E7_GC_STRESS OR E7_SANITIZE OR E7_TSAN OR E7_COVERAGE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(E7_ALLOC_STRIDE 200)
     set(E7_ALLOC_LIB_STRIDE 10)
+    set(E7_ALLOC_DBG_STRIDE 10)
+    set(E7_INSPECT_LIMIT 1000)
+    set(E7_SOAK_CALLS 20000)
+    # the two programs with a million budget checks / debugger stops (they run in the Release jobs)
+    set(E7_STRESS_EXCLUDE "gc_stress|ints64")
+  endif()
+  if(E7_GC_STRESS)
+    set(E7_SOAK_CALLS 3000)
   endif()
   foreach(t alloc_fail_test equiv_test threads_test soak_test)
     add_executable(${t} ${t}.cpp)
@@ -151,7 +164,7 @@ if(E7_WITH_COMPILER)
   add_test(NAME alloc_fail_persistent COMMAND alloc_fail_test --persistent --stride-after ${E7_ALLOC_STRIDE}
            ${E7_ALLOC_FAIL_PROGRAMS})
   add_test(NAME alloc_fail_slice COMMAND alloc_fail_test --slice --stride-after ${E7_ALLOC_STRIDE} ${E7_ALLOC_FAIL_PROGRAMS})
-  add_test(NAME alloc_fail_debugger COMMAND alloc_fail_test --debugger --stride-after ${E7_ALLOC_STRIDE}
+  add_test(NAME alloc_fail_debugger COMMAND alloc_fail_test --debugger --stride-after ${E7_ALLOC_DBG_STRIDE}
            ${E7_ALLOC_FAIL_PROGRAMS})
 
   # equivalence runs: every test program with a budget slice of 1 (suspend / resume at every check) and
@@ -163,12 +176,12 @@ if(E7_WITH_COMPILER)
     list(FILTER E7_EQUIV_PROGRAMS EXCLUDE REGEX "${E7_STRESS_EXCLUDE}")
   endif()
   add_test(NAME equiv_slice COMMAND equiv_test --modes slice ${E7_EQUIV_PROGRAMS})
-  add_test(NAME equiv_step COMMAND equiv_test --modes step ${E7_EQUIV_PROGRAMS})
+  add_test(NAME equiv_step COMMAND equiv_test --modes step --inspect-limit ${E7_INSPECT_LIMIT} ${E7_EQUIV_PROGRAMS})
 
   # several VMs on several threads (each VM used by one thread); CI also runs it under E7_TSAN
   add_test(NAME threads_test COMMAND threads_test)
 
   # soak: one VM, 100,000 calls; heap after a full collection, GC statistics and process heap flat
   # (`soak_test --calls 10000000 -v` for a long run)
-  add_test(NAME soak_test COMMAND soak_test)
+  add_test(NAME soak_test COMMAND soak_test --calls ${E7_SOAK_CALLS})
 endif()

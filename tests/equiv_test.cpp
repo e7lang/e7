@@ -6,9 +6,9 @@
 //   step   a synchronous debugger single-steps through everything (E7_DEBUG_STEP_IN at every stop,
 //          from the first statement, also stopping on caught errors) and at every stop walks the
 //          stack, every scope of the innermost 64 frames and the variables in them (two levels deep),
-//          and evaluates each variable by name. Scopes and variables are inspected at the first
-//          --inspect-limit stops of each program (default 5000), the stack at every stop, so that
-//          long loops stay quick.
+//          and evaluates each variable by name. The stack, scopes and variables are inspected at the
+//          first --inspect-limit stops of each program (default 5000), the stop information at every
+//          stop, so that long loops and deep recursion stay quick.
 // Modules are compiled with debug information, as `e7 file.ts` does. Files with `// @error:`
 // (compile errors) are skipped.
 //
@@ -90,10 +90,10 @@ static e7_debug_action onStop(e7_vm* vm, const e7_debug_stop* stop, void* user) 
     fprintf(stderr, "e7_debug_stop_info failed inside the handler\n");
     exit(1);
   }
+  if (r.stops > gInspectLimit) return E7_DEBUG_STEP_IN;
   const e7_debug_frame* frames = nullptr;
   size_t nf = e7_debug_stack(vm, &frames);
   for (size_t f = 0; f < nf; f++) r.inspected += strlen(frames[f].function) + strlen(frames[f].file) > 0;
-  if (r.stops > gInspectLimit) return E7_DEBUG_STEP_IN;
   // scopes and variables of the innermost 64 frames (deep recursion would make this quadratic)
   for (size_t f = 0; f < nf && f < 64; f++) {
     const e7_debug_scope* sc = nullptr;
