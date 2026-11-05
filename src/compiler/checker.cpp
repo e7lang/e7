@@ -1009,6 +1009,7 @@ void Checker::resolveClass(ClassSym* c) {
     std::string key = m.accessor == 1 ? "get " + m.name : m.accessor == 2 ? "set " + m.name : m.name;
     curFn = nullptr;
     FuncSym* f = newFunc(key, &m.params, m.retType, m.body, nullptr);
+    f->loc = m.loc;
     f->parent = nullptr;
     f->cls = c;
     f->isTopLevel = true;

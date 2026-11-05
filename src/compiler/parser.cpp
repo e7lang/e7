@@ -605,7 +605,8 @@ class Parser {
         expectP(":");
         f->ret = parseType();
         m.type = f;
-        m.method = true;
+        // an optional method `m?(): T` is an optional property of function type (called as obj.m?.())
+        m.method = !m.optional;
       } else {
         expectP(":");
         m.type = parseType();

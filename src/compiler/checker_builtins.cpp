@@ -406,6 +406,16 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
           e->innerType = fnT->ret;
           return fnT->ret->t == TT::Void ? T.voidT() : T.optional(fnT->ret, false, true);
         }
+        if (ft->t == TT::Optional && ft->elem->t == TT::Func && !m->optional) {
+          // an optional function field narrowed to non-null (`if (this.cb) this.cb(x)`): a closure call
+          Type* nt = check(m, nullptr);
+          if (nt->t != TT::Func)
+            return errT(m->loc, "cannot call '" + name + "': it is possibly undefined (use '" + name + "?.(...)' or check it first)");
+          checkArgs(e, nt, e->list);
+          e->intrinsic = IN_CLOSURE_CALL;
+          ret = nt->ret;
+          break;
+        }
         if (ft->t != TT::Func) return errT(e->loc, "property '" + name + "' is not callable");
         m->field = fit->second;
         m->cls = c;
@@ -443,6 +453,17 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
         e->intrinsic = IN_FIELD_CALL;
         ret = p->type->ret;
         break;
+      }
+      if (p && p->type->t == TT::Optional && p->type->elem->t == TT::Func && !m->optional) {
+        // an optional function property narrowed to non-null (`if (o.f) o.f(x)`): a closure call
+        Type* nt = check(m, nullptr);
+        if (nt->t == TT::Func) {
+          checkArgs(e, nt, e->list);
+          e->intrinsic = IN_CLOSURE_CALL;
+          ret = nt->ret;
+          break;
+        }
+        return errT(m->loc, "cannot call '" + name + "': it is possibly undefined (use '" + name + "?.(...)' or check it first)");
       }
       return errT(m->loc, "property '" + name + "' does not exist or is not callable on type '" + typeName(bt) + "'" +
                               suggestMember(bt, name));

@@ -559,6 +559,7 @@ FuncSym* Checker::instantiateFunc(GenericSym* g, const std::vector<Type*>& args,
     curFn = nullptr;
     f = newFunc(nm, &m->params, m->retType, m->body, nullptr);
     m->fn = f;
+    f->loc = m->loc;
     f->parent = nullptr;
     f->cls = c;
     f->isTopLevel = true;

@@ -27,14 +27,14 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **116 supported**, **19 partial**, **115 unsupported** (269 sample programs).
+250 features: **117 supported**, **19 partial**, **114 unsupported** (269 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
 | [Everyday Types](#everyday-types) | 13 | 3 | 4 |
 | [Narrowing](#narrowing) | 7 | 1 | 6 |
 | [More on Functions](#more-on-functions) | 14 | 1 | 6 |
-| [Object Types](#object-types) | 10 | 1 | 7 |
+| [Object Types](#object-types) | 11 | 1 | 6 |
 | [Generics](#generics) | 9 | 1 | 5 |
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
 | [Classes](#classes) | 16 | 1 | 14 |
@@ -53,9 +53,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 16 | 3 | 12 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 9 | 6 | 11 |
-| **Total** | **116** | **19** | **115** |
+| **Total** | **117** | **19** | **114** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 74.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 73.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -137,6 +137,7 @@ Within each category, supported features come first, then partial and unsupporte
 | Extending interfaces (single and multiple) | supported |  | [extending-interfaces.ts](../tests/ts-features/objects/extending-interfaces.ts) |
 | Accessors declared in interfaces (`get x(): T`) | supported | An interface *property* is read as a field, so a class implements it with a field; declare accessors as `get` / `set` in the interface | [interface-accessors.ts](../tests/ts-features/objects/interface-accessors.ts) |
 | Methods in object literals | supported |  | [object-literal-methods.ts](../tests/ts-features/objects/object-literal-methods.ts) |
+| Optional methods in interfaces (`m?(): T`) | supported | An optional method is an optional property of function type: call it with `obj.m?.()`, or after checking it | [optional-methods.ts](../tests/ts-features/objects/optional-methods.ts) |
 | Optional properties | supported |  | [optional-properties.ts](../tests/ts-features/objects/optional-properties.ts) |
 | Property access, nested objects and arrays of objects | supported |  | [property-access.ts](../tests/ts-features/objects/property-access.ts) |
 | `readonly T[]` and `ReadonlyArray<T>` | supported | `ReadonlyMap` and `ReadonlySet` too; mutating methods, index and `length` writes are compile errors | [readonly-arrays.ts](../tests/ts-features/objects/readonly-arrays.ts) |
@@ -148,7 +149,6 @@ Within each category, supported features come first, then partial and unsupporte
 | Index signatures `{ [key: string]: T }` | **unsupported** | **Why:** properties are fixed fields with static types (*types known at compile time*). **Instead:** `Map<string, T>` (`JSON.parse(text) as Map<string, T>` reads a JSON object with arbitrary keys) | [index-signatures.ts](../tests/ts-features/objects/index-signatures.ts) |
 | Intersection types `A & B` | **unsupported** | **Why:** intersections are not resolved into an object type (*not implemented yet*). **Instead:** an interface that extends both: `interface ColorfulCircle extends Colorful, Circle {}` | [intersection-types.ts](../tests/ts-features/objects/intersection-types.ts) |
 | Getters and setters in object literals | **unsupported** | **Why:** object literal properties are plain fields or methods (*not implemented yet*). **Instead:** a class with `get` / `set` accessors, or methods | [object-literal-accessors.ts](../tests/ts-features/objects/object-literal-accessors.ts) |
-| Optional methods in interfaces (`m?(): T`) | **unsupported** | **Why:** a method signature is always required (the `?` is ignored) (*not implemented yet*). **Instead:** an optional property with a function type: `m?: () => T`, called with `obj.m?.()` | [optional-methods.ts](../tests/ts-features/objects/optional-methods.ts) |
 | Optional tuple elements `[A, B?]` | **unsupported** | **Why:** tuples have a fixed length (*not implemented yet*). **Instead:** a tuple with a nullable element `[A, B \| undefined]`, or an interface with an optional property | [tuple-optional-elements.ts](../tests/ts-features/objects/tuple-optional-elements.ts) |
 | Rest elements in tuple types `[A, ...B[]]` | **unsupported** | **Why:** tuples have a fixed length (*not implemented yet*). **Instead:** an interface `{ head: A; rest: B[] }` | [tuple-rest-elements.ts](../tests/ts-features/objects/tuple-rest-elements.ts) |
 
