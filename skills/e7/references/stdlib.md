@@ -38,14 +38,18 @@ console.log(fnv1a(new TextEncoder().encode("hello")).toString(16)); // 4f9f2cab
 `length charAt charCodeAt codePointAt at indexOf lastIndexOf includes startsWith endsWith slice substring substr
 toUpperCase toLowerCase trim trimStart trimEnd padStart padEnd repeat split replace replaceAll concat
 localeCompare`, `String.fromCharCode/fromCodePoint`, template strings. `split` / `replace` take string
-patterns only (no regex). Strings are UTF-16 like JavaScript; `for (const ch of s)` iterates code points.
+patterns only (no regex); the replacement of `replace` / `replaceAll` can be a function
+`(match, offset, string) => string`. Strings are UTF-16 like JavaScript; `for (const ch of s)` iterates code points.
 
 ## Arrays, Map, Set
 
 - Arrays: `length` (writable: `a.length = n`), `push pop shift unshift at slice splice concat indexOf lastIndexOf
   includes join reverse fill sort map filter forEach reduce reduceRight some every find findIndex findLast
-  findLastIndex`, `Array.from`, `Array.of`, `new Array<T>(n)`, spread. Default `sort()` compares as strings
+  findLastIndex flatMap flat`, `Array.from`, `Array.of`, `new Array<T>(n)`, spread. `flat(depth)` needs a
+  constant depth. Default `sort()` compares as strings
   (pass `(a, b) => a - b` for numbers); sorting is stable.
+- Objects: `Object.keys`, `Object.values` / `Object.entries` (for types whose properties all have one
+  type), `Object.assign` (a literal target, or a target type that has every source property), `Object.freeze`.
 - `Map<K, V>` / `Set<T>`: `size get set has delete clear forEach keys values entries`, `for...of`, spread,
   copy construction (`new Map(other)`).
 

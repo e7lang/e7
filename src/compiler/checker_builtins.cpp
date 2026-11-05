@@ -63,54 +63,89 @@ bool Checker::argsMatch(Expr* call, std::vector<Expr*>& args, const std::vector<
 }
 
 // Check arguments against a function type (user functions / closures)
+// f(...t) with a tuple t: one argument per element. The tuple is evaluated once, by the first
+// element's node (it stores the tuple in a hidden local), the others read the hidden local.
+void Checker::expandSpreads(std::vector<Expr*>& args) {
+  for (size_t i = 0; i < args.size(); i++) {
+    Expr* a = args[i];
+    if (a->k != EK::Spread || a->type) continue;
+    Expr* in = strip(a->a);
+    if (in->k == EK::Array && in->list.empty()) {  // ...[] adds nothing
+      args.erase(args.begin() + (std::ptrdiff_t)i);
+      i--;
+      continue;
+    }
+    Type* st = check(a->a, nullptr);
+    a->type = st;
+    if (st->t != TT::Tuple) continue;
+    VarSym* hv = newVar("<spread>", st, true, a->loc);
+    hv->owner = curFn;
+    std::vector<Expr*> elems;
+    for (size_t k = 0; k < st->elems.size(); k++) {
+      Expr* ix = P.arena.expr(EK::Index, a->loc);
+      if (k == 0) {
+        ix->a = a->a;
+        ix->var = hv;
+      } else {
+        Expr* id = P.arena.expr(EK::Ident, a->loc);
+        id->raw = "<spread>";
+        id->var = hv;
+        id->type = st;
+        ix->a = id;
+      }
+      ix->field = (int)k;
+      ix->cls = tupleRecord(st);
+      ix->type = st->elems[k];
+      elems.push_back(ix);
+    }
+    args.erase(args.begin() + (std::ptrdiff_t)i);
+    args.insert(args.begin() + (std::ptrdiff_t)i, elems.begin(), elems.end());
+    i += elems.size();
+    i--;
+  }
+}
+
+// Check arguments against a function type (user functions / closures)
 void Checker::checkArgs(Expr* call, Type* ft, std::vector<Expr*>& args, size_t skip) {
   (void)skip;
   if (!ft || ft->t != TT::Func) return;
+  expandSpreads(args);
+  const char* spreadMsg = "a spread argument must either have a tuple type or be passed to a rest parameter";
+  auto checkArg = [&](Expr*& a, Type* pt) {
+    if (!a->type) check(a, pt);
+    coerce(a, pt);
+  };
   size_t np = ft->params.size();
   size_t minArgs = 0;
   for (size_t i = 0; i < np; i++)
     if (!ft->optParams[i] && !(ft->restParam && i + 1 == np)) minArgs = i + 1;
   if (ft->restParam) {
-    // f(a, b, ...rest): extra args are packed into an array; or f(a, ...arr)
+    // f(a, b, ...rest): the remaining arguments (and spread arrays) are packed into a new array
     size_t fixed = np - 1;
     if (args.size() < minArgs) { err(call->loc, "expected at least " + std::to_string(minArgs) + " argument(s), got " + std::to_string(args.size())); return; }
     for (size_t i = 0; i < args.size() && i < fixed; i++) {
-      if (args[i]->k == EK::Spread) { err(args[i]->loc, "spread argument must match the rest parameter"); return; }
-      check(args[i], ft->params[i]);
-      coerce(args[i], ft->params[i]);
+      if (args[i]->k == EK::Spread) { err(args[i]->loc, spreadMsg); return; }
+      checkArg(args[i], ft->params[i]);
     }
+    if (args.size() <= fixed) return;  // the rest parameter is an empty array (see genArgs)
     Type* restT = ft->params.back();
-    if (args.size() == fixed + 1 && args[fixed]->k == EK::Spread) {
-      Type* st = check(args[fixed]->a, restT);
-      args[fixed]->type = st;
-      if (st != restT) err(args[fixed]->loc, "spread argument of type '" + typeName(st) + "' does not match '" + typeName(restT) + "'");
-      call->intrinsic = call->intrinsic;  // spread passes array directly
-      call->bval = true;
-      return;
-    }
-    // pack extra args into an array literal
     Expr* arr = P.arena.expr(EK::Array, call->loc);
-    for (size_t i = fixed; i < args.size(); i++) {
-      if (args[i]->k == EK::Spread) { err(args[i]->loc, "spread must be the only rest argument"); return; }
-      arr->list.push_back(args[i]);
-    }
+    for (size_t i = fixed; i < args.size(); i++) arr->list.push_back(args[i]);
     check(arr, restT);
+    coerce(arr, restT);
     args.resize(fixed);
     args.push_back(arr);
     call->bval = true;  // rest packed
     return;
   }
+  for (Expr* a : args)
+    if (a->k == EK::Spread) { err(a->loc, spreadMsg); return; }
   if (args.size() < minArgs || args.size() > np) {
     std::string exp = minArgs == np ? std::to_string(np) : std::to_string(minArgs) + "-" + std::to_string(np);
     err(call->loc, "expected " + exp + " argument(s), got " + std::to_string(args.size()));
     return;
   }
-  for (size_t i = 0; i < args.size(); i++) {
-    if (args[i]->k == EK::Spread) { err(args[i]->loc, "spread arguments require a rest parameter"); return; }
-    Type* pt = ft->params[i];
-    check(args[i], pt);
-    coerce(args[i], pt);
-  }
+  for (size_t i = 0; i < args.size(); i++) checkArg(args[i], ft->params[i]);
 }
 
 // ------------------------------------------------------------------ calls
@@ -185,6 +220,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
     if (s && s->k == SymK::Class) {
       ClassSym* c = static_cast<ClassSym*>(s);
       resolveClass(c);
+      if (name[0] == '#' && !checkPrivateAccess(m->nameLoc, name, c)) return T.unknown();
       auto it = c->staticMethods.find(name);
       if (it == c->staticMethods.end()) {
         auto f = c->staticFields.find(name);
@@ -239,6 +275,30 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
     case TT::Class: {
       ClassSym* c = bt->cls;
       resolveClass(c);
+      if (name[0] == '#') {
+        // #private method: not virtual, called directly
+        FuncSym* pf = nullptr;
+        ClassSym* owner = nullptr;
+        for (ClassSym* k = c; k && !pf; k = k->parent) {
+          auto pi = k->privateMethods.find(name);
+          if (pi != k->privateMethods.end()) { pf = pi->second; owner = k; }
+        }
+        if (pf) {
+          if (!checkPrivateAccess(m->nameLoc, name, owner)) return T.unknown();
+          resolveSig(pf);
+          if (pf->inferRet) {
+            if (pf->checking) return errT(e->loc, "method '" + name + "' is called recursively; add an explicit return type");
+            checkFunction(pf);
+          }
+          checkArgs(e, pf->type, e->list);
+          e->callee = pf;
+          e->intrinsic = IN_PRIVATE_METHOD;
+          ret = pf->type->ret;
+          break;
+        }
+        auto fi = c->fieldIdx.find(name);
+        if (fi != c->fieldIdx.end() && !checkPrivateAccess(m->nameLoc, name, c->fields[fi->second].owner)) return T.unknown();
+      }
       auto it = c->methodIdx.find(name);
       if (it != c->methodIdx.end()) {
         FuncSym* f = c->vtable[it->second].fn;
@@ -426,6 +486,19 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         if (!argsMatch(e, args, {str, num}, 2, "split")) return T.unknown();
         native("String.split");
         return T.array(str);
+      }
+      if ((meth("replace") || meth("replaceAll")) && args.size() == 2 && args[1]->k != EK::Spread &&
+          (strip(args[1])->k == EK::Arrow || check(args[1], nullptr)->t == TT::Func)) {
+        // s.replace(pattern, (match, offset, string) => replacement): compiled to a loop (indexOf / slice)
+        if (args[0]->k == EK::Spread) return errT(args[0]->loc, "spread is not supported here");
+        check(args[0], str);
+        if (!coerce(args[0], str)) return T.unknown();
+        Type* ft = cb(args[1], {str, num, str}, str);
+        if (ft->t != TT::Func) return T.unknown();
+        if (ft->ret != str) return errT(args[1]->loc, "the replacement function must return a string");
+        e->intrinsic = IN_STR_REPLACE_FN;
+        e->bval = name == "replaceAll";
+        return str;
       }
       if (meth("replace") || meth("replaceAll")) {
         if (!argsMatch(e, args, {str, str}, 2, name.c_str())) return T.unknown();
@@ -653,8 +726,38 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       if (meth("keys") || meth("values") || meth("entries"))
         return errT(m->loc, "'" + name + "()' on arrays is only supported directly in for...of");
-      if (meth("flat") || meth("flatMap") || meth("copyWithin"))
-        return errT(m->loc, "'" + name + "' is not supported");
+      if (meth("flatMap")) {
+        // the callback returns an array (flattened one level) or a single value
+        if (args.size() != 1) return errT(e->loc, "'flatMap' expects one callback argument");
+        Type* ft = cb(args[0], {et, num, bt}, nullptr);
+        if (ft->t != TT::Func) return T.unknown();
+        Type* r = ft->ret;
+        if (r->t == TT::Void) return errT(args[0]->loc, "flatMap callback must return a value");
+        e->intrinsic = IN_ARR_FLATMAP;
+        e->bval = r->t == TT::Array;
+        return r->t == TT::Array ? r : T.array(r);
+      }
+      if (meth("flat")) {
+        // flat(depth): the depth must be a constant (it determines the result type)
+        int depth = 1;
+        if (args.size() > 1) return errT(e->loc, "'flat' expects at most one argument (the depth)");
+        if (args.size() == 1) {
+          Expr* d = strip(args[0]);
+          bool neg = false;
+          if (d->k == EK::Unary && d->raw == "-") { neg = true; d = strip(d->a); }
+          if (d->k == EK::Ident && d->raw == "Infinity" && !neg) depth = 1 << 20;
+          else if (d->k == EK::Num && d->isIntLit) depth = neg ? 0 : (int)std::min(d->num, 1048576.0);
+          else return errT(args[0]->loc, "flat(depth) needs a constant depth (an integer literal or Infinity): it determines the result type");
+          check(args[0], num);
+        }
+        Type* rt = bt;
+        int levels = 0;
+        while (levels < depth && rt->elem->t == TT::Array) { rt = rt->elem; levels++; }
+        e->intrinsic = IN_ARR_FLAT;
+        e->ival = levels;
+        return rt;
+      }
+      if (meth("copyWithin")) return errT(m->loc, "'copyWithin' is not supported");
       return noSuch();
     }
     case TT::Bytes: {

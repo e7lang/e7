@@ -594,7 +594,7 @@ Type* Checker::resolveType(TypeNode* n) {
       ObjShape* sh = T.shapes.back().get();
       for (auto& m : n->members) {
         Type* pt = resolveType(m.type);
-        if (m.method) sh->methods.push_back({m.name, pt});
+        if (m.method) sh->methods.push_back({m.accessor == 1 ? "get " + m.name : m.accessor == 2 ? "set " + m.name : m.name, pt});
         else {
           if (m.optional) pt = T.optional(pt, false, true);
           sh->props.push_back({m.name, pt, m.optional});
@@ -751,7 +751,7 @@ void Checker::resolveInterface(InterfaceSym* is) {
     if (sh->findProp(m.name) || sh->findMethod(m.name)) {
       // allow identical redeclaration
     }
-    if (m.method) sh->methods.push_back({m.name, pt});
+    if (m.method) sh->methods.push_back({m.accessor == 1 ? "get " + m.name : m.accessor == 2 ? "set " + m.name : m.name, pt});
     else {
       if (m.optional) pt = T.optional(pt, false, true);
       sh->props.push_back({m.name, pt, m.optional});
@@ -852,10 +852,25 @@ void Checker::resolveClass(ClassSym* c) {
     ctor->type = c->parent->ctor->type;
   }
 
+  c->isAbstract = d->isAbstract;
+  if (c->parent) c->abstractProps = c->parent->abstractProps;
   auto addField = [&](const std::string& name, Type* t, Expr* init, bool optional, Loc l, bool readonly) {
-    if (c->fieldIdx.count(name) || c->methodIdx.count(name)) {
+    if (name[0] == '#' && c->fieldIdx.count(name) && c->fields[c->fieldIdx[name]].owner != c) {
+      err(l, "private field '" + name + "' is also declared by a base class; e7 needs distinct private names in a class hierarchy");
+      return;
+    }
+    if (c->fieldIdx.count(name) || c->methodIdx.count(name) || c->privateMethods.count(name)) {
       err(l, "duplicate member '" + name + "' in class '" + c->name + "'");
       return;
+    }
+    if (c->getterSlot(name) >= 0 || c->setterSlot(name) >= 0) {
+      err(l, "'" + name + "' is an accessor in class '" + c->name + "' (or a base class); it cannot also be a field");
+      return;
+    }
+    if (Type* at = c->abstractProp(name)) {
+      // implements an abstract property of a base class (read by name through the base type)
+      if (at != t) err(l, "property '" + name + "' must have the type of the abstract property ('" + typeName(at) + "')");
+      c->abstractProps.erase(name);
     }
     c->fieldIdx[name] = (int)c->fields.size();
     c->fields.push_back({name, t, init, optional, c, l, readonly});
@@ -870,38 +885,96 @@ void Checker::resolveClass(ClassSym* c) {
       addField(p.name, t, nullptr, p.optional, p.loc, p.readonly);
     }
   }
-  // methods
+  // methods; accessors are methods named "get x" / "set x" (not valid identifiers, so they cannot
+  // clash with other members); #private methods are not virtual
   for (auto& m : d->members) {
     if (m.kind != ClassMember::Method) continue;
+    // a setter without a parameter type takes the getter's return type
+    if (m.accessor == 2 && m.params.size() == 1 && !m.params[0].type) {
+      for (auto& g : d->members)
+        if (g.kind == ClassMember::Method && g.accessor == 1 && g.name == m.name && g.isStatic == m.isStatic && g.retType)
+          m.params[0].type = g.retType;
+    }
+    std::string key = m.accessor == 1 ? "get " + m.name : m.accessor == 2 ? "set " + m.name : m.name;
     curFn = nullptr;
-    FuncSym* f = newFunc(m.name, &m.params, m.retType, m.body, nullptr);
+    FuncSym* f = newFunc(key, &m.params, m.retType, m.body, nullptr);
     f->parent = nullptr;
     f->cls = c;
     f->isTopLevel = true;
-    f->qualName = c->name + "." + m.name;
+    f->qualName = c->name + "." + key;
     f->isStatic = m.isStatic;
+    f->accessor = m.accessor;
+    f->isAbstract = m.isAbstract;
     m.fn = f;
+    if (m.isAbstract) {
+      if (!c->isAbstract) err(m.loc, "abstract methods can only appear within an abstract class");
+      if (m.isStatic) err(m.loc, "'static' and 'abstract' cannot be used together");
+      if (m.name[0] == '#') err(m.loc, "an abstract member cannot be private (#)");
+      if (!m.retType && m.accessor != 2) err(m.loc, "abstract method '" + m.name + "' needs a return type annotation");
+    }
+    if (m.accessor && m.name[0] == '#') { err(m.loc, "private accessors (get #x / set #x) are not supported; use a private field or method"); continue; }
+    if (m.accessor == 2) f->retNode = nullptr;
     if (m.isStatic) {
-      if (c->staticMethods.count(m.name) || c->staticFields.count(m.name)) err(m.loc, "duplicate static member '" + m.name + "'");
-      c->staticMethods[m.name] = f;
+      if (c->staticMethods.count(key) || c->staticFields.count(key) ||
+          (m.accessor && c->staticMethods.count(m.name)) ||
+          (!m.accessor && (c->staticMethods.count("get " + m.name) || c->staticMethods.count("set " + m.name))))
+        err(m.loc, "duplicate static member '" + m.name + "'");
+      c->staticMethods[key] = f;
       continue;
     }
     f->isMethod = true;
     f->thisVar = newVar("this", c->type, true, m.loc);
     f->thisVar->isThis = true;
     f->thisVar->owner = f;
-    if (c->fieldIdx.count(m.name)) { err(m.loc, "member '" + m.name + "' conflicts with a field"); continue; }
-    auto it = c->methodIdx.find(m.name);
+    if (c->fieldIdx.count(m.name)) {
+      err(m.loc, m.accessor ? "accessor '" + m.name + "' conflicts with a field of class '" + c->name + "' (or a base class)"
+                            : "member '" + m.name + "' conflicts with a field");
+      continue;
+    }
+    if (c->abstractProp(m.name)) {
+      err(m.loc, "abstract property '" + m.name + "' must be implemented as a field (e7 reads it by name)");
+      continue;
+    }
+    if (m.name[0] == '#') {
+      if (c->privateMethods.count(key)) { err(m.loc, "duplicate method '" + m.name + "'"); continue; }
+      for (ClassSym* p = c->parent; p; p = p->parent)
+        if (p->privateMethods.count(key) || p->fieldIdx.count(key))
+          err(m.loc, "private method '" + m.name + "' is also declared by a base class; e7 needs distinct private names in a class hierarchy");
+      c->privateMethods[key] = f;
+      continue;
+    }
+    if (m.accessor ? c->methodIdx.count(m.name) > 0 : (c->getterSlot(m.name) >= 0 || c->setterSlot(m.name) >= 0)) {
+      err(m.loc, "'" + m.name + "' is " + (m.accessor ? "a method" : "an accessor") + " in class '" + c->name +
+                     "' (or a base class); it cannot also be " + (m.accessor ? "an accessor" : "a method"));
+      continue;
+    }
+    auto it = c->methodIdx.find(key);
     if (it != c->methodIdx.end()) {
-      if (c->vtable[it->second].fn->cls == c) { err(m.loc, "duplicate method '" + m.name + "'"); continue; }
+      if (c->vtable[it->second].fn->cls == c) { err(m.loc, "duplicate " + std::string(m.accessor ? "accessor" : "method") + " '" + m.name + "'"); continue; }
       c->vtable[it->second].fn = f;  // override, signature checked below
     } else {
-      c->methodIdx[m.name] = (int)c->vtable.size();
-      c->vtable.push_back({m.name, f});
+      c->methodIdx[key] = (int)c->vtable.size();
+      c->vtable.push_back({key, f});
     }
   }
   for (auto& m : d->members) {
     if (m.kind != ClassMember::Field) continue;
+    if (m.isAbstract) {
+      // abstract property: no slot here; subclasses declare it as a field
+      if (!c->isAbstract) err(m.loc, "abstract properties can only appear within an abstract class");
+      if (m.isStatic) { err(m.loc, "'static' and 'abstract' cannot be used together"); continue; }
+      if (m.name[0] == '#') { err(m.loc, "an abstract member cannot be private (#)"); continue; }
+      if (!m.type) { err(m.loc, "abstract property '" + m.name + "' needs a type annotation"); continue; }
+      if (c->fieldIdx.count(m.name) || c->methodIdx.count(m.name) || c->getterSlot(m.name) >= 0 ||
+          c->setterSlot(m.name) >= 0 || c->abstractProps.count(m.name)) {
+        err(m.loc, "duplicate member '" + m.name + "' in class '" + c->name + "'");
+        continue;
+      }
+      Type* t = resolveType(m.type);
+      if (m.optional) t = T.optional(t, false, true);
+      c->abstractProps[m.name] = t;
+      continue;
+    }
     if (m.isStatic) {
       VarSym* v = newVar(c->name + "." + m.name, nullptr, false, m.loc);
       v->isGlobal = true;
@@ -922,7 +995,9 @@ void Checker::resolveClass(ClassSym* c) {
       static std::vector<std::unique_ptr<VarDecl>> keep;
       keep.emplace_back(vd);
       v->decl = vd;
-      if (c->staticFields.count(m.name)) err(m.loc, "duplicate static member '" + m.name + "'");
+      if (c->staticFields.count(m.name) || c->staticMethods.count(m.name) || c->staticMethods.count("get " + m.name) ||
+          c->staticMethods.count("set " + m.name))
+        err(m.loc, "duplicate static member '" + m.name + "'");
       c->staticFields[m.name] = v;
       continue;
     }
@@ -966,10 +1041,50 @@ void Checker::resolveClass(ClassSym* c) {
                          typeName(base->type) + ")");
     }
   }
+  // a getter and its setter have the same type
+  for (auto& m : d->members) {
+    if (m.kind != ClassMember::Method || m.accessor != 2 || !m.fn || !m.fn->type) continue;
+    FuncSym* g = nullptr;
+    if (m.isStatic) {
+      auto it = c->staticMethods.find("get " + m.name);
+      if (it != c->staticMethods.end()) g = it->second;
+    } else if (c->getterSlot(m.name) >= 0) {
+      g = c->vtable[c->getterSlot(m.name)].fn;
+    }
+    if (!g) continue;
+    resolveSig(g);
+    Type* st = m.fn->type->params.empty() ? nullptr : m.fn->type->params[0];
+    if (g->type && !g->inferRet && st && st != g->type->ret && st->t != TT::Unknown)
+      err(m.loc, "the getter and setter of '" + m.name + "' must have the same type ('" + typeName(g->type->ret) +
+                     "' and '" + typeName(st) + "')");
+  }
+  // a concrete class implements every abstract member
+  if (!c->isAbstract) {
+    for (auto& vm : c->vtable)
+      if (vm.fn->isAbstract) {
+        std::string nm = vm.fn->accessor ? vm.name.substr(4) : vm.name;
+        err(d->loc, "non-abstract class '" + c->name + "' does not implement inherited abstract member '" + nm +
+                        "' from class '" + vm.fn->cls->name + "'");
+      }
+    for (auto& ap : c->abstractProps)
+      err(d->loc, "non-abstract class '" + c->name + "' does not implement inherited abstract property '" + ap.first +
+                      "' (declare it as a field)");
+  }
   // implements: structural check
   for (Type* it : c->implements) {
-    if (!structurallyAssignable(c->type, it))
-      err(d->loc, "class '" + c->name + "' does not correctly implement '" + typeName(it) + "'");
+    if (!structurallyAssignable(c->type, it)) {
+      std::string why;
+      for (auto& p : it->shape->props) {
+        if (c->fieldIdx.count(p.name) || c->abstractProp(p.name)) continue;
+        if (c->getterSlot(p.name) >= 0)
+          why = ": property '" + p.name + "' is an accessor in the class; e7 reads interface properties as fields, so declare it in the interface as 'get " +
+                p.name + "(): " + typeName(p.type) + "'";
+        else
+          why = ": property '" + p.name + "' is missing";
+        break;
+      }
+      err(d->loc, "class '" + c->name + "' does not correctly implement '" + typeName(it) + "'" + why);
+    }
   }
   curFile = savedFile;
 }
@@ -1015,7 +1130,7 @@ void Checker::resolveSig(FuncSym* f) {
     }
   }
   Type* ret = f->retNode ? resolveType(f->retNode) : nullptr;
-  if (f->isCtor) ret = T.voidT();
+  if (f->isCtor || f->accessor == 2) ret = T.voidT();
   if (f->isNative) {
     if (!ret) ret = T.voidT();
     for (Type* t : ps)

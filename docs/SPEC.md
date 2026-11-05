@@ -14,7 +14,8 @@ Source file extension is `.ts` (recommended, supported directly by IDEs) or `.e7
 - Identifiers are ASCII only (`[A-Za-z_$][A-Za-z0-9_$]*`); string contents may be any Unicode.
 - Numbers: decimal, `0x`/`0o`/`0b`, exponents, numeric separators `1_000`; **bigint** literals `123n`. Legacy octal `017` is not allowed.
 - Strings: `'...'`, `"..."`, escapes `\n \t \r \b \f \v \0 \xHH \uHHHH \u{H...}`; template strings `` `a ${expr} b` `` (nestable).
-- **Not supported**: regex literals, private names `#x`, decorators `@`.
+- Private names `#x` for class members (section 5).
+- **Not supported**: regex literals, decorators `@`.
 
 ## 2. Types
 
@@ -61,13 +62,19 @@ utility types such as `Record/Partial/Pick`, `Promise`, `Symbol`, `RegExp`, and 
 ## 3. Declarations and statements
 
 - `let` / `const` (**`var` is not supported**); block scoping; `let` in a loop gets a fresh binding per iteration (closure capture behaves as in JS).
-- Array/object/tuple destructuring (declarations, assignment `[a, b] = [b, a]`, function parameters, `for...of`); default values and `...rest` in destructuring are not supported.
+- Array/object/tuple destructuring (declarations, assignment `[a, b] = [b, a]`, function parameters, `for...of`), nested.
+  In declarations, parameters and `for...of`, elements can have **default values** (used when the value is
+  `undefined`, or past the end of an array; evaluated only then, and they may refer to earlier bindings) and a
+  **rest element**: `const [first, ...others] = xs` (a new array; for a tuple, a tuple of the remaining
+  elements), `const { id, ...rest } = obj` (a new object with the other properties of the static type, without
+  `#private` fields). A binding with a default has the element type without `undefined`. Assignments to existing
+  variables support only plain patterns (no defaults or rest); a rest element must bind a name.
 - Object spread `{ ...a, k: v, ...b }`: the source may be an object type or a class instance (only fields are copied, not methods); later properties with the same name override earlier ones;
   **optional** properties in the source override only when present (same as TS: in `{ retries: 3, ...opts }`, `retries` has type `number`).
   The property order of the result is fixed at compile time: a possibly missing property that is later assigned by an explicit property is placed at the end (consistent with JS when that property is missing).
 - `if / else`, `while`, `do...while`, `for(;;)`, `for...of` (arrays, strings by code point, `Uint8Array`, `Map`, `Set`,
   `arr.entries()/keys()/values()`, `map.keys()/values()/entries()`), `switch` (with fall-through), `break/continue` (including labels),
-  labeled blocks, `try`/`catch` (section 3.1). **Not supported**: `for...in`, `with`, `finally`.
+  labeled blocks, `try`/`catch`/`finally` (section 3.1). **Not supported**: `for...in`, `with`.
 - Function declarations are hoisted; nested functions and arrow functions are closures.
 - `debugger;` stops execution when a debugger is attached ([DEBUGGING.md](DEBUGGING.md)) and does nothing otherwise (as in JS).
 - `throw` takes an Error: `throw new Error(msg)` (also `TypeError`, `RangeError`, `SyntaxError`, `URIError`), an
@@ -91,7 +98,16 @@ try {
   `SyntaxError`, `URIError`) to read `e.message` and `e.name`; `String(e)` and `` `${e}` `` give `"Name: message"`
   (just `"Name"` when the message is empty). Compare caught values with `===`, rethrow them with `throw e`.
   `console.log(e)` is rejected (Node.js prints a stack trace there); `e.stack` is not supported.
-- `finally` is not supported yet; run the cleanup after the `try` statement.
+- `try { } finally { }` and `try { } catch { } finally { }`: the finally block runs when the try block (and the
+  catch block) completes normally, by `return`, `break` or `continue`, and when a catchable error leaves it (the
+  error is rethrown after the finally block), as in JavaScript: a `return` value is computed before the finally
+  block runs; a `return`, `throw`, `break` or `continue` in the finally block replaces the pending completion
+  (and discards a pending error); nested finally blocks run innermost first.
+- Errors that cannot be caught (below) end the call **without running finally blocks**, like they skip catch
+  blocks. An error that passes through a finally block is rethrown from it: its stack trace starts there, and a
+  debugger that stops on caught errors also stops when the finally block takes it.
+- The compiler copies a finally block for every way out of its try statement, so deeply nested finally blocks
+  can make a function too large (a compile error).
 - **What can be caught**: errors that Node.js also throws as exceptions, with the same error name:
   - every `throw` in the script;
   - errors raised by the standard library whose JavaScript counterpart throws: `JSON.parse` syntax errors
@@ -147,7 +163,7 @@ try {
 - Only `===` / `!==` are allowed; `== null` / `!= null` are allowed as a special case meaning "is null or undefined".
 - Comparing types with no overlap (such as `string === number`) is a compile error (same as TS).
 - `&&` and `||` can be used with any type in conditions (by truthiness); in value position, `a || b` returns a value (types must be compatible), and `&&` is boolean only.
-- `??`, `??=`, `?.` (members, method calls, function calls) are the same as JS.
+- `??`, `??=`, `?.` (members, element access `a?.[i]`, method calls, function calls) are the same as JS.
 
 ### 4.5 Other
 - `typeof x` is evaluated at compile time to a constant string (not supported for nullable types).
@@ -158,7 +174,13 @@ try {
 ## 5. Functions and classes
 
 - Parameters must have type annotations (arrow functions can infer them from context). Default parameters (which may reference earlier parameters), optional parameters `x?: T`, and rest parameters `...xs: T[]` are supported.
-  A function with default parameters cannot be passed as a value (wrap it in an arrow function).
+  A function declaration with default parameters cannot be passed as a value (wrap it in an arrow function).
+  Arrow functions and function expressions can have default parameters too: such a closure parameter has the
+  type `T | undefined` (a default applies when the argument is omitted or `undefined`, as in JavaScript).
+  A callback parameter annotated `unknown` takes its contextual type (`Array.from({ length: n }, (_: unknown, i) => i)`).
+- Spread arguments: a tuple supplies one argument per element (`f(...pair)`, evaluated once); arrays, tuples and
+  other iterables can be spread into a rest parameter anywhere in the argument list (the rest parameter is always
+  a new array). Spreading an array into other parameters is a compile error (as in TypeScript).
 - Classes: fields (optionally initialized, types can be inferred), constructor parameter properties (`constructor(public x: number)`), methods, static fields/methods,
   single inheritance with `extends` (the first statement of a derived class constructor must be `super(...)`; if the constructor is omitted, the superclass constructor parameters are inherited automatically),
   `super.method()`, `implements` (checked structurally), `instanceof`. Method overrides require identical signatures.
@@ -167,7 +189,30 @@ try {
   initializer. Mutable static fields can be written with `=`, compound assignment and `++`/`--`. Writing an array's `length` truncates or
   extends it (`a.length = n`); compound assignment and `++`/`--` on `length` are not supported, and `length` of strings and `Uint8Array`
   is read-only. Members of an imported namespace (`import * as ns`) cannot be assigned.
-  Arrow function fields can capture `this`. **Not supported**: getters/setters, abstract classes, `#private`, generic classes, class expressions, methods as values (use arrow functions).
+  Arrow function fields can capture `this`.
+- **Accessors** `get x()` / `set x(v)` (instance and static) are compiled to method calls: they are virtual
+  (overridable), `super.x` calls the base class accessor, and compound assignment and `++` call the getter and
+  the setter once each. A getter and its setter have the same type; a setter without a parameter type takes the
+  getter's. Accessors are not own properties (not in `Object.keys`, `JSON.stringify`, spread). Interfaces and
+  object types may declare accessors (`get size(): number; set size(v: number)`), implemented by class accessors;
+  interface *properties* are read as fields, so a class cannot implement one with an accessor (compile error).
+  Destructuring a class value calls its getters.
+- **Abstract classes** cannot be instantiated; abstract methods and accessors need a return type and are
+  overridden by every concrete subclass. An abstract property (`abstract kind: string`) is declared as a field
+  (of the same type) by the concrete subclasses and read or written by name through the abstract class type.
+- **`#private`** fields and methods (instance and static) can only be used inside the class body that declares
+  them (including static blocks and closures there). Private methods are not virtual. Private fields are not
+  own enumerable properties: `Object.keys`, `JSON.stringify`, `console.log`, object spread and rest skip them. A
+  module with private instance fields requires e7vm 0.2.5 (older VMs would list them). Private accessors
+  (`get #x()`), `#x in obj` and redeclaring a base class's private name in a subclass are not supported.
+- **Static blocks** `static { ... }` run with the static field initializers, in source order, when the class
+  declaration is executed; they can use the class's private static members.
+- **Not supported**: generic classes, class expressions, decorators, methods as values (use arrow functions).
+- Object literals can have **methods** (`{ n: 2, twice(x: number): number { return x * this.n; } }`): `this` is
+  the object (or the contextual interface type), and the methods are own properties holding functions, as in
+  JavaScript. The literal's type has methods, so it can be passed as an interface with methods; such an
+  interface can also be implemented by arrow function properties. Methods cannot be used as values, and a
+  literal with methods cannot contain spreads.
 - Uninitialized fields start as `0` / `false` / `null`; optional fields start as `undefined`.
 
 ## 6. Standard library
@@ -183,10 +228,12 @@ The following behave the same as JavaScript (verified by differential testing ag
 - **Number**: `isInteger isSafeInteger isFinite isNaN parseFloat parseInt`, constants; instance methods `toString(radix) toFixed toPrecision toExponential`.
 - **String**: `length charAt charCodeAt codePointAt at indexOf lastIndexOf includes startsWith endsWith slice substring substr
   toUpperCase toLowerCase trim trimStart trimEnd padStart padEnd repeat split replace replaceAll concat localeCompare`,
-  `String.fromCharCode/fromCodePoint`. `split/replace` accept only string arguments (no regex); case conversion covers Latin, Greek and Cyrillic letters;
+  `String.fromCharCode/fromCodePoint`. `split/replace` accept only string patterns (no regex); the replacement of
+  `replace` / `replaceAll` can be a function `(match, offset, string) => string`; case conversion covers Latin, Greek and Cyrillic letters;
   `localeCompare` compares by code units (locale-independent).
 - **Array**: `length push pop shift unshift at slice splice concat indexOf lastIndexOf includes join reverse fill sort
-  map filter forEach reduce reduceRight some every find findIndex findLast findLastIndex`, `Array.from` (an iterable or
+  map filter forEach reduce reduceRight some every find findIndex findLast findLastIndex flatMap flat`
+  (`flat(depth)` with a constant depth, an integer literal or `Infinity`), `Array.from` (an iterable or
   `{ length: n }, fn`), `Array.of`, `new Array<T>(n)`, writable `length`. The default `sort()` sorts as strings (same as JS); sorting is stable.
   **Out-of-bounds reads are runtime errors** (JS returns `undefined`); writing at index `length` appends.
 - **Map / Set**: `size get set has delete clear forEach keys values entries`, iteration, spread, copy construction.
@@ -195,7 +242,12 @@ The following behave the same as JavaScript (verified by differential testing ag
 - **TextEncoder / TextDecoder** (UTF-8; decoding replaces invalid sequences per WHATWG rules).
 - **bigint**: all arithmetic/bitwise/comparison operations, `BigInt.asUintN/asIntN`, `toString(radix)`, use as Map keys.
 - **JSON.stringify** (including the indent argument; tuples are output as arrays; `undefined` fields are omitted; circular references are an error).
-- **Object.keys(obj)**.
+- **Object**: `keys(obj)`; `values(obj)` / `entries(obj)` for object and class types whose properties all have
+  one type (an optional property counts with its type without `undefined` and is skipped when absent, as with
+  `keys`): the properties come in their run-time order, and a property that the static
+  type does not declare (an object with more properties than its type) is an E7 error; `assign(target, ...sources)`:
+  with an object literal target it is the literal `{ ...target, ...sources }`, otherwise the target's type must have
+  every source property (copied like object spread, optional ones only when present); `freeze(obj)`.
 - **Date** (**UTC semantics**: local time is UTC, `getTimezoneOffset()` is always 0, results match Node under `TZ=UTC`):
   `Date.now/parse/UTC`, `new Date()/new Date(ms)/new Date(string)/new Date(y, m, d?, h?, mi?, s?, ms?)/new Date(date)`,
   all `get*/getUTC*`, `getTime/setTime/valueOf` (other `set*` methods are not supported; compute with `Date.UTC` and then `setTime`), `toISOString/toJSON/toString/toUTCString/toDateString/toTimeString`,
@@ -319,3 +371,6 @@ or host function that was running (or that called back into the script, like `Ar
 | JSON of the wrong shape | Accepted (no validation) | `JSON.parse(text) as T` ends the call (not catchable); `tryParse(text) as T \| null` from `e7:json` returns `null`. Syntax errors are a catchable `SyntaxError` in both |
 | Case conversion / `localeCompare` | Full Unicode / locale | Latin/Greek/Cyrillic / code-unit comparison |
 | Exceptions | Every error is catchable | `try`/`catch` catches the errors Node.js also throws; E7-specific checks and resource limits end the call (section 3.1) |
+| E7's own runtime checks (out of bounds, failed `as`, limits) | — | Not catchable; `finally` blocks do not run |
+| `Object.values` / `entries` of an object with more properties than its type | All own properties | E7 error (the extra property's type is unknown) |
+| `Object.assign` with an object having more properties than its type | Copies them all | Copies the properties of the static type (like spread) |

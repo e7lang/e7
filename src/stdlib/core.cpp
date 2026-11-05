@@ -421,6 +421,7 @@ struct Inspector {
           // a record field holding undefined is a missing optional property (JSON.stringify and spread
           // treat it the same way); class fields are always own properties in JavaScript
           if (c->isRecord && c->fieldVT[i] == VT_REF && fv[i].r == vm.undef()) continue;
+          if (privateField(c, i)) continue;  // #private fields are not shown (as in Node.js)
           fields.push_back(i);
           if (!c->fieldNames[i].empty() && c->fieldNames[i][0] >= '0' && c->fieldNames[i][0] <= '9') numericKeys = true;
         }
@@ -984,6 +985,7 @@ E7_NATIVE(n_objectKeys) {
   VM::TempRoot keep(vm, arr);
   for (uint32_t i : jsFieldOrder(in->cls)) {
     if (in->cls->fieldVT[i] == VT_REF && in->fields()[i].r == vm.undef()) continue;
+    if (privateField(in->cls, i)) continue;
     vm.arrayPush(arr, slotR(vm.newStringUtf8(in->cls->fieldNames[i])));
   }
   r->r = arr;

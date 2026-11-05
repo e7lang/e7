@@ -28,7 +28,8 @@ struct TypeNode {
   struct Param { std::string name; TypeNode* type; bool optional = false; bool rest = false; };
   std::vector<Param> params;         // Func
   TypeNode* ret = nullptr;           // Func
-  struct Member { std::string name; TypeNode* type; bool optional = false; bool method = false; bool readonly = false; };
+  // accessor: 0 = property or method, 1 = `get name(): T`, 2 = `set name(v: T)` (interfaces / type literals)
+  struct Member { std::string name; TypeNode* type; bool optional = false; bool method = false; bool readonly = false; int accessor = 0; };
   std::vector<Member> members;       // Object
   std::string literal;               // Literal (string literal type / null / undefined handled as Ref)
 };
@@ -55,6 +56,8 @@ struct Param {
   Loc loc;
   VarSym* sym = nullptr;
   VarDecl* pattern = nullptr;  // destructuring parameter
+  Type* innerType = nullptr;   // arrow parameter with a default: the type inside the body (the
+                               // closure's parameter type is that type | undefined)
 };
 
 enum class ConvKind {
@@ -67,6 +70,7 @@ struct ObjProp {
   Expr* value = nullptr;
   bool shorthand = false;
   bool spread = false;
+  bool method = false;  // method shorthand `name(params) { body }` (value is an Arrow)
   Loc loc;
 };
 
@@ -119,27 +123,32 @@ struct Expr {
 enum class SK {
   Var, Func, Class, Interface, TypeAlias, Enum, Expr, Block, If, While, DoWhile, For, ForOf, ForIn,
   Return, Break, Continue, Switch, Labeled, Throw, Empty, Import, Export, Declare, Debugger,
-  Try  // body = try block, els = catch block, decls[0] = catch variable (if any)
+  Try  // body = try block, els = catch block (or null), then = finally block (or null),
+       // decls[0] = catch variable (if any)
 };
 
 struct VarDecl {
   // pattern: simple name, or array / object destructuring
   std::string name;
   std::vector<VarDecl> elems;   // array pattern (empty name = hole) / object pattern
-  std::vector<std::string> keys;  // object pattern property names
+  std::vector<std::string> keys;  // object pattern property names ("" for a rest element)
   bool isArrayPat = false, isObjPat = false;
+  bool isRest = false;          // `...name` element of an array or object pattern (always last)
   TypeNode* type = nullptr;
-  Expr* init = nullptr;
+  Expr* init = nullptr;         // initializer; for an element of a pattern, its default value
+  Type* restType = nullptr;     // rest element: type of the collected value (checker)
   Loc loc;
   VarSym* sym = nullptr;
 };
 
 struct ClassMember {
-  enum Kind { Field, Method, Ctor } kind = Field;
-  std::string name;
+  enum Kind { Field, Method, Ctor, StaticBlock } kind = Field;
+  std::string name;  // "#name" for private members
   bool isStatic = false;
   bool readonly = false;
   bool optional = false;
+  bool isAbstract = false;
+  int accessor = 0;  // Method: 1 = getter, 2 = setter
   TypeNode* type = nullptr;
   Expr* init = nullptr;
   std::vector<Param> params;
@@ -183,6 +192,7 @@ struct Stmt {
   std::string label;               // Break/Continue target
   std::vector<SwitchCase> cases;
   // class
+  bool isAbstract = false;
   TypeNode* extends = nullptr;
   std::vector<TypeNode*> implements;
   std::vector<ClassMember> members;

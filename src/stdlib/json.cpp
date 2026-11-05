@@ -136,6 +136,7 @@ struct Stringifier {
         Slot fv = in->fields()[i];
         uint8_t fvt = in->cls->fieldVT[i];
         if (fvt == VT_REF && (fv.r == vm.undef() || (fv.r && fv.r->type == OT::Closure))) continue;
+        if (privateField(in->cls, i)) continue;  // #private fields are not serialized
         if (any) out += u',';
         nl(inner);
         std::u16string key = utf8ToUtf16(in->cls->fieldNames[i]);

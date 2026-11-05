@@ -69,6 +69,26 @@ class Checker {
 
   int recordCounter = 0;
 
+  // assignment targets: a member that is written (1) or read and written (2, compound / ++) is
+  // checked with this set, so that accessors resolve to the setter
+  Expr* lvalueTarget = nullptr;
+  int lvalueMode = 0;
+  Type* checkTarget(Expr* target, int mode) {
+    Expr* savedT = lvalueTarget;
+    int savedM = lvalueMode;
+    lvalueTarget = target;
+    while (lvalueTarget && lvalueTarget->k == EK::Paren) lvalueTarget = lvalueTarget->a;
+    lvalueMode = mode;
+    Type* t = check(target, nullptr);
+    lvalueTarget = savedT;
+    lvalueMode = savedM;
+    return t;
+  }
+  ClassSym* staticInitClass = nullptr;  // class whose static initializers / blocks are being checked
+  ClassSym* lexicalClass();             // class whose body contains the code being checked
+  bool checkPrivateAccess(Loc l, const std::string& name, ClassSym* owner);
+  Type* checkAccessor(Expr* e, ClassSym* c, const std::string& name, bool isStatic);
+
   // ---- diagnostics
   void err(Loc l, const std::string& msg);
   Type* errT(Loc l, const std::string& msg) { err(l, msg); return T.unknown(); }
@@ -147,12 +167,15 @@ class Checker {
   Type* checkNew(Expr* e, Type* expected);
   Type* checkMember(Expr* e, Type* expected);
   Type* checkIndex(Expr* e);
+  Type* checkIndexOn(Expr* e, Type* objectType);
   Type* checkArrow(Expr* e, Type* expected);
   Type* checkTemplate(Expr* e);
   Type* checkAs(Expr* e);
   bool checkLValue(Expr* e);
   std::string memberWriteError(Expr* target);  // "" when the member may be written here
+  Type* declaredMemberType(Expr* target);
   void checkArgs(Expr* call, Type* fnType, std::vector<Expr*>& args, size_t skip = 0);
+  void expandSpreads(std::vector<Expr*>& args);
   Type* checkBuiltinCall(Expr* e, const std::string& id, Type* expected);
   Type* checkMethodCall(Expr* e, Expr* member, Type* expected);
   Type* checkBuiltinMethod(Expr* e, Expr* member, Type* recvType, Type* expected);
@@ -175,7 +198,8 @@ class Checker {
  public:
   std::vector<ClassSym*> recordClasses;
   ClassSym* tupleRecord(Type* tupleType);
-  Type* recordFor(const std::vector<std::pair<std::string, Type*>>& fields, bool tuple = false);
+  Type* recordFor(const std::vector<std::pair<std::string, Type*>>& fields, bool tuple = false,
+                  const std::vector<std::pair<std::string, Type*>>* methods = nullptr);
 };
 
 }  // namespace e7

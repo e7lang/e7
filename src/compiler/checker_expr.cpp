@@ -207,13 +207,17 @@ Type* Checker::checkIdent(Expr* e) {
 }
 
 // ------------------------------------------------------------------ records
-Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& fields, bool tuple) {
-  // find identical layout (names + value types)
+Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& fields, bool tuple,
+                         const std::vector<std::pair<std::string, Type*>>* methods) {
+  size_t nm = methods ? methods->size() : 0;
+  // find identical layout (names + value types, and the same methods)
   for (ClassSym* c : recordClasses) {
-    if (c->fields.size() != fields.size() || c->isTuple != tuple) continue;
+    if (c->fields.size() != fields.size() || c->isTuple != tuple || c->vtable.size() != nm) continue;
     bool same = true;
     for (size_t i = 0; i < fields.size() && same; i++)
       if (c->fields[i].name != fields[i].first || vtOf(c->fields[i].type) != vtOf(fields[i].second)) same = false;
+    for (size_t i = 0; i < nm && same; i++)
+      if (c->vtable[i].name != (*methods)[i].first || c->vtable[i].fn->type != (*methods)[i].second) same = false;
     if (same) return c->type;
   }
   ClassSym* c = P.make<ClassSym>();
@@ -228,6 +232,28 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
     c->fields.push_back({f.first, f.second, nullptr, false, c, Loc()});
   }
   c->type = T.classType(c);
+  // methods of an object literal (method shorthand, or function properties implementing an
+  // interface's methods): vtable entries that call the closure stored in the field of that name,
+  // so that calls through interface types (by name) reach them
+  for (size_t i = 0; i < nm; i++) {
+    const std::string& mn = (*methods)[i].first;
+    FuncSym* t = P.make<FuncSym>();
+    t->name = mn;
+    t->qualName = mn;
+    t->cls = c;
+    t->isMethod = true;
+    t->isTopLevel = true;
+    t->trampField = c->fieldIdx[mn];
+    t->type = (*methods)[i].second;
+    t->sigResolved = t->checked = true;
+    t->file = curFile;
+    t->thisVar = newVar("this", c->type, true, Loc());
+    t->thisVar->isThis = true;
+    t->thisVar->owner = t;
+    P.funcs.push_back(t);
+    c->methodIdx[mn] = (int)c->vtable.size();
+    c->vtable.push_back({mn, t});
+  }
   c->classIdx = (int)P.classes.size();
   P.classes.push_back(c);
   recordClasses.push_back(c);
@@ -256,12 +282,13 @@ Type* Checker::elemTypeForIter(Expr* e, Type* t, Loc l) {
 
 Type* Checker::checkArray(Expr* e, Type* expected) {
   Type* exp = expected ? baseOf(expected) : nullptr;
+  expandSpreads(e->list);  // [...tuple]: one element per tuple element
   if (exp && exp->t == TT::Tuple) {
     if (e->list.size() != exp->elems.size())
       return errT(e->loc, "expected a tuple of " + std::to_string(exp->elems.size()) + " elements");
     for (size_t i = 0; i < e->list.size(); i++) {
-      if (e->list[i]->k == EK::Spread) return errT(e->loc, "spread is not allowed in tuple literals");
-      check(e->list[i], exp->elems[i]);
+      if (e->list[i]->k == EK::Spread) return errT(e->loc, "only tuples can be spread into tuple literals");
+      if (!e->list[i]->type) check(e->list[i], exp->elems[i]);
       coerce(e->list[i], exp->elems[i]);
     }
     e->cls = tupleRecord(exp);
@@ -274,11 +301,28 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
   }
   Type* et = elemExp;
   std::vector<Type*> types;
+  // [[1], []]: an empty array element takes its type from the other elements
+  auto isEmptyArr = [](Expr* x) {
+    x = strip(x);
+    return x->k == EK::Array && x->list.empty() && !x->type;
+  };
+  Type* emptyCtx = nullptr;
+  if (!elemExp) {
+    bool anyEmpty = false;
+    for (Expr* x : e->list) anyEmpty |= isEmptyArr(x);
+    if (anyEmpty)
+      for (Expr* x : e->list)
+        if (!isEmptyArr(x) && x->k != EK::Spread) {
+          Type* t = x->type ? x->type : check(x, nullptr);
+          if (baseOf(t)->t == TT::Array) { emptyCtx = baseOf(t); break; }
+        }
+  }
   for (Expr*& x : e->list) {
     Type* t;
-    if (x->k == EK::Spread) {
-      Type* st = check(x->a, nullptr);
-      x->type = st;
+    if (!elemExp && emptyCtx && isEmptyArr(x)) {
+      t = check(x, emptyCtx);
+    } else if (x->k == EK::Spread) {
+      Type* st = x->type;  // checked by expandSpreads
       if (st->t == TT::Array || st->t == TT::Set) t = st->elem;
       else if (st->t == TT::String) t = T.string();
       else if (st->t == TT::Bytes) t = T.number();
@@ -287,7 +331,7 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
       if (elemExp && t != elemExp && !(t->t == TT::Unknown) && !(kindOf(t) == K_R && kindOf(elemExp) == K_R && assignable(t, elemExp)))
         err(x->loc, "spread element type '" + typeName(t) + "' is not assignable to '" + typeName(elemExp) + "'");
     } else {
-      t = check(x, elemExp);
+      t = x->type ? x->type : check(x, elemExp);
       if (elemExp) coerce(x, elemExp);
     }
     types.push_back(t);
@@ -304,8 +348,24 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
 
 Type* Checker::checkObject(Expr* e, Type* expected) {
   Type* exp = expected ? baseOf(expected) : nullptr;
-  bool anySpread = false;
-  for (auto& p : e->props) anySpread |= p.spread;
+  bool anySpread = false, anyMethod = false;
+  for (auto& p : e->props) {
+    anySpread |= p.spread;
+    anyMethod |= p.method;
+  }
+  if (anySpread && anyMethod) {
+    for (auto& p : e->props)
+      if (p.method) return errT(p.loc, "method shorthand in an object literal with spread properties is not supported; use a class");
+  }
+  // a method (shorthand) has its own `this`: the object; it is captured from a hidden variable
+  // that the object literal sets when it creates the object
+  auto checkMethod = [&](ObjProp& p, VarSym* self, Type* want) -> Type* {
+    pushScope();
+    scope->names["this"] = self;
+    Type* t = check(p.value, want);
+    popScope();
+    return t;
+  };
   if (anySpread) {
     // { ...a, k: v, ...b }: later entries override earlier ones; a key keeps its first position
     std::vector<std::string> names;
@@ -341,7 +401,11 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
         Type* t = check(p.value, nullptr);
         if (t->t == TT::Class) {
           resolveClass(t->cls);
-          for (auto& f : t->cls->fields) upsert(f.name, f.type, (int)pi);
+          if (!t->cls->abstractProps.empty())
+            return errT(p.loc, "spreading a value of abstract class type '" + t->cls->name +
+                                   "' with abstract properties is not supported (their subclass fields are not known)");
+          for (auto& f : t->cls->fields)
+            if (f.name[0] != '#') upsert(f.name, f.type, (int)pi);  // #private fields are not copied
         } else if (t->t == TT::Object) {
           for (auto& pr : t->shape->props) upsert(pr.name, pr.type, (int)pi);
         } else if (t->t != TT::Unknown) {
@@ -402,15 +466,35 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       if (e->props[i].key == e->props[j].key) return errT(e->props[i].loc, "duplicate property '" + e->props[i].key + "'");
   if (exp && exp->t == TT::Object) {
     ObjShape* sh = exp->shape;
-    if (!sh->methods.empty())
-      return errT(e->loc, "object literals cannot implement '" + typeName(exp) + "' (it has methods); use a class");
-    std::vector<std::pair<std::string, Type*>> fields;
+    for (auto& m : sh->methods)
+      if (m.name.compare(0, 4, "get ") == 0 || m.name.compare(0, 4, "set ") == 0)
+        return errT(e->loc, "object literals cannot implement the accessor '" + m.name.substr(4) + "' of '" + typeName(exp) +
+                                "'; use a class");
+    VarSym* self = nullptr;
+    if (anyMethod) {
+      self = newVar("this", exp, true, e->loc);
+      self->owner = curFn;
+    }
+    std::vector<std::pair<std::string, Type*>> fields, methods;
     for (auto& p : e->props) {
       const ObjShape::Prop* sp = sh->findProp(p.key);
-      if (!sp) { err(p.loc, "object literal may only specify known properties; '" + p.key + "' does not exist in '" + typeName(exp) + "'"); continue; }
-      check(p.value, sp->type);
-      coerce(p.value, sp->type);
-      fields.push_back({p.key, sp->type});
+      const ObjShape::Method* sm = sp ? nullptr : sh->findMethod(p.key);
+      if (sp) {
+        if (p.method) checkMethod(p, self, sp->type);
+        else check(p.value, sp->type);
+        coerce(p.value, sp->type);
+        fields.push_back({p.key, sp->type});
+      } else if (sm) {
+        // the interface's method is implemented by a function property (shorthand or arrow)
+        Type* t = p.method ? checkMethod(p, self, sm->fn) : check(p.value, sm->fn);
+        if (t != sm->fn && t->t != TT::Unknown)
+          err(p.loc, "property '" + p.key + "' of type '" + typeName(t) + "' does not match the method '" + p.key + "' of '" +
+                         typeName(exp) + "' (" + typeName(sm->fn) + ")");
+        fields.push_back({p.key, sm->fn});
+        methods.push_back({p.key, sm->fn});
+      } else {
+        err(p.loc, "object literal may only specify known properties; '" + p.key + "' does not exist in '" + typeName(exp) + "'");
+      }
     }
     for (auto& sp : sh->props) {
       bool present = false;
@@ -420,8 +504,74 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
         err(e->loc, "property '" + sp.name + "' is missing in object literal of type '" + typeName(exp) + "'");
       fields.push_back({sp.name, sp.type});
     }
-    e->cls = recordFor(fields)->cls;
+    for (auto& m : sh->methods) {
+      bool present = false;
+      for (auto& p : e->props) if (p.key == m.name) present = true;
+      if (!present) err(e->loc, "method '" + m.name + "' is missing in object literal of type '" + typeName(exp) + "'");
+    }
+    e->cls = recordFor(fields, false, methods.empty() ? nullptr : &methods)->cls;
+    e->var = self;
     return exp;
+  }
+  if (anyMethod && !(exp && exp->t != TT::Unknown)) {
+    // { n: 2, twice(x: number) { return x * this.n; } }: the type has the properties and methods
+    // ({ n: number; twice(x: number): number }); `this` is that type
+    T.shapes.emplace_back(new ObjShape());
+    ObjShape* sh = T.shapes.back().get();
+    Type* selfT = T.objectType(sh);
+    VarSym* self = newVar("this", selfT, true, e->loc);
+    self->owner = curFn;
+    std::vector<Type*> propT(e->props.size(), nullptr);
+    for (size_t i = 0; i < e->props.size(); i++) {
+      ObjProp& p = e->props[i];
+      if (p.method) continue;
+      Type* t = check(p.value, nullptr);
+      if (t->t == TT::Null || t->t == TT::Undefined) {
+        err(p.loc, "cannot infer the type of property '" + p.key + "' from null/undefined; declare an interface");
+        t = T.unknown();
+      }
+      if (t->t == TT::Void) { err(p.loc, "property value cannot be void"); t = T.unknown(); }
+      propT[i] = t;
+      sh->props.push_back({p.key, t, false});
+    }
+    // methods with a complete signature are part of `this` before any body is checked
+    std::vector<bool> known(e->props.size(), false);
+    for (size_t i = 0; i < e->props.size(); i++) {
+      ObjProp& p = e->props[i];
+      if (!p.method) continue;
+      Expr* a = p.value;
+      bool complete = a->retType != nullptr;
+      for (auto& q : a->params) complete = complete && q.type && !q.init && !q.pattern;
+      if (!complete) continue;
+      std::vector<Type*> ps;
+      std::vector<bool> opt;
+      bool rest = false;
+      for (auto& q : a->params) {
+        Type* qt = resolveType(q.type);
+        if (q.optional) qt = T.optional(qt, false, true);
+        ps.push_back(qt);
+        opt.push_back(q.optional);
+        rest |= q.rest;
+      }
+      propT[i] = T.func(ps, resolveType(a->retType), opt, rest);
+      known[i] = true;
+      sh->methods.push_back({p.key, propT[i]});
+    }
+    for (size_t i = 0; i < e->props.size(); i++) {
+      ObjProp& p = e->props[i];
+      if (!p.method) continue;
+      Type* t = checkMethod(p, self, nullptr);
+      if (!known[i]) {
+        propT[i] = t;
+        if (t->t == TT::Func) sh->methods.push_back({p.key, t});
+      }
+    }
+    std::vector<std::pair<std::string, Type*>> fields, methods;
+    for (size_t i = 0; i < e->props.size(); i++) fields.push_back({e->props[i].key, propT[i]});
+    for (auto& m : sh->methods) methods.push_back({m.name, m.fn});
+    e->cls = recordFor(fields, false, &methods)->cls;
+    e->var = self;
+    return selfT;
   }
   if (exp && exp->t != TT::Unknown) {
     if (exp->t == TT::Class) return errT(e->loc, "an object literal cannot be used as class '" + typeName(exp) + "'; use 'new'");
@@ -499,6 +649,10 @@ bool Checker::checkLValue(Expr* e) {
     }
     case EK::Member:
     case EK::Index:
+      if (x->optional) {
+        err(x->loc, "the left-hand side of an assignment may not be an optional property access");
+        return false;
+      }
       return true;
     default:
       err(x->loc, "invalid assignment target");
@@ -513,10 +667,45 @@ static Type* storageTypeOf(Expr* x) {
   return nullptr;
 }
 
+// Declared (not narrowed) type of an accessor or abstract property that is written; nullptr for
+// other targets.
+Type* Checker::declaredMemberType(Expr* target) {
+  target = strip(target);
+  if (target->k != EK::Member) return nullptr;
+  const std::string& n = target->raw;
+  switch (target->intrinsic) {
+    case IN_ABSTRACT_PROP: return target->cls->abstractProp(n);
+    case IN_ACCESSOR: case IN_SUPER_ACCESSOR: {
+      int s = target->cls->setterSlot(n);
+      if (s < 0) return nullptr;
+      FuncSym* f = target->cls->vtable[s].fn;
+      resolveSig(f);
+      return f->type->params.empty() ? nullptr : f->type->params[0];
+    }
+    case IN_STATIC_ACCESSOR: {
+      auto it = target->cls->staticMethods.find("set " + n);
+      if (it == target->cls->staticMethods.end()) return nullptr;
+      resolveSig(it->second);
+      return it->second->type->params.empty() ? nullptr : it->second->type->params[0];
+    }
+    case IN_IFACE_ACCESSOR: {
+      Type* ot = target->a->type ? baseOf(target->a->type) : nullptr;
+      const ObjShape::Method* m = ot && ot->t == TT::Object ? ot->shape->findMethod("set " + n) : nullptr;
+      return m && !m->fn->params.empty() ? m->fn->params[0] : nullptr;
+    }
+    default: return nullptr;
+  }
+}
+
 std::string Checker::memberWriteError(Expr* target) {
   target = strip(target);
   if (target->k != EK::Member) return "";
   const std::string& n = target->raw;
+  // accessors: checkAccessor already required a setter; abstract properties are writable
+  if (target->intrinsic == IN_ACCESSOR || target->intrinsic == IN_STATIC_ACCESSOR ||
+      target->intrinsic == IN_SUPER_ACCESSOR || target->intrinsic == IN_IFACE_ACCESSOR ||
+      target->intrinsic == IN_ABSTRACT_PROP)
+    return "";
   if (target->intrinsic == IN_STATIC_FIELD) {
     Expr* base = strip(target->a);
     Sym* s = base->k == EK::Ident ? lookup(base->raw) : nullptr;
@@ -537,7 +726,7 @@ std::string Checker::memberWriteError(Expr* target) {
 
 Type* Checker::checkUpdate(Expr* e) {
   if (!checkLValue(e->a)) return T.unknown();
-  Type* t = check(e->a, nullptr);
+  Type* t = checkTarget(e->a, 2);
   // built-in / intrinsic properties (array length, Map.size, Math.PI, static fields, ...) are not
   // writable through ++ / --, consistent with assignment
   Expr* target = strip(e->a);
@@ -548,6 +737,10 @@ Type* Checker::checkUpdate(Expr* e) {
   std::string werr = memberWriteError(target);
   if (!werr.empty()) return errT(e->loc, werr);
   Type* st = storageTypeOf(e->a);
+  if (Type* dt = declaredMemberType(target)) {
+    st = dt;
+    e->a->type = dt;
+  }
   if (st) t = st;
   if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown) {
     std::string key = pathKey(e->a);
@@ -733,9 +926,12 @@ Type* Checker::checkAssign(Expr* e) {
     if (op != "=") return errT(e->loc, "invalid destructuring assignment");
     std::vector<Type*> tts;
     for (Expr*& x : target->list) {
-      if (x->k == EK::Spread) return errT(x->loc, "rest elements are not supported");
+      if (x->k == EK::Spread)
+        return errT(x->loc, "rest elements in destructuring assignments are not supported; use a declaration: const [a, ...rest] = xs");
+      if (strip(x)->k == EK::Assign)
+        return errT(x->loc, "default values in destructuring assignments are not supported; use a declaration: const [a = 1] = xs");
       if (!checkLValue(x)) return T.unknown();
-      Type* t = check(x, nullptr);
+      Type* t = checkTarget(x, 1);
       Type* st = storageTypeOf(x);
       tts.push_back(st ? st : t);
       invalidatePath(pathKey(x));
@@ -768,8 +964,9 @@ Type* Checker::checkAssign(Expr* e) {
     lt = target->var ? (target->var->isGlobal ? globalVarType(target->var) : target->var->type) : T.unknown();
     if (target->var) e->a->type = lt;
   } else {
-    lt = check(e->a, nullptr);
-    if (target->k == EK::Member && target->field >= 0 && target->cls) lt = target->cls->fields[target->field].type;
+    lt = checkTarget(e->a, e->raw == "=" ? 1 : 2);
+    if (Type* dt = declaredMemberType(target)) lt = dt;
+    else if (target->k == EK::Member && target->field >= 0 && target->cls) lt = target->cls->fields[target->field].type;
     else if (target->k == EK::Member && target->field < 0 && target->intrinsic == 0 && target->a->type &&
              baseOf(target->a->type)->t == TT::Object) {
       const ObjShape::Prop* p = baseOf(target->a->type)->shape->findProp(target->raw);
@@ -841,14 +1038,29 @@ Type* Checker::checkCondExpr(Expr* e, Type* expected) {
   std::vector<Fact> tf, ff;
   factsFrom(e->a, true, tf);
   factsFrom(e->a, false, ff);
-  pushScope();
-  applyFacts(tf);
-  Type* bt = check(e->b, expected);
-  popScope();
+  // c ? [x] : []: an empty array literal takes the type of the other branch
+  auto isEmptyArr = [](Expr* x) {
+    x = strip(x);
+    return x->k == EK::Array && x->list.empty();
+  };
+  bool emptyB = !expected && isEmptyArr(e->b) && !isEmptyArr(e->c);
+  Type *bt = nullptr, *ct = nullptr;
+  if (!emptyB) {
+    pushScope();
+    applyFacts(tf);
+    bt = check(e->b, expected);
+    popScope();
+  }
   pushScope();
   applyFacts(ff);
-  Type* ct = check(e->c, expected);
+  ct = check(e->c, expected ? expected : (isEmptyArr(e->c) && bt && baseOf(bt)->t == TT::Array ? baseOf(bt) : nullptr));
   popScope();
+  if (emptyB) {
+    pushScope();
+    applyFacts(tf);
+    bt = check(e->b, baseOf(ct)->t == TT::Array ? baseOf(ct) : nullptr);
+    popScope();
+  }
   Type* t;
   if (expected && expected->t != TT::Bool) {
     if (assignable(bt, expected) && assignable(ct, expected)) t = expected;
@@ -928,7 +1140,7 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
     f->arrow = e;
     f->parent = curFn;
     f->defScope = scope;
-    f->isArrowThis = e->intrinsic != IN_FUNC_EXPR;
+    f->isArrowThis = e->intrinsic != IN_FUNC_EXPR && e->intrinsic != IN_OBJ_METHOD;
     f->qualName = (curFn && !curFn->isInit ? curFn->qualName + "." : "") + nm;
     e->fn = f;
   }
@@ -939,17 +1151,53 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
   for (size_t i = 0; i < e->params.size(); i++) {
     Param& p = e->params[i];
     Type* t = nullptr;
-    if (p.type) t = resolveType(p.type);
-    else if (exp && i < exp->params.size()) t = exp->params[i];
-    else if (p.init) t = check(p.init, nullptr);
-    else { err(p.loc, "parameter '" + p.name + "' implicitly has an unknown type; add a type annotation"); t = T.unknown(); }
+    Type* ctx = exp && i < exp->params.size() ? exp->params[i] : nullptr;
+    // `(x: unknown) => ...` as a callback: TypeScript lets the body do nothing type-specific with x,
+    // so it takes the contextual parameter type (e.g. Array.from({ length: n }, (_: unknown, i) => i))
+    bool unknownAnn = p.type && p.type->k == TNK::Ref && p.type->name == "unknown" && p.type->args.empty();
+    if (unknownAnn && ctx && !p.optional && !p.rest) t = ctx;
+    else if (p.type) t = resolveType(p.type);
+    else if (ctx) t = ctx;
+    else if (p.init) {
+      // type of the default value; it may refer to the earlier parameters
+      Scope* s0 = scope;
+      pushScope(true);
+      for (size_t k = 0; k < i; k++) {
+        Param& q = e->params[k];
+        if (q.pattern) continue;
+        VarSym* tv = newVar(q.name, q.innerType ? q.innerType : ps[k], false, q.loc);
+        tv->owner = f;
+        scope->names[q.name] = tv;
+      }
+      t = widen(check(p.init, nullptr));
+      scope = s0;
+      if (t->t == TT::Null || t->t == TT::Undefined) {
+        err(p.loc, "cannot infer the type of parameter '" + p.name + "' from its default value; add a type annotation");
+        t = T.unknown();
+      }
+    } else { err(p.loc, "parameter '" + p.name + "' implicitly has an unknown type; add a type annotation"); t = T.unknown(); }
     if (p.optional && p.type) t = T.optional(t, false, true);
     if (p.rest) rest = true;
+    bool isOpt = p.optional;
     if (p.init) {
-      err(p.loc, "default parameter values are not supported in arrow functions");
+      if (p.rest) err(p.loc, "a rest parameter cannot have a default value");
+      if (p.optional) err(p.loc, "parameter cannot be optional and have an initializer");
+      // A closure has no hidden argument count: the default applies when the argument is undefined
+      // (as in JavaScript), so the parameter itself is `T | undefined` unless the contextual type
+      // says it is never undefined. Inside the body it has the type without undefined.
+      Type* inner = t;
+      Type* outer = t;
+      if (t->t == TT::Optional && t->hasUndef) {
+        inner = t->hasNull ? T.optional(t->elem, true, false) : t->elem;
+      } else if (!(ctx && ctx == t) && t->t != TT::Unknown) {
+        outer = t->t == TT::Optional ? T.optional(t->elem, t->hasNull, true) : T.optional(t, false, true);
+      }
+      p.innerType = inner;
+      t = outer;
+      isOpt = ctx ? exp->optParams[i] : true;
     }
     ps.push_back(t);
-    opt.push_back(p.optional);
+    opt.push_back(isOpt);
   }
   if (exp && e->params.size() > exp->params.size())
     err(e->loc, "function has more parameters than expected by '" + typeName(exp) + "'");
@@ -974,6 +1222,55 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
 }
 
 // ------------------------------------------------------------------ member access
+ClassSym* Checker::lexicalClass() {
+  for (FuncSym* f = curFn; f; f = f->parent) {
+    if (f->cls) return f->cls;
+    if (f->isInit) break;
+  }
+  return staticInitClass;
+}
+
+// #x can only be used inside the body of the class that declares it
+bool Checker::checkPrivateAccess(Loc l, const std::string& name, ClassSym* owner) {
+  if (lexicalClass() == owner) return true;
+  err(l, "property '" + name + "' is not accessible outside class '" + owner->name + "' because it has a private identifier");
+  return false;
+}
+
+// get x() / set x(v) of class c (instance or static); nullptr when c has neither
+Type* Checker::checkAccessor(Expr* e, ClassSym* c, const std::string& name, bool isStatic) {
+  FuncSym* g = nullptr;
+  FuncSym* s = nullptr;
+  if (isStatic) {
+    auto gi = c->staticMethods.find("get " + name);
+    auto si = c->staticMethods.find("set " + name);
+    if (gi != c->staticMethods.end()) g = gi->second;
+    if (si != c->staticMethods.end()) s = si->second;
+  } else {
+    if (c->getterSlot(name) >= 0) g = c->vtable[c->getterSlot(name)].fn;
+    if (c->setterSlot(name) >= 0) s = c->vtable[c->setterSlot(name)].fn;
+  }
+  if (!g && !s) return nullptr;
+  int mode = e == lvalueTarget ? lvalueMode : 0;
+  if (mode != 1 && !g) return errT(e->loc, "property '" + name + "' has no getter (it only has a setter)");
+  if (mode >= 1 && !s) return errT(e->loc, "cannot assign to '" + name + "' because it is a read-only property");
+  Type* t;
+  if (g) {
+    resolveSig(g);
+    if (g->inferRet) {
+      if (g->checking) return errT(e->loc, "getter '" + name + "' is used recursively; add a return type annotation");
+      checkFunction(g);
+    }
+    t = g->type->ret;
+  } else {
+    resolveSig(s);
+    t = s->type->params.empty() ? T.unknown() : s->type->params[0];
+  }
+  e->cls = c;
+  e->intrinsic = isStatic ? IN_STATIC_ACCESSOR : IN_ACCESSOR;
+  return t;
+}
+
 Type* Checker::checkMember(Expr* e, Type* expected) {
   Expr* obj = strip(e->a);
   const std::string& name = e->raw;
@@ -997,6 +1294,7 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
     if (s && s->k == SymK::Class) {
       ClassSym* c = static_cast<ClassSym*>(s);
       resolveClass(c);
+      if (name[0] == '#' && !checkPrivateAccess(e->nameLoc, name, c)) return T.unknown();
       auto it = c->staticFields.find(name);
       if (it != c->staticFields.end()) {
         e->intrinsic = IN_STATIC_FIELD;
@@ -1004,9 +1302,27 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
         if (!it->second->type) globalVarType(it->second);
         return it->second->type ? it->second->type : T.unknown();
       }
+      if (Type* at = checkAccessor(e, c, name, true)) return at;
       if (c->staticMethods.count(name)) return errT(e->loc, "static methods cannot be used as values; wrap in an arrow function");
       return errT(e->loc, "class '" + c->name + "' has no static member '" + name + "'");
     }
+  }
+  if (obj->k == EK::Super) {
+    // super.x: an accessor of the base class (called directly, with this)
+    FuncSym* f = curFn;
+    while (f && f->isArrowThis && f->parent && !f->isMethod && !f->isCtor) f = f->parent;
+    if (!f || !f->cls || !f->cls->parent || f->isStatic || !(f->isMethod || f->isCtor))
+      return errT(e->loc, "'super' property access is only allowed in methods of derived classes");
+    ClassSym* pc = f->cls->parent;
+    if (pc->fieldIdx.count(name))
+      return errT(e->loc, "class field '" + name + "' defined by the parent class is not accessible in the child class via super; use this." + name);
+    Type* t = checkAccessor(e, pc, name, false);
+    if (!t) return errT(e->loc, "base class '" + pc->name + "' has no accessor '" + name + "'");
+    if (t->t == TT::Unknown) return t;
+    e->intrinsic = IN_SUPER_ACCESSOR;
+    Sym* th = lookup("this");
+    if (th && th->k == SymK::Var) { e->var = static_cast<VarSym*>(th); markCapture(e->var); }
+    return t;
   }
   Type* ot = check(e->a, nullptr);
   if (ot->t == TT::Unknown) return T.unknown();
@@ -1028,17 +1344,44 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
       resolveClass(c);
       auto it = c->fieldIdx.find(name);
       if (it != c->fieldIdx.end()) {
+        if (name[0] == '#' && !checkPrivateAccess(e->nameLoc, name, c->fields[it->second].owner)) return T.unknown();
         e->field = it->second;
         e->cls = c;
         result = c->fields[it->second].type;
         break;
       }
+      if (Type* at = checkAccessor(e, c, name, false)) {
+        if (at->t == TT::Unknown) return at;
+        result = at;
+        break;
+      }
+      if (Type* ap = c->abstractProp(name)) {
+        // abstract property: the subclass declares the field, read / written by name
+        e->intrinsic = IN_ABSTRACT_PROP;
+        e->cls = c;
+        result = ap;
+        break;
+      }
       if (c->methodIdx.count(name)) return errT(e->loc, "method '" + name + "' cannot be used as a value; use an arrow function");
+      for (ClassSym* k = c; k; k = k->parent)
+        if (k->privateMethods.count(name)) return errT(e->loc, "method '" + name + "' cannot be used as a value; use an arrow function");
+      if (name[0] == '#') return errT(e->loc, "private name '" + name + "' is not declared by class '" + c->name + "'");
       return errT(e->loc, "property '" + name + "' does not exist on type '" + c->name + "'" + suggestMember(bt, name));
     }
     case TT::Object: {
       const ObjShape::Prop* p = bt->shape->findProp(name);
       if (!p) {
+        const ObjShape::Method* g = bt->shape->findMethod("get " + name);
+        const ObjShape::Method* s = bt->shape->findMethod("set " + name);
+        if (g || s) {
+          // accessor declared by an interface: a method call by name
+          int mode = e == lvalueTarget ? lvalueMode : 0;
+          if (mode != 1 && !g) return errT(e->loc, "property '" + name + "' has no getter");
+          if (mode >= 1 && !s) return errT(e->loc, "cannot assign to '" + name + "' because it is a read-only property");
+          e->intrinsic = IN_IFACE_ACCESSOR;
+          result = g ? g->fn->ret : s->fn->params[0];
+          break;
+        }
         if (bt->shape->findMethod(name)) return errT(e->loc, "method '" + name + "' cannot be used as a value");
         return errT(e->loc, "property '" + name + "' does not exist on type '" + typeName(bt) + "'" + suggestMember(bt, name));
       }
@@ -1071,9 +1414,19 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
 Type* Checker::checkIndex(Expr* e) {
   Type* ot = check(e->a, nullptr);
   if (ot->t == TT::Optional) {
-    if (!e->optional) return errT(e->loc, "object is possibly null or undefined");
-    return errT(e->loc, "optional element access is not supported");
+    if (!e->optional) return errT(e->loc, "object is possibly null or undefined; use '?.[' or a check");
+    // a?.[i]: undefined when a is null or undefined (the index is not evaluated then)
+    Type* r = checkIndexOn(e, ot->elem);
+    if (r->t == TT::Unknown) return r;
+    if (r->t == TT::Void) return errT(e->loc, "void in optional chain");
+    e->innerType = r;
+    return T.optional(r, false, true);
   }
+  e->optional = false;  // '?.[' on a value that is never null: a plain index
+  return checkIndexOn(e, ot);
+}
+
+Type* Checker::checkIndexOn(Expr* e, Type* ot) {
   switch (ot->t) {
     case TT::Array: {
       Type* it = check(e->b, nullptr);

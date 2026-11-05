@@ -301,7 +301,9 @@ string/byte types) are checked by the interpreter at runtime. So even maliciousl
 - The `version` field is the bytecode format. e7 0.2.x reads and writes format 2 only; a module of another format is
   rejected at load time with `E7_ERR_VERSION` (0.1 modules must be recompiled).
 - `requires` is the oldest e7vm that can run the module. The compiler computes it from the instructions and native
-  functions the module uses (each has a "since" version, `src/core/since.h`); a VM older than `requires` rejects the
+  functions the module uses (each has a "since" version, `src/core/since.h`), and from features that change how a
+  VM must treat it: a class (not a record) with a field named `#...` (a `#private` field, hidden from
+  `Object.keys`, `JSON.stringify` and `console.log` since e7vm 0.2.5) requires 0.2.5; a VM older than `requires` rejects the
   module with `E7_ERR_VERSION` instead of failing verification. `e7c --target 0.2` makes newer features compile
   errors, so a server can build modules for the VM versions of the apps in the field.
 - `e7_inspect()` (and `e7c --info`) read the format, `requires` and signature without loading a module.

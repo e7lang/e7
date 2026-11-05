@@ -86,11 +86,11 @@ function area(s: Shape): number {
 console.log(area({ kind: ShapeKind.Rect, w: 2, h: 3 }));
 ```
 
-### Exceptions: `try` / `catch` (no `finally`)
+### Exceptions: `try` / `catch` / `finally`
 
 `try`/`catch` catches errors that Node.js also throws (with the same name): `throw`, `JSON.parse` syntax errors,
 standard-library `RangeError` / `TypeError` / `URIError`s. The catch variable is `unknown` (narrow it with
-`instanceof Error` before reading `.message`), only Errors can be thrown, and there is no `finally`:
+`instanceof Error` before reading `.message`) and only Errors can be thrown:
 
 ```ts
 function parse(text: string): number {
@@ -112,13 +112,30 @@ try { console.log(1); } catch (e) { console.log(e.message); } // narrow first: i
 throw "failed"; // throw new Error("failed")
 ```
 
-```ts e7-reject
-try { console.log(1); } finally { console.log(2); } // no finally yet
+`finally` runs as in JavaScript: after the `try` (and `catch`) block completes, returns, breaks, continues or
+throws a catchable error (which is rethrown afterwards); a `return` or `throw` in `finally` replaces the
+pending one:
+
+```ts
+const log: string[] = [];
+function withResource(fail: boolean): string {
+  log.push("open");
+  try {
+    if (fail) throw new Error("failed");
+    return "done";
+  } finally {
+    log.push("close");
+  }
+}
+console.log(withResource(false));
+try { withResource(true); } catch (e) { console.log(String(e)); }
+console.log(log.join(","));
 ```
 
 E7's own runtime checks are not catchable, because JavaScript would not throw there: an out-of-bounds read,
 `JSON.parse(text) as T` with JSON of the wrong shape, integer division by zero, `abort()`, and the budget and
-memory limits. Validate before acting, and return expected failures as values:
+memory limits. They end the call without running `finally` blocks. Validate before acting, and return expected
+failures as values:
 
 ```ts
 function parsePort(text: string): number | null {
@@ -249,24 +266,29 @@ const maybe: string | null = null;
 console.log(count, "1" === "1", maybe == null);   // `== null` / `!= null` are allowed
 ```
 
-### Getters, setters, `#private`, abstract classes, class expressions, decorators
+### Class expressions, decorators, private accessors
+
+Getters and setters, `#private` fields and methods, `abstract` classes and `static {}` blocks work (see
+section 4). Class expressions, decorators, private accessors (`get #x()`) and `#x in obj` are rejected:
 
 ```ts e7-reject
-class Temp { private c = 0; get f(): number { return this.c * 9 / 5 + 32; } }
+const Point = class { x = 0; };
 ```
 
-```ts
-class Temp {
-  private celsius = 0;
-  fahrenheit(): number { return this.celsius * 9 / 5 + 32; }
-  setCelsius(c: number): void { this.celsius = c; }
-}
-const t = new Temp();
-t.setCelsius(100);
-console.log(t.fahrenheit());
+```ts e7-reject
+class A { #v = 1; get #x(): number { return this.#v; } }
 ```
 
-`public` / `private` / `protected` are accepted (not enforced). `readonly` is enforced like TypeScript.
+`public` / `private` / `protected` are accepted (not enforced); `#private` members are enforced (only usable
+inside their class). `readonly` is enforced like TypeScript.
+
+Interfaces read properties as fields: a class that implements an interface property with a getter is
+rejected. Declare the accessor in the interface instead (`interface Sized { get size(): number }`):
+
+```ts e7-reject
+interface HasArea { readonly area: number }
+class Square implements HasArea { constructor(private side: number) {} get area(): number { return this.side ** 2; } }
+```
 
 ### Methods and default-parameter functions as values
 
@@ -317,20 +339,23 @@ const root = new TreeNode("root").add(new TreeNode("a")).add(new TreeNode("b").a
 console.log(root.size());
 ```
 
-### Destructuring with defaults or rest
+### Defaults and rest in destructuring assignments
+
+Destructuring declarations, parameters and `for...of` support defaults and rest elements
+(`const [first = 0, ...rest] = nums`, `const { host = "localhost", ...other } = options`); assignments to
+existing variables only support plain patterns (`[a, b] = [b, a]`):
 
 ```ts e7-reject
-const [first, ...rest] = [1, 2, 3];
+let first = 0;
+let rest: number[] = [];
+[first, ...rest] = [1, 2, 3];
 ```
-
-Plain destructuring works (`const [a, b] = pair`, `const { x, y } = point`, `for (const [k, v] of map)`,
-`[a, b] = [b, a]`); use `slice` for the rest and `??` for defaults:
 
 ```ts
 const nums = [1, 2, 3];
-const [first, second] = nums;
-const rest = nums.slice(1);
-console.log(first, second, rest.join(","));
+const [first = 0, second = 0, ...rest] = nums;
+const { host = "localhost", ...other } = { port: 80, tls: false } as { host?: string; port: number; tls: boolean };
+console.log(first, second, rest.join(","), host, JSON.stringify(other));
 ```
 
 ### Other rejected syntax
@@ -344,8 +369,15 @@ console.log(first, second, rest.join(","));
 - `let`/`const` with block scoping; a `let` in a loop gets a fresh binding per iteration.
 - `if`, `switch` (fall-through allowed), `for`, `for...of` (arrays, strings, `Uint8Array`, `Map`, `Set`,
   `entries()/keys()/values()`), `while`, `do...while`, labeled `break`/`continue`.
-- Object spread `{ ...a, k: v }` (objects and class instances; only fields are copied).
-- `?.`, `??`, `??=`, `!` (checked at run time), `as T` (upcasts; class downcasts are checked at run time).
+- `try` / `catch` / `finally`, `throw new Error(...)`.
+- Destructuring with defaults and rest: `const [a = 1, ...rest] = xs`, `const { x, y = 0, ...others } = p`,
+  in parameters (`function f({ host = "h" }: Opts = {})`) and `for...of`.
+- Object spread `{ ...a, k: v }` (objects and class instances; only fields are copied, not `#private` ones).
+- Spread arguments: tuples into any parameters (`f(...pair)`), arrays and tuples into rest parameters.
+- Object literal methods `{ n: 2, twice(x: number) { return x * this.n; } }` (`this` is the object); an
+  object literal can implement an interface with methods.
+- `?.` (also `a?.[i]`), `??`, `??=`, `!` (checked at run time), `as T` (upcasts; class downcasts are checked at
+  run time).
 - Narrowing works on `=== null`, `!== undefined`, `== null`, truthiness, `instanceof`, early returns, and
   property paths (`if (this.head !== null) this.head.next ...`).
 - Comparing values of unrelated types (`"1" === 1`) is a compile error, as in TypeScript.
@@ -354,12 +386,37 @@ console.log(first, second, rest.join(","));
 ## 4. Functions and classes
 
 - Parameters need type annotations (arrow functions passed as callbacks infer them). Default, optional and rest
-  parameters work. A recursive function needs an explicit return type.
-- An empty array literal needs a type: `const xs: string[] = []`.
+  parameters work (also in arrow functions). A recursive function needs an explicit return type.
+- An empty array literal needs a type: `const xs: string[] = []` (`c ? [x] : []` takes the other branch's type).
 - Classes: fields (typed or initialized), constructor parameter properties, methods, static members,
   `extends` (derived constructors call `super(...)` first), `super.method()`, `implements` (structural),
   `instanceof`. Overrides must keep the same signature. Fields without an initializer start as
   `0` / `false` / `null`, optional fields as `undefined`.
+- `get x()` / `set x(v)` (also static, overridable, `super.x`), `#private` fields and methods, `abstract`
+  classes, methods and properties (a concrete subclass declares an abstract property as a field), and
+  `static { }` blocks (run with the static initializers, in order):
+
+```ts
+abstract class Shape {
+  abstract area(): number;
+  get label(): string { return `area ${this.area()}`; }
+}
+class Square extends Shape {
+  private _side: number;
+  static created = 0;
+  static { Square.created = -1; }
+  constructor(side: number) { super(); this._side = side; Square.created++; }
+  get side(): number { return this._side; }
+  set side(s: number) { if (s < 0) throw new RangeError("negative"); this._side = s; }
+  area(): number { return this._side ** 2; }
+}
+const sq = new Square(3);
+sq.side += 1;
+console.log(sq.label, sq.side, Square.created, JSON.stringify(sq));
+```
+
+- A module with `#private` fields needs e7vm 0.2.5 or newer (older VMs would list them in `Object.keys`,
+  `JSON.stringify` and `console.log`); `e7c --target` reports it.
 - Arrow-function fields can capture `this` and are the way to pass "methods" around.
 
 ## 5. Modules and host functions
@@ -381,7 +438,7 @@ console.log(first, second, rest.join(","));
 | `new Array<T>(n)` elements | holes | `0` / `false` / `null` |
 | integer types | floating point | machine integers (wrap) |
 | `JSON.parse` | `any` | must be `as T`, validated |
-| `throw` | catchable | ends the call |
+| E7's own checks (out of bounds, failed `as`, limits) | — | not catchable; `finally` blocks do not run |
 | `Date` local time | host time zone | UTC |
 | `toUpperCase` / `localeCompare` | full Unicode / locale | Latin, Greek, Cyrillic / code units |
 | `console.log` of an arrow function | `[Function: f]` | `[Function (anonymous)]` |
