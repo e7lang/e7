@@ -160,23 +160,37 @@ console.log(parseCount("41") + 1, parseCount("oops"), lastError());
 
 In tests, `assertThrows` from `e7:test` can check that a call fails.
 
-### User-defined generics
+### Generics: what stays unsupported
+
+Generic functions, generic arrow functions assigned to a `const`, generic classes and methods, generic
+interfaces and type aliases work (section 4: they are compiled once per type argument list). Rejected: generic
+methods in interfaces or object literals, generic function types, `keyof` constraints, `instanceof` with a generic
+class, and a generic function used as a value without a contextual function type:
 
 ```ts e7-reject
-function first<T>(items: T[]): T { return items[0]; }
+interface Mapper { map<U>(f: (x: number) => U): U[] }
 ```
 
 ```ts e7-reject
-class Box<T> { constructor(public value: T) {} }
+function get<T, K extends keyof T>(o: T, k: K): T[K] { return o[k]; }
 ```
 
-Built-in generic types (`Array<T>`, `Map<K, V>`, `Set<T>`) and generic built-in methods (`map`, `filter`,
-`reduce`, ...) work. For your own code, write concrete types:
+```ts e7-reject
+function id<T>(x: T): T { return x; }
+const f = id;
+```
 
-```ts
-function firstOrNull(items: string[]): string | null { return items.length > 0 ? items[0] : null; }
-class NumberBox { constructor(public value: number) {} }
-console.log(firstOrNull(["a", "b"]), new NumberBox(3).value);
+Write a concrete function type, or wrap the call: `const f = (x: number) => id(x)`.
+
+`Box<Circle>` and `Box<Shape>` are different classes in E7 (one class per instantiation), so one is not
+assignable to the other even when TypeScript accepts it:
+
+```ts e7-reject
+class Shape { name = "s"; }
+class Circle extends Shape { r = 1; }
+class Box<T> { constructor(public v: T) {} }
+const c = new Box(new Circle());
+const d: Box<Shape> = c;
 ```
 
 ### Index signatures, `Record`, and utility types
@@ -418,6 +432,37 @@ console.log(sq.label, sq.side, Square.created, JSON.stringify(sq));
 - A module with `#private` fields needs e7vm 0.2.5 or newer (older VMs would list them in `Object.keys`,
   `JSON.stringify` and `console.log`); `e7c --target` reports it.
 - Arrow-function fields can capture `this` and are the way to pass "methods" around.
+- Generics: functions, `const` arrow functions, classes (with generic methods), interfaces and type aliases,
+  constraints (`<T extends Shape>`), defaults (`<T = number>`), explicit type arguments (`f<number>(x)`) and
+  inference from arguments and the expected type. Each type argument list gets its own compiled copy;
+  static members are shared by all instantiations. Errors in generic code name the instantiation
+  (`... (in first<string>)`):
+
+```ts
+function groupBy<T, K>(xs: T[], key: (x: T) => K): Map<K, T[]> {
+  const m = new Map<K, T[]>();
+  for (const x of xs) {
+    const g = m.get(key(x));
+    if (g) g.push(x);
+    else m.set(key(x), [x]);
+  }
+  return m;
+}
+class Stack<T> {
+  private items: T[] = [];
+  push(x: T): Stack<T> { this.items.push(x); return this; }
+  pop(): T | undefined { return this.items.pop(); }
+  map<U>(f: (x: T) => U): Stack<U> {
+    const s = new Stack<U>();
+    for (const x of this.items) s.push(f(x));
+    return s;
+  }
+}
+interface Result<T> { ok: boolean; value: T | null }
+const ok = <T,>(value: T): Result<T> => ({ ok: true, value });
+console.log(groupBy(["a", "bb", "cc"], (s) => s.length), new Stack<number>().push(1).push(2).map((n) => `#${n}`).pop());
+console.log(ok(42), ok("s").value);
+```
 
 ## 5. Modules and host functions
 

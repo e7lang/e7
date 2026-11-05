@@ -7,9 +7,10 @@
 > - The planned "runtime quickening" was replaced by emitting typed instructions directly from static types; compare-and-jump fusion, constant register hoisting and loop inversion were also added.
 > - `throw new Error(msg)` is supported. Since 0.2 there is `try`/`catch` for the errors that Node.js also throws
 >   (per-function handler tables in the bytecode, checked by the verifier; see SPEC.md 3.1). E7-specific checks and
->   resource limits still terminate the call; `finally` is not supported yet. Sections 1.x and 3.4 below describe the
->   original no-exceptions plan.
-> - User-defined generics, getters/setters and coroutine syntax are deferred to E8; the VM already supports suspend/resume (`e7_resume`).
+>   resource limits still terminate the call (and skip `finally` blocks, supported since 0.2.5). Sections 1.x and 3.4
+>   below describe the original no-exceptions plan.
+> - Since 0.2.5, user-defined generics (compiled by monomorphization) and getters/setters (compiled to method calls)
+>   are supported without VM changes; coroutine syntax is deferred to E8 (the VM already supports suspend/resume, `e7_resume`).
 > - Crypto libraries: BearSSL (RSA, ECDSA, AES, ChaCha20-Poly1305, SHA-1/2, HMAC, HKDF) + Monocypher (Ed25519/X25519);
 >   SHA-3/Keccak, PBKDF2 and RSA-PSS are in-house implementations. All are cross-checked against Node.js `node:crypto`. The Chinese national (SM) algorithms SM2/3/4 are not included.
 

@@ -159,6 +159,7 @@ static std::string argsKey(const std::vector<Type*>& args) {
 std::string Checker::instanceName(GenericSym* g, const std::vector<Type*>& args) {
   std::string n = g->name + "<";
   for (size_t i = 0; i < args.size(); i++) n += (i ? ", " : "") + typeName(args[i]);
+  if (n.size() > 300) n = n.substr(0, 300) + "...";  // nested instances: names could grow exponentially
   return n + ">";
 }
 
@@ -643,7 +644,12 @@ Type* Checker::instantiateType(GenericSym* g, const std::vector<Type*>& args, Lo
       g->order.push_back(is);
     }
     curFile = g->file;
+    int nest0 = instNest;
+    instNest = curInstDepth() + 1;
+    instCtx.push_back(nm);
     resolveInterface(is);
+    instCtx.pop_back();
+    instNest = nest0;
     curFile = f0;
     return is->type ? is->type : T.unknown();
   }
@@ -655,9 +661,12 @@ Type* Checker::instantiateType(GenericSym* g, const std::vector<Type*>& args, Lo
     g->resolving[key] = true;
     scope = bindTypeParams(g, args);
     curFile = g->file;
+    int nest0 = instNest;
+    instNest = curInstDepth() + 1;
     instCtx.push_back(nm);
     Type* t = resolveType(g->decl->typeBody);
     instCtx.pop_back();
+    instNest = nest0;
     scope = s0;
     curFile = f0;
     g->resolving.erase(key);
