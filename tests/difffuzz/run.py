@@ -40,9 +40,25 @@ def typescript_module(tsc):
     return mod if os.path.exists(mod) else None
 
 
+def node_has_std_math_pow(node):
+    p = subprocess.run([node, "--v8-options"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return b"--use-std-math-pow" in p.stdout
+
+
+def node_fdlibm_is_canonical(node):
+    """True when node's Math results are fdlibm's without fused multiply-adds, as e7's are on every
+    platform: x64 builds. Node.js for arm64 is compiled with FMA contraction (clang's and GCC's default),
+    which changes the last bit of about 0.1% of sin/exp/log/... results."""
+    p = subprocess.run([node, "-p", "process.arch"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return p.stdout.strip() == b"x64"
+
+
 class Runner:
     def __init__(self, a):
         self.a = a
+        # V8 13+ (Node.js 23+) computes Math.pow / ** with the C library's pow unless told otherwise;
+        # e7 (like Node.js 22) uses V8's fdlibm pow
+        self.node_flags = ["--no-use-std-math-pow"] if node_has_std_math_pow(a.node) else []
         self.cache = {}
         self.local = threading.local()
         self.checkers = []
@@ -81,11 +97,11 @@ class Runner:
         # miscompiled expressions (Node 24.21: `32 / (-(9 / 1000))` printed -0.0035...). It is needed only
         # for parameter properties (`constructor(public x: number)`) and enums.
         a = self.a
-        rc, out, err = self._run([a.node, "--experimental-strip-types", "--no-warnings", "--import", SHIM, path],
-                                 timeout or a.timeout)
+        rc, out, err = self._run([a.node, *self.node_flags, "--experimental-strip-types", "--no-warnings", "--import",
+                                  SHIM, path], timeout or a.timeout)
         if rc not in (0, None) and "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" in err:
-            rc, out, err = self._run([a.node, "--experimental-transform-types", "--no-warnings", "--import", SHIM,
-                                      path], timeout or a.timeout)
+            rc, out, err = self._run([a.node, *self.node_flags, "--experimental-transform-types", "--no-warnings",
+                                      "--import", SHIM, path], timeout or a.timeout)
         st = "timeout" if rc is None else "ok" if rc == 0 else "error"
         return {"status": st, "rc": rc, "stdout": out, "stderr": err}
 
@@ -335,8 +351,10 @@ def main():
     ap.add_argument("--mem", type=int, default=256 << 20, help="e7 memory limit (bytes)")
     ap.add_argument("--timeout", type=float, default=30)
     ap.add_argument("--no-ints", action="store_true", help="do not generate fixed-width integers")
-    ap.add_argument("--exact-math", action="store_true",
-                    help="compare sin/exp/log/... results exactly (they come from the C library in e7)")
+    ap.add_argument("--exact-math", dest="exact_math", action="store_true", default=None,
+                    help="compare sin/exp/log/... results exactly (default when node is an x64 build)")
+    ap.add_argument("--approx-math", dest="exact_math", action="store_false",
+                    help="compare them to 12 digits (default for other node builds, see node_fdlibm_is_canonical)")
     ap.add_argument("--no-minimize", action="store_true")
     ap.add_argument("--min-time", type=float, default=300, help="seconds per minimization")
     ap.add_argument("--min-timeout", type=float, default=5, help="time limit of one run while minimizing")
@@ -348,6 +366,8 @@ def main():
     if not os.path.exists(a.e7):
         print(f"e7 not found: {a.e7}", file=sys.stderr)
         return 2
+    if a.exact_math is None:
+        a.exact_math = node_fdlibm_is_canonical(a.node)
     runner = Runner(a)
     os.makedirs(a.out, exist_ok=True)
     workdir = tempfile.mkdtemp(prefix="e7difffuzz-")

@@ -25,8 +25,9 @@ for (let e = -1074; e <= 1023; e += 7) pw += String(2 ** e).length + ",";
 console.log(pw);
 
 // parseInt beyond 2^53: V8's algorithms (powers of two rounded half to even, other radices in 32-bit chunks
-// after the leading zeros)
-console.log(parseInt("9223372036854775807", 36), parseInt("0g848c2cg2ce260866g6608ece68c68ge844e66ca8242e260224geeg24", 18),
+// after the leading zeros; "umn820gzt6yc0rru" is not correctly rounded that way, and its result does not depend
+// on whether V8 was compiled with fused multiply-adds, as its arm64 builds are)
+console.log(parseInt("umn820gzt6yc0rru", 36), parseInt("0g848c2cg2ce260866g6608ece68c68ge844e66ca8242e260224geeg24", 18),
   parseInt("1fffffffffffff9", 16), parseInt("1fffffffffffff8", 16), parseInt("7777777777777777777777", 8),
   parseInt("011882663408622405305007445273230873531330145714214243044214", 9), parseInt("-0", 16));
 

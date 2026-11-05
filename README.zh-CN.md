@@ -411,7 +411,7 @@ src/capi/           C API                      tools/           e7、e7c 命令�
 platform/           Android（JNI）/ Java、iOS（Swift）、Windows（C#）
 packages/e7/        npm 包 @e7lang/e7          editors/vscode/  VS Code 扩展
 examples/           示例脚本 + 嵌入示例（examples/embed）
-tests/ bench/ docs/                            third_party/     BearSSL（MIT）、Monocypher（BSD-2/CC0）
+tests/ bench/ docs/                            third_party/     BearSSL（MIT）、Monocypher（BSD-2/CC0）、fdlibm（V8 移植，BSD）
 ```
 
 ## 文档
@@ -428,4 +428,4 @@ tests/ bench/ docs/                            third_party/     BearSSL（MIT）
 
 ## 许可
 
-见 [LICENSE](LICENSE)。第三方代码：BearSSL（MIT）、Monocypher（BSD-2-Clause / CC0），位于 `third_party/`。
+见 [LICENSE](LICENSE)。第三方代码：BearSSL（MIT）、Monocypher（BSD-2-Clause / CC0）、V8 移植的 fdlibm（Sun fdlibm 许可证与 V8 的 BSD-3-Clause 许可证；`Math` 函数），位于 `third_party/`。

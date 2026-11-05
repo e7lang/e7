@@ -91,8 +91,10 @@ the reproducer to `tests/cases/lang/`), a documented difference (SPEC section 9;
 produce it), or a generator bug (an invalid or nondeterministic program; fix `gen.py`). The generator
 already stays away from the documented differences: indexes go through a bounds helper, fixed-width
 integer operations are wrapped in their conversion (`u32(a + b)`), structures are printed with
-`JSON.stringify`, and results of the `Math` functions that come from the C library (`sin`, `exp`, `log`,
-...; V8 uses fdlibm) are rounded to 12 digits unless `--exact-math` is given.
+`JSON.stringify`. Results of the fdlibm `Math` functions (`sin`, `exp`, `log`, `pow`, ...) are compared
+exactly when node is an x64 build and rounded to 12 digits otherwise (Node.js for arm64 contracts fdlibm
+into fused multiply-adds; SPEC section 4.1); `--exact-math` / `--approx-math` override that. `run.py`
+passes `--no-use-std-math-pow` to Node.js 23+, whose `**` otherwise uses the C library's pow.
 
 ## Commit style
 

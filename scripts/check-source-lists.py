@@ -22,7 +22,7 @@ have = set()
 for m in re.finditer(r"\[([^\[\]]*?)\]\.map \{ \"([^\"]*)\\\(\$0\)([^\"]*)\" \}", swift):
     for item in re.findall(r'"([^"]+)"', m.group(1)):
         have.add(m.group(2) + item + m.group(3))
-for m in re.finditer(r'"(src/[^"]+\.cpp)"', swift):
+for m in re.finditer(r'"((?:src|third_party)/[^"]+\.cpp)"', swift):
     if "\\(" not in m.group(1):  # skip the interpolated templates handled above
         have.add(m.group(1))
 

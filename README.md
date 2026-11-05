@@ -434,7 +434,7 @@ src/capi/           C API                      tools/           e7, e7c command-
 platform/           Android (JNI) / Java, iOS (Swift), Windows (C#)
 packages/e7/        npm package @e7lang/e7     editors/vscode/  VS Code extension
 examples/           sample scripts + embedding example (examples/embed)
-tests/ bench/ docs/                            third_party/     BearSSL (MIT), Monocypher (BSD-2/CC0)
+tests/ bench/ docs/                            third_party/     BearSSL (MIT), Monocypher (BSD-2/CC0), fdlibm (V8 port, BSD)
 ```
 
 ## Documentation
@@ -449,4 +449,5 @@ tests/ bench/ docs/                            third_party/     BearSSL (MIT), M
 
 ## License
 
-See [LICENSE](LICENSE). Third-party code: BearSSL (MIT) and Monocypher (BSD-2-Clause / CC0), in `third_party/`.
+See [LICENSE](LICENSE). Third-party code: BearSSL (MIT), Monocypher (BSD-2-Clause / CC0) and V8's port of fdlibm
+(Sun Microsystems fdlibm license and V8's BSD-3-Clause license; `Math` functions), in `third_party/`.

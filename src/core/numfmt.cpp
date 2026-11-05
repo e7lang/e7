@@ -6,6 +6,14 @@
 #include <clocale>
 #include <cstring>
 
+// parseInt's chunked accumulation (v * multiplier + part) must round twice, as JS arithmetic does:
+// no fused multiply-add, whatever the compiler's default (CMake also passes -ffp-contract=off).
+#if defined(__clang__)
+#pragma STDC FP_CONTRACT OFF
+#elif defined(_MSC_VER)
+#pragma fp_contract(off)
+#endif
+
 namespace e7 {
 
 // The C library's number conversions follow LC_NUMERIC; hosts may call setlocale() (e.g. a locale whose

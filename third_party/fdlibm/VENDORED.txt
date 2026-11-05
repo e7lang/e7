@@ -1,0 +1,12 @@
+Source: V8 13.6.233.17 (Node.js 24.21) src/base/ieee754.cc (sha256 1bf99980...) and ieee754.h; fdlibm, BSD-style
+licenses (LICENSE). The functions are the same as in V8 12.4.254.21 (Node.js 22), where pow is
+base::ieee754::pow instead of base::ieee754::legacy::pow (only comments and that namespace differ).
+Ported mechanically: V8 base helpers (bit_cast, Divide, *WithWraparound) replaced by local equivalents,
+namespace v8::base::ieee754 -> e7::fdlibm, the V8_USE_LIBM_TRIG_FUNCTIONS variant removed (Node.js does not
+define it: its Math.sin / Math.cos are these fdlibm functions), FMA contraction disabled.
+
+Which Node.js results this matches: Node.js on x64 (and every build that does not contract a*b+c into fused
+multiply-adds). Node.js for arm64 (macOS, Linux) compiles this same code with contraction, which changes the
+last bit of about 0.1% of the results; e7 gives the x64 results on every platform. Math.pow / ** match
+Node.js 22; Node.js 23+ uses the C library's pow by default (V8 flag --use-std-math-pow) and matches with
+--no-use-std-math-pow.

@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "../../third_party/fdlibm/ieee754.h"
 #include "../core/numfmt.h"
 #include "debug.h"
 #include "vm.h"
@@ -38,13 +39,8 @@ const OpInfo kOpInfo[OP__COUNT] = {
 static inline int32_t toInt32(double d) { return (int32_t)(uint32_t)(uint64_t)doubleToInt64Bits(d); }
 static inline uint32_t toUint32(double d) { return (uint32_t)(uint64_t)doubleToInt64Bits(d); }
 
-static double jsPow(double x, double y) {
-  if (y != y) return NAN;
-  if (y == 0) return 1;
-  if ((x == 1 || x == -1) && std::isinf(y)) return NAN;
-  if (y == 0.5 && !std::signbit(x)) return std::sqrt(x);  // as V8 (fdlibm): C libraries may be 1 ulp off
-  return std::pow(x, y);
-}
+// x ** y: the fdlibm pow V8 uses (with the ECMAScript special cases), not the C library's.
+static inline double jsPow(double x, double y) { return fdlibm::pow(x, y); }
 
 static inline uint32_t rotl32(uint32_t x, unsigned n) { n &= 31; return n ? (x << n) | (x >> (32 - n)) : x; }
 static inline uint64_t rotl64(uint64_t x, unsigned n) { n &= 63; return n ? (x << n) | (x >> (64 - n)) : x; }

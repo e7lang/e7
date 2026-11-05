@@ -53,9 +53,10 @@ BAD_DATE_STRS = ["abc", "", "2020-02-30T25:00:00Z", "2021-13-01"]
 MATH1 = ["abs", "floor", "ceil", "round", "trunc", "sign", "sqrt", "cbrt", "exp", "expm1", "log", "log2", "log10",
          "log1p", "sin", "cos", "tan", "atan", "asin", "acos", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
          "fround", "clz32"]
-# Math functions whose results are exact (correctly rounded) everywhere. The others come from the C library
-# in e7 and from fdlibm in V8, and differ in the last bit now and then: unless --exact-math is given, their
-# results go through approx() (12 significant digits) so that a 1-ulp difference does not show.
+# Math functions whose results are exact (correctly rounded) everywhere. The others come from fdlibm in
+# both e7 and V8 and are compared exactly; with --approx-math their results go through approx() (12
+# significant digits), for a Node.js whose fdlibm results differ in the last bit (arm64 builds that
+# contract fdlibm into fused multiply-adds, or Node.js 23+ pow without --no-use-std-math-pow).
 MATH_EXACT = {"abs", "floor", "ceil", "round", "trunc", "sign", "sqrt", "fround", "clz32", "imul", "max", "min"}
 ERR_TYPES = ["Error", "RangeError", "TypeError", "SyntaxError", "URIError"]
 
@@ -79,7 +80,7 @@ class Cls:
 
 
 class Gen:
-    def __init__(self, rng, ints=True, exact_math=False):
+    def __init__(self, rng, ints=True, exact_math=True):
         self.r = rng
         self.ints = ints
         self.exact_math = exact_math
@@ -1368,7 +1369,7 @@ class Gen:
         return "\n".join(self.lines) + "\n"
 
 
-def generate(seed, index, ints=True, size=None, exact_math=False):
+def generate(seed, index, ints=True, size=None, exact_math=True):
     rng = random.Random(f"e7-difffuzz:{seed}:{index}")
     g = Gen(rng, ints=ints, exact_math=exact_math)
     n = size if size is not None else rng.randrange(10, 40)
@@ -1381,10 +1382,10 @@ def main():
     ap.add_argument("--index", type=int, default=0)
     ap.add_argument("--no-ints", action="store_true", help="do not generate fixed-width integers")
     ap.add_argument("--size", type=int, help="number of top-level statements")
-    ap.add_argument("--exact-math", action="store_true", help="print results of fdlibm-based Math functions exactly")
+    ap.add_argument("--approx-math", action="store_true", help="print fdlibm-based Math results to 12 digits")
     ap.add_argument("-o", "--output")
     a = ap.parse_args()
-    src = generate(a.seed, a.index, ints=not a.no_ints, size=a.size, exact_math=a.exact_math)
+    src = generate(a.seed, a.index, ints=not a.no_ints, size=a.size, exact_math=not a.approx_math)
     if a.output:
         with open(a.output, "w", encoding="utf-8") as f:
             f.write(src)
