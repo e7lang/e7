@@ -27,13 +27,13 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **114 supported**, **21 partial**, **115 unsupported** (271 sample programs).
+250 features: **116 supported**, **19 partial**, **115 unsupported** (269 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
 | [Everyday Types](#everyday-types) | 13 | 3 | 4 |
 | [Narrowing](#narrowing) | 7 | 1 | 6 |
-| [More on Functions](#more-on-functions) | 12 | 3 | 6 |
+| [More on Functions](#more-on-functions) | 14 | 1 | 6 |
 | [Object Types](#object-types) | 10 | 1 | 7 |
 | [Generics](#generics) | 9 | 1 | 5 |
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
@@ -53,9 +53,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 16 | 3 | 12 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 9 | 6 | 11 |
-| **Total** | **114** | **21** | **115** |
+| **Total** | **116** | **19** | **115** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 76.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 74.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -108,6 +108,8 @@ Within each category, supported features come first, then partial and unsupporte
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
 | Arrow functions and closures | supported |  | [arrow-functions.ts](../tests/ts-features/functions/arrow-functions.ts) |
+| Default parameters | supported | A default may refer to earlier parameters (in declarations, methods, constructors and arrow functions) | [default-parameters.ts](../tests/ts-features/functions/default-parameters.ts) |
+| Function expressions | supported | A named function expression's name is in scope in its body (recursion) | [function-expressions.ts](../tests/ts-features/functions/function-expressions.ts) |
 | Function type expressions `(a: A) => R` | supported |  | [function-type-expressions.ts](../tests/ts-features/functions/function-type-expressions.ts) |
 | Higher-order functions and callbacks with fewer parameters | supported |  | [higher-order.ts](../tests/ts-features/functions/higher-order.ts) |
 | Function declaration hoisting | supported |  | [hoisting.ts](../tests/ts-features/functions/hoisting.ts) |
@@ -119,8 +121,6 @@ Within each category, supported features come first, then partial and unsupporte
 | Rest parameters | supported |  | [rest-parameters.ts](../tests/ts-features/functions/rest-parameters.ts) |
 | Spread arguments (arrays into rest parameters, tuples into parameters) | supported |  | [spread-arguments.ts](../tests/ts-features/functions/spread-arguments.ts) |
 | `void` return type and contextual `void` | supported | A `void`-returning function type accepts functions that return a value | [void-return.ts](../tests/ts-features/functions/void-return.ts) |
-| Default parameters | **partial** | **Works:** defaults in function declarations, methods and constructors; in arrow functions and function expressions they may refer to earlier parameters. **Not supported:** in function declarations, methods and constructors a default cannot refer to an earlier parameter (docs/SPEC.md section 5 says it can; arrow functions and function expressions accept it) (*not implemented yet*). **Instead:** an optional parameter and `b ?? a + 1` in the body, or an arrow function | [default-parameters.ok.ts](../tests/ts-features/functions/default-parameters.ok.ts), [default-parameters.no.ts](../tests/ts-features/functions/default-parameters.no.ts) |
-| Function expressions | **partial** | **Works:** anonymous function expressions. **Not supported:** the name of a named function expression is not in scope inside its body (*not implemented yet*). **Instead:** a function declaration, or recursion through the `const` it is assigned to | [function-expressions.ok.ts](../tests/ts-features/functions/function-expressions.ok.ts), [function-expressions.no.ts](../tests/ts-features/functions/function-expressions.no.ts) |
 | Functions as values | **partial** | **Works:** function declarations, arrows and function expressions are first-class values. **Not supported:** function declarations with default parameters, and built-in functions such as `Math.sqrt`, have no closure form (*not implemented yet*). **Instead:** wrap it in an arrow function: `xs.map(x => scale(x))`, `xs.map(x => Math.sqrt(x))` | [functions-as-values.ok.ts](../tests/ts-features/functions/functions-as-values.ok.ts), [functions-as-values.no.ts](../tests/ts-features/functions/functions-as-values.no.ts) |
 | The `arguments` object | **unsupported** | **Why:** `arguments` is untyped (*types known at compile time*). **Instead:** rest parameters `...args: T[]` | [arguments-object.ts](../tests/ts-features/functions/arguments-object.ts) |
 | Call signatures in object types | **unsupported** | **Why:** functions are closures without properties (*types known at compile time*). **Instead:** an interface with a function-typed property, or a class with a method | [call-signatures.ts](../tests/ts-features/functions/call-signatures.ts) |

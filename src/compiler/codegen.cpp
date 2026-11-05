@@ -1159,17 +1159,15 @@ void Gen::genVarDecl(VarDecl& d, bool topLevel) {
       else loadZero(r, K(v->type));
     } else {
       size_t m0 = mark();
+      // re-entering a loop body: a fresh binding per iteration, created before the initializer so that a
+      // closure in it that refers to the variable itself (a recursive local function) captures this binding
+      if (existed) emit(OP_NEWCELL, varReg[v], vtOf(v->type));
       uint16_t r;
       if (d.init) r = gen(d.init);
       else {
         r = temp(K(v->type));
         if (v->type->t == TT::Optional && v->type->hasUndef) emit(OP_LOADUNDEF, r);
         else loadZero(r, K(v->type));
-      }
-      if (existed) {
-        // re-entering a loop body: a fresh binding per iteration
-        uint16_t cell = varReg[v];
-        emit(OP_NEWCELL, cell, vtOf(v->type));
       }
       writeVar(v, r);
       release(m0);
@@ -2505,6 +2503,19 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
       return;
     }
     case EK::Arrow:
+      if (VarSym* sv = e->fn->exprSelf; sv && sv->captured) {
+        // a named function expression that refers to itself: a fresh cell holding the closure, created
+        // each time the expression is evaluated
+        varReg.erase(sv);
+        declareLocal(sv);
+        size_t m0 = mark();
+        uint16_t r = dst != kNoReg ? dst : temp(K_R);
+        genClosure(e->fn, r);
+        writeVar(sv, r);
+        release(m0);
+        varReg.erase(sv);
+        return;
+      }
       if (dst != kNoReg) genClosure(e->fn, dst);
       return;
     case EK::Paren:

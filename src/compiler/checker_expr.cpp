@@ -1296,6 +1296,17 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
     f->arrow = e;
     f->parent = curFn;
     f->defScope = scope;
+    if (e->intrinsic == IN_FUNC_EXPR && !e->raw.empty()) {
+      // `function name(...) { ... name(...) ... }`: the name is in scope in the body only
+      Scope* s0 = scope;
+      pushScope();
+      VarSym* sv = newVar(e->raw, nullptr, true, e->loc);
+      sv->owner = curFn;
+      scope->names[e->raw] = sv;
+      f->exprSelf = sv;
+      f->defScope = scope;
+      scope = s0;
+    }
     f->isArrowThis = e->intrinsic != IN_FUNC_EXPR && e->intrinsic != IN_OBJ_METHOD;
     f->qualName = (curFn && !curFn->isInit ? curFn->qualName + "." : "") + nm;
     e->fn = f;
@@ -1372,6 +1383,7 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
   f->sigResolved = true;
   f->inferRet = ret == nullptr;
   f->type = T.func(ps, ret ? ret : T.unknown(), opt, rest);
+  if (f->exprSelf) f->exprSelf->type = f->type;
   // a 'function' expression with no explicit this: no this binding
   checkFunction(f);
   // if the expected type has fewer params than the arrow uses, error above; if more, codegen adapts

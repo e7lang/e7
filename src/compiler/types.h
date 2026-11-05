@@ -113,6 +113,7 @@ struct FuncSym : Sym {
   std::vector<VarSym*> captures;
   std::unordered_map<VarSym*, int> captureIndex;
   VarSym* selfVar = nullptr;   // nested function declaration: variable holding the closure
+  VarSym* exprSelf = nullptr;  // named function expression: its name inside its body (the closure)
   std::vector<Type*> returnTypes;  // collected during inference
   std::string file;
   std::string qualName;

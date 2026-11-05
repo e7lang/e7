@@ -672,6 +672,37 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
     return;
   }
   Type* declared = d.type ? resolveType(d.type) : nullptr;
+  // a local function value that calls itself (const f = (n: number): number => ... f(n - 1)): when its type
+  // is known without checking the initializer (an annotation, or an arrow with typed parameters and a return
+  // type), the variable is in scope in the initializer; the closure captures it in a cell, as in JavaScript
+  if (simple && !topLevel && d.init && !d.name.empty()) {
+    Expr* ai = d.init;
+    while (ai->k == EK::Paren) ai = ai->a;
+    Type* ft = nullptr;
+    if (ai->k == EK::Arrow && ai->typeParams.empty()) {
+      if (declared) ft = declared->t == TT::Func ? declared : nullptr;
+      else if (ai->retType) {
+        std::vector<Type*> ps;
+        std::vector<bool> opt;
+        bool rest = false, ok = true;
+        for (auto& p : ai->params) {
+          if (!p.type || p.init || p.pattern) { ok = false; break; }
+          Type* pt = resolveType(p.type);
+          if (p.optional) pt = T.optional(pt, false, true);
+          ps.push_back(pt);
+          opt.push_back(p.optional);
+          rest = rest || p.rest;
+        }
+        if (ok) ft = T.func(ps, resolveType(ai->retType), opt, rest);
+      }
+    }
+    if (ft) {
+      bindPattern(d, ft, isConst, false, d.loc);
+      check(d.init, ft);
+      coerce(d.init, ft);
+      return;
+    }
+  }
   Type* t = declared;
   if (d.init) {
     Type* it = !declared && d.isArrayPat ? checkArrayPatInit(d, d.init) : check(d.init, declared);

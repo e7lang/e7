@@ -1223,7 +1223,17 @@ void Checker::resolveSig(FuncSym* f) {
       Type* t;
       if (p.type) t = resolveType(p.type);
       else if (p.init) {
+        // type of the default value; it may refer to the earlier parameters (as for arrow functions)
         Scope* s0 = scope;
+        pushScope(true);
+        if (f->thisVar) scope->names["this"] = f->thisVar;
+        for (size_t k = 0; k < i; k++) {
+          Param& q = (*params)[k];
+          if (q.pattern || !ps[k]) continue;
+          VarSym* tv = newVar(q.name, ps[k], false, q.loc);
+          tv->owner = f;
+          scope->names[q.name] = tv;
+        }
         t = widen(check(p.init, nullptr));
         scope = s0;
       } else if (f->arrow) {
