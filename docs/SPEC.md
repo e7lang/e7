@@ -216,7 +216,10 @@ try {
   with `null` / `undefined` (also a non-nullable one, or a variable narrowed to a non-nullable type, as tsc accepts); the
   result of such a comparison is known at compile time. A `void` value cannot be compared.
 - `&&` and `||` can be used with any type in conditions (by truthiness); in value position, `a || b` returns a value (types must be compatible), and `&&` is boolean only.
-- `??`, `??=`, `?.` (members, element access `a?.[i]`, method calls, function calls) are the same as JS.
+- `??`, `??=`, `?.` (members, element access `a?.[i]`, method calls, function calls) are the same as JS. An
+  optional chain short-circuits as a whole: in `a?.b.c`, `a?.b[i]` or `a?.m().n()` the links after `?.` are
+  skipped (the result is `undefined`) when `a` is null or undefined, and type-checked against the non-null
+  type; a link whose own type is nullable (`a?.b.c` with an optional `b`) still needs its own `?.`, as in tsc.
 
 ### 4.5 Other
 - `typeof x` is evaluated at compile time to a constant string (not supported for nullable types).
