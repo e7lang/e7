@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 const bin = fileURLToPath(new URL("./bin/e7-js.js", import.meta.resolve("@e7lang/e7")));
 const dir = mkdtempSync(join(tmpdir(), "e7-js-"));
 copyFileSync(new URL("./fixtures/sign.ts", import.meta.url), join(dir, "sign.ts"));
+const pkgVersion = JSON.parse(readFileSync(new URL("./package.json", import.meta.resolve("@e7lang/e7")), "utf8")).version;
 const HMAC = "0fa1ee36e152de30350b6a463f4f365d6574bea59f99ccfebb599c7b6b1f1fd6";
 
 const e7 = (...args) => {
@@ -20,7 +21,8 @@ const e7 = (...args) => {
 test("version / help", () => {
   const v = e7("--version");
   assert.equal(v.code, 0, v.err);
-  assert.match(v.out, /^e7-js 1\.0\.1 \(e7 \d+\.\d+\.\d+, WebAssembly\)/);
+  assert.ok(v.out.startsWith(`e7-js ${pkgVersion} (e7 `), v.out);
+  assert.match(v.out, /\(e7 \d+\.\d+\.\d+, WebAssembly\)/);
   assert.match(e7("help").out, /usage: e7-js/);
   assert.equal(e7("bogus").code, 2);
 });
