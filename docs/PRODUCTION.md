@@ -143,6 +143,33 @@ Regression tests: `verify_handlers_test` (handlers before or inside their range)
 natives and unwinding, `Map` accounting after repeated out-of-memory), `tests/cases/lang/error_values.ts` (Node parity),
 `tests/cases/errors/rt_limit_not_catchable.ts`, `catch_console_log_nested.ts`.
 
+### 3.6 Sixth security review: the 0.2.5 VM changes (0.2.6)
+
+A separate AI review agent reviewed everything the VM gained between 0.2.1 and 0.2.5: the garbage collector running
+during native callbacks (`Array.sort` comparators, `assertThrows`), the Node.js-compatible `console.log` formatter, `Map`
+iteration cursors, fdlibm, module unloading after a failed load, the test hooks, and the handler tables for `finally`.
+It built Release, ASan+UBSan and ASan+UBSan with `E7_GC_STRESS`, ran hostile comparators and every exit path of
+try/catch/finally under GC stress, fuzzed the 21 fdlibm functions (364k inputs) and the number formatting and parsing
+(300k inputs) under the sanitizers, and reproduced each finding. **No memory-safety issue was found.** All six findings
+are fixed in 0.2.6:
+
+| # | Severity | Issue | Fix |
+|---|---|---|---|
+| 1 | High (0.2.5 regression) | With `suspend_on_budget`, a native that charges its work up front or as it goes (`pbkdf2`, `assertEqual` on an object graph with 2^60 paths) ran to completion whatever the slice: one call could hold the host thread for days | A native may run past the end of the slice by a bounded amount (2^22 ticks, or the slice when that is larger); past it the call fails with `E7_ERR_BUDGET`, as without suspension |
+| 2 | High | The output of `JSON.stringify` (and of console.log's `%j`, which follows shared objects path by path) was not checked against the memory limit: an object graph of 2^23 shared nodes reached 1.5 GB of host memory under an 8 MB limit | The output buffer is checked against the memory limit as it grows |
+| 3 | Medium | console.log's formatting was charged by its arguments only: printing one large BigInt many times took 122 s on 801 ticks | Formatting charges the text it produces, `%j` its JSON, and a BigInt its quadratic decimal conversion, as `BigInt.toString` does |
+| 4 | Medium (older) | The string keys of a default `Array.sort()` were not checked against the memory limit (2.5 GB under an 8 MB limit) | The keys are checked as they are built and their comparison is charged; the buffers of `sort(cmp)` are checked too |
+| 5 | Low | `parseInt` with a power-of-two radix overflowed a signed counter (undefined behaviour) for about 430 million digits; Release printed 0 instead of Infinity | The exponent saturates (the result is Infinity, as in JavaScript) |
+| 6 | Low | A `Map` iteration cursor from crafted bytecode overflowed a signed subtraction (undefined behaviour; the result was still bounds-checked) | Cursors before the first entry are handled before the subtraction |
+
+Areas the review confirmed correct: GC roots during callbacks (everything a native holds across a callback is rooted,
+`gcBlockers_` is restored on every path), the inspector's bounds and memory accounting, `Map` cursors across compaction and
+`clear`, `-0` keys and `Date` keys, fdlibm's argument reduction, number formatting, unloading a module after a failed
+load (also with a debugger attached), the test hooks (not reachable from scripts or bytecode), the tick counter in
+suspend mode, and the verifier and code generation for `finally`, generics, getters and spread. Regression tests:
+`capi_test` (bounded overrun with suspension; console.log, `%j`, `JSON.stringify` and default sort against the budget
+and memory limit).
+
 **Configuration the host must apply** (see EMBEDDING.md §6): enable signature checking, set an instruction budget and a memory limit. The command-line tool `e7` is for development only
 and sets no budget by default.
 

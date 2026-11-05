@@ -22,6 +22,20 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 - `scripts/macos.sh release` runs the full macOS test first (unless it already passed at the same commit with
   nothing skipped).
 
+### Security
+Fixes from an independent review of the 0.2.5 VM changes (docs/PRODUCTION.md section 3.6); none is a memory-safety issue.
+- With `suspend_on_budget`, a native that charges its work up front or as it goes (`pbkdf2`, `assertEqual`) could run
+  without bound inside one slice (a 0.2.5 regression). It may now run past the end of the slice by at most 2^22 ticks
+  (or the slice, when that is larger); past it the call fails with `E7_ERR_BUDGET`.
+- `JSON.stringify` and console.log's `%j` check their output against the memory limit as it grows (an object graph
+  with many shared nodes could use gigabytes of host memory under a small limit).
+- console.log charges its formatting to the instruction budget: the text it produces, `%j`, and the quadratic decimal
+  conversion of BigInts.
+- The string keys of a default `Array.sort()` are checked against the memory limit and their comparison is charged.
+- `parseInt` with a power-of-two radix on hundreds of millions of digits overflowed a signed counter (now Infinity, as in
+  JavaScript); a `Map` iteration cursor from crafted bytecode overflowed a signed subtraction. Both were undefined
+  behaviour without memory access.
+
 ### Fixed
 - A generic instantiated with `void` (for example `run(() => { ... })` with `run<T>(f: () => T)`) could store or pass
   the void result and crash the compiler with an internal error; storing it in a property or passing it as an

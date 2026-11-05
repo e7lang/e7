@@ -47,6 +47,21 @@ struct Stringifier {
   int depth = 0;
   bool cycleOk = false;  // console.log's %j: a cycle sets `cycle` instead of raising a TypeError
   bool cycle = false;
+  size_t nextCheck = 0;  // out.size() at which the output is next checked against the memory limit
+  bool charge = false;   // console.log's %j: charge the output to the budget as it grows (JSON.stringify's
+  size_t charged = 0;    // cost is charged after the call, from the result)
+
+  // The output is a transient buffer: bounded by the memory limit like the heap (a value shared many
+  // times in an object graph is written out each time, so the output can be far larger than the heap)
+  void checkOut() {
+    if (out.size() < nextCheck) return;
+    vm.checkTemp(out.capacity() * sizeof(char16_t));
+    if (charge) {
+      vm.chargeWork((out.size() - charged) / 8);
+      charged = out.size();
+    }
+    nextCheck = out.size() + 16384;
+  }
 
   void nl(const std::u16string& indent) {
     if (gap.empty()) return;
@@ -55,6 +70,7 @@ struct Stringifier {
   }
   // returns false if the value is "undefined" (omitted)
   bool value(Slot v, uint8_t vt, const std::u16string& indent) {
+    checkOut();
     if (vt == VT_NUMBER) {
       if (!std::isfinite(v.f)) { out += u"null"; return true; }
       std::string s = numberToString(v.f);
@@ -155,6 +171,7 @@ struct Stringifier {
         nl(inner);
         std::string k = "\"" + std::to_string(i) + (gap.empty() ? "\":" : "\": ") + std::to_string(b->ptr()[i]);
         out.append(k.begin(), k.end());
+        checkOut();
       }
       if (b->len) nl(indent);
       out += u'}';
@@ -163,6 +180,7 @@ struct Stringifier {
     }
     stack.erase(o);
     depth--;
+    checkOut();
     if (out.size() > 0x3FFFFFFF) vm.error("RangeError: invalid string length");
     return true;
   }
@@ -176,7 +194,10 @@ static void stringifyImpl(VM& vm, Slot v, const std::u16string& gap, Slot* r) {
 std::string jsonForLog(VM& vm, Slot v, uint8_t vt) {
   Stringifier s{vm, u"", {}, {}, 0};
   s.cycleOk = true;
+  s.charge = true;
   if (!s.value(v, vt, u"")) return "undefined";
+  s.nextCheck = 0;
+  s.checkOut();
   return s.cycle ? "[Circular]" : utf16ToUtf8(s.out);
 }
 E7_NATIVE(j_stringify) { E7_UNUSED; stringifyImpl(vm, a[0], u"", r); }

@@ -316,7 +316,7 @@ E7_NATIVE(m_entries) {
 // its current position, as in JavaScript. entries stay sorted by seq.
 static size_t lowerBoundSeq(const MapObj* m, int64_t s) {
   const auto& E = m->entries;
-  if (E.empty()) return 0;
+  if (E.empty() || s <= E[0].seq) return 0;  // (also keeps a cursor from crafted bytecode from overflowing)
   int64_t guess = s - E[0].seq;  // no compaction since: seq - first seq is the index
   if (guess >= 0 && guess < (int64_t)E.size() && E[(size_t)guess].seq == s) return (size_t)guess;
   size_t lo = 0, hi = E.size();

@@ -199,13 +199,23 @@ E7_NATIVE(a_sort) {
   ArrObj* arr = A(vm, a[0]);
   // default sort: by UTF-16 string comparison, undefined last
   struct Item { std::u16string key; Slot v; bool undef; };
+  // the keys are a transient buffer bounded by the memory limit (one long string referenced many times
+  // makes keys far larger than the heap), and comparing them is charged by their length
+  size_t bytes = (size_t)arr->len * sizeof(Item), chars = 0;
+  vm.checkTemp(bytes);
   std::vector<Item> items;
   items.reserve(arr->len);
   for (uint32_t i = 0; i < arr->len; i++) {
     Slot e = arr->data[i];
     bool und = arr->vt == VT_REF && e.r == vm.undef();
     items.push_back({und ? u"" : valueToString(vm, e, arr->vt), e, und});
+    chars += items.back().key.size();
+    bytes += items.back().key.size() * sizeof(char16_t);
+    vm.checkTemp(bytes);
   }
+  uint64_t lg = 1;
+  while ((1ull << lg) < arr->len) lg++;
+  vm.chargeWork(chars / 8 * lg);
   std::stable_sort(items.begin(), items.end(), [](const Item& x, const Item& y) {
     if (x.undef != y.undef) return !x.undef;
     return x.key < y.key;
@@ -220,6 +230,7 @@ E7_NATIVE(a_sortCmp) {
   char k = kindChar(kindOfVT(arr->vt));
   std::string want = std::string(1, k) + k + ">F";
   if (vm.sigString(c->fn->sigId) != want) vm.error("sort comparator has the wrong signature");
+  vm.checkTemp((size_t)arr->len * 3 * sizeof(Slot));  // v, mergeSort's buffer and the temporary roots
   std::vector<Slot> v(arr->data, arr->data + arr->len);
   // the comparator runs script code, during which the collector may run: the elements being sorted
   // stay reachable even if the comparator empties or shrinks the array (arr and c are reachable

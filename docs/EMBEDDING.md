@@ -113,7 +113,11 @@ while (st == E7_SUSPENDED) {                     // e.g. resume one slice per fr
 }
 ```
 Without suspension enabled, an exhausted budget returns `E7_ERR_BUDGET`, which guards against infinite loops. Native functions for strings/arrays/encoding/JSON/hashing/BigInt etc. charge the budget by the amount of data processed
-(settled after the call returns), so the budget also caps the total time a script can spend in heavy native functions. While a call is suspended, no new `e7_call` can be started (`E7_ERR_STATE`);
+(settled after the call returns), so the budget also caps the total time a script can spend in heavy native functions.
+A native cannot be suspended halfway: with suspension enabled, one that does more work than the rest of the slice (such
+as `pbkdf2` with many iterations) runs past the end of the slice and the call suspends right after it, but only by up to
+2^22 ticks (about 4 million PBKDF2 iterations) or the slice, whichever is larger; a native that needs more fails with
+`E7_ERR_BUDGET`. While a call is suspended, no new `e7_call` can be started (`E7_ERR_STATE`);
 use `e7_abort_suspended` to abandon it. `e7_ticks_used(vm)` returns the ticks charged since the VM was
 created (with any budget, also unlimited): a deterministic, machine-independent measure of the work a script
 did, useful for sizing budgets (`e7 --stats` prints it).

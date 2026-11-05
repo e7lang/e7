@@ -473,7 +473,7 @@ double parseIntJS(const std::u16string& s, int radix) {
         bool zeroTail = true;
         for (k++; k < n; k++) {
           zeroTail = zeroTail && digits[k] == '0';
-          exponent += log2r;
+          if (exponent < 2048) exponent += log2r;  // saturates: 2^2048 is Infinity already (no int overflow)
         }
         int middle = 1 << (bits - 1);
         if (dropped > middle || (dropped == middle && ((number & 1) != 0 || !zeroTail))) number++;

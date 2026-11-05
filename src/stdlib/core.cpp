@@ -286,8 +286,20 @@ constexpr size_t kMaxStringLength = 10000;
 constexpr long kBreakLength = 80;
 constexpr int kCompact = 3;
 
+// console.log's conversions charge their work to the instruction budget as they go: a value shared many
+// times in an object graph, or a large BigInt (decimal conversion is quadratic in its length), is formatted
+// each time it is printed. Same model as BigInt.toString (NC_BIGQ) and the scanning natives (NC_SCAN).
+static std::string bigDecimal(VM& vm, const BigObj* b, bool charge) {
+  if (charge) {
+    uint64_t n = b->mag.size();
+    vm.chargeWork(n * n / 4 + n / 2);
+  }
+  return bigToString(b, 10);
+}
+
 struct Inspector {
   VM& vm;
+  bool charge = false;      // charge the formatting work to the budget (console.log; not the debugger)
   int depth = 2;            // levels of nested objects shown (deeper ones print as [Array], [Object], ...)
   bool lines = true;        // false: everything on one line, no column grouping (messages, debugger)
   bool showHidden = false;  // console.log's %o
@@ -302,6 +314,7 @@ struct Inspector {
   void account(size_t n) {
     produced += n;
     vm.checkTemp(produced);
+    if (charge) vm.chargeWork(n / 8);
   }
 
   std::string value(Slot v, uint8_t vt, int rt, bool typedArray = false) {
@@ -317,7 +330,7 @@ struct Inspector {
         if (b->flags & 1) return b->v.f != b->v.f ? "Invalid Date" : dateToISO(b->v.f);
         return value(b->v, b->vt, rt, typedArray);
       }
-      case OT::BigInt: return bigToString(static_cast<BigObj*>(o), 10) + "n";
+      case OT::BigInt: return bigDecimal(vm, static_cast<BigObj*>(o), charge) + "n";
       case OT::Closure: return functionBase(static_cast<CloObj*>(o));
       case OT::Handle: return "KeyHandle {}";
       default: break;
@@ -654,6 +667,7 @@ struct Inspector {
 
 std::string inspectArg(VM& vm, Slot v, uint8_t vt, int depth, bool hidden) {
   Inspector in(vm);
+  in.charge = true;
   in.depth = depth;
   in.showHidden = hidden;
   return in.value(v, vt, 0);
@@ -702,7 +716,7 @@ std::string substitute(VM& vm, char16_t conv, Slot v, uint8_t vt) {
   switch (conv) {
     case 's': {
       if (vt == VT_NUMBER) return formatNumber(v.f);
-      if (big) return bigToString(static_cast<BigObj*>(v.r), 10) + "n";
+      if (big) return bigDecimal(vm, static_cast<BigObj*>(v.r), true) + "n";
       Obj* o = vt == VT_REF ? v.r : nullptr;
       // String(x) unless x has the toString of a global built-in (Node.js hasBuiltInToString): Uint8Array's
       // comes from %TypedArray%, a class's own toString method is its own
@@ -712,10 +726,10 @@ std::string substitute(VM& vm, char16_t conv, Slot v, uint8_t vt) {
       return inspectArg(vm, v, vt, 0, false);
     }
     case 'd':
-      if (big) return bigToString(static_cast<BigObj*>(v.r), 10) + "n";
+      if (big) return bigDecimal(vm, static_cast<BigObj*>(v.r), true) + "n";
       return formatNumber(toNumberJS(vm, v, vt));
     case 'i':
-      if (big) return bigToString(static_cast<BigObj*>(v.r), 10) + "n";
+      if (big) return bigDecimal(vm, static_cast<BigObj*>(v.r), true) + "n";
       return formatNumber(parseIntJS(valueToString(vm, v, vt), 0));
     case 'f': return formatNumber(parseFloatJS(valueToString(vm, v, vt)));
     case 'j': return jsonForLog(vm, v, vt);

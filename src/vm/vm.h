@@ -164,14 +164,26 @@ class VM {
   uint64_t ticksUsed() const { return ticksBase_ + ticksSinceBudget(); }
   // Natives doing work proportional to a script-chosen parameter charge it against the instruction
   // budget up front (a native cannot be suspended halfway), so the budget also bounds them.
-  // With suspension enabled, a native called directly by script code cannot fail for want of budget
-  // (whether it did would depend on where the slice boundary falls): the work is charged, the budget
-  // may go negative, and the next budget check suspends, as for the costs charged after a call.
+  // With suspension enabled, a native called directly by script code may run past the end of the slice
+  // (whether it failed would otherwise depend on where the slice boundary falls): the work is charged,
+  // the budget goes negative, and the next budget check suspends, as for the costs charged after a call.
+  // The overrun is bounded (kNativeOverrun, or the slice when that is larger), so that one native call
+  // cannot hold the host thread for longer than that: past it the call fails with E7_ERR_BUDGET.
+  // 2^22 ticks: about 20 ms of interpreted code, or a PBKDF2 of 4 million HMACs (about 0.6 s; one tick each)
+  static constexpr int64_t kNativeOverrun = int64_t(1) << 22;
   void chargeWork(uint64_t ticks) {
-    if (ticks > (uint64_t)budget_) {
+    if (ticks > (uint64_t)(budget_ < 0 ? 0 : budget_)) {
       if (budgetStart_ == INT64_MAX) return;  // unlimited budget: never fails
       if (cfg_.suspendOnBudget && nativeDepth_ <= 1) {
-        budget_ -= (int64_t)(ticks > (1ull << 40) ? (1ull << 40) : ticks);
+        int64_t cap = budgetStart_ > kNativeOverrun ? budgetStart_ : kNativeOverrun;
+        if (ticks <= (uint64_t)cap && budget_ - (int64_t)ticks >= -cap) {
+          budget_ -= (int64_t)ticks;
+          return;
+        }
+      }
+      if (E7_UNLIKELY(testCallbackRefill_ > 0) && nativeDepth_ > 1 && ticks <= (uint64_t)testCallbackRefill_) {
+        setBudget(testCallbackRefill_);  // testing hook (as in the interpreter's budget check)
+        budget_ -= (int64_t)ticks;
         return;
       }
       budget_ = 0;

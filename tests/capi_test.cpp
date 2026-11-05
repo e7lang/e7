@@ -688,6 +688,53 @@ int main() {
     }
     e7_vm_free(vm);
   }
+  // 0.2.6 (security review of 0.2.5): with suspension, a native may run past the end of the slice only
+  // by a bounded amount (VM::kNativeOverrun); past it the call fails with E7_ERR_BUDGET instead of holding
+  // the host thread (pbkdf2 charging up front; assertEqual charging per node of a DAG of 2^60 nodes).
+  // console.log charges its formatting (a large BigInt, a shared object graph printed with %j), and
+  // JSON.stringify's output and the keys of a default sort are bounded by the memory limit.
+  {
+    const char* src =
+        "import { pbkdf2 } from \"e7:crypto\";\n"
+        "import { assertEqual } from \"e7:test\";\n"
+        "class N { l: N | null; r: N | null; constructor(l: N | null, r: N | null) { this.l = l; this.r = r; } }\n"
+        "function dag(d: number): N { let a = new N(null, null); for (let i = 0; i < d; i++) a = new N(a, a); return a; }\n"
+        "export function kdf(): number { return pbkdf2(\"sha256\", new Uint8Array(8), new Uint8Array(8), 5000000, 32).length; }\n"
+        "export function eq(): number { assertEqual(dag(60), dag(60)); return 1; }\n"
+        "export function big(): number { const b = (1n << 262140n) - 1n; const row: bigint[] = [];\n"
+        "  for (let i = 0; i < 100; i++) row.push(b); console.log(row); return 1; }\n"
+        "export function logj(): number { console.log(\"%j\", dag(23)); return 1; }\n"
+        "export function json(): number { return JSON.stringify(dag(23)).length; }\n"
+        "export function sortKeys(): number { const s = \"x\".repeat(20000); const a: string[] = [];\n"
+        "  for (let i = 0; i < 50000; i++) a.push(s); a.sort(); return a.length; }\n";
+    std::vector<uint8_t> bc = compile(src);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.suspend_on_budget = 1;
+    cfg.memory_limit = 8u << 20;
+    e7_vm* vm = e7_vm_new(&cfg);
+    e7_set_print(vm, [](void*, const char*, size_t) {}, nullptr);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_value r;
+    auto runSliced = [&](const char* fn, int64_t slice) {
+      e7_set_budget(vm, slice);
+      e7_status st = e7_call(vm, m, fn, nullptr, 0, &r);
+      for (int i = 0; st == E7_SUSPENDED && i < 1000000; i++) {
+        e7_set_budget(vm, slice);
+        st = e7_resume(vm, &r);
+      }
+      if (st == E7_SUSPENDED) e7_abort_suspended(vm);
+      return st;
+    };
+    CHECK(runSliced("kdf", 1000) == E7_ERR_BUDGET);
+    CHECK(runSliced("eq", 1000) == E7_ERR_BUDGET);
+    CHECK(runSliced("big", 100000) == E7_ERR_BUDGET);
+    CHECK(runSliced("logj", 100000000) == E7_ERR_MEMORY);
+    CHECK(runSliced("json", 100000000) == E7_ERR_MEMORY);
+    CHECK(runSliced("sortKeys", 100000000) == E7_ERR_MEMORY);
+    e7_vm_free(vm);
+  }
   // 0.2.5 (coverage report): host natives receiving booleans, sized integers, Uint8Array and
   // KeyHandle arguments; integer parameters of exported functions given numbers / booleans; argument
   // types that cannot convert
