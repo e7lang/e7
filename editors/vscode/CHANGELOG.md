@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0
+
+- Bundles `@e7lang/e7` 0.2.0: `try` / `catch`, bytecode format 2 (modules built with 0.1 must be recompiled).
+- The debugger stops only on runtime errors that no `catch` handles.
+
 ## 0.1.0
 
 First public release. Earlier builds were published as 1.0.0–1.0.2 and have been withdrawn;
