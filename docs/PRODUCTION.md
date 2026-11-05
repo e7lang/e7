@@ -16,6 +16,13 @@ audit of the verifier, the loading path, the C API and the crypto wrappers.
 | C API | `tests/capi_test.cpp`: argument encoding/decoding, host functions, KeyHandle, signatures, budget suspend/resume, memory/stack limits, reuse after errors | Pass |
 | Locale independence | `tests/locale_test.cpp` (number parsing/formatting under de_DE) | Pass |
 | Bindings | JNI (OpenJDK 21 `E7VMTest`), iOS xcframework build, Android NDK build, C# (Windows) | Pass |
+| GC stress (0.2.5) | `-DE7_GC_STRESS=ON` + ASan/UBSan: the whole ctest suite with a collection at every safepoint and every allocation where one is allowed (CI job `gc-stress`) | Pass |
+| Allocation failures (0.2.5) | `tests/alloc_fail_test.cpp`: the N-th allocation fails for every N in every language/library test and example (also with every later one failing, with a budget slice of 1, under a stepping debugger); clean `E7_ERR_MEMORY`, consistent heap accounting (`VM::checkHeap`), heap back at its baseline after a failed load, VM usable afterwards | Pass (found: a module whose initializer failed stayed allocated for the life of the VM; fixed) |
+| Equivalence runs (0.2.5) | `tests/equiv_test.cpp`: all test programs with a budget slice of 1 and under a single-stepping debugger inspecting every scope; switch dispatch in CI. Output identical to a normal run | Pass (found: up-front native charges failed with `E7_ERR_BUDGET` in suspend mode; fixed) |
+| Soak (0.2.5) | `tests/soak_test.cpp`: one VM, 100,000 calls (1,000,000 locally) plus a failing module load every 1,000 calls; heap after GC, GC statistics and process heap flat | Pass |
+| Threads (0.2.5) | `tests/threads_test.cpp` under ThreadSanitizer (CI job `tsan`): concurrent compilation, execution, slicing, cross-thread `e7_debug_pause` | Pass (found: a data race in the compiler; fixed) |
+| Forward compatibility (0.2.5) | `tests/compat/forward_compat.py` (CI job `forward-compat`): modules from the current `e7c --target 0.2` on the 0.2.1 and 0.2.0 VMs; newer modules rejected with `E7_ERR_VERSION` | Pass on 0.2.1; on 0.2.0 two programs differ by the 0.2.1 fixes (Error values in `instanceof` / `String` / `JSON.stringify`, the JSON nesting-limit message) |
+| Coverage (0.2.5) | `scripts/coverage.py` (CI job `coverage`, llvm-cov over the whole ctest suite; summary and artifact) | Lines 93.7%, functions 98.3% (local run; before the new tests 92.6% / 96.7%). The 80 natives no test called (Math functions, integer-keyed Map / Set / arrays, the `get()!` / `get() ??` / `pop()!` fast paths, ...) and the uncovered C API, stack-trace and disassembler paths now have tests |
 
 ## 2. Platform and compiler matrix (CI)
 

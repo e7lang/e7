@@ -31,6 +31,101 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  # Stability (docs/ROADMAP.md 0.2.5, P0; CONTRIBUTING.md, "Testing"). The equivalence runs
+  # (equiv_slice, equiv_step), allocation-failure injection (alloc_fail_test), the soak test and the
+  # threads test are ctest tests and run in every job above; switch dispatch is linux-gcc-switch-dispatch.
+
+  # The whole suite with a collection at every safepoint and every allocation where one is allowed,
+  # under ASan + UBSan: a missing GC root becomes a use-after-free at once.
+  gc-stress:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure (E7_GC_STRESS + E7_SANITIZE)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DE7_GC_STRESS=ON -DE7_SANITIZE=ON
+      - run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build -j 4 --output-on-failure --timeout 3600
+
+  # Several VMs on several threads under ThreadSanitizer (tests/threads_test.cpp), plus the tests that
+  # use threads already (e7_debug_pause from another thread).
+  tsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      # TSan of LLVM 18 cannot map its shadow memory with the 32 random mmap bits of recent kernels
+      - run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Configure (E7_TSAN, clang)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DE7_TSAN=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+      - run: cmake --build build
+      - name: Test
+        env: { TSAN_OPTIONS: "halt_on_error=1 second_deadlock_stack=1" }
+        run: ctest --test-dir build --output-on-failure -R "threads_test|debug_test|capi_test|capi_reentry_test|soak_test"
+
+  # Forward compatibility (docs/BYTECODE.md section 5): modules compiled by the current e7c with
+  # --target 0.2 run on the e7 of earlier releases with the same output; modules that need a newer VM
+  # are rejected with E7_ERR_VERSION. `base` (E7_COMPAT_BASE) is the previous release: bump it after
+  # each release. v0.2.0 also runs, with the programs whose output 0.2.1 bug fixes changed (Error
+  # values in instanceof / String / JSON.stringify; the JSON nesting-limit message) as known differences.
+  forward-compat:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { base: v0.2.1, allow: "" }
+          - { base: v0.2.0, allow: "--allow tests/cases/lang/error_values.ts --allow tests/cases/lib/json_try_shape.ts" }
+    name: forward-compat (${{ matrix.base }})
+    runs-on: ubuntu-24.04
+    env:
+      E7_COMPAT_BASE: ${{ matrix.base }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build the current e7 / e7c
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_TESTS=OFF
+          cmake --build build --target e7 e7c
+      - name: Build e7 ${{ env.E7_COMPAT_BASE }}
+        run: |
+          mkdir ../e7-base
+          git archive "$E7_COMPAT_BASE" | tar -x -C ../e7-base
+          cmake -S ../e7-base -B build-base -G Ninja -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_TESTS=OFF
+          cmake --build build-base --target e7
+      - name: Run current modules on ${{ env.E7_COMPAT_BASE }}
+        run: |
+          python3 tests/compat/forward_compat.py --old-e7 build-base/e7 --e7 build/e7 --e7c build/e7c \
+            --base "$E7_COMPAT_BASE" --summary "$GITHUB_STEP_SUMMARY" ${{ matrix.allow }} \
+            tests/cases/lang/*.ts tests/cases/lib/*.ts examples/*.ts
+
+  # Coverage of the VM, stdlib, crypto, C API and compiler over the whole ctest suite (clang
+  # source-based coverage, scripts/coverage.py): a job summary and the coverage artifact
+  # (coverage.txt / coverage.md / coverage.lcov / html).
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build clang-18 llvm-18
+      - name: Build with E7_COVERAGE, run ctest, report
+        env: { CC: clang-18, CXX: clang++-18, LLVM_PROFDATA: llvm-profdata-18, LLVM_COV: llvm-cov-18 }
+        run: python3 scripts/coverage.py --build build-cov --jobs 4 --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage
+          path: |
+            build-cov/coverage.txt
+            build-cov/coverage.md
+            build-cov/coverage.lcov
+            build-cov/html
+          if-no-files-found: ignore
+
   # Performance gate (scripts/bench.py, CONTRIBUTING.md): instruction ticks and peak heap of every
   # bench/*.ts must equal bench/baseline.json; machine instructions under cachegrind (Ir) may not grow
   # by more than 3%. The measured numbers are uploaded as the bench-baseline artifact (a ready-made
