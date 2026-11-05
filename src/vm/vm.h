@@ -135,8 +135,8 @@ class VM {
   ModuleRT* loadModule(Module&& m);
   int runInit(ModuleRT* mod);  // runs module initializer (may suspend)
   // Drops a module whose loading failed before a handle to it was given out (its initializer failed):
-  // its constants, globals and the objects only they reach become garbage. Not while a call is running
-  // or suspended.
+  // its constants, globals and the objects only they reach are freed (a collection runs). Not while a
+  // call is running or suspended.
   void unloadModule(ModuleRT* mod);
 
   // ---- execution ----

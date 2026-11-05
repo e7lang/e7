@@ -840,6 +840,9 @@ void VM::unloadModule(ModuleRT* mod) {
     if (modules[i].get() != mod) continue;
     if (dbg_) dbg_->moduleUnloading(mod);
     modules.erase(modules.begin() + (std::ptrdiff_t)i);
+    // its objects are unreachable now, but instances and closures still point to its class and
+    // function descriptions, which are gone: free them at once, while nothing can run
+    collectGarbage();
     return;
   }
 }
