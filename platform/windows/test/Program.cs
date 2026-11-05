@@ -147,10 +147,11 @@ export function nothing(): void {}
                 while (true)
                 {
                     slices++;
+                    vm.SetBudget(100_000);  // each slice gets a fresh budget
                     try { r = vm.Resume(); break; } catch (E7Exception e2) when (e2.IsSuspended) { }
                 }
             }
-            Check(slices > 1 && (double?)r == 499999500000.0, $"suspend + resume ({slices} slices)");
+            Check(slices > 1 && slices < 100 && (double?)r == 499999500000.0, $"suspend + resume ({slices} slices)");
         }
 
         // optional signing
