@@ -29,6 +29,19 @@ struct LoopCtx {
   Label* cont;  // null for switch / labeled blocks
   bool isLoop;
   bool isSwitch = false;
+  size_t regionDepth = 0;  // protected regions (try blocks) open where the loop / label starts
+};
+
+// A protected range of a try statement: the try block of a try/catch (handler: the catch block) or
+// the try and catch blocks of a try/finally (handler: the finally block, then rethrow). Leaving it by
+// return / break / continue runs the finally block inline; that code is outside the range (and
+// outside every range being left), so a range is a list of segments, one handler entry each.
+struct Region {
+  std::vector<std::pair<uint32_t, uint32_t>> segs;
+  uint32_t openAt = 0;
+  bool open = false;
+  Stmt* fin = nullptr;    // finally block (null for a catch range)
+  size_t loopDepth = 0;   // loops open at the try statement (the finally block sees only these)
 };
 
 struct Gen {
@@ -108,7 +121,64 @@ struct Gen {
   std::vector<uint16_t> temps;
   std::unordered_map<VarSym*, uint16_t> varReg;
   std::vector<LoopCtx> loops;
+  std::vector<Region*> regions;  // open protected regions, innermost last
+  std::vector<std::unique_ptr<Region>> regionPool;
   std::vector<std::unique_ptr<Label>> labels;
+  void pushLoop(LoopCtx lc) {
+    lc.regionDepth = regions.size();
+    loops.push_back(lc);
+  }
+  void openSeg(Region* r) {
+    r->openAt = (uint32_t)pc();
+    r->open = true;
+  }
+  void closeSeg(Region* r) {
+    if (r->open && (uint32_t)pc() > r->openAt) r->segs.push_back({r->openAt, (uint32_t)pc()});
+    r->open = false;
+  }
+  // handler entries for the segments of a region (call when its statement's handler code starts)
+  void addHandlers(Region* r, uint32_t handler, uint16_t reg, Loc l) {
+    closeSeg(r);
+    for (auto& sg : r->segs) {
+      if (D->handlers.size() >= 65535) { err(l, "too many try statements in one function (at most 65535)"); return; }
+      D->handlers.push_back(HandlerDesc{sg.first, sg.second, handler, reg});
+    }
+  }
+  // finally block emitted for one way of leaving its try statement: only the loops and regions that
+  // enclose the try statement apply inside it
+  void genFinallyCopy(Region* r) {
+    std::vector<LoopCtx> savedLoops(loops.begin() + (std::ptrdiff_t)std::min(r->loopDepth, loops.size()), loops.end());
+    loops.resize(std::min(r->loopDepth, loops.size()));
+    std::string savedPending = pendingLabel;
+    pendingLabel.clear();
+    genStmt(r->fin);
+    pendingLabel = savedPending;
+    loops.insert(loops.end(), savedLoops.begin(), savedLoops.end());
+  }
+  bool finallyAbove(size_t depth) const {
+    for (size_t i = depth; i < regions.size(); i++)
+      if (regions[i]->fin) return true;
+    return false;
+  }
+  // Leaving the regions at index >= depth (return / break / continue): runs their finally blocks,
+  // innermost first, each outside the regions being left. Returns them for reenterRegions.
+  std::vector<Region*> exitRegions(size_t depth) {
+    std::vector<Region*> left(regions.begin() + (std::ptrdiff_t)depth, regions.end());
+    for (size_t i = regions.size(); i-- > depth;) {
+      Region* r = regions[i];
+      closeSeg(r);
+      regions.resize(i);
+      if (r->fin) genFinallyCopy(r);
+    }
+    return left;
+  }
+  // after the jump: the following code is again inside the regions
+  void reenterRegions(const std::vector<Region*>& left) {
+    for (Region* r : left) {
+      openSeg(r);
+      regions.push_back(r);
+    }
+  }
   std::string pendingLabel;
   uint32_t curLine = 0;
   std::string curFile;
@@ -466,6 +536,9 @@ struct Gen {
   void genObjectLit(Expr* e, uint16_t dst);
   void genConsoleLog(Expr* e);
   void genCallbackLoop(Expr* e, uint16_t dst);
+  FuncSym* accessorFn(Expr* m, bool set, Type** fnType);
+  uint16_t accessorReceiver(Expr* m);
+  void accessorCall(Expr* m, uint16_t obj, bool set, uint16_t v, uint16_t dst);
   std::vector<uint16_t> genArgs(std::vector<Expr*>& args, Type* ft, bool restPacked, size_t* nGiven);
   void callClosure(uint16_t clo, Type* ft, const std::vector<uint16_t>& args, uint16_t dst);
   void boxIfNeeded(uint16_t dst, uint16_t src, Type* from, Type* to);
@@ -474,6 +547,87 @@ struct Gen {
   void spreadInto(uint16_t arr, Expr* sp, Type* elemT);
   void iterateCollection(Type* t, uint16_t coll, int mode, std::function<void(uint16_t idxOrElem, uint16_t second)> body, Label* brk, Label* cont);
 };
+
+// ======================================================================= accessors
+static std::string sigOf(FuncSym* f);
+
+static bool isAccessorMember(Expr* m) {
+  return m->k == EK::Member && (m->intrinsic == IN_ACCESSOR || m->intrinsic == IN_STATIC_ACCESSOR ||
+                                m->intrinsic == IN_SUPER_ACCESSOR || m->intrinsic == IN_IFACE_ACCESSOR);
+}
+
+// The getter ("get x") or setter ("set x") a member expression calls: its function and type.
+FuncSym* Gen::accessorFn(Expr* m, bool set, Type** fnType) {
+  std::string key = (set ? "set " : "get ") + m->raw;
+  FuncSym* f = nullptr;
+  if (m->intrinsic == IN_IFACE_ACCESSOR) {
+    const ObjShape::Method* im = baseOf(m->a->type)->shape->findMethod(key);
+    *fnType = im ? im->fn : nullptr;
+    return nullptr;
+  }
+  if (m->intrinsic == IN_STATIC_ACCESSOR) {
+    auto it = m->cls->staticMethods.find(key);
+    if (it != m->cls->staticMethods.end()) f = it->second;
+  } else {
+    auto it = m->cls->methodIdx.find(key);
+    if (it != m->cls->methodIdx.end()) f = m->cls->vtable[it->second].fn;
+  }
+  *fnType = f ? f->type : nullptr;
+  return f;
+}
+
+// Receiver of an accessor call: the object (instance / interface), this (super.x), none (static).
+uint16_t Gen::accessorReceiver(Expr* m) {
+  if (m->intrinsic == IN_STATIC_ACCESSOR) return kNoReg;
+  if (m->intrinsic == IN_SUPER_ACCESSOR) {
+    uint16_t self = temp(K_R);
+    readVar(m->var, self, m->var->type);
+    return self;
+  }
+  return gen(m->a);
+}
+
+// Calls the getter (into dst) or the setter (with value v) of an accessor member expression.
+void Gen::accessorCall(Expr* m, uint16_t obj, bool set, uint16_t v, uint16_t dst) {
+  Type* ft = nullptr;
+  FuncSym* f = accessorFn(m, set, &ft);
+  if (!ft) { err(m->loc, "internal error: accessor '" + m->raw + "' not found"); return; }
+  std::vector<uint16_t> args;
+  if (set) args.push_back(v);
+  Kind rk = kindOf(ft->ret);
+  uint16_t out = set || rk == K_V ? kNoReg : dst;
+  switch (m->intrinsic) {
+    case IN_ACCESSOR: {
+      int slot = m->cls->methodIdx[(set ? "set " : "get ") + m->raw];
+      emit(OP_CALLM, out, obj, (uint16_t)args.size());
+      emitWord((uint64_t)(uint32_t)slot | ((uint64_t)sig(sigOf(f)) << 32));
+      emitRegList(args);
+      return;
+    }
+    case IN_SUPER_ACCESSOR:
+      args.insert(args.begin(), obj);
+      emit(OP_CALL, out, (uint16_t)f->funcIdx, (uint16_t)args.size());
+      emitRegList(args);
+      return;
+    case IN_STATIC_ACCESSOR:
+      emit(OP_CALL, out, (uint16_t)f->funcIdx, (uint16_t)args.size());
+      emitRegList(args);
+      return;
+    case IN_IFACE_ACCESSOR: {
+      std::string sg = "R";
+      for (Type* p : ft->params) sg += kindChar(K(p));
+      sg += '>';
+      sg += rk == K_V ? 'V' : kindChar(rk);
+      D->icNames.push_back(kStr(utf8ToUtf16((set ? "set " : "get ") + m->raw)));
+      emit(OP_CALLI, out, obj, (uint16_t)args.size());
+      emitWord((uint64_t)(uint32_t)(D->icNames.size() - 1) | ((uint64_t)sig(sg) << 32));
+      emitRegList(args);
+      return;
+    }
+    default:
+      err(m->loc, "internal error: accessor call");
+  }
+}
 
 // ======================================================================= helpers
 uint8_t Gen::keyModeOf(Type* t) {
@@ -608,6 +762,8 @@ void Gen::genInitOnce() {
   temps.clear();
   varReg.clear();
   loops.clear();
+  regions.clear();
+  regionPool.clear();
   curLine = 0;
   for (auto& file : P.files) {
     curFile = file->path;
@@ -654,6 +810,36 @@ void Gen::prologue(FuncSym* f) {
       genInto(p.init, varReg[f->paramSyms[i]]);
       place(skip);
       release(m0);
+    }
+  }
+  // closures: a default applies when the argument is undefined; the parameter register holds
+  // `T | undefined`, the variable T (its own register when the representation differs)
+  if (f->arrow && f->params) {
+    for (size_t i = 0; i < f->params->size() && i < f->paramSyms.size(); i++) {
+      Param& p = (*f->params)[i];
+      if (!p.init) continue;
+      Type* outer = f->type->params[i];
+      VarSym* v = f->paramSyms[i];
+      if (outer->t != TT::Optional || !outer->hasUndef) continue;  // never undefined: the default is unused
+      uint16_t pr = varReg[v];
+      uint16_t vr = pr;
+      if (K(outer) != K(v->type) || isBoxedOptional(outer) != isBoxedOptional(v->type)) {
+        vr = allocReg(K(v->type));
+        varReg[v] = vr;
+        dbgOpen(v, vr, false, false);
+      }
+      Label* given = newLabel();
+      Label* done = newLabel();
+      size_t m0 = mark();
+      uint16_t c = temp(K_I);
+      emit(OP_ISUNDEF, c, pr);
+      jump(OP_JF, c, given);
+      release(m0);
+      genInto(p.init, vr);
+      jump(OP_JMP, 0, done);
+      place(given);
+      unboxNarrowed(vr, pr, outer, v->type);
+      place(done);
     }
   }
   // captured parameters / this move into cells
@@ -735,6 +921,8 @@ void Gen::genFunctionOnce(FuncSym* f) {
   temps.clear();
   varReg.clear();
   loops.clear();
+  regions.clear();
+  regionPool.clear();
   curLine = 0;
   curFile = f->file;
   argcReg = kNoReg;
@@ -745,6 +933,13 @@ void Gen::genFunctionOnce(FuncSym* f) {
   Loc start = f->declStmt ? f->declStmt->loc : f->arrow ? f->arrow->loc : f->body ? f->body->loc : Loc();
   line(start);
   prologue(f);
+  if (f->isAbstract) {
+    // never called: abstract classes cannot be instantiated and concrete subclasses override it
+    uint16_t r = temp(K_R);
+    loadStr(r, u"abstract method '" + utf8ToUtf16(D->name) + u"' called");
+    emit(OP_ABORT, r);
+    return;
+  }
   if (f->isCtor && f->inheritCtor) {
     // implicit constructor: super(...args) then own field initializers
     FuncSym* pc = f->cls->parent->ctor;
@@ -931,7 +1126,58 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
     size_t m0 = mark();
     Type* et;
     uint16_t r;
+    if (sub.isRest) {
+      Type* rt = sub.restType;
+      r = temp(K_R);
+      if (d.isArrayPat && t->t == TT::Array) {
+        // [a, ...rest] = array: rest = array.slice(i)
+        uint16_t from = temp(K_F), inf = temp(K_F);
+        loadNum(from, (double)i);
+        loadNum(inf, INFINITY);
+        callNative("Array.slice", {src, from, inf}, r, 'R');
+      } else if (d.isArrayPat) {
+        // tuple: a new tuple of the remaining elements
+        ClassSym* sc = C.tupleRecord(t);
+        ClassSym* rc = C.tupleRecord(rt);
+        emit(OP_NEW, r, (uint16_t)rc->classIdx);
+        for (size_t k = 0; k < rt->elems.size(); k++) {
+          Kind ek = K(rt->elems[k]);
+          uint16_t v = temp(ek);
+          emit(op3(ek, OP_GETF_I, OP_GETF_F, OP_GETF_R), v, src, (uint16_t)sc->fieldIdx[std::to_string(i + k)]);
+          emit(op3(ek, OP_SETF_I, OP_SETF_F, OP_SETF_R), r, (uint16_t)k, v);
+        }
+      } else {
+        // { a, ...rest }: a new object with the other properties
+        std::vector<std::pair<std::string, Type*>> fs;
+        for (auto& p : rt->shape->props) fs.push_back({p.name, p.type});
+        ClassSym* rc = C.recordFor(fs)->cls;
+        emit(OP_NEW, r, (uint16_t)rc->classIdx);
+        for (size_t k = 0; k < fs.size(); k++) {
+          Kind fk = K(fs[k].second);
+          uint16_t v = temp(fk);
+          if (t->t == TT::Class) {
+            emit(op3(fk, OP_GETF_I, OP_GETF_F, OP_GETF_R), v, src, (uint16_t)t->cls->fieldIdx[fs[k].first]);
+          } else {
+            D->icNames.push_back(kStr(utf8ToUtf16(fs[k].first)));
+            emit(op3(fk, OP_GETN_I, OP_GETN_F, OP_GETN_R), v, src, (uint16_t)(D->icNames.size() - 1));
+          }
+          emit(op3(fk, OP_SETF_I, OP_SETF_F, OP_SETF_R), r, (uint16_t)rc->fieldIdx[fs[k].first], v);
+        }
+      }
+      destructure(sub, r, rt);
+      release(m0);
+      continue;
+    }
+    // element with a default value: used when the element is undefined (or past the end of an array)
+    Label* useDefault = sub.init ? newLabel() : nullptr;
     if (d.isArrayPat) {
+      if (useDefault && t->t == TT::Array) {
+        uint16_t n = temp(K_I), ir = temp(K_I), c = temp(K_I);
+        emit(OP_ALENI, n, src);
+        loadInt(ir, (int64_t)i);
+        emit(OP_LT_I, c, ir, n);
+        jump(OP_JF, c, useDefault);
+      }
       if (t->t == TT::Tuple) {
         et = t->elems[i];
         r = temp(K(et));
@@ -959,6 +1205,24 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
         emit(op3(K(et), OP_GETN_I, OP_GETN_F, OP_GETN_R), r, src, (uint16_t)(D->icNames.size() - 1));
       }
     }
+    if (useDefault) {
+      Type* bt = et;
+      if (et->t == TT::Optional && et->hasUndef) bt = et->hasNull ? T.optional(et->elem, true, false) : et->elem;
+      uint16_t v = temp(K(bt));
+      Label* done = newLabel();
+      if (K(et) == K_R) {
+        uint16_t c = temp(K_I);
+        emit(OP_ISUNDEF, c, r);
+        jump(OP_JT, c, useDefault);
+      }
+      unboxNarrowed(v, r, et, bt);
+      jump(OP_JMP, 0, done);
+      place(useDefault);
+      genInto(sub.init, v);
+      place(done);
+      r = v;
+      et = bt;
+    }
     destructure(sub, r, et);
     release(m0);
   }
@@ -974,7 +1238,7 @@ void Gen::genStmt(Stmt* s) {
         break;
       case SK::Class: {
         code = false;
-        for (auto& m : s->members) code = code || (m.kind == ClassMember::Field && m.isStatic);
+        for (auto& m : s->members) code = code || ((m.kind == ClassMember::Field && m.isStatic) || m.kind == ClassMember::StaticBlock);
         break;
       }
       default: break;
@@ -1016,7 +1280,7 @@ void Gen::genStmt(Stmt* s) {
       Label* end = newLabel();
       jump(OP_JMP, 0, cond);
       place(top);
-      loops.push_back({pendingLabel, end, cond, true});
+      pushLoop({pendingLabel, end, cond, true});
       pendingLabel.clear();
       genStmt(s->body);
       loops.pop_back();
@@ -1032,7 +1296,7 @@ void Gen::genStmt(Stmt* s) {
       Label* cont = newLabel();
       Label* end = newLabel();
       place(top);
-      loops.push_back({pendingLabel, end, cont, true});
+      pushLoop({pendingLabel, end, cont, true});
       pendingLabel.clear();
       genStmt(s->body);
       loops.pop_back();
@@ -1064,7 +1328,7 @@ void Gen::genStmt(Stmt* s) {
       Label* end = newLabel();
       if (s->expr) jump(OP_JMP, 0, cond);
       place(top);
-      loops.push_back({label, end, cont, true});
+      pushLoop({label, end, cont, true});
       genStmt(s->body);
       loops.pop_back();
       place(cont);
@@ -1103,23 +1367,32 @@ void Gen::genStmt(Stmt* s) {
       break;
     case SK::Return: {
       size_t m0 = mark();
-      if (fn->isCtor) { emit(OP_RET_V); break; }
-      Kind rk = kindOf(fn->type->ret);
-      if (!s->expr) {
-        if (rk == K_V) emit(OP_RET_V);
-        else {
-          uint16_t r = temp(K_R);
+      // finally blocks run after the value is computed (and cannot change it): the value is kept
+      // in a fresh register while they run
+      bool fin = finallyAbove(0);
+      Kind rk = fn->isCtor ? K_V : kindOf(fn->type->ret);
+      uint16_t r = kNoReg;
+      if (fn->isCtor) {
+        // return; in a constructor
+      } else if (!s->expr) {
+        if (rk != K_V) {
+          r = temp(K_R);
           emit(OP_LOADUNDEF, r);
-          emit(OP_RET_R, r);
         }
       } else if (rk == K_V) {
         genDiscard(s->expr);
-        emit(OP_RET_V);
+      } else if (fin) {
+        r = temp(rk);
+        genInto(s->expr, r);
       } else {
-        uint16_t r = gen(s->expr);
-        static const uint16_t rets[3] = {OP_RET_I, OP_RET_F, OP_RET_R};
-        emit(rets[rk], r);
+        r = gen(s->expr);
       }
+      std::vector<Region*> left;
+      if (fin) left = exitRegions(0);
+      static const uint16_t rets[3] = {OP_RET_I, OP_RET_F, OP_RET_R};
+      if (rk == K_V) emit(OP_RET_V);
+      else emit(rets[rk], r);
+      if (fin) reenterRegions(left);
       release(m0);
       break;
     }
@@ -1134,7 +1407,14 @@ void Gen::genStmt(Stmt* s) {
         }
       }
       if (!lc) { err(s->loc, "invalid break"); break; }
-      jump(OP_JMP, 0, lc->brk);
+      Label* target = lc->brk;
+      if (finallyAbove(lc->regionDepth)) {
+        std::vector<Region*> left = exitRegions(lc->regionDepth);
+        jump(OP_JMP, 0, target);
+        reenterRegions(left);
+      } else {
+        jump(OP_JMP, 0, target);
+      }
       break;
     }
     case SK::Continue: {
@@ -1146,7 +1426,14 @@ void Gen::genStmt(Stmt* s) {
         break;
       }
       if (!lc) { err(s->loc, "invalid continue"); break; }
-      jump(OP_JMP, 0, lc->cont);
+      Label* target = lc->cont;
+      if (finallyAbove(lc->regionDepth)) {
+        std::vector<Region*> left = exitRegions(lc->regionDepth);
+        jump(OP_JMP, 0, target);
+        reenterRegions(left);
+      } else {
+        jump(OP_JMP, 0, target);
+      }
       break;
     }
     case SK::Labeled: {
@@ -1158,7 +1445,7 @@ void Gen::genStmt(Stmt* s) {
         pendingLabel.clear();
       } else {
         Label* end = newLabel();
-        loops.push_back({s->label, end, nullptr, false});
+        pushLoop({s->label, end, nullptr, false});
         genStmt(b);
         loops.pop_back();
         place(end);
@@ -1179,37 +1466,87 @@ void Gen::genStmt(Stmt* s) {
       break;
     }
     case SK::Try: {
-      // try range [start, end) -> handler; the VM stores the Error object in `er` (reserved for the
-      // whole statement). Handlers of try statements nested in the body are recorded first.
-      uint16_t er = allocReg(K_R);
+      // try { B } catch (e) { C } finally { F }:
+      //       B                  catch range, finally range
+      //       F; jmp after       (normal completion of B)
+      //   h1: e = er; C          finally range
+      //       F; jmp after
+      //   h2: F; throw fr        (a catchable error in B or C: F, then rethrow it)
+      // The VM stores the caught Error object in the handler's register (er / fr, reserved for the
+      // whole statement). Leaving B or C by return / break / continue runs F inline (exitRegions).
+      // Handlers of try statements nested in B / C are recorded first (inner before outer).
+      uint16_t er = s->els ? allocReg(K_R) : kNoReg;
+      uint16_t fr = s->then ? allocReg(K_R) : kNoReg;
       Label* after = newLabel();
-      uint32_t start = (uint32_t)pc();
-      genStmt(s->body);
-      uint32_t end = (uint32_t)pc();
-      jump(OP_JMP, 0, after);
-      uint32_t handler = (uint32_t)pc();
-      if (end > start) {
-        if (D->handlers.size() >= 65535) err(s->loc, "too many try statements in one function (at most 65535)");
-        else D->handlers.push_back(HandlerDesc{start, end, handler, er});
+      Region* fin = nullptr;
+      Region* rc = nullptr;
+      if (s->then) {
+        regionPool.emplace_back(new Region());
+        fin = regionPool.back().get();
+        fin->fin = s->then;
+        fin->loopDepth = loops.size();
+        openSeg(fin);
+        regions.push_back(fin);
       }
-      VarSym* cv = s->decls.empty() ? nullptr : s->decls[0].sym;
-      if (cv) bindVar(cv, er);
-      genStmt(s->els);
-      if (cv) {
-        auto it = varReg.find(cv);
-        if (it != varReg.end()) {
-          freeReg(it->second);
-          varReg.erase(it);
-          dbgClose(cv);
+      if (s->els) {
+        regionPool.emplace_back(new Region());
+        rc = regionPool.back().get();
+        rc->loopDepth = loops.size();
+        openSeg(rc);
+        regions.push_back(rc);
+      }
+      genStmt(s->body);
+      if (rc) { closeSeg(rc); regions.pop_back(); }
+      if (fin) {
+        closeSeg(fin);
+        regions.pop_back();
+        genFinallyCopy(fin);
+      }
+      jump(OP_JMP, 0, after);
+      if (rc) {
+        addHandlers(rc, (uint32_t)pc(), er, s->loc);
+        if (fin) {
+          openSeg(fin);
+          regions.push_back(fin);
+        }
+        VarSym* cv = s->decls.empty() ? nullptr : s->decls[0].sym;
+        if (cv) bindVar(cv, er);
+        genStmt(s->els);
+        if (cv) {
+          auto it = varReg.find(cv);
+          if (it != varReg.end()) {
+            freeReg(it->second);
+            varReg.erase(it);
+            dbgClose(cv);
+          }
+        }
+        if (fin) {
+          closeSeg(fin);
+          regions.pop_back();
+          genFinallyCopy(fin);
+          jump(OP_JMP, 0, after);
+        }
+      }
+      if (fin) {
+        closeSeg(fin);
+        if (!fin->segs.empty()) {
+          addHandlers(fin, (uint32_t)pc(), fr, s->loc);
+          genFinallyCopy(fin);
+          emit(OP_THROW, fr);
         }
       }
       place(after);
-      freeReg(er);
+      if (er != kNoReg) freeReg(er);
+      if (fr != kNoReg) freeReg(fr);
       break;
     }
     case SK::Class: {
       if (!s->cls) break;
       for (auto& m : s->members) {
+        if (m.kind == ClassMember::StaticBlock) {
+          genStmt(m.body);
+          continue;
+        }
         if (m.kind != ClassMember::Field || !m.isStatic) continue;
         auto it = s->cls->staticFields.find(m.name);
         if (it == s->cls->staticFields.end()) continue;
@@ -1265,8 +1602,10 @@ void Gen::genForOf(Stmt* s) {
   };
   place(top);
   size_t mLoop = mark();
+  bool plainPair = d.isArrayPat && d.elems.size() <= 2;
+  for (auto& el : d.elems) plainPair = plainPair && !el.init && !el.isRest;
   auto pairBind = [&](uint16_t a, Type* ta, uint16_t b, Type* tb, Type* tupleT) {
-    if (d.isArrayPat && d.elems.size() <= 2) {
+    if (plainPair) {
       if (d.elems.size() > 0) { size_t m1 = mark(); destructure(d.elems[0], a, ta); release(m1); }
       if (d.elems.size() > 1) { size_t m1 = mark(); destructure(d.elems[1], b, tb); release(m1); }
     } else {
@@ -1342,7 +1681,7 @@ void Gen::genForOf(Stmt* s) {
     err(s->loc, "cannot iterate over '" + typeName(t) + "'");
   }
   release(mLoop);
-  loops.push_back({label, end, cont, true});
+  pushLoop({label, end, cont, true});
   genStmt(s->body);
   loops.pop_back();
   place(cont);
@@ -1388,7 +1727,7 @@ void Gen::genSwitch(Stmt* s) {
     for (Stmt* x : c.body) all.push_back(x);
   LoopCtx lc{label, end, nullptr, false};
   lc.isSwitch = true;
-  loops.push_back(lc);
+  pushLoop(lc);
   blockEntry(all);
   for (size_t i = 0; i < s->cases.size(); i++) {
     place(bodies[i]);
@@ -2069,6 +2408,11 @@ void Gen::storeTo(Expr* target, uint16_t v) {
       break;
     case EK::Member: {
       if (t->intrinsic == IN_STATIC_FIELD) { writeVar(t->var, v); break; }
+      if (isAccessorMember(t)) {
+        uint16_t obj = accessorReceiver(t);
+        accessorCall(t, obj, true, v, kNoReg);
+        break;
+      }
       if (t->intrinsic == IN_ARR_LENGTH_SET) {
         uint16_t obj = gen(t->a);
         callNative("Array.setLength", {obj, v}, kNoReg, 'V');
@@ -2215,8 +2559,18 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
   uint16_t cur = temp(k);
   uint16_t obj = kNoReg, idx = kNoReg;
   Expr* readExpr = e->a;
-  if (target->k == EK::Member && target->intrinsic == 0 && !(target->field < 0 && !target->cls && target->a->type &&
-                                                              baseOf(target->a->type)->t != TT::Object)) {
+  bool acc = isAccessorMember(target);
+  if (acc) {
+    // o.x op= v with an accessor: receiver evaluated once, getter, then setter
+    obj = accessorReceiver(target);
+    if (obj != kNoReg) {
+      uint16_t o2 = temp(K_R);
+      mov(o2, obj, K_R);
+      obj = o2;
+    }
+    accessorCall(target, obj, false, kNoReg, cur);
+  } else if (target->k == EK::Member && (target->intrinsic == 0 || target->intrinsic == IN_ABSTRACT_PROP) &&
+             !(target->field < 0 && !target->cls && target->a->type && baseOf(target->a->type)->t != TT::Object)) {
     obj = temp(K_R);
     genInto(target->a, obj);
     if (target->field >= 0 && target->cls) emit(op3(k, OP_GETF_I, OP_GETF_F, OP_GETF_R), cur, obj, (uint16_t)target->field);
@@ -2253,7 +2607,9 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
     binaryOp(bop, lt, e->b->type, res, cur, r, e->loc);
   }
   // write back
-  if (obj != kNoReg && target->k == EK::Member) {
+  if (acc) {
+    accessorCall(target, obj, true, res, kNoReg);
+  } else if (obj != kNoReg && target->k == EK::Member) {
     if (target->field >= 0 && target->cls) emit(op3(k, OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)target->field, res);
     else {
       D->icNames.push_back(kStr(utf8ToUtf16(target->raw)));
@@ -2617,6 +2973,22 @@ void Gen::genCall(Expr* e, uint16_t dst) {
       uint32_t si = sig(sigOf(f));
       emit(OP_CALLM, rk == K_V ? kNoReg : dst, obj, (uint16_t)args.size());
       emitWord((uint64_t)(uint32_t)e->vslot | ((uint64_t)si << 32));
+      emitRegList(args);
+      return;
+    }
+    case IN_PRIVATE_METHOD: {
+      // this.#m(...): non-virtual
+      FuncSym* f = e->callee;
+      uint16_t obj = gen(callee->a);
+      size_t n;
+      std::vector<uint16_t> args = genArgs(e->list, f->type, e->bval, &n);
+      args.insert(args.begin(), obj);
+      if (f->hasDefaults) {
+        uint16_t ac = temp(K_I);
+        loadInt(ac, (int64_t)n);
+        args.push_back(ac);
+      }
+      emit(OP_CALL, rk == K_V ? kNoReg : dst, (uint16_t)f->funcIdx, (uint16_t)args.size());
       emitRegList(args);
       return;
     }
@@ -3360,12 +3732,24 @@ void Gen::genMember(Expr* e, uint16_t d) {
       callNative(e->native, {obj}, d, kindChar(K(e->type)));
       return;
     }
+    case IN_ACCESSOR: case IN_STATIC_ACCESSOR: case IN_SUPER_ACCESSOR: case IN_IFACE_ACCESSOR: {
+      // getter call; the result may be narrowed (e.g. unboxed after a null check)
+      Type* ft = nullptr;
+      accessorFn(e, false, &ft);
+      if (!ft) { err(e->loc, "internal error: getter '" + e->raw + "' not found"); return; }
+      uint16_t obj = accessorReceiver(e);
+      uint16_t v = temp(K(ft->ret));
+      accessorCall(e, obj, false, kNoReg, v);
+      unboxNarrowed(d, v, ft->ret, e->type);
+      return;
+    }
     default: break;
   }
   uint16_t obj = gen(e->a);
   Type* ot = baseOf(e->a->type);
   Type* fieldT;
   if (e->field >= 0 && e->cls) fieldT = e->cls->fields[e->field].type;
+  else if (e->intrinsic == IN_ABSTRACT_PROP) fieldT = e->cls->abstractProp(e->raw);
   else fieldT = ot->shape->findProp(e->raw)->type;
   Kind fk = K(fieldT);
   auto load = [&](uint16_t into) {
@@ -3385,7 +3769,40 @@ void Gen::genMember(Expr* e, uint16_t d) {
 }
 
 void Gen::genIndex(Expr* e, uint16_t d) {
+  if (e->optional) {
+    // a?.[i]: undefined when a is null or undefined (the index is not evaluated)
+    uint16_t obj = temp(K_R);
+    genInto(e->a, obj);
+    Label* nul = newLabel();
+    Label* end = newLabel();
+    jump(OP_JNULLISH, obj, nul);
+    Expr* saved = e->a;
+    e->a = regExpr(obj, baseOf(saved->type), saved->loc);
+    e->optional = false;
+    Type* savedT = e->type;
+    Type* innerT = e->innerType ? e->innerType : baseOf(savedT);
+    e->type = innerT;
+    uint16_t v = temp(K(innerT));
+    genIndex(e, v);
+    boxIfNeeded(d, v, innerT, savedT);
+    e->type = savedT;
+    e->optional = true;
+    e->a = saved;
+    jump(OP_JMP, 0, end);
+    place(nul);
+    emit(OP_LOADUNDEF, d);
+    place(end);
+    return;
+  }
   Type* ot = baseOf(e->a->type);
+  if (e->var) {
+    // first element of a spread tuple argument: evaluate the tuple once into its hidden variable
+    uint16_t tup = gen(e->a);
+    declareLocal(e->var);
+    writeVar(e->var, tup);
+    emit(op3(K(e->type), OP_GETF_I, OP_GETF_F, OP_GETF_R), d, tup, (uint16_t)e->field);
+    return;
+  }
   uint16_t obj = gen(e->a);
   if (ot->t == TT::Tuple) {
     emit(op3(K(e->type), OP_GETF_I, OP_GETF_F, OP_GETF_R), d, obj, (uint16_t)e->field);

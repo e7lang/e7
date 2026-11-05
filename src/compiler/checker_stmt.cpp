@@ -14,8 +14,10 @@ bool Checker::structurallyAssignable(Type* src, Type* dst) {
     resolveClass(c);
     for (auto& p : ds->props) {
       auto it = c->fieldIdx.find(p.name);
-      if (it == c->fieldIdx.end()) return false;
-      Type* ft = c->fields[it->second].type;
+      Type* ft;
+      if (it != c->fieldIdx.end()) ft = c->fields[it->second].type;
+      else if (Type* at = c->abstractProp(p.name)) ft = at;  // read by name, like interface properties
+      else return false;
       if (ft != p.type && !(kindOf(ft) == K_R && kindOf(p.type) == K_R && !isBoxedOptional(ft) && !isBoxedOptional(p.type) && assignable(ft, p.type)))
         return false;
     }
@@ -186,7 +188,8 @@ void Checker::checkBody(FuncSym* f) {
   if (f->params) {
     for (size_t i = 0; i < f->params->size(); i++) {
       Param& p = (*f->params)[i];
-      Type* pt = f->type->params[i];
+      // closure parameter with a default: `T | undefined` outside, T inside (see checkArrow)
+      Type* pt = f->arrow && p.init && p.innerType ? p.innerType : f->type->params[i];
       VarSym* v = newVar(p.name, pt, false, p.loc);
       v->isParam = true;
       v->paramIndex = (int)i;
@@ -284,7 +287,9 @@ bool Checker::exits(Stmt* s) {
       for (Stmt* x : s->stmts) if (exits(x)) return true;
       return false;
     case SK::If: return s->els && exits(s->then) && exits(s->els);
-    case SK::Try: return exits(s->body) && exits(s->els);
+    case SK::Try:
+      if (s->then && exits(s->then)) return true;
+      return exits(s->body) && (!s->els || exits(s->els));
     case SK::While: {
       bool infinite = s->expr->k == EK::Bool && s->expr->bval;
       return infinite && !containsBreakFor(s->body, "", 0);
@@ -330,7 +335,9 @@ static bool containsBreakFor(Stmt* s, const std::string& label, int depth) {
       for (Stmt* x : s->stmts) if (containsBreakFor(x, label, depth)) return true;
       return false;
     case SK::If: return containsBreakFor(s->then, label, depth) || containsBreakFor(s->els, label, depth);
-    case SK::Try: return containsBreakFor(s->body, label, depth) || containsBreakFor(s->els, label, depth);
+    case SK::Try:
+      return containsBreakFor(s->body, label, depth) || containsBreakFor(s->els, label, depth) ||
+             containsBreakFor(s->then, label, depth);
     case SK::While: case SK::DoWhile: case SK::For: case SK::ForOf:
       return containsBreakFor(s->body, label, depth + 1);
     case SK::Switch:
@@ -457,22 +464,71 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
     declare(d.name, v, d.loc);
     return;
   }
+  // an element with a default: the value is used unless it is undefined, so the binding has the
+  // element type without undefined; the default must fit that type
+  auto withDefault = [&](VarDecl& el, Type* et) -> Type* {
+    if (!el.init) return et;
+    Type* bt = et;
+    if (et->t == TT::Optional && et->hasUndef) bt = et->hasNull ? T.optional(et->elem, true, false) : et->elem;
+    check(el.init, bt->t == TT::Unknown ? nullptr : bt);
+    if (bt->t != TT::Unknown) coerce(el.init, bt, "default value");
+    return bt;
+  };
   if (d.isArrayPat) {
     for (size_t i = 0; i < d.elems.size(); i++) {
+      VarDecl& el = d.elems[i];
       Type* et;
+      if (el.isRest) {
+        // [a, ...rest]: the remaining elements (an array of the same type, or a tuple of the rest)
+        if (t->t == TT::Array) et = t;
+        else if (t->t == TT::Tuple) {
+          std::vector<Type*> restElems(t->elems.begin() + (std::ptrdiff_t)std::min(i, t->elems.size()), t->elems.end());
+          if (restElems.empty()) { err(el.loc, "the rest element would be an empty tuple"); et = T.unknown(); }
+          else et = T.tuple(restElems);
+        } else if (t->t == TT::Unknown) et = T.unknown();
+        else { err(l, "cannot destructure a value of type '" + typeName(t) + "' as an array"); et = T.unknown(); }
+        el.restType = et;
+        bindPattern(el, et, isConst, topLevel, l);
+        continue;
+      }
       if (t->t == TT::Array) et = t->elem;
       else if (t->t == TT::Tuple) {
         if (i >= t->elems.size()) { err(d.loc, "tuple has no element at index " + std::to_string(i)); et = T.unknown(); }
         else et = t->elems[i];
       } else if (t->t == TT::Unknown) et = T.unknown();
       else { err(l, "cannot destructure a value of type '" + typeName(t) + "' as an array"); et = T.unknown(); }
-      bindPattern(d.elems[i], et, isConst, topLevel, l);
+      if (el.name.empty() && !el.isArrayPat && !el.isObjPat) continue;  // hole
+      bindPattern(el, withDefault(el, et), isConst, topLevel, l);
     }
     return;
   }
   // object pattern
+  std::vector<std::string> named;
   for (size_t i = 0; i < d.elems.size(); i++) {
     const std::string& key = d.keys[i];
+    VarDecl& el = d.elems[i];
+    if (el.isRest) {
+      // { a, ...rest }: an object with the other (non-private) properties of the static type
+      std::vector<ObjShape::Prop> props;
+      if (t->t == TT::Class) {
+        resolveClass(t->cls);
+        for (auto& f : t->cls->fields)
+          if (f.name[0] != '#' && std::find(named.begin(), named.end(), f.name) == named.end())
+            props.push_back({f.name, f.type, f.optional});
+        if (!t->cls->abstractProps.empty())
+          err(el.loc, "a rest property of an abstract class type with abstract properties is not supported");
+      } else if (t->t == TT::Object) {
+        for (auto& p : t->shape->props)
+          if (std::find(named.begin(), named.end(), p.name) == named.end()) props.push_back(p);
+      } else if (t->t != TT::Unknown) {
+        err(l, "cannot destructure a value of type '" + typeName(t) + "'");
+      }
+      Type* rt = t->t == TT::Unknown ? T.unknown() : T.anonObject(props);
+      el.restType = rt;
+      bindPattern(el, rt, isConst, topLevel, l);
+      continue;
+    }
+    named.push_back(key);
     Type* ft = T.unknown();
     if (t->t == TT::Class) {
       auto it = t->cls->fieldIdx.find(key);
@@ -485,7 +541,7 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
     } else if (t->t != TT::Unknown) {
       err(l, "cannot destructure a value of type '" + typeName(t) + "'");
     }
-    bindPattern(d.elems[i], ft, isConst, topLevel, l);
+    bindPattern(el, withDefault(el, ft), isConst, topLevel, l);
   }
 }
 
@@ -571,18 +627,31 @@ void Checker::checkStmt(Stmt* s) {
       if (!topLevel) { err(s->loc, "classes must be declared at top level"); break; }
       if (s->cls) {
         resolveClass(s->cls);
-        // static field initializers run here, in source order
-        for (auto& kv : s->cls->staticFields) {
-          VarSym* v = kv.second;
+        // static field initializers and static blocks run here, in source order, inside the class
+        // body (private names of the class are accessible)
+        ClassSym* savedStatic = staticInitClass;
+        staticInitClass = s->cls;
+        for (auto& m : s->members) {
+          if (m.kind == ClassMember::StaticBlock) {
+            pushScope();
+            checkBlockStmts(m.body->stmts);
+            popScope();
+            continue;
+          }
+          if (m.kind != ClassMember::Field || !m.isStatic) continue;
+          auto it = s->cls->staticFields.find(m.name);
+          if (it == s->cls->staticFields.end()) continue;
+          VarSym* v = it->second;
           VarDecl* d = v->decl;
-          if (d && d->init) {
+          if (d && d->init && !v->checked) {
             Type* t = check(d->init, v->type);
             if (v->type) coerce(d->init, v->type);
             else v->type = t;
           }
-          if (!v->type) { err(v->loc, "static field '" + kv.first + "' needs a type annotation or initializer"); v->type = T.unknown(); }
+          if (!v->type) { err(v->loc, "static field '" + m.name + "' needs a type annotation or initializer"); v->type = T.unknown(); }
           v->checked = true;
         }
+        staticInitClass = savedStatic;
       }
       break;
     case SK::Interface: case SK::TypeAlias: case SK::Enum:
@@ -805,22 +874,32 @@ void Checker::checkStmt(Stmt* s) {
       // try { } catch (e) { }: the catch variable is 'unknown' (TypeScript --strict), narrowed with
       // `e instanceof Error`. Variables assigned in the try block may hold any of the values they had
       // in it when the error happened, so their narrowings are dropped for the catch block.
+      // A finally block runs after any prefix of the try block (and of the catch block), so it
+      // starts with the narrowings of both dropped too.
       pushScope();
       checkStmt(s->body);
       popScope();
       invalidateAssigned(s->body);
-      pushScope();
-      if (!s->decls.empty()) {
-        VarDecl& d = s->decls[0];
-        if (d.type && !(d.type->k == TNK::Ref && d.type->name == "unknown" && d.type->args.empty()))
-          err(d.type->loc, "a catch variable can only be annotated as 'unknown'");
-        d.type = nullptr;
-        bindPattern(d, T.caught(), false, false, d.loc);
+      if (s->els) {
+        pushScope();
+        if (!s->decls.empty()) {
+          VarDecl& d = s->decls[0];
+          if (d.type && !(d.type->k == TNK::Ref && d.type->name == "unknown" && d.type->args.empty()))
+            err(d.type->loc, "a catch variable can only be annotated as 'unknown'");
+          d.type = nullptr;
+          bindPattern(d, T.caught(), false, false, d.loc);
+        }
+        checkStmt(s->els);
+        popScope();
+        invalidateAssigned(s->body);
+        invalidateAssigned(s->els);
       }
-      checkStmt(s->els);
-      popScope();
-      invalidateAssigned(s->body);
-      invalidateAssigned(s->els);
+      if (s->then) {
+        pushScope();
+        checkStmt(s->then);
+        popScope();
+        invalidateAssigned(s->then);
+      }
       break;
     }
     case SK::ForIn:

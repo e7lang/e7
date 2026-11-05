@@ -2,9 +2,11 @@
 #include "parser.h"
 
 #include "../core/numfmt.h"
+#include "intrinsics.h"
 
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <unordered_set>
 
 namespace e7 {
@@ -404,8 +406,13 @@ class Parser {
     if (cur().k == TK::Ident) return t[i++].text;
     if (cur().k == TK::Str) return utf16ToUtf8(t[i++].str);
     if (cur().k == TK::Num) return t[i++].text;
-    if (cur().k == TK::PrivateName) fail("private names (#x) are not supported; use 'private'");
+    if (cur().k == TK::PrivateName) fail("private names (#x) are only allowed for class members");
     fail("expected property name");
+  }
+  // class member names: property names and private names (#x)
+  std::string memberName() {
+    if (cur().k == TK::PrivateName) return "#" + t[i++].text;
+    return propName();
   }
   void semi() {
     if (eatP(";")) return;
@@ -532,6 +539,42 @@ class Parser {
       TypeNode::Member m;
       if (isKw("readonly") && peek().k == TK::Ident) { i++; m.readonly = true; }
       if (isP("[")) fail("index signatures are not supported; use Map<K, V>");
+      if ((isKw("get") || isKw("set")) && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num) &&
+          peek(2).k == TK::Punct && peek(2).text == "(") {
+        // accessor signature: get name(): T / set name(v: T)
+        bool isGet = isKw("get");
+        i++;
+        m.name = propName();
+        m.accessor = isGet ? 1 : 2;
+        m.method = true;
+        TypeNode* f = A.type(TNK::Func, loc());
+        expectP("(");
+        while (!isP(")")) {
+          TypeNode::Param pr;
+          pr.name = ident();
+          expectP(":");
+          pr.type = parseType();
+          f->params.push_back(pr);
+          if (!eatP(",")) break;
+        }
+        expectP(")");
+        if (isGet) {
+          if (!f->params.empty()) fail("a 'get' accessor cannot have parameters");
+          expectP(":");
+          f->ret = parseType();
+        } else {
+          if (f->params.size() != 1) fail("a 'set' accessor must have exactly one parameter");
+          if (isP(":")) fail("a 'set' accessor cannot have a return type annotation");
+          f->ret = A.type(TNK::Ref, loc());
+          f->ret->name = "void";
+        }
+        m.type = f;
+        o->members.push_back(m);
+        if (!eatP(";") && !eatP(",")) {
+          if (!isP("}") && !cur().nl) fail("expected ';' in type literal");
+        }
+        continue;
+      }
       m.name = propName();
       if (eatP("?")) m.optional = true;
       if (isP("(")) {
@@ -640,7 +683,12 @@ class Parser {
       if (w == "async") {
         if (peek().k == TK::Ident && peek().text == "function") fail("async functions are not supported yet (reserved for coroutines); use a synchronous function (the host can run long work in slices with an instruction budget)");
       }
-      if (w == "abstract" && peek().k == TK::Ident && peek().text == "class") fail("abstract classes are not supported");
+      if (w == "abstract" && peek().k == TK::Ident && peek().text == "class" && !peek().nl) {
+        i++;
+        Stmt* c = parseClass();
+        c->isAbstract = true;
+        return c;
+      }
       if (w == "class") return parseClass();
       if (w == "interface" && peek().k == TK::Ident) return parseInterface();
       if (w == "type" && peek().k == TK::Ident && !peek().nl) return parseTypeAlias();
@@ -697,21 +745,20 @@ class Parser {
         i++;
         Stmt* s = A.stmt(SK::Try, l);
         s->body = parseBlock();
-        const char* noFinally =
-            "'finally' is not supported yet; run the cleanup after the try statement (and in the catch block)";
-        if (isKw("finally")) fail(noFinally);
-        if (!eatKw("catch")) fail("expected 'catch' after the try block");
-        if (eatP("(")) {
-          VarDecl d;
-          d.loc = loc();
-          if (isP("{") || isP("[")) fail("destructuring a caught error is not supported; use catch (e)");
-          d.name = ident();
-          if (eatP(":")) d.type = parseType();
-          expectP(")");
-          s->decls.push_back(d);
+        if (!isKw("catch") && !isKw("finally")) fail("expected 'catch' or 'finally' after the try block");
+        if (eatKw("catch")) {
+          if (eatP("(")) {
+            VarDecl d;
+            d.loc = loc();
+            if (isP("{") || isP("[")) fail("destructuring a caught error is not supported; use catch (e)");
+            d.name = ident();
+            if (eatP(":")) d.type = parseType();
+            expectP(")");
+            s->decls.push_back(d);
+          }
+          s->els = parseBlock();
         }
-        s->els = parseBlock();
-        if (isKw("finally")) fail(noFinally);
+        if (eatKw("finally")) s->then = parseBlock();
         return s;
       }
       if (w == "switch") return parseSwitch();
@@ -860,13 +907,31 @@ class Parser {
       if (eatP(";")) continue;
       ClassMember m;
       m.loc = loc();
+      if (isKw("static") && peek().k == TK::Punct && peek().text == "{") {
+        // static { ... }: runs with the static field initializers, in source order
+        i++;
+        m.kind = ClassMember::StaticBlock;
+        m.isStatic = true;
+        m.name = "static";
+        m.body = parseBlock();
+        s->members.push_back(m);
+        continue;
+      }
       bool any = true;
+      // a modifier keyword followed by a name (not by '(' ':' '=' ';' ...) is a modifier
+      auto modifierFollows = [&]() {
+        const Tok& n = peek();
+        return n.k == TK::Ident || n.k == TK::PrivateName || n.k == TK::Str || n.k == TK::Num ||
+               (n.k == TK::Punct && (n.text == "[" || n.text == "*"));
+      };
       while (any) {
         any = false;
-        if ((isKw("public") || isKw("private") || isKw("protected") || isKw("readonly") || isKw("static") || isKw("override") || isKw("declare")) &&
-            peek().k != TK::Punct) {
+        if ((isKw("public") || isKw("private") || isKw("protected") || isKw("readonly") || isKw("static") ||
+             isKw("override") || isKw("declare") || isKw("abstract")) &&
+            modifierFollows() && !(peek().k == TK::Punct && peek().text == "[")) {
           if (isKw("static")) m.isStatic = true;
           if (isKw("readonly")) m.readonly = true;
+          if (isKw("abstract")) m.isAbstract = true;
           if (isKw("declare")) fail("'declare' fields are not supported");
           i++;
           any = true;
@@ -875,17 +940,20 @@ class Parser {
           fail("computed members are not supported");
         }
       }
-      if (isKw("abstract")) fail("abstract members are not supported");
-      if ((isKw("get") || isKw("set")) && peek().k == TK::Ident) fail("getters and setters are not supported yet; use a plain field or methods such as getValue() / setValue(v)");
+      if ((isKw("get") || isKw("set")) &&
+          (peek().k == TK::Ident || peek().k == TK::PrivateName || peek().k == TK::Str || peek().k == TK::Num)) {
+        m.accessor = isKw("get") ? 1 : 2;
+        i++;
+      }
       if (isKw("async")) fail("async methods are not supported yet (reserved for coroutines); use a synchronous method (the host can run long work in slices with an instruction budget)");
       if (isP("*")) fail("generator methods are not supported");
       if (isP("[")) fail("computed members / index signatures are not supported");
-      if (isKw("static") && peek().k == TK::Punct && peek().text == "{") fail("static blocks are not supported");
-      if (isKw("constructor") && peek().k == TK::Punct && peek().text == "(") {
+      if (!m.accessor && isKw("constructor") && peek().k == TK::Punct && peek().text == "(") {
         i++;
         m.kind = ClassMember::Ctor;
         m.name = "constructor";
         if (m.isStatic) fail("constructor cannot be static");
+        if (m.isAbstract) fail("a constructor cannot be abstract");
         parseParams(m.params, true);
         m.body = parseBlock();
         {
@@ -895,17 +963,27 @@ class Parser {
         s->members.push_back(m);
         continue;
       }
-      m.name = propName();
+      Loc nameLoc = loc();
+      m.name = memberName();
+      if (m.name == "#constructor") failAt(nameLoc, "'#constructor' is a reserved word");
       if (eatP("?")) m.optional = true;
       if (eatP("!")) {}
+      if (m.accessor && !isP("(")) failAt(nameLoc, "expected '(' after the accessor name");
       if (isP("(") || isP("<")) {
         m.kind = ClassMember::Method;
         if (isP("<")) fail("generic methods are not supported yet; write one method per concrete type");
         parseParams(m.params, false);
         if (eatP(":")) m.retType = parseType();
-        if (!isP("{")) fail("method overloads are not supported");
-        m.body = parseBlock();
-        {
+        if (m.accessor == 1 && !m.params.empty()) failAt(nameLoc, "a 'get' accessor cannot have parameters");
+        if (m.accessor == 2 && (m.params.size() != 1 || m.params[0].rest || m.params[0].optional || m.params[0].init))
+          failAt(nameLoc, "a 'set' accessor must have exactly one parameter (not optional, rest or with a default)");
+        if (m.accessor == 2 && m.retType) failAt(nameLoc, "a 'set' accessor cannot have a return type annotation");
+        if (m.isAbstract) {
+          if (isP("{")) failAt(nameLoc, "method '" + m.name + "' cannot have an implementation because it is marked abstract");
+          semi();
+        } else {
+          if (!isP("{")) fail("method overloads are not supported");
+          m.body = parseBlock();
           Expr* none = nullptr;
           applyPatterns(m.params, m.body, none);
         }
@@ -913,6 +991,7 @@ class Parser {
         m.kind = ClassMember::Field;
         if (eatP(":")) m.type = parseType();
         if (eatP("=")) m.init = parseAssign();
+        if (m.isAbstract && m.init) failAt(nameLoc, "property '" + m.name + "' cannot have an initializer because it is marked abstract");
         semi();
       }
       s->members.push_back(m);
@@ -965,28 +1044,68 @@ class Parser {
   }
 
   VarDecl parseBindingPattern() {
+    Nest guard(*this);
     VarDecl d;
     d.loc = loc();
+    // `= default` after an element: parsed without 'in' restrictions (for (const [a = x in y] of ...) is not valid anyway)
+    auto parseDefault = [&](VarDecl& el) {
+      if (!eatP("=")) return;
+      int saved = noIn;
+      noIn = 0;
+      el.init = parseAssign();
+      noIn = saved;
+    };
     if (eatP("[")) {
       d.isArrayPat = true;
       while (!isP("]")) {
         if (isP(",")) { i++; d.elems.push_back(VarDecl()); continue; }
-        if (isP("...")) fail("rest elements in destructuring are not supported");
+        if (isP("...")) {
+          Loc rl = loc();
+          i++;
+          if (isP("[") || isP("{")) fail("nested patterns in rest elements are not supported; bind a name: ...rest");
+          VarDecl r;
+          r.loc = rl;
+          r.name = ident();
+          r.isRest = true;
+          if (isP("=")) fail("a rest element cannot have a default value");
+          d.elems.push_back(r);
+          if (isP(",")) fail("a rest element must be last in a destructuring pattern");
+          break;
+        }
         d.elems.push_back(parseBindingPattern());
-        if (isP("=")) fail("default values in destructuring are not supported");
+        parseDefault(d.elems.back());
         if (!eatP(",")) break;
       }
       expectP("]");
     } else if (eatP("{")) {
       d.isObjPat = true;
       while (!isP("}")) {
-        if (isP("...")) fail("rest properties are not supported");
+        if (isP("...")) {
+          Loc rl = loc();
+          i++;
+          if (isP("[") || isP("{")) fail("a rest property must bind a name: ...rest");
+          VarDecl r;
+          r.loc = rl;
+          r.name = ident();
+          r.isRest = true;
+          if (isP("=")) fail("a rest property cannot have a default value");
+          d.keys.push_back("");
+          d.elems.push_back(r);
+          if (isP(",")) fail("a rest property must be last in a destructuring pattern");
+          break;
+        }
+        if (isP("[")) fail("computed property names in destructuring are not supported");
+        bool wasIdent = cur().k == TK::Ident;
+        Loc kl = loc();
         std::string key = propName();
         VarDecl sub;
-        sub.loc = loc();
+        sub.loc = kl;
         if (eatP(":")) sub = parseBindingPattern();
-        else sub.name = key;
-        if (isP("=")) fail("default values in destructuring are not supported");
+        else {
+          if (!wasIdent) failAt(kl, "expected ':' after the property name");
+          sub.name = key;
+        }
+        parseDefault(sub);
         d.keys.push_back(key);
         d.elems.push_back(sub);
         if (!eatP(",")) break;
@@ -1426,11 +1545,10 @@ class Parser {
       Loc ml = loc();
       if (isP(".")) {
         i++;
-        if (cur().k == TK::PrivateName) fail("private names (#x) are not supported; use 'private'");
         Expr* m = A.expr(EK::Member, ml);
         m->a = e;
         m->nameLoc = loc();
-        m->raw = propName();
+        m->raw = memberName();
         e = m;
       } else if (isP("?.")) {
         i++;
@@ -1453,7 +1571,7 @@ class Parser {
           m->a = e;
           m->optional = true;
           m->nameLoc = loc();
-        m->raw = propName();
+          m->raw = memberName();
           e = m;
         }
       } else if (isP("[")) {
@@ -1558,7 +1676,7 @@ class Parser {
           if (eatP(":")) f->retType = parseType();
           f->body = parseBlock();
           applyPatterns(f->params, f->body, f->exprBody);
-          f->intrinsic = 1;  // function expression
+          f->intrinsic = IN_FUNC_EXPR;
           return f;
         }
         if (w == "class") fail("class expressions are not supported");
@@ -1617,10 +1735,28 @@ class Parser {
               continue;
             }
             if (isP("[")) fail("computed property names are not supported");
-            if ((isKw("get") || isKw("set") || isKw("async")) && peek().k == TK::Ident) fail("accessor / async properties are not supported; use a plain property or a method");
+            if ((isKw("get") || isKw("set") || isKw("async")) && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num))
+              fail("accessor / async properties are not supported in object literals; use a plain property or a method");
+            if (isP("*")) fail("generator methods are not supported");
             bool wasIdent = cur().k == TK::Ident;
             pr.key = propName();
-            if (isP("(")) fail("method shorthand in object literals is not supported; use 'name: (args) => ...'");
+            if (isP("(") || isP("<")) {
+              // method shorthand: name(params): T { body }  (has its own 'this': the object)
+              if (isP("<")) fail("generic methods are not supported yet; write one method per concrete type");
+              Expr* f = A.expr(EK::Arrow, pr.loc);
+              f->raw = pr.key;
+              parseParams(f->params, false);
+              if (eatP(":")) f->retType = parseType();
+              if (!isP("{")) fail("expected '{' (method body)");
+              f->body = parseBlock();
+              applyPatterns(f->params, f->body, f->exprBody);
+              f->intrinsic = IN_OBJ_METHOD;
+              pr.value = f;
+              pr.method = true;
+              e->props.push_back(pr);
+              if (!eatP(",")) break;
+              continue;
+            }
             if (eatP(":")) {
               pr.value = parseAssign();
             } else {
@@ -1640,6 +1776,10 @@ class Parser {
         if (tk.text == "/" || tk.text == "/=") fail("regular expressions are not supported; use string methods such as indexOf, includes, startsWith, split or replaceAll");
         break;
       }
+      case TK::PrivateName:
+        if (peek().k == TK::Ident && peek().text == "in")
+          fail("'#" + tk.text + " in obj' is not supported; private fields always exist on instances of their class (use instanceof)");
+        fail("private names (#x) can only be used as members: this.#" + tk.text);
       default:
         break;
     }
@@ -1654,6 +1794,12 @@ static bool checkDepth(SourceFile& file, std::vector<CompileError>& errs) {
   const int kMax = 400;
   struct Item { const void* node; bool isStmt; int d; };
   std::vector<Item> st;
+  // initializers and default values of a (possibly nested) destructuring pattern; pattern nesting
+  // itself is bounded by the parser
+  std::function<void(const VarDecl&, int)> pushDecl = [&](const VarDecl& v, int d) {
+    st.push_back({v.init, false, d});
+    for (const VarDecl& sub : v.elems) pushDecl(sub, d + 1);
+  };
   for (Stmt* s : file.body) st.push_back({s, true, 1});
   while (!st.empty()) {
     Item it = st.back();
@@ -1671,8 +1817,11 @@ static bool checkDepth(SourceFile& file, std::vector<CompileError>& errs) {
       for (const Stmt* x : {s->body, s->then, s->els, s->init}) st.push_back({x, true, d});
       st.push_back({s->expr, false, d});
       st.push_back({s->update, false, d});
-      for (auto& v : s->decls) st.push_back({v.init, false, d});
-      for (auto& p : s->params) st.push_back({p.init, false, d});
+      for (auto& v : s->decls) pushDecl(v, d);
+      for (auto& p : s->params) {
+        st.push_back({p.init, false, d});
+        if (p.pattern) pushDecl(*p.pattern, d);
+      }
       for (auto& c : s->cases) {
         st.push_back({c.test, false, d});
         for (const Stmt* x : c.body) st.push_back({x, true, d});
@@ -1680,7 +1829,10 @@ static bool checkDepth(SourceFile& file, std::vector<CompileError>& errs) {
       for (auto& m : s->members) {
         st.push_back({m.init, false, d});
         st.push_back({m.body, true, d});
-        for (auto& p : m.params) st.push_back({p.init, false, d});
+        for (auto& p : m.params) {
+          st.push_back({p.init, false, d});
+          if (p.pattern) pushDecl(*p.pattern, d);
+        }
       }
       for (auto& em : s->enumMembers) st.push_back({em.init, false, d});
     } else {
@@ -1688,7 +1840,10 @@ static bool checkDepth(SourceFile& file, std::vector<CompileError>& errs) {
       for (const Expr* x : {e->a, e->b, e->c, e->exprBody}) st.push_back({x, false, d});
       for (const Expr* x : e->list) st.push_back({x, false, d});
       for (auto& p : e->props) st.push_back({p.value, false, d});
-      for (auto& p : e->params) st.push_back({p.init, false, d});
+      for (auto& p : e->params) {
+        st.push_back({p.init, false, d});
+        if (p.pattern) pushDecl(*p.pattern, d);
+      }
       st.push_back({e->body, true, d});
     }
   }

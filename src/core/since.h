@@ -84,10 +84,23 @@ inline size_t instructionWords(uint64_t w) {
   }
 }
 
+// Features that are not an opcode or a native function but change how a VM must treat a module.
+// #private class fields: a class (not a record) field named "#x". Since 0.2.5 Object.keys,
+// JSON.stringify and console.log skip them (as JavaScript does); older VMs would list them.
+constexpr uint32_t kPrivateFieldsSince = makeVersion(0, 2, 5);
+
 // The minimum VM version for a module; `why` names the newest feature used (empty for the baseline).
 inline uint32_t moduleRequires(const Module& m, std::string* why = nullptr) {
   uint32_t req = kBaselineVersion;
   if (why) why->clear();
+  for (const ClassDesc& c : m.classes) {
+    if (c.isRecord) continue;
+    for (const FieldDesc& f : c.fields)
+      if (!f.name.empty() && f.name[0] == '#' && kPrivateFieldsSince > req) {
+        req = kPrivateFieldsSince;
+        if (why) *why = "#private class fields";
+      }
+  }
   for (const NativeImport& n : m.natives) {
     uint32_t s = nativeSince(n.name);
     if (s > req) { req = s; if (why) *why = "native function " + n.name; }

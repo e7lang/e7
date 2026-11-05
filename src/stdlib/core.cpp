@@ -252,12 +252,15 @@ static std::string inspectRec(VM& vm, Slot v, uint8_t vt, int depth, bool top, s
     auto* in = static_cast<InstObj*>(o);
     ClassRT* c = in->cls;
     std::string prefix = c->isRecord ? "" : c->name + " ";
-    if (c->nfields == 0) return prefix + "{}";
+    uint32_t visible = 0;
+    for (uint32_t i = 0; i < c->nfields; i++) visible += !privateField(c, i);
+    if (visible == 0) return prefix + "{}";
     if (depth > 2) return c->isRecord ? "[Object]" : "[" + c->name + "]";
     seen.insert(o);
     std::string out = prefix + "{ ";
     bool first = true;
     for (uint32_t i = 0; i < c->nfields; i++) {
+      if (privateField(c, i)) continue;  // #private fields are not shown (as in Node.js)
       Slot fv = in->fields()[i];
       if (!first) out += ", ";
       first = false;
@@ -453,6 +456,7 @@ E7_NATIVE(n_objectKeys) {
   ArrObj* arr = vm.newArray(VT_REF, in->cls->nfields);
   for (uint32_t i = 0; i < in->cls->nfields; i++) {
     if (in->cls->fieldVT[i] == VT_REF && in->fields()[i].r == vm.undef()) continue;
+    if (privateField(in->cls, i)) continue;
     vm.arrayPush(arr, slotR(vm.newStringUtf8(in->cls->fieldNames[i])));
   }
   r->r = arr;

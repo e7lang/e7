@@ -62,6 +62,13 @@ inline int64_t clampIndex(double v, int64_t len) {
   return d > (double)len ? len : (int64_t)d;
 }
 
+// A #private class field (named "#x" by the compiler): not an own enumerable property in
+// JavaScript, so Object.keys, JSON.stringify and console.log skip it. Records (object literals)
+// never have private fields; their keys may start with '#' ({ "#a": 1 }).
+inline bool privateField(const ClassRT* c, uint32_t i) {
+  return !c->isRecord && i < c->fieldNames.size() && !c->fieldNames[i].empty() && c->fieldNames[i][0] == '#';
+}
+
 inline Slot slotF(double d) { Slot s; s.f = d; return s; }
 inline Slot slotI(int64_t i) { Slot s; s.i = i; return s; }
 inline Slot slotR(Obj* o) { Slot s; s.r = o; return s; }

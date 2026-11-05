@@ -777,6 +777,7 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     ClassSym* cls = static_cast<ClassSym*>(s);
     resolveClass(cls);
     if (!e->typeArgs.empty()) return errT(l, "class '" + name + "' is not generic");
+    if (cls->isAbstract) return errT(l, "cannot create an instance of an abstract class ('" + name + "')");
     resolveSig(cls->ctor);
     checkArgs(e, cls->ctor->type, args);
     e->cls = cls;

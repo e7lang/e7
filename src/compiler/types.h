@@ -114,6 +114,11 @@ struct FuncSym : Sym {
   bool inferRet = false;     // return type inferred from body
   bool hasDefaults = false;  // has default-valued params (hidden argc parameter)
   bool inheritCtor = false;  // synthesized constructor forwarding to the parent constructor
+  bool isAbstract = false;   // abstract method: no body (a stub that is never called)
+  int accessor = 0;          // 1 = getter "get x", 2 = setter "set x"
+  // record method (object literal method or arrow property): calls the closure in field
+  // `trampField` of the record (vtable entry so that interface method calls reach it)
+  int trampField = -1;
   struct Scope* defScope = nullptr;  // lexical scope of the definition
 };
 
@@ -135,7 +140,26 @@ struct ClassSym : Sym {
   int state = 0;  // 0 = unresolved, 1 = resolving, 2 = resolved
   bool isRecord = false;
   bool isTuple = false;
+  bool isAbstract = false;
+  // abstract properties (declared here or inherited, not implemented yet): no slot in this class,
+  // read and written by name; concrete subclasses declare them as fields
+  std::map<std::string, Type*> abstractProps;
+  // #private methods (non-virtual, called directly); private fields are ordinary fields named "#x"
+  std::unordered_map<std::string, FuncSym*> privateMethods;
   std::string file;
+  // accessor lookup helpers ("get x" / "set x" vtable slots; -1 when absent)
+  int getterSlot(const std::string& n) const {
+    auto it = methodIdx.find("get " + n);
+    return it == methodIdx.end() ? -1 : it->second;
+  }
+  int setterSlot(const std::string& n) const {
+    auto it = methodIdx.find("set " + n);
+    return it == methodIdx.end() ? -1 : it->second;
+  }
+  Type* abstractProp(const std::string& n) const {
+    auto it = abstractProps.find(n);
+    return it == abstractProps.end() ? nullptr : it->second;
+  }
 };
 
 struct InterfaceSym : Sym {
