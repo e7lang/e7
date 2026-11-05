@@ -186,3 +186,21 @@ const ho = new Holder();
 if (ho.x !== undefined) console.log(ho.x + 1);
 const maybeHolder: Holder | null = Math.random() < 2 ? ho : null;
 console.log(maybeHolder?.x);
+
+// destructuring calls getters; a rest object has only the own fields
+const { side: sd, area: ar, ...own } = new Square(4);
+console.log(sd, ar, own);
+
+// try / finally inside a getter
+class Logged {
+  log: string[] = [];
+  get x(): number {
+    try {
+      return 1;
+    } finally {
+      this.log.push("got");
+    }
+  }
+}
+const lg = new Logged();
+console.log(lg.x + lg.x, lg.log);

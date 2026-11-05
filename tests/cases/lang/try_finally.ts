@@ -385,3 +385,40 @@ try {
 console.log("top", topCount);
 
 console.log(log.join("\n"));
+
+// a finally block in a callback called by a library function (the error leaves the native call)
+const cmpLog: string[] = [];
+try {
+  [3, 1, 2].sort((x, y) => {
+    try {
+      if (x === 1 || y === 1) throw new Error("cmp");
+      return x - y;
+    } finally {
+      cmpLog.push("f");
+    }
+  });
+} catch (e) {
+  cmpLog.push("caught " + (e instanceof Error ? e.message : ""));
+}
+console.log(cmpLog[cmpLog.length - 1], cmpLog.length > 1);
+
+// labeled block and do...while
+const lb: string[] = [];
+blk: {
+  try {
+    break blk;
+  } finally {
+    lb.push("labeled finally");
+  }
+}
+let k = 0;
+do {
+  try {
+    k++;
+    if (k % 2 === 0) continue;
+    lb.push("k" + k);
+  } finally {
+    lb.push("f" + k);
+  }
+} while (k < 4);
+console.log(lb.join(" "));

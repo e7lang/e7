@@ -532,8 +532,18 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
     Type* ft = T.unknown();
     if (t->t == TT::Class) {
       auto it = t->cls->fieldIdx.find(key);
-      if (it == t->cls->fieldIdx.end()) err(d.loc, "property '" + key + "' does not exist on type '" + typeName(t) + "'");
-      else ft = t->cls->fields[it->second].type;
+      int gs = t->cls->getterSlot(key);
+      if (it != t->cls->fieldIdx.end() && key[0] != '#') {
+        ft = t->cls->fields[it->second].type;
+      } else if (gs >= 0) {
+        // a getter: called while destructuring
+        FuncSym* g = t->cls->vtable[gs].fn;
+        resolveSig(g);
+        if (g->inferRet && !g->checking) checkFunction(g);
+        ft = g->type->ret;
+      } else {
+        err(d.loc, "property '" + key + "' does not exist on type '" + typeName(t) + "'");
+      }
     } else if (t->t == TT::Object) {
       const ObjShape::Prop* p = t->shape->findProp(key);
       if (!p) err(d.loc, "property '" + key + "' does not exist on type '" + typeName(t) + "'");

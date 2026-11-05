@@ -923,7 +923,10 @@ Type* Checker::checkAssign(Expr* e) {
     if (op != "=") return errT(e->loc, "invalid destructuring assignment");
     std::vector<Type*> tts;
     for (Expr*& x : target->list) {
-      if (x->k == EK::Spread) return errT(x->loc, "rest elements are not supported");
+      if (x->k == EK::Spread)
+        return errT(x->loc, "rest elements in destructuring assignments are not supported; use a declaration: const [a, ...rest] = xs");
+      if (strip(x)->k == EK::Assign)
+        return errT(x->loc, "default values in destructuring assignments are not supported; use a declaration: const [a = 1] = xs");
       if (!checkLValue(x)) return T.unknown();
       Type* t = checkTarget(x, 1);
       Type* st = storageTypeOf(x);

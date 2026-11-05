@@ -6,6 +6,8 @@ For every tests/cases/**/*.ts:
   * `// @runtime-error: <text>`   compilation succeeds, execution fails with <text>
   * `<name>.out` exists           stdout must equal the file
   * otherwise                     stdout must equal Node.js output (differential test)
+  * `// @requires-vm: <version>`  the program needs that e7vm version (see src/core/since.h): on an older
+                                  VM it must be rejected with "requires e7vm <version>" and is skipped
 """
 import argparse, os, pathlib, subprocess, sys, glob, difflib
 
@@ -29,13 +31,18 @@ def main():
         files = [f for f in files if any(x in f for x in a.filter)]
     # --import takes a URL (a bare "D:\\..." path is rejected on Windows)
     shim = pathlib.Path(ROOT, "node_shim", "register.mjs").resolve().as_uri()
-    passed = failed = 0
+    passed = failed = skipped = 0
     for f in files:
         rel = os.path.relpath(f, ROOT)
         src = open(f, encoding="utf-8").read()
         expect_err = [l.split("@error:", 1)[1].strip() for l in src.splitlines() if "// @error:" in l]
         expect_rt = [l.split("@runtime-error:", 1)[1].strip() for l in src.splitlines() if "// @runtime-error:" in l]
         rc, out, err = run([a.e7, f])
+        needs = [l.split("@requires-vm:", 1)[1].strip() for l in src.splitlines() if "// @requires-vm:" in l]
+        if needs and rc != 0 and f"the module requires e7vm {needs[0]};" in err:
+            skipped += 1
+            print(f"skip {rel} (needs e7vm {needs[0]})")
+            continue
         ok = True
         why = ""
         if expect_err:
@@ -65,7 +72,7 @@ def main():
         else:
             failed += 1
             print(f"FAIL {rel}\n{why}")
-    print(f"\n{passed} passed, {failed} failed")
+    print(f"\n{passed} passed, {failed} failed" + (f", {skipped} skipped (newer e7vm needed)" if skipped else ""))
     return 1 if failed else 0
 
 if __name__ == "__main__":

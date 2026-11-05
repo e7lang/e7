@@ -182,6 +182,40 @@ def main():
                             "-o", p("m2.json")])
         check("manifest.py: unsigned module refused", rc != 0 and "not signed" in err, out + err)
 
+    # ---- 0.2.x compatibility of the TypeScript features added in 0.2.5: the compiler-only ones
+    # still run on 0.2.0 VMs; #private fields need a 0.2.5 VM (it hides them from Object.keys,
+    # JSON.stringify and console.log)
+    with tempfile.TemporaryDirectory() as tmp:
+        def p(name):
+            return os.path.join(tmp, name)
+        with open(p("compat.ts"), "w") as f:
+            f.write(
+                "abstract class Shape { abstract area(): number; get double(): number { return this.area() * 2; } }\n"
+                "class Sq extends Shape { static count = 0; static { Sq.count = 1; } constructor(private s: number = 1) { super(); }\n"
+                "  area(): number { return this.s * this.s; } }\n"
+                "const o = { n: 2, twice(x: number): number { return x * this.n; } };\n"
+                "function f(): string { try { return [[1], [2]].flat().flatMap((x) => [x, x]).join(); } finally { o.n++; } }\n"
+                "const [h = 0, ...t] = [1, 2, 3];\n"
+                "const add = (a: number, b = 1): number => a + b;\n"
+                "const pair: [number, number] = [h, t.length];\n"
+                "export function run(): string {\n"
+                "  return f() + Object.entries({ a: 1 }).join() + 'a-b'.replaceAll('-', (m) => m + m) + o.twice(add(...pair)) +\n"
+                "    new Sq(3).double + Object.values(Object.assign({}, { x: 1 })).join() + Sq.count;\n"
+                "}\n")
+        with open(p("private.ts"), "w") as f:
+            f.write("class Counter { #n = 0; inc(): number { return ++this.#n; } }\n"
+                    "export function run(): number { return new Counter().inc(); }\n")
+        rc, out, err = run([e7c, p("compat.ts"), "--target", "0.2.0", "-o", p("compat.e7b")])
+        check("0.2.5 compiler-only features: --target 0.2.0", rc == 0, out + err)
+        rc, out, err = run([e7c, "--info", p("compat.e7b")])
+        check("0.2.5 compiler-only features: requires 0.2.0", rc == 0 and "requires: e7vm 0.2.0" in out, out + err)
+        rc, out, err = run([e7c, p("private.ts"), "--target", "0.2.1", "-o", p("private.e7b")])
+        check("#private fields: --target 0.2.1 rejected",
+              rc != 0 and "#private class fields" in err and "needs e7vm 0.2.5" in err, out + err)
+        rc, out, err = run([e7c, p("private.ts"), "-o", p("private.e7b")])
+        rc2, out2, err2 = run([e7c, "--info", p("private.e7b")])
+        check("#private fields: requires 0.2.5", rc == 0 and "requires: e7vm 0.2.5" in out2, out + err + out2 + err2)
+
     print("\n%d failed" % len(failures))
     return 1 if failures else 0
 

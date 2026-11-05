@@ -140,13 +140,29 @@ struct Gen {
   void addHandlers(Region* r, uint32_t handler, uint16_t reg, Loc l) {
     closeSeg(r);
     for (auto& sg : r->segs) {
-      if (D->handlers.size() >= 65535) { err(l, "too many try statements in one function (at most 65535)"); return; }
+      if (D->handlers.size() >= 65535) {
+        if (!finallyOverflow) err(l, "too many try statements (or ways out of them through finally blocks) in one function (at most 65535 handlers)");
+        finallyOverflow = true;  // stops copying finally blocks too
+        return;
+      }
       D->handlers.push_back(HandlerDesc{sg.first, sg.second, handler, reg});
     }
   }
   // finally block emitted for one way of leaving its try statement: only the loops and regions that
   // enclose the try statement apply inside it
+  bool finallyOverflow = false;
   void genFinallyCopy(Region* r) {
+    // nested finally blocks are copied for every way out of each enclosing try statement, so the
+    // code can grow exponentially with their nesting: bound it
+    static constexpr size_t kMaxFunctionCode = 1u << 20;
+    if (finallyOverflow) return;
+    if (D->code.size() > kMaxFunctionCode) {
+      finallyOverflow = true;
+      err(r->fin->loc, "function '" + (fn ? fn->name : std::string("?")) +
+                           "' is too large: its finally blocks (copied for every way out of the try statements) "
+                           "are nested too deeply; move the cleanup into a function");
+      return;
+    }
     std::vector<LoopCtx> savedLoops(loops.begin() + (std::ptrdiff_t)std::min(r->loopDepth, loops.size()), loops.end());
     loops.resize(std::min(r->loopDepth, loops.size()));
     std::string savedPending = pendingLabel;
@@ -771,6 +787,7 @@ void Gen::genInitOnce() {
   loops.clear();
   regions.clear();
   regionPool.clear();
+  finallyOverflow = false;
   curLine = 0;
   for (auto& file : P.files) {
     curFile = file->path;
@@ -930,6 +947,7 @@ void Gen::genFunctionOnce(FuncSym* f) {
   loops.clear();
   regions.clear();
   regionPool.clear();
+  finallyOverflow = false;
   curLine = 0;
   curFile = f->file;
   argcReg = kNoReg;
@@ -1214,7 +1232,15 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
       }
     } else {
       const std::string& key = d.keys[i];
-      if (t->t == TT::Class) {
+      if (t->t == TT::Class && !t->cls->fieldIdx.count(key)) {
+        // a getter
+        int slot = t->cls->getterSlot(key);
+        FuncSym* g = t->cls->vtable[slot].fn;
+        et = g->type->ret;
+        r = temp(K(et));
+        emit(OP_CALLM, r, src, 0);
+        emitWord((uint64_t)(uint32_t)slot | ((uint64_t)sig(sigOf(g)) << 32));
+      } else if (t->t == TT::Class) {
         int fi = t->cls->fieldIdx[key];
         et = t->cls->fields[fi].type;
         r = temp(K(et));
