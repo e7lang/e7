@@ -62,7 +62,10 @@ compatibility with 0.1: `.e7b` files must be recompiled.
 Incremental GC (decided from pilot measurements), `finally`, OSS-Fuzz (after a pilot), a third-party security
 audit, and code-signing certificates / registry accounts (owner actions).
 
-## 0.2.5: stability, reliability and TypeScript compatibility
+## 0.2.5: stability, reliability and TypeScript compatibility (released 2026-11-06)
+
+Everything below shipped (see CHANGELOG.md). Beyond the plan: Math bit-identical to Node.js (fdlibm), eight compiler
+issues and ten library differences found by the differential fuzzer, and the bugs the stability checks found.
 
 A compatible 0.2.x release: modules from 0.2.0 / 0.2.1 keep running, and modules the 0.2.5 compiler builds without
 new library functions still run on 0.2.0 / 0.2.1 VMs (`requires` stays 0.2.0). New natives are marked "since 0.2.5"

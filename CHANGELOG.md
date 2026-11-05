@@ -10,6 +10,59 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-06
+
+Stability, reliability and TypeScript compatibility ([docs/ROADMAP.md](docs/ROADMAP.md), section 0.2.5). Compatible
+with 0.2.0 / 0.2.1: their modules keep running, and modules this compiler builds run on 0.2.0 / 0.2.1 VMs unless they
+use `#private` class fields (`requires 0.2.5`, rejected there with `E7_ERR_VERSION`). Of 59 common TypeScript
+patterns probed before this release, 33 were rejected; 14 still are (unions other than with `null`, `Record` and
+index signatures, `unknown`, `keyof`, regular expressions, generators, overloads, `in`, `Intl`).
+
+### Added
+- **Generics**: generic functions, arrow functions, classes (including generic methods and inheritance), interfaces and
+  type aliases, with constraints, defaults, explicit type arguments and tsc-style inference; compiled by
+  monomorphization, so no VM change (SPEC 2.3).
+- **`finally`**, with JavaScript semantics for `return` / `break` / `continue` / catchable errors and overriding
+  completions (E7-specific uncatchable errors still end the call without running it).
+- Classes: getters and setters, `abstract` classes and members, `#private` fields and methods, `static {}` blocks;
+  static members are inherited by subclasses; `String(x)`, template literals and `+` call a class's own `toString()`.
+- Default parameters in arrow functions and function expressions; defaults and rest in array / object destructuring
+  (declarations, parameters, `for...of`); `a?.[i]`; spreading tuples and arrays into calls;
+  `Array.from({ length: n }, fn)`; method shorthand in object literals (with `this`); tuples inferred from
+  `const [a, b] = [1, "x"]`.
+- Library: `flatMap`, `flat`, `Object.entries` / `values` / `assign`, `replace` / `replaceAll` with a function.
+
+### Changed
+- **`console.log` prints exactly like Node.js** (`util.inspect`): multi-line layout, aligned number columns, `... N
+  more items`, quoting, `Map(n) {...}`, class names, depth limits, cycles, format strings (`%s %d %i %f %j %o %O %c`).
+- **Math functions and `**` are bit-identical to Node.js** on every platform (V8's fdlibm port, `third_party/fdlibm`);
+  builds use `-ffp-contract=off`, and 32-bit x86 builds use SSE2 instead of x87.
+- Numbers: `toString(radix)`, shortest formatting, `parseInt` above 2^53, `(-0).toFixed()`; Dates before year 0 and
+  after 9999, `getDay()` before 1970, `Date.parse` of RFC formats; `encodeURI` of NUL — all now as in V8.
+- Map / Set: iteration visits entries added after compaction or `clear()`; `-0` keys are stored as `+0`; `Date` keys
+  are compared by identity. `Object.keys` / `JSON.stringify` list array-index keys first; object spread and rest keep
+  the source's run-time property order; `Object.keys` lists class fields holding `undefined`.
+- The compiler no longer rejects comparisons with `null` / `undefined` that tsc accepts ("always true/false").
+
+### Fixed
+- Found by the new stability checks: a data race and leak in the compiler on static class fields (two threads
+  compiling at once); a failed `e7_load` kept the module and everything its globals reached for the life of the VM;
+  no garbage collection during callbacks from natives (a sort comparator's garbage piled up until the native returned);
+  natives that charge work up front failed with `E7_ERR_BUDGET` in suspend mode.
+- Found by differential fuzzing: internal compiler errors for a default that reads a parameter captured by a closure
+  and for chained `map` calls in a `Set` constructor; `new Set<number>(Array.of(...))` was rejected.
+
+### Reliability (CI and tooling)
+- GC stress mode (`E7_GC_STRESS`), allocation-failure injection with a heap consistency check, equivalence runs
+  (budget slice 1, a stepping debugger, switch dispatch), a 100,000-call soak test, a multi-thread test under TSan,
+  forward-compatibility runs of new modules on the previous release's VM, and a coverage report (lines 93.7%).
+- Differential fuzzing: random E7 programs run on e7 and Node.js and compared (`tests/difffuzz`; a smoke test in
+  ctest and a nightly workflow); about 70,000 programs were compared during this release.
+- macOS and iOS are built and tested on a maintainer's Mac (`scripts/macos.sh test`), and the macOS release files are
+  built there (`scripts/macos.sh release`) and published by the release workflow; GitHub Actions runs Linux, Windows,
+  Android and WebAssembly. The macOS archive is not covered by build provenance attestations.
+- XCFramework: iOS 15.0 by default (`IOS_DEPLOYMENT_TARGET` overrides).
+
 ## [0.2.1] - 2026-11-05
 
 ### Added
@@ -129,7 +182,8 @@ tested and hardened but has not yet run in production, so it is versioned 0.x un
   on an Android emulator, the iOS simulator, JVMs and .NET; libFuzzer targets for the loader and compiler with
   ClusterFuzzLite (ASan + UBSan) on pull requests and nightly. See [docs/PRODUCTION.md](docs/PRODUCTION.md).
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/e7lang/e7/compare/v0.2.1...v0.2.5
 [0.2.1]: https://github.com/e7lang/e7/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/e7lang/e7/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/e7lang/e7/releases/tag/v0.1.0

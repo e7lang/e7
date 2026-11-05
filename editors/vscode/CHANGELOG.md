@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5
+
+- Bundles `@e7lang/e7` 0.2.5: generics, `finally`, class accessors / `abstract` / `#private`, destructuring
+  defaults and rest, `console.log` output identical to Node.js.
+
 ## 0.2.1
 
 - *Caught errors* exception breakpoint: stop on errors that a `try`/`catch` handler takes, before the handler runs.
