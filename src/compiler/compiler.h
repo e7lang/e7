@@ -20,6 +20,7 @@ struct CompileOutput {
 
 struct CompileOptions {
   bool debugInfo = false;  // emit debug information (see docs/DEBUGGING.md)
+  uint32_t target = 0;     // oldest e7vm that must run the module (makeVersion); 0 = this compiler's VM
 };
 
 // Compiles the program rooted at entryPath. Imports ("./x") are resolved relative to the

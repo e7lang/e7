@@ -112,6 +112,7 @@ struct VMConfig {
   uint32_t stackSlots = 1u << 18;    // register slots
   uint32_t maxFrames = 20000;
   bool suspendOnBudget = false;
+  uint32_t gcGrowthPercent = 200;    // next GC at this % of the live heap (>= 125)
 };
 
 class VM {
@@ -213,6 +214,9 @@ class VM {
   void collectGarbage();
   size_t bytesAllocated() const { return bytes_; }
   uint64_t gcCount() const { return gcCount_; }
+  uint64_t gcTotalPauseNs() const { return gcTotalNs_; }
+  uint64_t gcMaxPauseNs() const { return gcMaxNs_; }
+  size_t peakBytes() const { return peakBytes_ > bytes_ ? peakBytes_ : bytes_; }
 
   // Interned string constants: map a signature string to VM-global id
   uint32_t sigId(const std::string& sig);
@@ -289,6 +293,8 @@ class VM {
   size_t bytes_ = 0;
   size_t nextGC_ = 1u << 20;
   uint64_t gcCount_ = 0;
+  uint64_t gcTotalNs_ = 0, gcMaxNs_ = 0;
+  size_t peakBytes_ = 0;  // highest bytes_ seen before a collection (peakBytes() adds the current value)
   bool gcRequested_ = false;
   int gcInhibit_ = 0;  // >0 while a multi-step allocation is in progress
   struct NoGC {

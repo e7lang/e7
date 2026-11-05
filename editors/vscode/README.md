@@ -93,7 +93,7 @@ npx vsce package --no-dependencies
 ```
 
 Prebuilt `.vsix` files are attached to every [GitHub release](https://github.com/e7lang/e7/releases):
-install with *Extensions: Install from VSIX...* or `code --install-extension e7-0.1.0.vsix`.
+install with *Extensions: Install from VSIX...* or `code --install-extension e7-0.2.0.vsix`.
 
 ## License
 

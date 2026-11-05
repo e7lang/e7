@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define E7_VERSION_MAJOR 0
-#define E7_VERSION_MINOR 1
+#define E7_VERSION_MINOR 2
 #define E7_VERSION_PATCH 0
 
 typedef struct e7_vm e7_vm;
@@ -51,7 +51,8 @@ typedef enum e7_status {
   E7_ERR_ARGS = 10,      /* argument count / type mismatch */
   E7_ERR_COMPILE = 11,   /* compilation error */
   E7_ERR_STATE = 12,     /* VM busy (suspended) or invalid state */
-  E7_PAUSED = 13         /* stopped by an attached debugger (pause-to-host mode); see e7_debug_resume() */
+  E7_PAUSED = 13,        /* stopped by an attached debugger (pause-to-host mode); see e7_debug_resume() */
+  E7_ERR_VERSION = 14    /* module format or required e7vm version not supported by this VM */
 } e7_status;
 
 typedef enum e7_type {
@@ -79,7 +80,11 @@ typedef struct e7_value {
   } v;
 } e7_value;
 
+/* Structs passed into the library start with struct_size = sizeof(the struct), set by the matching
+ * *_init function: always call it before filling in fields, so that a newer library can tell
+ * which fields an older caller knows about. */
 typedef struct e7_config {
+  size_t struct_size;           /* sizeof(e7_config); set by e7_config_init() */
   size_t memory_limit;          /* heap limit in bytes (default 256 MiB) */
   uint32_t stack_slots;         /* register stack size in 8-byte slots (default 262144) */
   uint32_t max_frames;          /* maximum call depth (default 20000) */
@@ -87,17 +92,37 @@ typedef struct e7_config {
   int require_signature;        /* 1: e7_load() only accepts modules signed by a trusted key */
   const uint8_t* trusted_keys;  /* num_trusted_keys * 32 bytes of Ed25519 public keys */
   size_t num_trusted_keys;
+  uint32_t gc_growth_percent;   /* next collection when the heap reaches this % of the live size after the
+                                   previous one (default 200, minimum 125; lower = less memory, more GCs) */
 } e7_config;
 
 /* ---- lifecycle ---- */
 E7_API void e7_config_init(e7_config* cfg);
-E7_API e7_vm* e7_vm_new(const e7_config* cfg); /* cfg may be NULL; returns NULL on allocation failure */
+/* cfg may be NULL (defaults). Returns NULL on allocation failure or an invalid cfg->struct_size. */
+E7_API e7_vm* e7_vm_new(const e7_config* cfg);
 E7_API void e7_vm_free(e7_vm* vm);
-E7_API const char* e7_version(void);
+E7_API const char* e7_version(void);            /* "0.2.0" */
+E7_API uint32_t e7_version_number(void);        /* major << 16 | minor << 8 | patch */
 
 /* ---- modules ---- */
-/* Verifies (signature, structure, types), links natives and runs the module initializer. */
+/* Verifies (signature, structure, types), links natives and runs the module initializer.
+ * E7_ERR_VERSION: the module has another bytecode format or needs a newer e7vm (recompile it, or
+ * deliver a build made with `e7c --target <this VM's version>`). */
 E7_API e7_status e7_load(e7_vm* vm, const uint8_t* data, size_t len, e7_module** out);
+
+/* Reads a module's header without loading it (for example to pick a module the app's VM can run).
+ * Checks the magic and the checksum; fills *info even when it returns E7_ERR_VERSION. */
+typedef struct e7_module_info {
+  size_t struct_size;          /* sizeof(e7_module_info); set by the caller */
+  uint32_t format;             /* bytecode format version (this VM: 2) */
+  uint32_t requires_version;   /* minimum e7vm version, major << 16 | minor << 8 | patch */
+  int is_signed;               /* 1: an Ed25519 signature trailer is present (not verified here) */
+  uint8_t key_id[8];           /* first 8 bytes of SHA-256(public key) of the signing key */
+  int has_debug_info;          /* 1: compiled with debug information */
+} e7_module_info;
+/* E7_OK: this VM can load the format and version; E7_ERR_VERSION: it cannot; E7_ERR_LOAD: not an
+ * e7b module or corrupted. */
+E7_API e7_status e7_inspect(const uint8_t* data, size_t len, e7_module_info* info);
 /* Compiles E7 source to bytecode (only when built with E7_WITH_COMPILER). On success *out is
  * allocated with malloc (free with e7_free); on failure *errors (if non-NULL) receives a
  * malloc'ed diagnostic text. */
@@ -109,10 +134,14 @@ E7_API e7_status e7_compile(const char* source, size_t len, const char* file_nam
  * malloc'ed buffer (e7 frees it), or nonzero if the file does not exist. opts may be NULL. */
 #define E7_COMPILE_DEBUG 1u
 typedef struct e7_compile_options {
+  size_t struct_size;  /* sizeof(e7_compile_options); set by e7_compile_options_init() */
   uint32_t flags;
   int (*read_file)(void* user, const char* path, char** data, size_t* len);
   void* read_user;
+  uint32_t target_version; /* oldest e7vm that must run the module (major << 16 | minor << 8 | patch);
+                              0 = this library's version. Features newer than the target are errors. */
 } e7_compile_options;
+E7_API void e7_compile_options_init(e7_compile_options* opts);
 E7_API e7_status e7_compile_ex(const char* source, size_t len, const char* file_name, const e7_compile_options* opts,
                                uint8_t** out, size_t* out_len, char** errors);
 /* Compile and load in one step (convenience for development). */
@@ -148,6 +177,16 @@ E7_API void e7_set_key_provider(e7_vm* vm, int (*fn)(void* user, int64_t id, con
 E7_API void e7_seed_random(e7_vm* vm, uint64_t seed);
 E7_API size_t e7_memory_used(e7_vm* vm);
 E7_API void e7_collect_garbage(e7_vm* vm);
+/* Garbage collector statistics since the VM was created. */
+typedef struct e7_gc_stats {
+  size_t struct_size;         /* sizeof(e7_gc_stats); set by the caller */
+  uint64_t collections;
+  uint64_t total_pause_ns;
+  uint64_t max_pause_ns;      /* longest single collection */
+  size_t heap_bytes;          /* currently allocated (same as e7_memory_used) */
+  size_t peak_heap_bytes;
+} e7_gc_stats;
+E7_API e7_status e7_gc_stats_get(e7_vm* vm, e7_gc_stats* out);
 
 /* ---- debugging (see docs/DEBUGGING.md) ----
  * Attach a debugger to a VM before loading modules (so that breakpoints in top-level code work).

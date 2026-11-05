@@ -1,4 +1,5 @@
 // C API integration tests.
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +31,24 @@ static std::vector<uint8_t> compile(const char* src) {
   std::vector<uint8_t> v(out, out + len);
   e7_free(out);
   return v;
+}
+
+static uint32_t crc32(const uint8_t* p, size_t n) {
+  uint32_t c = 0xFFFFFFFFu;
+  for (size_t i = 0; i < n; i++) {
+    c ^= p[i];
+    for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1)));
+  }
+  return ~c;
+}
+static void putU32(std::vector<uint8_t>& b, size_t at, uint32_t v) {
+  for (int i = 0; i < 4; i++) b[at + i] = (uint8_t)(v >> (8 * i));
+}
+// rewrites a header field (offset 4: format, 12: required version) and fixes the checksum
+static std::vector<uint8_t> patchHeader(std::vector<uint8_t> b, size_t at, uint32_t v) {
+  putU32(b, at, v);
+  putU32(b, b.size() - 4, crc32(b.data(), b.size() - 8));
+  return b;
 }
 
 static e7_value num(double d) { e7_value v; v.type = E7_NUMBER; v.v.num = d; return v; }
@@ -401,6 +420,94 @@ int main() {
       e7_vm_free(vm);
     }
     CHECK(first[0] == first[1]);
+  }
+  // 0.2: versions, struct sizes, inspect, gc stats
+  {
+    CHECK(e7_version_number() == ((uint32_t)E7_VERSION_MAJOR << 16 | E7_VERSION_MINOR << 8 | E7_VERSION_PATCH));
+    std::vector<uint8_t> bc = compile("export function main(): number { return 7; }");
+    e7_module_info info;
+    memset(&info, 0, sizeof info);
+    info.struct_size = sizeof info;
+    CHECK(e7_inspect(bc.data(), bc.size(), &info) == E7_OK);
+    CHECK(info.format == 2 && info.requires_version == 0x000200 && !info.is_signed && !info.has_debug_info);
+    uint8_t seed[32] = {1, 2, 3};
+    uint8_t* signedBc = nullptr;
+    size_t signedLen = 0;
+    CHECK(e7_sign_module(bc.data(), bc.size(), seed, &signedBc, &signedLen) == E7_OK);
+    memset(&info, 0, sizeof info);
+    info.struct_size = sizeof info;
+    CHECK(e7_inspect(signedBc, signedLen, &info) == E7_OK && info.is_signed == 1);
+    e7_free(signedBc);
+    // a module needing a newer VM, and an old format, are rejected with E7_ERR_VERSION
+    std::vector<uint8_t> newer = patchHeader(bc, 12, 0x630000);
+    std::vector<uint8_t> older = patchHeader(bc, 4, 1);
+    memset(&info, 0, sizeof info);
+    info.struct_size = sizeof info;
+    CHECK(e7_inspect(newer.data(), newer.size(), &info) == E7_ERR_VERSION && info.requires_version == 0x630000);
+    CHECK(e7_inspect(older.data(), older.size(), &info) == E7_ERR_VERSION && info.format == 1);
+    std::vector<uint8_t> junk(40, 7);
+    CHECK(e7_inspect(junk.data(), junk.size(), &info) == E7_ERR_LOAD);
+    info.struct_size = 0;
+    CHECK(e7_inspect(bc.data(), bc.size(), &info) == E7_ERR_ARGS);
+    e7_vm* vm = e7_vm_new(nullptr);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, newer.data(), newer.size(), &m) == E7_ERR_VERSION);
+    CHECK(strstr(e7_last_error(vm), "requires e7vm 99.0.0") != nullptr);
+    CHECK(e7_load(vm, older.data(), older.size(), &m) == E7_ERR_VERSION);
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_vm_free(vm);
+    // struct_size: an older (shorter) e7_config keeps defaults for the fields it lacks; bad sizes fail
+    e7_config cfg;
+    e7_config_init(&cfg);
+    CHECK(cfg.struct_size == sizeof cfg && cfg.gc_growth_percent == 200);
+    cfg.struct_size = 0;
+    CHECK(e7_vm_new(&cfg) == nullptr);
+    cfg.struct_size = sizeof cfg + 8;
+    CHECK(e7_vm_new(&cfg) == nullptr);
+    e7_config_init(&cfg);
+    cfg.struct_size = offsetof(e7_config, gc_growth_percent);
+    cfg.gc_growth_percent = 1;  // beyond the caller's struct_size: ignored
+    vm = e7_vm_new(&cfg);
+    CHECK(vm != nullptr);
+    e7_vm_free(vm);
+    // compile options: target versions
+    e7_compile_options co;
+    e7_compile_options_init(&co);
+    CHECK(co.struct_size == sizeof co);
+    const char* src = "export function main(): number { return 1; }";
+    uint8_t* out = nullptr;
+    size_t outLen = 0;
+    char* errs = nullptr;
+    co.target_version = 0x000200;
+    CHECK(e7_compile_ex(src, strlen(src), "t.ts", &co, &out, &outLen, &errs) == E7_OK);
+    e7_free(out);
+    co.target_version = 0x000100;
+    CHECK(e7_compile_ex(src, strlen(src), "t.ts", &co, &out, &outLen, &errs) == E7_ERR_COMPILE);
+    CHECK(errs && strstr(errs, "--target 0.1.0 is not supported"));
+    e7_free(errs);
+    errs = nullptr;
+    co.struct_size = 3;
+    CHECK(e7_compile_ex(src, strlen(src), "t.ts", &co, &out, &outLen, &errs) == E7_ERR_ARGS);
+    // gc stats
+    e7_config_init(&cfg);
+    cfg.gc_growth_percent = 150;
+    vm = e7_vm_new(&cfg);
+    std::vector<uint8_t> gbc = compile(
+        "let keep: number[][] = [];\n"
+        "export function main(): number { for (let i = 0; i < 20000; i++) { keep.push([i, i]); if (keep.length > 500) keep = []; } return keep.length; }");
+    CHECK(e7_load(vm, gbc.data(), gbc.size(), &m) == E7_OK);
+    e7_value r;
+    CHECK(e7_call(vm, m, "main", nullptr, 0, &r) == E7_OK);
+    e7_collect_garbage(vm);
+    e7_gc_stats gs;
+    memset(&gs, 0, sizeof gs);
+    gs.struct_size = sizeof gs;
+    CHECK(e7_gc_stats_get(vm, &gs) == E7_OK);
+    CHECK(gs.collections >= 1 && gs.max_pause_ns > 0 && gs.total_pause_ns >= gs.max_pause_ns);
+    CHECK(gs.heap_bytes == e7_memory_used(vm) && gs.peak_heap_bytes >= gs.heap_bytes);
+    gs.struct_size = 1;
+    CHECK(e7_gc_stats_get(vm, &gs) == E7_ERR_ARGS);
+    e7_vm_free(vm);
   }
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);

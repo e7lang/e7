@@ -5,7 +5,7 @@
 
 namespace e7 {
 
-constexpr uint32_t kFormatVersion = 1;
+constexpr uint32_t kFormatVersion = 2;
 
 struct FieldDesc {
   std::string name;
@@ -41,6 +41,14 @@ struct FuncDebug {
   std::vector<std::string> upvalNames;  // one per upvalue (may be empty: no names)
 };
 
+// try/catch: while pc is in [start, end), a catchable runtime error jumps to `handler` with the
+// error object in register `reg` (a reference register). Inner handlers are listed before the
+// handlers that enclose them; ranges are either nested or disjoint.
+struct HandlerDesc {
+  uint32_t start = 0, end = 0, handler = 0;
+  uint32_t reg = 0;
+};
+
 struct FuncDesc {
   std::string name;
   uint32_t sig = 0;                 // index into Module::sigs
@@ -49,6 +57,7 @@ struct FuncDesc {
   std::vector<uint8_t> upvalKinds;  // Kind of each captured cell's content
   std::vector<uint32_t> icNames;    // string-constant index per inline-cache slot
   std::vector<uint64_t> code;
+  std::vector<HandlerDesc> handlers;  // try/catch ranges (innermost first)
   std::vector<uint32_t> lines;      // pairs (pc, line), sorted by pc; optional extension below
   bool hasDebug = false;            // debug information present (`debug` is meaningful)
   FuncDebug debug;
@@ -99,8 +108,18 @@ struct Module {
   std::vector<GlobalDesc> globals;
   std::vector<ExportDesc> exports;
   uint32_t initFunc = 0;
-  uint32_t flags = 0;  // kModuleFlag*
+  uint32_t flags = 0;     // kModuleFlag*
+  uint32_t minVm = 0;     // minimum e7vm version (major << 16 | minor << 8 | patch); see core/since.h
 };
+
+// Header fields readable without parsing the whole module (and before verifying a signature).
+struct ModuleHeader {
+  uint32_t format = 0;
+  uint32_t flags = 0;
+  uint32_t minVm = 0;
+};
+// Returns false if data is not an e7b file (bad magic or too short); does not check the CRC.
+bool readModuleHeader(const uint8_t* data, size_t len, ModuleHeader& out);
 
 // Signature string helpers
 inline std::string sigParams(const std::string& sig) { return sig.substr(0, sig.find('>')); }

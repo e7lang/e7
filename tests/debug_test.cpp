@@ -117,7 +117,7 @@ static int readFile(void*, const char* path, char** data, size_t* len) {
 
 static std::vector<uint8_t> compileProgram(const char* src, bool debug, const char* name = "main.ts") {
   e7_compile_options o;
-  memset(&o, 0, sizeof o);
+  e7_compile_options_init(&o);
   o.flags = debug ? E7_COMPILE_DEBUG : 0;
   o.read_file = readFile;
   uint8_t* out = nullptr;

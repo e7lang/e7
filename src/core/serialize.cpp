@@ -189,6 +189,7 @@ std::vector<uint8_t> serializeModule(const Module& m) {
   bool anyDebug = false;
   for (auto& f : m.funcs) anyDebug = anyDebug || f.hasDebug;
   w.u32(anyDebug ? (m.flags | kModuleFlagDebug) : (m.flags & ~kModuleFlagDebug));  // flags
+  w.u32(m.minVm);
   w.str(m.name);
   w.u32((uint32_t)m.ints.size());
   for (int64_t v : m.ints) w.u64((uint64_t)v);
@@ -223,6 +224,8 @@ std::vector<uint8_t> serializeModule(const Module& m) {
     for (uint32_t s : f.icNames) w.u32(s);
     w.u32((uint32_t)f.code.size());
     for (uint64_t c : f.code) w.u64(c);
+    w.u32((uint32_t)f.handlers.size());
+    for (auto& h : f.handlers) { w.u32(h.start); w.u32(h.end); w.u32(h.handler); w.u32(h.reg); }
     std::vector<uint32_t> L = linesWithDebug(f);
     w.u32((uint32_t)L.size());
     for (uint32_t l : L) w.u32(l);
@@ -238,6 +241,22 @@ std::vector<uint8_t> serializeModule(const Module& m) {
   return std::move(w.b);
 }
 
+bool readModuleHeader(const uint8_t* data, size_t len, ModuleHeader& out) {
+  out = ModuleHeader();
+  if (!data || len < 24 || memcmp(data, kMagic, 4) != 0) return false;
+  auto u32at = [&](size_t i) {
+    return (uint32_t)data[i] | ((uint32_t)data[i + 1] << 8) | ((uint32_t)data[i + 2] << 16) | ((uint32_t)data[i + 3] << 24);
+  };
+  out.format = u32at(4);
+  if (out.format >= 2) {
+    out.flags = u32at(8);
+    out.minVm = u32at(12);
+  } else if (out.format == 1) {
+    out.flags = u32at(8);
+  }
+  return true;
+}
+
 bool deserializeModule(const uint8_t* data, size_t len, Module& m, std::string& err) {
   m = Module();
   if (len < 20 || memcmp(data, kMagic, 4) != 0) { err = "not an e7b file"; return false; }
@@ -251,6 +270,7 @@ bool deserializeModule(const uint8_t* data, size_t len, Module& m, std::string& 
   uint32_t ver = r.u32();
   if (ver != kFormatVersion) { err = "unsupported e7b format version " + std::to_string(ver); return false; }
   m.flags = r.u32();  // informational (unknown bits are ignored)
+  m.minVm = r.u32();
   m.name = r.str();
   uint32_t n = r.count(8);
   m.ints.resize(n);
@@ -304,6 +324,9 @@ bool deserializeModule(const uint8_t* data, size_t len, Module& m, std::string& 
     k = r.count(8);
     f.code.resize(k);
     for (auto& x : f.code) x = r.u64();
+    k = r.count(16);
+    f.handlers.resize(k);
+    for (auto& h : f.handlers) { h.start = r.u32(); h.end = r.u32(); h.handler = r.u32(); h.reg = r.u32(); }
     k = r.count(4);
     f.lines.resize(k);
     for (auto& x : f.lines) x = r.u32();

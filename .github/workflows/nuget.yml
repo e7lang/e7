@@ -2,7 +2,7 @@ name: NuGet
 
 # Builds the e7vm shared library for every desktop platform, packs the E7VM NuGet package
 # (platform/dotnet/E7VM) and tests it from a local feed on Linux, Windows and macOS.
-# Release integration: call it with `uses: ./.github/workflows/nuget.yml`, `with: { version: 0.1.0, publish: true }`
+# Release integration: call it with `uses: ./.github/workflows/nuget.yml`, `with: { version: 0.2.0, publish: true }`
 # and `secrets: inherit`; the caller must grant `contents: write` and `packages: write`.
 # Publishing uploads the .nupkg to the GitHub release v<version>, pushes it to GitHub Packages and,
 # when the NUGET_API_KEY secret is set, to nuget.org.
@@ -13,7 +13,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Package version (e.g. 0.1.0); the release tag is v<version>"
+        description: "Package version (e.g. 0.2.0); the release tag is v<version>"
         required: true
         type: string
       publish:

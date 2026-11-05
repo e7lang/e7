@@ -2,6 +2,7 @@
 
 #include "debug.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -325,6 +326,7 @@ void VM::accountExternal(int64_t delta) {
     bytes_ += (size_t)delta;
     if (bytes_ > nextGC_) gcRequested_ = true;
   } else {
+    if (bytes_ > peakBytes_) peakBytes_ = bytes_;
     bytes_ -= (size_t)(-delta);
   }
 }
@@ -576,12 +578,18 @@ void VM::sweep() {
 }
 
 void VM::collectGarbage() {
+  auto t0 = std::chrono::steady_clock::now();
+  if (bytes_ > peakBytes_) peakBytes_ = bytes_;
   markRoots();
   traceAll();
   sweep();
   gcCount_++;
   gcRequested_ = false;
-  size_t next = bytes_ * 2;
+  uint64_t ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
+  gcTotalNs_ += ns;
+  if (ns > gcMaxNs_) gcMaxNs_ = ns;
+  uint32_t growth = cfg_.gcGrowthPercent < 125 ? 125 : cfg_.gcGrowthPercent;
+  size_t next = (size_t)((unsigned long long)bytes_ * growth / 100);
   if (next < (1u << 20)) next = 1u << 20;
   size_t cap = cfg_.memoryLimit - cfg_.memoryLimit / 8;
   if (next > cap && bytes_ < cap) next = cap;

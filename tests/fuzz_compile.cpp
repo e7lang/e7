@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
     size_t len = 0;
     char* errs = nullptr;
     e7_compile_options co;  // every other program with debug information (it must pass the verifier too)
-    memset(&co, 0, sizeof co);
+    e7_compile_options_init(&co);
     co.flags = (it % 2) ? E7_COMPILE_DEBUG : 0;
     e7_status st = e7_compile_ex(src.data(), src.size(), "fuzz.ts", &co, &out, &len, &errs);
     if (st != E7_OK) {

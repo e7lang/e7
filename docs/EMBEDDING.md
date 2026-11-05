@@ -154,8 +154,8 @@ The binding is published as two Maven artifacts (group `org.e7vm`):
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("org.e7vm:e7vm-android:0.1.0")   // Android
-    // implementation("org.e7vm:e7vm:0.1.0")         // desktop / server JVM
+    implementation("org.e7vm:e7vm-android:0.2.0")   // Android
+    // implementation("org.e7vm:e7vm:0.2.0")         // desktop / server JVM
 }
 ```
 
@@ -179,7 +179,7 @@ dependencyResolutionManagement {
 ```
 
 The `.aar` and `.jar` are also attached to each [GitHub release](https://github.com/e7lang/e7/releases);
-a downloaded AAR can be used with `implementation(files("libs/e7vm-android-0.1.0.aar"))`.
+a downloaded AAR can be used with `implementation(files("libs/e7vm-android-0.2.0.aar"))`.
 
 On the desktop JVM, `org.e7vm.NativeLoader` loads the library in this order: the path in the system
 property `e7vm.library`, then `System.loadLibrary("e7vm_jni")` (`java.library.path`), then the copy bundled
@@ -231,7 +231,7 @@ crypto libraries from source; no prebuilt binary is involved. In Xcode use *File
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/e7lang/e7.git", from: "0.1.0"),
+  .package(url: "https://github.com/e7lang/e7.git", from: "0.2.0"),
 ],
 targets: [
   .target(name: "App", dependencies: [.product(name: "E7VM", package: "e7")]),
@@ -270,7 +270,7 @@ e7vm uses no JIT and allocates no executable memory, which meets the App Store r
   and macOS 11+ (universal), which .NET loads automatically from `runtimes/<rid>/native/`:
 
   ```bash
-  dotnet add package E7VM --version 0.1.0
+  dotnet add package E7VM --version 0.2.0
   ```
 
   The package targets `netstandard2.0` and `net8.0` (managed assembly `E7.dll`, namespace `E7`). It is also attached to each GitHub release and published to

@@ -1,4 +1,5 @@
 #include "compiler.h"
+#include "../core/since.h"
 
 #include <fstream>
 #include <memory>
@@ -160,6 +161,23 @@ CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& rea
   if (!generateModule(P, C, out.module, modName, opts.debugInfo)) {
     out.errors = P.errors;
     return out;
+  }
+  std::string why;
+  out.module.minVm = moduleRequires(out.module, &why);
+  if (opts.target) {
+    if (opts.target < kBaselineVersion || opts.target > kVmVersion) {
+      out.errors.push_back(CompileError{entry, Loc{0, 0}, "--target " + versionString(opts.target) +
+                                                             " is not supported (this compiler targets e7vm " +
+                                                             versionString(kBaselineVersion) + " to " +
+                                                             versionString(kVmVersion) + ")"});
+      return out;
+    }
+    if (out.module.minVm > opts.target) {
+      out.errors.push_back(CompileError{entry, Loc{0, 0}, "the program uses " + why + ", which needs e7vm " +
+                                                             versionString(out.module.minVm) + " (--target is " +
+                                                             versionString(opts.target) + ")"});
+      return out;
+    }
   }
   std::string verr;
   if (!verifyModule(out.module, verr)) {

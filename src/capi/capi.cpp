@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 
+#include "../core/since.h"
 #include "../crypto/sign.h"
 #include "../stdlib/util.h"
 #include "../vm/debug.h"
@@ -78,21 +79,39 @@ static e7_status fail(e7_vm* v, e7_status st, const std::string& msg) {
   return st;
 }
 
+// Copies a caller's struct that starts with struct_size into a zero-initialized full-size one:
+// fields a (smaller) older struct does not have keep their defaults. False if struct_size is
+// smaller than the struct_size field itself or larger than this library's struct.
+template <class T>
+static bool copySized(const T* in, T& out) {
+  size_t n = in->struct_size;
+  if (n < sizeof(size_t) || n > sizeof(T)) return false;
+  memcpy(&out, in, n);
+  out.struct_size = sizeof(T);
+  return true;
+}
+
 extern "C" {
 
-const char* e7_version(void) { return "0.1.0"; }
+const char* e7_version(void) { return "0.2.0"; }
+uint32_t e7_version_number(void) { return kVmVersion; }
 
 void e7_config_init(e7_config* cfg) {
   memset(cfg, 0, sizeof *cfg);
+  cfg->struct_size = sizeof *cfg;
   cfg->memory_limit = 256u << 20;
   cfg->stack_slots = 1u << 18;
   cfg->max_frames = 20000;
+  cfg->gc_growth_percent = 200;
 }
 
-e7_vm* e7_vm_new(const e7_config* cfg) {
+e7_vm* e7_vm_new(const e7_config* user) {
   e7_config def;
   e7_config_init(&def);
-  if (!cfg) cfg = &def;
+  e7_config given;
+  e7_config_init(&given);
+  if (user && !copySized(user, given)) return nullptr;
+  const e7_config* cfg = &given;
   std::unique_ptr<e7_vm> owner;
   try {
     owner.reset(new e7_vm());
@@ -102,6 +121,7 @@ e7_vm* e7_vm_new(const e7_config* cfg) {
     vc.stackSlots = cfg->stack_slots ? cfg->stack_slots : def.stack_slots;
     vc.maxFrames = cfg->max_frames ? cfg->max_frames : def.max_frames;
     vc.suspendOnBudget = cfg->suspend_on_budget != 0;
+    vc.gcGrowthPercent = cfg->gc_growth_percent ? (cfg->gc_growth_percent < 125 ? 125 : cfg->gc_growth_percent) : 200;
     v->vm.reset(new VM(vc));
     v->requireSignature = cfg->require_signature != 0;
     if (cfg->trusted_keys && cfg->num_trusted_keys)
@@ -139,6 +159,16 @@ static e7_status loadBytes(e7_vm* v, const uint8_t* data, size_t len, e7_module*
   bool verifying = v->requireSignature || !v->trustedKeys.empty();
   if (sig < 0 && verifying) return fail(v, E7_ERR_SIGNATURE, "module signature is invalid or the signing key is not trusted");
   if (sig == 0 && v->requireSignature) return fail(v, E7_ERR_SIGNATURE, "module is not signed");
+  ModuleHeader hdr;
+  if (!readModuleHeader(data, payload, hdr)) return fail(v, E7_ERR_LOAD, "not an e7b file");
+  if (hdr.format != kFormatVersion)
+    return fail(v, E7_ERR_VERSION, "e7b format " + std::to_string(hdr.format) + " is not supported by e7vm " +
+                                       versionString(kVmVersion) + " (it reads format " +
+                                       std::to_string(kFormatVersion) + "); recompile the module");
+  if (hdr.minVm > kVmVersion)
+    return fail(v, E7_ERR_VERSION, "the module requires e7vm " + versionString(hdr.minVm) + "; this is e7vm " +
+                                       versionString(kVmVersion) + " (compile with e7c --target " +
+                                       versionString(kVmVersion) + ")");
   Module m;
   std::string err;
   if (!deserializeModule(data, payload, m, err)) return fail(v, E7_ERR_LOAD, err);
@@ -177,16 +207,26 @@ e7_status e7_compile(const char* source, size_t len, const char* file_name, uint
   return e7_compile_ex(source, len, file_name, nullptr, out, out_len, errors);
 }
 
-e7_status e7_compile_ex(const char* source, size_t len, const char* file_name, const e7_compile_options* opts,
+void e7_compile_options_init(e7_compile_options* opts) {
+  memset(opts, 0, sizeof *opts);
+  opts->struct_size = sizeof *opts;
+}
+
+e7_status e7_compile_ex(const char* source, size_t len, const char* file_name, const e7_compile_options* userOpts,
                         uint8_t** out, size_t* out_len, char** errors) {
   if (out) *out = nullptr;
   if (out_len) *out_len = 0;
   if (errors) *errors = nullptr;
+  e7_compile_options optsCopy;
+  e7_compile_options_init(&optsCopy);
+  if (userOpts && !copySized(userOpts, optsCopy)) return E7_ERR_ARGS;
+  const e7_compile_options* opts = userOpts ? &optsCopy : nullptr;
 #ifdef E7_WITH_COMPILER
   if (!out || !out_len || (!source && len)) return E7_ERR_ARGS;
   try {
     CompileOptions co_;
     co_.debugInfo = opts && (opts->flags & E7_COMPILE_DEBUG);
+    co_.target = opts ? opts->target_version : 0;
     std::string name = file_name ? file_name : "main.ts";
     std::string src(source ? source : "", len);
     CompileOutput co;
@@ -527,6 +567,56 @@ void e7_seed_random(e7_vm* v, uint64_t seed) { v->vm->seedRandom(seed); }
 size_t e7_memory_used(e7_vm* v) { return v->vm->bytesAllocated(); }
 void e7_collect_garbage(e7_vm* v) {
   if (!v->active && !v->vm->suspended()) v->vm->collectGarbage();
+}
+
+e7_status e7_gc_stats_get(e7_vm* v, e7_gc_stats* out) {
+  if (!v || !out || out->struct_size < sizeof(size_t) || out->struct_size > sizeof(e7_gc_stats)) return E7_ERR_ARGS;
+  e7_gc_stats st;
+  memset(&st, 0, sizeof st);
+  st.struct_size = out->struct_size;
+  st.collections = v->vm->gcCount();
+  st.total_pause_ns = v->vm->gcTotalPauseNs();
+  st.max_pause_ns = v->vm->gcMaxPauseNs();
+  st.heap_bytes = v->vm->bytesAllocated();
+  st.peak_heap_bytes = v->vm->peakBytes();
+  memcpy(out, &st, out->struct_size);
+  return E7_OK;
+}
+
+e7_status e7_inspect(const uint8_t* data, size_t len, e7_module_info* info) {
+  if (!data || !info || info->struct_size < sizeof(size_t) || info->struct_size > sizeof(e7_module_info))
+    return E7_ERR_ARGS;
+  e7_module_info r;
+  memset(&r, 0, sizeof r);
+  r.struct_size = info->struct_size;
+  e7_status st = E7_OK;
+  size_t payload = len;
+  if (len >= kSigTrailer && memcmp(data + len - kSigTrailer, "E7S1", 4) == 0) {
+    r.is_signed = 1;
+    memcpy(r.key_id, data + len - kSigTrailer + 4, 8);
+    payload = len - kSigTrailer;
+  }
+  ModuleHeader hdr;
+  if (!readModuleHeader(data, payload, hdr)) {
+    st = E7_ERR_LOAD;
+  } else {
+    r.format = hdr.format;
+    r.requires_version = hdr.minVm;
+    r.has_debug_info = (hdr.flags & kModuleFlagDebug) ? 1 : 0;
+    if (hdr.format != kFormatVersion || hdr.minVm > kVmVersion) {
+      st = E7_ERR_VERSION;
+    } else {
+      Module m;
+      std::string err;
+      try {
+        if (!deserializeModule(data, payload, m, err)) st = E7_ERR_LOAD;
+      } catch (std::bad_alloc&) {
+        st = E7_ERR_MEMORY;
+      }
+    }
+  }
+  memcpy(info, &r, info->struct_size);
+  return st;
 }
 
 e7_status e7_sign_module(const uint8_t* e7b, size_t len, const uint8_t seed[32], uint8_t** out, size_t* out_len) {

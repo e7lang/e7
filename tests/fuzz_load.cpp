@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
     size_t len;
     char* errs = nullptr;
     e7_compile_options co;
-    memset(&co, 0, sizeof co);
+    e7_compile_options_init(&co);
     co.flags = debug ? E7_COMPILE_DEBUG : 0;
     if (e7_compile_ex(src, strlen(src), "f.ts", &co, &out, &len, &errs) != E7_OK) {
       fprintf(stderr, "compile failed: %s\n", errs);

@@ -325,6 +325,22 @@ bool verifyModule(const Module& m, std::string& err) {
     }
     for (uint32_t t : jumps)
       if (!isStart[t]) return F("function %zu: jump into the middle of an instruction", fi);
+    // try/catch handlers: ranges and targets at instruction starts, a reference register for the
+    // error, inner handlers listed before the ones enclosing them, ranges nested or disjoint
+    if (f.handlers.size() > 65535) return F("function %zu: too many handlers", fi);
+    for (size_t k = 0; k < f.handlers.size(); k++) {
+      const HandlerDesc& h = f.handlers[k];
+      if (h.start >= h.end || h.end > n || !isStart[h.start] || (h.end < n && !isStart[h.end]))
+        return F("function %zu: bad handler range", fi);
+      if (h.handler >= n || !isStart[h.handler]) return F("function %zu: bad handler target", fi);
+      if (h.reg >= f.regKinds.size() || f.regKinds[h.reg] != K_R) return F("function %zu: bad handler register", fi);
+      for (size_t j = 0; j < k; j++) {
+        const HandlerDesc& g = f.handlers[j];  // listed earlier: inside h, or disjoint from it
+        bool disjoint = g.end <= h.start || h.end <= g.start;
+        bool inside = h.start <= g.start && g.end <= h.end;
+        if (!disjoint && !inside) return F("function %zu: overlapping handlers", fi);
+      }
+    }
     // debug information: only positions, names and register mappings, but the debugger reads
     // registers through it, so every index and range is checked
     if (f.hasDebug) {

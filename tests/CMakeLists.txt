@@ -56,6 +56,17 @@ target_link_libraries(malicious_test PRIVATE e7vm_static)
 file(GLOB E7_MALICIOUS ${CMAKE_CURRENT_SOURCE_DIR}/malicious/*.e7b)
 add_test(NAME malicious_test COMMAND malicious_test ${E7_MALICIOUS})
 
+# bytecode compatibility corpus (docs/BYTECODE.md): 0.1 modules are rejected with E7_ERR_VERSION,
+# modules from every 0.2.x release keep loading and printing the same output
+add_executable(compat_test compat_test.cpp)
+target_link_libraries(compat_test PRIVATE e7vm_static)
+file(GLOB E7_COMPAT_REJECT ${CMAKE_CURRENT_SOURCE_DIR}/compat/0.1.*/*.e7b)
+file(GLOB E7_COMPAT_RUN ${CMAKE_CURRENT_SOURCE_DIR}/compat/0.2.*/*.e7b)
+add_test(NAME compat_reject COMMAND compat_test reject ${E7_COMPAT_REJECT})
+if(E7_COMPAT_RUN)
+  add_test(NAME compat_run COMMAND compat_test run ${E7_COMPAT_RUN})
+endif()
+
 # debugger: C debug API, debug information in bytecode, verifier checks of debug sections
 if(E7_WITH_COMPILER)
   find_package(Threads REQUIRED)
