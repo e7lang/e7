@@ -68,8 +68,12 @@ static void inspectRef(e7_vm* vm, uint32_t ref, size_t frame, int depth, bool ev
   }
   for (auto& v : copy) {
     if (evaluate) {
-      const e7_debug_variable* ev = nullptr;
-      if (e7_debug_evaluate(vm, frame, v.name.c_str(), &ev) == E7_OK && ev) r.inspected += strlen(ev->value) > 0;
+      // the variable, and the member accesses the evaluator knows (most fail for most types)
+      for (const char* suffix : {"", ".length", ".size", "[0]", "[1].length", "['k']"}) {
+        const e7_debug_variable* ev = nullptr;
+        std::string expr = v.name + suffix;
+        if (e7_debug_evaluate(vm, frame, expr.c_str(), &ev) == E7_OK && ev) r.inspected += strlen(ev->value) > 0;
+      }
     }
     if (v.ref && depth < 2) inspectRef(vm, v.ref, frame, depth + 1, false, r);
   }
