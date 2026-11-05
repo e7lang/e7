@@ -708,7 +708,7 @@ bool Gen::run(const std::string& name) {
   // classes (after functions so that records created during codegen are included)
   for (ClassSym* c : P.classes) {
     ClassDesc cd;
-    cd.name = c->name;
+    cd.name = c->rtName.empty() ? c->name : c->rtName;  // Box<number> is "Box" at run time
     cd.parent = c->parent ? c->parent->classIdx : -1;
     cd.isRecord = c->isTuple ? 2 : c->isRecord ? 1 : 0;
     for (auto& f : c->fields) cd.fields.push_back(FieldDesc{f.name, vtOf(f.type)});
@@ -1052,12 +1052,23 @@ void Gen::blockEntry(std::vector<Stmt*>& stmts) {
   };
   for (Stmt* s : stmts) {
     if (s->k == SK::Var)
-      for (auto& d : s->decls) pre(d);
+      for (auto& d : s->decls) {
+        pre(d);
+        if (d.generic)
+          for (Sym* inst : d.generic->order) {
+            FuncSym* f = static_cast<FuncSym*>(inst);
+            if (f && f->selfVar && f->selfVar->captured) declareLocal(f->selfVar);
+          }
+      }
   }
-  // hoisted nested functions
+  // hoisted nested functions (and the instances of nested generic functions)
   std::vector<FuncSym*> nested;
-  for (Stmt* s : stmts)
+  for (Stmt* s : stmts) {
     if (s->k == SK::Func && s->fn && s->fn->selfVar) nested.push_back(s->fn);
+    if (s->k == SK::Func && s->generic)
+      for (Sym* inst : s->generic->order)
+        if (inst && static_cast<FuncSym*>(inst)->selfVar) nested.push_back(static_cast<FuncSym*>(inst));
+  }
   for (FuncSym* f : nested) declareLocal(f->selfVar);
   for (FuncSym* f : nested) {
     size_t m0 = mark();
@@ -1076,8 +1087,17 @@ void Gen::genBlock(std::vector<Stmt*>& stmts) {
     for (auto& sub : d.elems) col(sub);
   };
   for (Stmt* s : stmts) {
-    if (s->k == SK::Var) for (auto& d : s->decls) col(d);
+    if (s->k == SK::Var)
+      for (auto& d : s->decls) {
+        col(d);
+        if (d.generic)
+          for (Sym* inst : d.generic->order)
+            if (inst && static_cast<FuncSym*>(inst)->selfVar) declared.push_back(static_cast<FuncSym*>(inst)->selfVar);
+      }
     if (s->k == SK::Func && s->fn && s->fn->selfVar) declared.push_back(s->fn->selfVar);
+    if (s->k == SK::Func && s->generic)
+      for (Sym* inst : s->generic->order)
+        if (inst && static_cast<FuncSym*>(inst)->selfVar) declared.push_back(static_cast<FuncSym*>(inst)->selfVar);
   }
   blockEntry(stmts);
   for (Stmt* s : stmts) genStmt(s);
@@ -1103,6 +1123,20 @@ void Gen::bindVar(VarSym* v, uint16_t valueReg) {
 
 void Gen::genVarDecl(VarDecl& d, bool topLevel) {
   (void)topLevel;
+  if (d.generic) {
+    // const f = <T>(...) => ...: one closure per instance (instances at the top level need none)
+    for (Sym* inst : d.generic->order) {
+      FuncSym* f = static_cast<FuncSym*>(inst);
+      if (!f || !f->selfVar) continue;
+      declareLocal(f->selfVar);
+      size_t m0 = mark();
+      uint16_t r = temp(K_R);
+      genClosure(f, r);
+      writeVar(f->selfVar, r);
+      release(m0);
+    }
+    return;
+  }
   if (!d.isArrayPat && !d.isObjPat) {
     VarSym* v = d.sym;
     if (!v) return;

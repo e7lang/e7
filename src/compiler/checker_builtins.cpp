@@ -170,6 +170,29 @@ Type* Checker::checkCall(Expr* e, Type* expected) {
   if (c->k == EK::Ident) {
     Sym* s = lookup(c->raw);
     if (!s) return errT(c->loc, "cannot find name '" + c->raw + "'" + suggestName(c->raw, false));
+    if (s->k == SymK::Generic) {
+      GenericSym* g = static_cast<GenericSym*>(s);
+      if (g->kind == GenericSym::Class) return errT(e->loc, "class constructor '" + c->raw + "' cannot be invoked without 'new'");
+      if (g->kind != GenericSym::Func && g->kind != GenericSym::Arrow) return errT(c->loc, "'" + c->raw + "' is a type, not a value");
+      std::vector<Type*> targs;
+      if (!inferCall(g, g->fnParams(), g->fnRet(), e->list, e->typeArgs, expected, e->loc, targs)) {
+        for (Expr* a : e->list) if (!a->type && a->k != EK::Spread) check(a, nullptr);
+        return T.unknown();
+      }
+      FuncSym* f = instantiateFunc(g, targs, e->loc);
+      if (!f) return T.unknown();
+      checkArgs(e, f->type, e->list);
+      if (f->inferRet) {
+        if (f->checking) return errT(e->loc, "'" + f->name + "' is called recursively; add an explicit return type");
+        checkFunction(f);
+      }
+      e->callee = f;
+      e->intrinsic = IN_DIRECT;
+      if (f->selfVar) markCapture(f->selfVar);
+      return f->type->ret;
+    }
+    if (!e->typeArgs.empty() && s->k != SymK::Builtin && s->k != SymK::Namespace)
+      return errT(e->loc, "'" + c->raw + "' is not generic: it takes no type arguments");
     if (s->k == SymK::Builtin) return checkBuiltinCall(e, static_cast<BuiltinSym*>(s)->id, expected);
     if (s->k == SymK::Namespace && static_cast<NamespaceSym*>(s)->builtin) {
       // Number(x), String(x), Boolean(x), BigInt(x)
@@ -217,10 +240,26 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
   if (obj->k == EK::Ident) {
     Sym* s = lookup(obj->raw);
     if (s && s->k == SymK::Namespace) return checkNamespaceMember(e, static_cast<NamespaceSym*>(s), name, true, expected);
-    if (s && s->k == SymK::Class) {
-      ClassSym* c = static_cast<ClassSym*>(s);
+    if (ClassSym* c = classOf(s)) {
       resolveClass(c);
       if (name[0] == '#' && !checkPrivateAccess(m->nameLoc, name, c)) return T.unknown();
+      auto gm = c->genericMethods.find(name);
+      if (gm != c->genericMethods.end() && gm->second->isStatic) {
+        // static generic method
+        GenericSym* g = gm->second;
+        std::vector<Type*> targs;
+        if (!inferCall(g, g->fnParams(), g->fnRet(), e->list, e->typeArgs, expected, e->loc, targs)) return T.unknown();
+        FuncSym* f = instantiateFunc(g, targs, e->loc);
+        if (!f) return T.unknown();
+        checkArgs(e, f->type, e->list);
+        if (f->inferRet) {
+          if (f->checking) return errT(e->loc, "'" + name + "' is called recursively; add an explicit return type");
+          checkFunction(f);
+        }
+        e->callee = f;
+        e->intrinsic = IN_DIRECT;
+        return f->type->ret;
+      }
       auto it = c->staticMethods.find(name);
       if (it == c->staticMethods.end()) {
         auto f = c->staticFields.find(name);
@@ -275,6 +314,27 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
     case TT::Class: {
       ClassSym* c = bt->cls;
       resolveClass(c);
+      GenericSym* gmeth = nullptr;
+      for (ClassSym* k = c; k && !gmeth; k = k->parent) {
+        auto gi = k->genericMethods.find(name);
+        if (gi != k->genericMethods.end() && !gi->second->isStatic) gmeth = gi->second;
+      }
+      if (gmeth) {
+        // generic method: instantiated per type argument list, called directly with this
+        std::vector<Type*> targs;
+        if (!inferCall(gmeth, gmeth->fnParams(), gmeth->fnRet(), e->list, e->typeArgs, expected, e->loc, targs)) return T.unknown();
+        FuncSym* f = instantiateFunc(gmeth, targs, e->loc);
+        if (!f) return T.unknown();
+        checkArgs(e, f->type, e->list);
+        if (f->inferRet) {
+          if (f->checking) return errT(e->loc, "method '" + name + "' is called recursively; add an explicit return type");
+          checkFunction(f);
+        }
+        e->callee = f;
+        e->intrinsic = IN_PRIVATE_METHOD;
+        ret = f->type->ret;
+        break;
+      }
       if (name[0] == '#') {
         // #private method: not virtual, called directly
         FuncSym* pf = nullptr;

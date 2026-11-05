@@ -12,6 +12,7 @@ struct Type;
 struct VarSym;
 struct FuncSym;
 struct ClassSym;
+struct GenericSym;
 
 struct Loc {
   uint32_t line = 0, col = 0;
@@ -32,6 +33,14 @@ struct TypeNode {
   struct Member { std::string name; TypeNode* type; bool optional = false; bool method = false; bool readonly = false; int accessor = 0; };
   std::vector<Member> members;       // Object
   std::string literal;               // Literal (string literal type / null / undefined handled as Ref)
+};
+
+// A type parameter <T extends C = D>
+struct TypeParam {
+  std::string name;
+  TypeNode* constraint = nullptr;
+  TypeNode* def = nullptr;
+  Loc loc;
 };
 
 // ------------------------------------------------------------------ expressions
@@ -101,6 +110,7 @@ struct Expr {
   bool prefix = false;    // update
   bool optional = false;  // ?. member / call
   // arrow function
+  std::vector<TypeParam> typeParams;  // generic arrow function <T>(x: T) => ...
   std::vector<Param> params;
   TypeNode* retType = nullptr;
   Stmt* body = nullptr;       // block body
@@ -137,6 +147,7 @@ struct VarDecl {
   TypeNode* type = nullptr;
   Expr* init = nullptr;         // initializer; for an element of a pattern, its default value
   Type* restType = nullptr;     // rest element: type of the collected value (checker)
+  GenericSym* generic = nullptr;  // `const f = <T>(...) => ...`: the generic function (no variable)
   Loc loc;
   VarSym* sym = nullptr;
 };
@@ -149,6 +160,7 @@ struct ClassMember {
   bool optional = false;
   bool isAbstract = false;
   int accessor = 0;  // Method: 1 = getter, 2 = setter
+  std::vector<TypeParam> typeParams;  // generic method
   TypeNode* type = nullptr;
   Expr* init = nullptr;
   std::vector<Param> params;
@@ -179,7 +191,7 @@ struct Stmt {
   bool isConst = false;            // Var
   std::vector<VarDecl> decls;      // Var
   std::string name;                // Func / Class / Interface / TypeAlias / Enum / labels
-  std::vector<std::string> typeParams;
+  std::vector<TypeParam> typeParams;
   std::vector<Param> params;       // Func
   TypeNode* retType = nullptr;     // Func
   Stmt* body = nullptr;            // Func body, loop body, labeled body
@@ -209,6 +221,7 @@ struct Stmt {
   // resolution
   FuncSym* fn = nullptr;
   ClassSym* cls = nullptr;
+  GenericSym* generic = nullptr;  // generic function / class / interface / alias declaration
   int declareKind = 0;  // Declare: 1 = function
 };
 

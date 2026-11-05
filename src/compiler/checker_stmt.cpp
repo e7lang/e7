@@ -157,8 +157,13 @@ void Checker::checkFunction(FuncSym* f) {
   if (f->defScope) scope = f->defScope;
   else if (fileInfo.count(curFile)) scope = fileInfo[curFile]->scope;
   curFn = f;
+  auto savedStatic = staticInitClass;
+  staticInitClass = nullptr;
+  if (!f->instName.empty()) instCtx.push_back(f->instName);
   pushScope(true);
   checkBody(f);
+  if (!f->instName.empty()) instCtx.pop_back();
+  staticInitClass = savedStatic;
   scope = savedScope;
   curFn = savedFn;
   curFile = savedFile;
@@ -257,8 +262,17 @@ void Checker::checkBody(FuncSym* f) {
 
 void Checker::hoistFunctions(std::vector<Stmt*>& stmts) {
   for (Stmt* s : stmts) {
-    if (s->k != SK::Func || s->fn) continue;
-    if (!s->typeParams.empty()) err(s->loc, "generic functions are not supported yet; write one function per concrete type (builtins such as Array<T>, Map<K, V> and Set<T> are generic)");
+    if (s->k != SK::Func || s->fn || s->generic) continue;
+    if (!s->typeParams.empty()) {
+      // a nested generic function: its instances are closures created where it is declared
+      GenericSym* g = newGeneric(GenericSym::Func, s->name, &s->typeParams, s->loc);
+      g->decl = s;
+      g->parentFn = curFn;
+      g->topLevel = false;
+      s->generic = g;
+      declare(s->name, g, s->loc);
+      continue;
+    }
     FuncSym* f = newFunc(s->name, &s->params, s->retType, s->body, nullptr);
     f->declStmt = s;
     f->parent = curFn;
@@ -557,6 +571,22 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
 
 void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
   bool simple = !d.isArrayPat && !d.isObjPat;
+  if (d.generic) return;  // top-level `const f = <T>(...) => ...` (see declareFile)
+  if (simple && d.init && !d.type) {
+    Expr* gi = d.init;
+    while (gi->k == EK::Paren) gi = gi->a;
+    if (gi->k == EK::Arrow && !gi->typeParams.empty()) {
+      // const f = <T>(x: T) => ...: a generic function; its instances are closures created here
+      if (!isConst) { err(d.loc, "a generic arrow function must be assigned to a 'const'"); return; }
+      GenericSym* g = newGeneric(GenericSym::Arrow, d.name, &gi->typeParams, d.loc);
+      g->arrow = gi;
+      g->parentFn = curFn;
+      g->topLevel = curFn == nullptr || (curFn->isInit && topLevel);
+      d.generic = g;
+      declare(d.name, g, d.loc);
+      return;
+    }
+  }
   if (simple && topLevel && d.sym) {
     VarSym* v = d.sym;
     if (v->checked) {
@@ -626,7 +656,8 @@ void Checker::checkStmt(Stmt* s) {
       break;
     case SK::Func:
       if (topLevel) break;  // top-level functions are checked separately
-      if (!s->fn) { std::vector<Stmt*> one{s}; hoistFunctions(one); }
+      if (!s->fn && !s->generic) { std::vector<Stmt*> one{s}; hoistFunctions(one); }
+      if (s->generic) break;  // a generic function: its instances are checked where they are created
       checkFunction(s->fn);
       if (s->fn->selfVar) s->fn->selfVar->type = s->fn->type;
       break;

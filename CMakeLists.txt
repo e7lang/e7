@@ -81,6 +81,7 @@ set(E7_VM_SRC
 set(E7_COMPILER_SRC
   src/compiler/parser.cpp src/compiler/types.cpp src/compiler/checker.cpp src/compiler/checker_stmt.cpp
   src/compiler/checker_expr.cpp src/compiler/checker_builtins.cpp src/compiler/checker_ns.cpp
+  src/compiler/checker_generic.cpp
   src/compiler/codegen.cpp src/compiler/compiler.cpp)
 
 set(E7_ALL_SRC ${E7_CORE_SRC} ${E7_VM_SRC})

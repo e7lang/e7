@@ -14,7 +14,8 @@ Checker::Checker(Program& p, std::function<SourceFile*(const std::string&, const
 void Checker::err(Loc l, const std::string& msg) {
   for (auto& e : P.errors)
     if (e.file == curFile && e.loc.line == l.line && e.loc.col == l.col) return;  // one error per location
-  P.errors.push_back(CompileError{curFile, l, msg});
+  // in the code of a generic instance, name it: "... (in first<string>)"
+  P.errors.push_back(CompileError{curFile, l, instCtx.empty() ? msg : msg + " (in " + instCtx.back() + ")"});
 }
 
 // ------------------------------------------------------------------ scopes
@@ -385,7 +386,14 @@ void Checker::declareFile(FileInfo* fi) {
   for (Stmt* s : fi->file->body) {
     switch (s->k) {
       case SK::Func: {
-        if (!s->typeParams.empty()) err(s->loc, "generic functions are not supported yet; write one function per concrete type (builtins such as Array<T>, Map<K, V> and Set<T> are generic)");
+        if (!s->typeParams.empty()) {
+          GenericSym* g = newGeneric(GenericSym::Func, s->name, &s->typeParams, s->loc);
+          g->decl = s;
+          s->generic = g;
+          declare(s->name, g, s->loc);
+          if (s->exported) fi->exports[s->name] = g;
+          break;
+        }
         FuncSym* f = newFunc(s->name, &s->params, s->retType, s->body, nullptr);
         f->isTopLevel = true;
         f->declStmt = s;
@@ -409,7 +417,23 @@ void Checker::declareFile(FileInfo* fi) {
         break;
       }
       case SK::Class: {
-        if (!s->typeParams.empty()) err(s->loc, "generic classes are not supported yet; write one class per concrete type or use Array<T> / Map<K, V> / Set<T>");
+        if (!s->typeParams.empty()) {
+          // instances (Box<number>) are created on use; the static members belong to the holder
+          GenericSym* g = newGeneric(GenericSym::Class, s->name, &s->typeParams, s->loc);
+          g->decl = s;
+          ClassSym* h = P.make<ClassSym>();
+          h->name = s->name;
+          h->decl = s;
+          h->file = curFile;
+          h->type = T.classType(h);
+          h->genericRole = 1;
+          g->holder = h;
+          s->cls = h;
+          s->generic = g;
+          declare(s->name, g, s->loc);
+          if (s->exported) fi->exports[s->name] = g;
+          break;
+        }
         ClassSym* c = P.make<ClassSym>();
         c->name = s->name;
         c->decl = s;
@@ -421,7 +445,14 @@ void Checker::declareFile(FileInfo* fi) {
         break;
       }
       case SK::Interface: {
-        if (!s->typeParams.empty()) err(s->loc, "generic interfaces are not supported yet; write one interface per concrete type");
+        if (!s->typeParams.empty()) {
+          GenericSym* g = newGeneric(GenericSym::Interface, s->name, &s->typeParams, s->loc);
+          g->decl = s;
+          s->generic = g;
+          declare(s->name, g, s->loc);
+          if (s->exported) fi->exports[s->name] = g;
+          break;
+        }
         InterfaceSym* is = P.make<InterfaceSym>();
         is->name = s->name;
         is->decl = s;
@@ -430,7 +461,14 @@ void Checker::declareFile(FileInfo* fi) {
         break;
       }
       case SK::TypeAlias: {
-        if (!s->typeParams.empty()) err(s->loc, "generic type aliases are not supported yet; write one alias per concrete type");
+        if (!s->typeParams.empty()) {
+          GenericSym* g = newGeneric(GenericSym::Alias, s->name, &s->typeParams, s->loc);
+          g->decl = s;
+          s->generic = g;
+          declare(s->name, g, s->loc);
+          if (s->exported) fi->exports[s->name] = g;
+          break;
+        }
         AliasSym* a = P.make<AliasSym>();
         a->name = s->name;
         a->decl = s;
@@ -450,6 +488,19 @@ void Checker::declareFile(FileInfo* fi) {
       case SK::Var: {
         for (VarDecl& d : s->decls) {
           if (d.isArrayPat || d.isObjPat) continue;  // typed when checked
+          Expr* gi = d.init;
+          while (gi && gi->k == EK::Paren) gi = gi->a;
+          if (gi && gi->k == EK::Arrow && !gi->typeParams.empty() && !d.type) {
+            // const f = <T>(x: T) => ...: a generic function (instantiated per use), not a variable
+            if (!s->isConst) { err(d.loc, "a generic arrow function must be assigned to a 'const'"); continue; }
+            GenericSym* g = newGeneric(GenericSym::Arrow, d.name, &gi->typeParams, d.loc);
+            g->arrow = gi;
+            g->parentFn = P.init;
+            d.generic = g;
+            declare(d.name, g, d.loc);
+            if (s->exported) fi->exports[d.name] = g;
+            continue;
+          }
           VarSym* v = newVar(d.name, nullptr, s->isConst, d.loc);
           v->isGlobal = true;
           v->owner = nullptr;
@@ -675,6 +726,8 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
         resolveEnum(e);
         return e->type;
       }
+      case SymK::Generic:
+        return genericNamedType(static_cast<GenericSym*>(s), args, l);
       default: break;
     }
   }
@@ -734,9 +787,13 @@ void Checker::resolveInterface(InterfaceSym* is) {
     return;
   }
   is->state = 1;
+  Scope* savedScope = scope;
+  if (is->defScope) scope = is->defScope;  // instance of a generic interface: type parameters bound
   T.shapes.emplace_back(new ObjShape());
   ObjShape* sh = T.shapes.back().get();
   sh->name = is->name;
+  sh->origin = is->origin;
+  sh->typeArgs = is->typeArgs;
   is->type = T.objectType(sh);
   for (TypeNode* ext : is->decl->ifaceExtends) {
     is->inExtends = true;
@@ -757,6 +814,7 @@ void Checker::resolveInterface(InterfaceSym* is) {
       sh->props.push_back({m.name, pt, m.optional});
     }
   }
+  scope = savedScope;
   is->state = 2;
 }
 
@@ -804,7 +862,19 @@ void Checker::resolveClass(ClassSym* c) {
   curFile = c->file;
   Scope* savedScope = scope;
   FuncSym* savedFn = curFn;
-  if (d->extends) {
+  // generic classes: the holder has the static members, an instance the instance members (with the
+  // type parameters bound in its scope)
+  bool holder = c->genericRole == 1, inst = c->genericRole == 2;
+  if (c->defScope) scope = c->defScope;
+  int savedNest = instNest;
+  if (inst) instNest = std::max(instNest, c->instDepth);
+  auto instInfo = [&](FuncSym* f) {
+    if (!inst) return;
+    f->defScope = c->defScope;
+    f->instName = f->qualName;
+    f->instDepth = c->instDepth;
+  };
+  if (d->extends && !holder) {
     Type* pt = resolveType(d->extends);
     if (pt->t != TT::Class) err(d->extends->loc, "a class can only extend another class");
     else if (pt->cls->state == 1 || pt->cls == c) err(d->extends->loc, "class '" + c->name + "' circularly extends itself");
@@ -818,6 +888,7 @@ void Checker::resolveClass(ClassSym* c) {
     }
   }
   for (TypeNode* im : d->implements) {
+    if (holder) break;
     Type* it = resolveType(im);
     if (it->t != TT::Object) err(im->loc, "a class can only implement interfaces");
     else c->implements.push_back(it);
@@ -825,7 +896,7 @@ void Checker::resolveClass(ClassSym* c) {
   // constructor symbol (explicit or synthesized)
   ClassMember* ctorDecl = nullptr;
   for (auto& m : d->members)
-    if (m.kind == ClassMember::Ctor) {
+    if (m.kind == ClassMember::Ctor && !holder) {
       if (ctorDecl) err(m.loc, "multiple constructors are not supported");
       ctorDecl = &m;
     }
@@ -843,6 +914,7 @@ void Checker::resolveClass(ClassSym* c) {
   ctor->thisVar = newVar("this", c->type, true, d->loc);
   ctor->thisVar->isThis = true;
   ctor->thisVar->owner = ctor;
+  instInfo(ctor);
   if (!ctorDecl && c->parent) {
     // implicit `constructor(...args) { super(...args); }`
     resolveSig(c->parent->ctor);
@@ -889,6 +961,30 @@ void Checker::resolveClass(ClassSym* c) {
   // clash with other members); #private methods are not virtual
   for (auto& m : d->members) {
     if (m.kind != ClassMember::Method) continue;
+    if ((holder && !m.isStatic) || (inst && m.isStatic)) continue;
+    if (!m.typeParams.empty()) {
+      // generic method: instantiated per call, called directly (not virtual)
+      if (m.isAbstract) { err(m.loc, "a generic method cannot be abstract (e7 calls generic methods directly)"); continue; }
+      if (m.name[0] == '#') { err(m.loc, "private generic methods are not supported; use a generic function"); continue; }
+      bool clash = c->methodIdx.count(m.name) > 0 || c->genericMethods.count(m.name) > 0;
+      for (ClassSym* p = c->parent; p && !clash; p = p->parent) clash = p->genericMethods.count(m.name) > 0;
+      if (clash || c->fieldIdx.count(m.name)) {
+        err(m.loc, "generic method '" + m.name + "' cannot override or be overridden (e7 calls generic methods directly, not through the class)");
+        continue;
+      }
+      GenericSym* g = newGeneric(GenericSym::Method, m.name, &m.typeParams, m.loc);
+      g->member = &m;
+      g->ownerClass = c;
+      g->isStatic = m.isStatic;
+      g->file = c->file;
+      c->genericMethods[m.name] = g;
+      continue;
+    }
+    if (!m.isStatic)
+      for (ClassSym* p = c->parent; p; p = p->parent)
+        if (p->genericMethods.count(m.name))
+          err(m.loc, "method '" + m.name + "' cannot override the generic method of class '" + p->name +
+                         "' (e7 calls generic methods directly, not through the class)");
     // a setter without a parameter type takes the getter's return type
     if (m.accessor == 2 && m.params.size() == 1 && !m.params[0].type) {
       for (auto& g : d->members)
@@ -906,6 +1002,7 @@ void Checker::resolveClass(ClassSym* c) {
     f->accessor = m.accessor;
     f->isAbstract = m.isAbstract;
     m.fn = f;
+    instInfo(f);
     if (m.isAbstract) {
       if (!c->isAbstract) err(m.loc, "abstract methods can only appear within an abstract class");
       if (m.isStatic) err(m.loc, "'static' and 'abstract' cannot be used together");
@@ -959,6 +1056,7 @@ void Checker::resolveClass(ClassSym* c) {
   }
   for (auto& m : d->members) {
     if (m.kind != ClassMember::Field) continue;
+    if ((holder && !m.isStatic) || (inst && m.isStatic)) continue;
     if (m.isAbstract) {
       // abstract property: no slot here; subclasses declare it as a field
       if (!c->isAbstract) err(m.loc, "abstract properties can only appear within an abstract class");
@@ -1021,7 +1119,7 @@ void Checker::resolveClass(ClassSym* c) {
     }
     addField(m.name, t, m.init, m.optional, m.loc, m.readonly);
   }
-  scope = savedScope;
+  if (!c->defScope) scope = savedScope;
   curFn = savedFn;
   c->state = 2;
   c->classIdx = (int)P.classes.size();
@@ -1086,6 +1184,8 @@ void Checker::resolveClass(ClassSym* c) {
       err(d->loc, "class '" + c->name + "' does not correctly implement '" + typeName(it) + "'" + why);
     }
   }
+  scope = savedScope;
+  instNest = savedNest;
   curFile = savedFile;
 }
 
@@ -1094,6 +1194,8 @@ void Checker::resolveSig(FuncSym* f) {
   f->sigResolved = true;
   std::string savedFile = curFile;
   curFile = f->file.empty() ? curFile : f->file;
+  Scope* savedSigScope = scope;
+  if (f->defScope) scope = f->defScope;  // e.g. the type parameters of a generic instance
   std::vector<Type*> ps;
   std::vector<bool> opt;
   bool rest = false;
@@ -1146,6 +1248,7 @@ void Checker::resolveSig(FuncSym* f) {
   if (!ret) { f->inferRet = true; ret = T.unknown(); }
   f->type = T.func(pp, ret, opt, rest);
   curFile = savedFile;
+  scope = savedSigScope;
 }
 
 }  // namespace e7

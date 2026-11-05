@@ -37,8 +37,11 @@ struct Type {
   EnumSym* en = nullptr;
 };
 
+struct GenericSym;
 struct ObjShape {
   std::string name;  // interface name or empty
+  GenericSym* origin = nullptr;  // instance of a generic interface: the template and its type arguments
+  std::vector<Type*> typeArgs;
   struct Prop { std::string name; Type* type; bool optional; };
   std::vector<Prop> props;
   struct Method { std::string name; Type* fn; };
@@ -54,7 +57,7 @@ struct ObjShape {
 };
 
 // ------------------------------------------------------------------ symbols
-enum class SymK { Var, Func, Class, Interface, Alias, Enum, Namespace, Builtin, TypeParam };
+enum class SymK { Var, Func, Class, Interface, Alias, Enum, Namespace, Builtin, TypeParam, Generic };
 
 struct Sym {
   SymK k;
@@ -119,6 +122,10 @@ struct FuncSym : Sym {
   // record method (object literal method or arrow property): calls the closure in field
   // `trampField` of the record (vtable entry so that interface method calls reach it)
   int trampField = -1;
+  // instance of a generic function / method, or a method of a generic class instance: its name with
+  // the type arguments (error messages say "in first<string>") and the instantiation depth
+  std::string instName;
+  int instDepth = 0;
   struct Scope* defScope = nullptr;  // lexical scope of the definition
 };
 
@@ -141,6 +148,15 @@ struct ClassSym : Sym {
   bool isRecord = false;
   bool isTuple = false;
   bool isAbstract = false;
+  // generics: 1 = holder of the static members of a generic class (one per template),
+  // 2 = an instance (Box<number>: the instance members, with the type parameters bound)
+  int genericRole = 0;
+  GenericSym* origin = nullptr;    // instance: the template
+  std::vector<Type*> typeArgs;     // instance: the type arguments
+  struct Scope* defScope = nullptr;  // instance: scope binding the type parameters
+  std::string rtName;              // instance: the name at run time (console.log shows "Box")
+  int instDepth = 0;
+  std::unordered_map<std::string, GenericSym*> genericMethods;  // generic methods (not virtual)
   // abstract properties (declared here or inherited, not implemented yet): no slot in this class,
   // read and written by name; concrete subclasses declare them as fields
   std::map<std::string, Type*> abstractProps;
@@ -167,6 +183,9 @@ struct InterfaceSym : Sym {
   Stmt* decl = nullptr;
   Type* type = nullptr;
   int state = 0;
+  struct Scope* defScope = nullptr;  // instance of a generic interface: scope binding the type parameters
+  GenericSym* origin = nullptr;
+  std::vector<Type*> typeArgs;
   bool inExtends = false;  // resolving the extends clause (a cycle there is a circular extends)
 };
 
@@ -192,6 +211,32 @@ struct NamespaceSym : Sym {
   std::string module;  // builtin namespace ("Math", "e7:crypto") or file path
   std::unordered_map<std::string, Sym*> members;  // for file modules
   bool builtin = false;
+};
+
+// A generic declaration (function, arrow function assigned to a const, class, interface, type alias,
+// method): a template that is never checked itself. Each distinct list of type arguments gets an
+// instance: a copy of the syntax tree checked with the type parameters bound to the concrete types.
+struct GenericSym : Sym {
+  GenericSym() : Sym(SymK::Generic) {}
+  enum Kind { Func, Arrow, Class, Interface, Alias, Method } kind = Func;
+  Stmt* decl = nullptr;            // Func / Class / Interface / Alias
+  Expr* arrow = nullptr;           // Arrow
+  ClassMember* member = nullptr;   // Method
+  ClassSym* ownerClass = nullptr;  // Method: the class (instance) that declares it
+  std::vector<TypeParam>* params = nullptr;
+  struct Scope* defScope = nullptr;  // scope of the declaration
+  FuncSym* parentFn = nullptr;       // enclosing function (null at top level)
+  bool topLevel = true;
+  bool isStatic = false;
+  std::string file;
+  ClassSym* holder = nullptr;      // Class: static members
+  std::unordered_map<std::string, Sym*> instances;  // key: the type argument list
+  std::vector<Sym*> order;                          // instances in creation order
+  std::unordered_map<std::string, Type*> typeInstances;  // Alias
+  std::unordered_map<std::string, bool> resolving;       // Alias: instances being resolved
+  // the parameter list and return type of a function-like template (for inference)
+  std::vector<Param>* fnParams() const;
+  TypeNode* fnRet() const;
 };
 
 struct BuiltinSym : Sym {

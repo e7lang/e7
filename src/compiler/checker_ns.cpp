@@ -90,6 +90,20 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       return errT(l, "module '" + ns->name + "' has no exported member '" + name + "'" + didYouMean(name, names));
     }
     Sym* s = it->second;
+    if (s->k == SymK::Generic && isCall &&
+        (static_cast<GenericSym*>(s)->kind == GenericSym::Func || static_cast<GenericSym*>(s)->kind == GenericSym::Arrow)) {
+      GenericSym* g = static_cast<GenericSym*>(s);
+      std::vector<Type*> targs;
+      if (!inferCall(g, g->fnParams(), g->fnRet(), args, e->typeArgs, expected, l, targs)) return T.unknown();
+      FuncSym* f = instantiateFunc(g, targs, l);
+      if (!f) return T.unknown();
+      checkArgs(e, f->type, args);
+      if (f->inferRet && !f->checking) checkFunction(f);
+      e->callee = f;
+      e->intrinsic = IN_DIRECT;
+      return f->type->ret;
+    }
+    if (s->k == SymK::Generic) return errT(l, "'" + name + "' is generic: call it, or use it as a type with type arguments");
     if (s->k == SymK::Func) {
       FuncSym* f = static_cast<FuncSym*>(s);
       resolveSig(f);
@@ -860,6 +874,47 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
   if (c->k != EK::Ident) return errT(l, "unsupported 'new' expression");
   const std::string& name = c->raw;
   Sym* s = lookup(name);
+  if (s && s->k == SymK::Generic && static_cast<GenericSym*>(s)->kind == GenericSym::Class) {
+    // new Box<number>(...) / new Box(...): type arguments explicit, or inferred from the constructor
+    // arguments, or taken from the expected type
+    GenericSym* g = static_cast<GenericSym*>(s);
+    std::vector<Param>* ctorParams = nullptr;
+    for (auto& m : g->decl->members)
+      if (m.kind == ClassMember::Ctor) ctorParams = &m.params;
+    std::vector<Type*> targs;
+    if (e->typeArgs.empty() && exp && exp->t == TT::Class && exp->cls->origin == g) {
+      targs = exp->cls->typeArgs;
+    } else if (e->typeArgs.empty() && !ctorParams && g->decl->extends) {
+      // inherited constructor: infer the base class's type arguments from the arguments, then this
+      // class's from `extends Base<...>`
+      TypeNode* ext = g->decl->extends;
+      Sym* bs = lookupFrom(g->defScope, ext->name);
+      GenericSym* h = bs && bs->k == SymK::Generic ? static_cast<GenericSym*>(bs) : nullptr;
+      std::vector<Param>* hp = nullptr;
+      if (h && h->kind == GenericSym::Class)
+        for (auto& m : h->decl->members)
+          if (m.kind == ClassMember::Ctor) hp = &m.params;
+      if (!hp)
+        return errT(l, "cannot infer the type arguments of '" + name + "' (its constructor is inherited); write new " + name + "<...>(...)");
+      std::vector<Type*> hargs;
+      if (!inferCall(h, hp, nullptr, args, {}, nullptr, l, hargs)) return T.unknown();
+      targs.assign(g->params->size(), nullptr);
+      for (size_t j = 0; j < ext->args.size() && j < hargs.size(); j++) inferMatch(g, targs, ext->args[j], hargs[j]);
+      int r = completeTypeArgs(g, targs, l);
+      if (r >= 0) return errT(l, "cannot infer the type argument '" + (*g->params)[r].name + "' of '" + name + "'; write new " + name + "<...>(...)");
+      if (r == -2) return T.unknown();
+    } else if (!inferCall(g, ctorParams, nullptr, args, e->typeArgs, nullptr, l, targs)) {
+      return T.unknown();
+    }
+    ClassSym* cls = instantiateClass(g, targs, l);
+    if (!cls) return T.unknown();
+    if (cls->isAbstract) return errT(l, "cannot create an instance of an abstract class ('" + cls->name + "')");
+    resolveSig(cls->ctor);
+    checkArgs(e, cls->ctor->type, args);
+    e->cls = cls;
+    e->callee = cls->ctor;
+    return cls->type;
+  }
   if (s && s->k == SymK::Class) {
     ClassSym* cls = static_cast<ClassSym*>(s);
     resolveClass(cls);

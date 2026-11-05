@@ -459,6 +459,7 @@ class Parser {
   }
   TypeNode* parsePrimaryType() {
     Loc l = loc();
+    if (isP("<")) fail("generic function types (<T>(x: T) => T) are not supported; use a concrete function type");
     if (isKw("readonly")) { i++; return parseTypeNoUnion(); }
     if (isKw("keyof") || isKw("typeof") || isKw("infer") || isKw("unique"))
       fail("'" + cur().text + "' types are not supported");
@@ -577,6 +578,9 @@ class Parser {
       }
       m.name = propName();
       if (eatP("?")) m.optional = true;
+      if (isP("<"))
+        fail("generic methods in interfaces and object types are not supported (e7 calls them by name); "
+             "use a generic function or a method of a generic class");
       if (isP("(")) {
         // method signature
         TypeNode* f = A.type(TNK::Func, loc());
@@ -843,15 +847,26 @@ class Parser {
     expectP(")");
   }
 
-  void parseTypeParams(std::vector<std::string>& tps) {
+  void parseTypeParams(std::vector<TypeParam>& tps) {
     if (!isP("<")) return;
     i++;
     while (!isP(">")) {
-      tps.push_back(ident());
-      if (eatKw("extends")) parseType();
-      if (eatP("=")) fail("default type parameters are not supported");
+      TypeParam tp;
+      tp.loc = loc();
+      if (isKw("const") || isKw("in") || isKw("out")) fail("'" + cur().text + "' type parameter modifiers are not supported");
+      tp.name = ident();
+      for (auto& o : tps)
+        if (o.name == tp.name) failAt(tp.loc, "duplicate type parameter '" + tp.name + "'");
+      if (eatKw("extends")) {
+        if (isKw("keyof"))
+          fail("'keyof' constraints are not supported (no keyof types); use a Map<K, V> or a concrete interface");
+        tp.constraint = parseType();
+      }
+      if (eatP("=")) tp.def = parseType();
+      tps.push_back(tp);
       if (!eatP(",")) break;
     }
+    if (tps.empty()) fail("type parameter list cannot be empty");
     expectP(">");
   }
 
@@ -971,7 +986,10 @@ class Parser {
       if (m.accessor && !isP("(")) failAt(nameLoc, "expected '(' after the accessor name");
       if (isP("(") || isP("<")) {
         m.kind = ClassMember::Method;
-        if (isP("<")) fail("generic methods are not supported yet; write one method per concrete type");
+        if (isP("<")) {
+          if (m.accessor) failAt(nameLoc, "an accessor cannot have type parameters");
+          parseTypeParams(m.typeParams);
+        }
         parseParams(m.params, false);
         if (eatP(":")) m.retType = parseType();
         if (m.accessor == 1 && !m.params.empty()) failAt(nameLoc, "a 'get' accessor cannot have parameters");
@@ -1255,9 +1273,19 @@ class Parser {
     }
     if (isP("(") || isP("<")) {
       size_t save = i;
+      if (isP("<")) {
+        // generic arrow function <T>(x: T) => ... (a '<' cannot start any other expression)
+        Expr* f = A.expr(EK::Arrow, l);
+        parseTypeParams(f->typeParams);
+        parseParams(f->params, false);
+        if (eatP(":")) f->retType = parseType();
+        if (!isP("=>") || cur().nl) fail("expected '=>' (generic arrow function)");
+        i++;
+        parseArrowBody(f);
+        return f;
+      }
       try {
         Expr* f = A.expr(EK::Arrow, l);
-        if (isP("<")) fail("generic arrow functions are not supported; write one function per concrete type");
         parseParams(f->params, false);
         if (eatP(":")) f->retType = parseType();
         if (!isP("=>") || cur().nl) { i = save; return nullptr; }
@@ -1742,7 +1770,7 @@ class Parser {
             pr.key = propName();
             if (isP("(") || isP("<")) {
               // method shorthand: name(params): T { body }  (has its own 'this': the object)
-              if (isP("<")) fail("generic methods are not supported yet; write one method per concrete type");
+              if (isP("<")) fail("generic methods in object literals are not supported; use a generic function");
               Expr* f = A.expr(EK::Arrow, pr.loc);
               f->raw = pr.key;
               parseParams(f->params, false);
