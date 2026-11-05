@@ -779,6 +779,48 @@ int main() {
     CHECK(e7_call(vm, m, "run", &a, 1, &r) == E7_OK && r.v.num == 2);
     e7_vm_free(vm);
   }
+  // 0.2.5 (GC stress review): the garbage made inside a callback from a native (a sort comparator)
+  // was never collected before the native returned: sorting 50,000 numbers with a comparator that
+  // builds a string peaked at 150 MB and failed with an 8 MB limit. The collector now also runs during
+  // callbacks; the elements being sorted stay rooted even when the comparator empties the array.
+  {
+    const char* src =
+        "export function sortWithGarbage(n: number): number {\n"
+        "  const a: number[] = [];\n"
+        "  for (let i = 0; i < n; i++) a.push((i * 7919) % n);\n"
+        "  a.sort((x: number, y: number): number => { const s = \"cmp-\" + x + \"-\" + y; return s.length > 0 ? x - y : 0; });\n"
+        "  return a[0] + a[n - 1];\n"
+        "}\n"
+        "export function sortMutating(): string {\n"
+        "  const a: string[] = [];\n"
+        "  for (let i = 0; i < 300; i++) a.push(\"s\" + ((i * 37) % 300));\n"
+        "  let calls = 0;\n"
+        "  a.sort((x: string, y: string): number => {\n"
+        "    calls++;\n"
+        "    if (calls === 50) a.length = 0;\n"
+        "    if (calls === 60) for (let k = 0; k < 100; k++) a.push(\"new\" + k + \"-\" + calls);\n"
+        "    const t = x + \"|\" + y;\n"
+        "    return t.length > 0 && x < y ? -1 : x > y ? 1 : 0;\n"
+        "  });\n"
+        "  return a.length + \":\" + a[0] + \":\" + a[99];\n"
+        "}\n";
+    std::vector<uint8_t> bc = compile(src);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.memory_limit = 8u << 20;
+    e7_vm* vm = e7_vm_new(&cfg);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_value n = num(50000), r;
+    e7_status st = e7_call(vm, m, "sortWithGarbage", &n, 1, &r);
+    CHECK(st == E7_OK && r.v.num == 49999);
+    if (st != E7_OK) fprintf(stderr, "  %s\n", e7_last_error(vm));
+    for (int i = 0; i < 3; i++) {
+      CHECK(e7_call(vm, m, "sortMutating", nullptr, 0, &r) == E7_OK && r.type == E7_STRING);
+      e7_collect_garbage(vm);
+    }
+    e7_vm_free(vm);
+  }
   // 0.2.5 (allocation-failure injection): a module whose initializer failed (memory error, runtime
   // error) stayed in the VM with its constants and the globals it had set: no handle to it exists, so
   // that memory was lost for the life of the VM, a little more with every failed e7_load. It is

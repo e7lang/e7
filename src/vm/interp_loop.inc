@@ -41,7 +41,7 @@ int VM::E7_INTERP_NAME() {
     budget_ -= (n);                                                \
     if (E7_UNLIKELY(budget_ < 0 || gcRequested_ || kGCStress)) {   \
       fr->ip = ip;                                                 \
-      if ((gcRequested_ || kGCStress) && nativeDepth_ == 0) collectGarbage(); \
+      if ((gcRequested_ || kGCStress) && gcBlockers_ == 0) collectGarbage(); \
       if (budget_ < 0) {                                           \
         if (cfg_.suspendOnBudget && nativeDepth_ == 0) return ERR_SUSPENDED; \
         if (E7_UNLIKELY(testCallbackRefill_ > 0) && nativeDepth_ > 0) { \
@@ -372,11 +372,13 @@ dispatch:
       for (uint32_t k = 0; k < argc; k++) args[k] = R[argReg(aw, k)];
       ret.u = 0;
       nativeDepth_++;
+      gcBlockers_++;
       const NativeBinding* prevNative = curNative_;
       curNative_ = &nb;
       if (E7_UNLIKELY(nb.cost != NC_NONE)) callCharged(nb, args, argc, &ret);
       else nb.fn(*this, args, argc, &ret, nb.ud);
       curNative_ = prevNative;
+      gcBlockers_--;
       nativeDepth_--;
     } else {
       ret = invokeNativeMany(nb, R, aw, argc);

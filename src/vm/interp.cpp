@@ -104,11 +104,13 @@ Slot VM::invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32
   Slot ret;
   ret.u = 0;
   nativeDepth_++;
+  gcBlockers_++;
   const NativeBinding* prevNative = curNative_;
   curNative_ = &nb;
   if (nb.cost != NC_NONE) callCharged(nb, args.data(), argc, &ret);
   else nb.fn(*this, args.data(), argc, &ret, nb.ud);
   curNative_ = prevNative;
+  gcBlockers_--;
   nativeDepth_--;
   return ret;
 }
@@ -153,7 +155,7 @@ StrObj* VM::numToStringObj(double d) { return newStringAscii(numberToString(d).c
 // host, or the native that called back into script). The C++ try block costs nothing until an
 // error is actually thrown.
 int VM::execute(size_t entryDepth) {
-  const ExecState st{nativeDepth_, curNative_, callbackNatives_.size(), tempRoots_.size(), gcInhibit_};
+  const ExecState st{nativeDepth_, gcBlockers_, curNative_, callbackNatives_.size(), tempRoots_.size(), gcInhibit_};
   for (;;) {
     try {
       return E7_UNLIKELY(dbg_ != nullptr) ? runDebug() : runNormal();

@@ -182,7 +182,10 @@ class VM {
   void setSuspendOnBudget(bool b) { cfg_.suspendOnBudget = b; }
   void resetExecution();  // abandon a suspended call
 
-  // Re-entrant call from native code (cannot suspend).
+  // Re-entrant call from native code (cannot suspend). The garbage collector may run during the
+  // callback: the calling native must keep every object it still uses reachable (its arguments are,
+  // through the caller's registers; anything else it holds in C++ variables needs a TempRoot or
+  // TempRootSlots).
   Slot callClosure(CloObj* c, const Slot* args, uint32_t nargs);
   // Calls a parameterless closure from native code; a runtime error (throw, abort, ...) raised by
   // it is caught: returns false with the error message. Other errors (budget, memory, stack)
@@ -247,6 +250,17 @@ class VM {
     size_t n;
     TempRoot(VM& v, Obj* o) : vm(v), n(v.tempRoots_.size()) { v.tempRoots_.push_back(o); }
     ~TempRoot() { vm.tempRoots_.resize(n); }
+  };
+  // The references among `count` slots (when `refs`), e.g. a native's copy of array elements.
+  struct TempRootSlots {
+    VM& vm;
+    size_t n;
+    TempRootSlots(VM& v, const Slot* s, size_t count, bool refs) : vm(v), n(v.tempRoots_.size()) {
+      if (refs)
+        for (size_t i = 0; i < count; i++)
+          if (s[i].r) v.tempRoots_.push_back(s[i].r);
+    }
+    ~TempRootSlots() { vm.tempRoots_.resize(n); }
   };
 
   void collectGarbage();
@@ -365,7 +379,7 @@ class VM {
   const HandlerDesc* handlerAt(size_t k) const;
   bool willBeCaught() const;
   struct ExecState {
-    uint32_t nativeDepth;
+    uint32_t nativeDepth, gcBlockers;
     const NativeBinding* curNative;
     size_t callbacks, tempRoots;
     int gcInhibit;
@@ -406,6 +420,10 @@ class VM {
   uint64_t ticksBase_ = 0;
   uint64_t ticksSinceBudget() const { return (uint64_t)budgetStart_ - (uint64_t)budget_; }
   uint32_t nativeDepth_ = 0;
+  // natives running that may hold references the collector cannot see: no collection while > 0.
+  // A native waiting for a callback it made does not count (callClosure: it roots what it holds), so
+  // the garbage of long callback loops (sort comparators) is collected.
+  uint32_t gcBlockers_ = 0;
   // native currently executing (nullptr while script code runs) and, for each callback from a
   // native into script, the frame index of the callback and the calling native (stack traces)
   const NativeBinding* curNative_ = nullptr;

@@ -275,6 +275,7 @@ int VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
     // top level: the C++ frames of a native cannot be kept for a pause)
     if (E7_UNLIKELY(dbg_ != nullptr) && st.nativeDepth == 0 && dbg_->wantsCaughtHostStop()) {
       nativeDepth_ = st.nativeDepth;
+      gcBlockers_ = st.gcBlockers;
       curNative_ = st.curNative;
       callbackNatives_.resize(st.callbacks);
       tempRoots_.resize(st.tempRoots);
@@ -291,6 +292,7 @@ int VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
     budget_ -= (int64_t)(frames_.size() - k);
     frames_.resize(k + 1);
     nativeDepth_ = st.nativeDepth;
+    gcBlockers_ = st.gcBlockers;
     curNative_ = st.curNative;
     callbackNatives_.resize(st.callbacks);
     tempRoots_.resize(st.tempRoots);
@@ -445,13 +447,14 @@ std::string VM::stackTrace() const {
 void* VM::allocRaw(OT t, size_t size) {
 #if E7_GC_STRESS
   // testing (E7_GC_STRESS): collect wherever the emergency collection below would be allowed
-  if (nativeDepth_ == 0 && gcInhibit_ == 0) collectGarbage();
+  if (gcBlockers_ == 0 && gcInhibit_ == 0) collectGarbage();
 #endif
   if (E7_UNLIKELY(injectFailure())) errorCode(ERR_MEMORY, "out of memory (injected failure)");
   if (E7_UNLIKELY(bytes_ + size > cfg_.memoryLimit)) {
-    // Emergency collection. Safe when no native code is running: every live reference is then
-    // held in a register, a global, a pinned object or the object graph.
-    if (nativeDepth_ == 0 && gcInhibit_ == 0) collectGarbage();
+    // Emergency collection. Safe when no native code is running (or only natives waiting for a
+    // callback, which root what they hold): every live reference is then held in a register, a
+    // global, a pinned or temporarily rooted object or the object graph.
+    if (gcBlockers_ == 0 && gcInhibit_ == 0) collectGarbage();
     if (bytes_ + size > cfg_.memoryLimit) errorCode(ERR_MEMORY, "out of memory (limit %zu bytes)", cfg_.memoryLimit);
   }
   Obj* o = static_cast<Obj*>(malloc(size));
@@ -470,10 +473,10 @@ void* VM::allocRaw(OT t, size_t size) {
 void VM::accountExternal(int64_t delta) {
   if (delta > 0) {
 #if E7_GC_STRESS
-    if (nativeDepth_ == 0 && gcInhibit_ == 0) collectGarbage();
+    if (gcBlockers_ == 0 && gcInhibit_ == 0) collectGarbage();
 #endif
     if (E7_UNLIKELY(injectFailure())) errorCode(ERR_MEMORY, "out of memory (injected failure)");
-    if (bytes_ + (size_t)delta > cfg_.memoryLimit && nativeDepth_ == 0 && gcInhibit_ == 0) collectGarbage();
+    if (bytes_ + (size_t)delta > cfg_.memoryLimit && gcBlockers_ == 0 && gcInhibit_ == 0) collectGarbage();
     if (bytes_ + (size_t)delta > cfg_.memoryLimit)
       errorCode(ERR_MEMORY, "out of memory (limit %zu bytes)", cfg_.memoryLimit);
     bytes_ += (size_t)delta;
@@ -743,7 +746,7 @@ bool VM::checkHeap(std::string* why) const {
     if (!ref(kv.first, "a pinned object")) return false;
   if (resultKind_ == 'R' && !ref(result_.r, "the call result")) return false;
   if (!suspended_ && frames_.empty() &&
-      (nativeDepth_ || gcInhibit_ || !tempRoots_.empty() || curNative_ || !callbackNatives_.empty() || catchDepth_ ||
+      (nativeDepth_ || gcBlockers_ || gcInhibit_ || !tempRoots_.empty() || curNative_ || !callbackNatives_.empty() || catchDepth_ ||
        pendingCatch_.active))
     return fail("execution state not reset after the call (native depth " + std::to_string(nativeDepth_) +
                 ", GC inhibit " + std::to_string(gcInhibit_) + ", temp roots " + std::to_string(tempRoots_.size()) +
@@ -849,7 +852,7 @@ void VM::collectGarbage() {
 }
 
 void VM::maybeGC() {
-  if (gcRequested_ && nativeDepth_ == 0) collectGarbage();
+  if (gcRequested_ && gcBlockers_ == 0) collectGarbage();
 }
 
 // ------------------------------------------------------------------ loading
@@ -980,6 +983,7 @@ int VM::runFrames() {
       // a debugger in pause-to-host mode reports the error first: keep the frames for inspection,
       // the error is raised again by resume()
       nativeDepth_ = 0;
+      gcBlockers_ = 0;
       gcInhibit_ = 0;
       tempRoots_.clear();
       curNative_ = nullptr;
@@ -1015,6 +1019,7 @@ void VM::resetExecution() {
   gcInhibit_ = 0;
   suspended_ = false;
   nativeDepth_ = 0;
+  gcBlockers_ = 0;
   tempRoots_.clear();
   curNative_ = nullptr;
   callbackNatives_.clear();
@@ -1053,8 +1058,14 @@ Slot VM::callClosure(CloObj* c, const Slot* args, uint32_t nargs) {
   callbackNatives_.push_back({depth, curNative_});
   const NativeBinding* saved = curNative_;
   curNative_ = nullptr;
+  // every native on the C++ stack is waiting for a callback it made and roots what it holds
+  // (see vm.h): the callback's garbage can be collected. On an error, execute() / the caller of
+  // the native restore the count.
+  const uint32_t blockers = gcBlockers_;
+  gcBlockers_ = 0;
   int st = execute(depth);
   (void)st;
+  gcBlockers_ = blockers;
   curNative_ = saved;
   callbackNatives_.pop_back();
   return result_;
@@ -1062,7 +1073,7 @@ Slot VM::callClosure(CloObj* c, const Slot* args, uint32_t nargs) {
 
 bool VM::callClosureCatching(CloObj* c, std::string& errorMessage) {
   size_t depth = frames_.size();
-  uint32_t nd = nativeDepth_;
+  uint32_t nd = nativeDepth_, blockers = gcBlockers_;
   const NativeBinding* cn = curNative_;
   size_t cbs = callbackNatives_.size();
   size_t roots = tempRoots_.size();
@@ -1080,6 +1091,7 @@ bool VM::callClosureCatching(CloObj* c, std::string& errorMessage) {
     if (e.code != ERR_RUNTIME) throw;
     frames_.erase(frames_.begin() + (std::ptrdiff_t)depth, frames_.end());
     nativeDepth_ = nd;
+    gcBlockers_ = blockers;
     curNative_ = cn;
     callbackNatives_.resize(cbs);
     tempRoots_.resize(roots);
