@@ -1,17 +1,19 @@
 #!/bin/bash
 # Builds build-ios/e7vm.xcframework (iOS device arm64 + simulator arm64/x86_64).
 # Usage: platform/ios/build_xcframework.sh [--no-compiler]
-# Requires macOS with Xcode and CMake >= 3.16. Then add the xcframework and
+# Requires macOS with Xcode and CMake >= 3.16. IOS_DEPLOYMENT_TARGET (default 15.0, the oldest iOS that
+# current Xcode versions build for) sets the minimum iOS version. Then add the xcframework and
 # platform/ios/E7VM/E7VM.swift (and E7ModuleManager.swift) to your app target and `import CE7VM` is available.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$ROOT/build-ios"
 WITH_COMPILER=ON
+IOS_DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET:-15.0}"
 [[ "${1:-}" == "--no-compiler" ]] && WITH_COMPILER=OFF
 rm -rf "$OUT"
 build() { # dir sysroot archs
   cmake -S "$ROOT" -B "$OUT/$1" -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT="$2" \
-    -DCMAKE_OSX_ARCHITECTURES="$3" -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+    -DCMAKE_OSX_ARCHITECTURES="$3" -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
     -DE7_WITH_COMPILER=$WITH_COMPILER -DE7_BUILD_TOOLS=OFF -DE7_BUILD_TESTS=OFF
   cmake --build "$OUT/$1" --config Release -- -quiet
   # merge e7vm and its dependencies into a single static library
