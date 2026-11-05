@@ -119,7 +119,6 @@ static void mapSet(VM& vm, MapObj* m, Slot k, Slot v) {
   if (idx >= 0) { m->entries[idx].v = v; return; }
   if (m->count >= 0x7FFFFFF) vm.error("RangeError: Map maximum size exceeded");
   if (m->entries.size() + 1 > m->buckets.size()) rehash(vm, m);
-  if (m->km == KM_NUM && k.f == 0) k.f = 0;  // a -0 key is stored as +0 (JavaScript Map.set / Set.add)
   size_t before = mapBytes(m);
   uint32_t h = hashDyn(vm, k, m->km);
   MapEntry e;
