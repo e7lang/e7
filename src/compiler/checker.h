@@ -216,6 +216,7 @@ class Checker {
   Type* declaredMemberType(Expr* target);
   std::string exactOptionalError(const std::string& name, Type* declared, Type* value);
   const char* exactOptionalTarget(Expr* target);
+  std::string indexWriteError(Expr* target);
   bool spreadExact(const std::string& name, Type* t, bool absentIfUndef, Type* exp, Loc loc);
   void checkArgs(Expr* call, Type* fnType, std::vector<Expr*>& args, size_t skip = 0);
   void expandSpreads(std::vector<Expr*>& args);

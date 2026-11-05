@@ -139,8 +139,8 @@ Within each category, supported features come first, then partial and unsupporte
 | Methods in object literals | supported |  | [object-literal-methods.ts](../tests/ts-features/objects/object-literal-methods.ts) |
 | Optional properties | supported |  | [optional-properties.ts](../tests/ts-features/objects/optional-properties.ts) |
 | Property access, nested objects and arrays of objects | supported |  | [property-access.ts](../tests/ts-features/objects/property-access.ts) |
-| `readonly T[]` and `ReadonlyArray<T>` | supported | Tsc rejects mutating calls; E7 treats the type as `T[]` | [readonly-arrays.ts](../tests/ts-features/objects/readonly-arrays.ts) |
-| `readonly` properties | supported | Tsc rejects writes; E7 itself enforces `readonly` only on class fields (an assignment to a readonly interface property compiles) | [readonly-properties.ts](../tests/ts-features/objects/readonly-properties.ts) |
+| `readonly T[]` and `ReadonlyArray<T>` | supported | `ReadonlyMap` and `ReadonlySet` too; mutating methods, index and `length` writes are compile errors | [readonly-arrays.ts](../tests/ts-features/objects/readonly-arrays.ts) |
+| `readonly` properties | supported |  | [readonly-properties.ts](../tests/ts-features/objects/readonly-properties.ts) |
 | Shorthand properties | supported |  | [shorthand-properties.ts](../tests/ts-features/objects/shorthand-properties.ts) |
 | Tuple types (including labeled and readonly tuples) | supported |  | [tuples.ts](../tests/ts-features/objects/tuples.ts) |
 | Recursive types | **partial** | **Works:** classes may refer to themselves (linked lists, trees). **Not supported:** recursive interfaces and type aliases (*not implemented yet*). **Instead:** a class for linked or tree-shaped data | [recursive-types.ok.ts](../tests/ts-features/objects/recursive-types.ok.ts), [recursive-types.no.ts](../tests/ts-features/objects/recursive-types.no.ts) |

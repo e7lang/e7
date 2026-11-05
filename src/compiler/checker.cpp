@@ -605,12 +605,12 @@ Type* Checker::resolveType(TypeNode* n) {
   if (!n) return T.unknown();
   switch (n->k) {
     case TNK::Ref: return resolveNamedType(n->name, n->args, n->loc);
-    case TNK::Array: return T.array(resolveType(n->elem));
+    case TNK::Array: return T.array(resolveType(n->elem), n->readonly);
     case TNK::Tuple: {
       std::vector<Type*> es;
       for (TypeNode* a : n->args) es.push_back(resolveType(a));
       if (es.empty()) return errT(n->loc, "empty tuple types are not supported");
-      return T.tuple(es);
+      return T.tuple(es, n->readonly);
     }
     case TNK::Func: {
       std::vector<Type*> ps;
@@ -639,7 +639,7 @@ Type* Checker::resolveType(TypeNode* n) {
           Type* pt = resolveType(m.type);
           bool uo = m.optional && hasUndefined(pt);
           if (m.optional) pt = T.optional(pt, false, true);
-          props.push_back({m.name, pt, m.optional, uo});
+          props.push_back({m.name, pt, m.optional, uo, m.readonly});
         }
         return T.anonObject(props);
       }
@@ -651,7 +651,7 @@ Type* Checker::resolveType(TypeNode* n) {
         else {
           bool uo = m.optional && hasUndefined(pt);
           if (m.optional) pt = T.optional(pt, false, true);
-          sh->props.push_back({m.name, pt, m.optional, uo});
+          sh->props.push_back({m.name, pt, m.optional, uo, m.readonly});
         }
       }
       return T.objectType(sh);
@@ -752,15 +752,15 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
     if (name == p.first) { noArgs(); return T.intT(p.second); }
   if (name == "Array" || name == "ReadonlyArray") {
     if (!nargs(1)) return T.unknown();
-    return T.array(resolveType(args[0]));
+    return T.array(resolveType(args[0]), name == "ReadonlyArray");
   }
   if (name == "Map" || name == "ReadonlyMap") {
     if (!nargs(2)) return T.unknown();
-    return T.map(resolveType(args[0]), resolveType(args[1]));
+    return T.map(resolveType(args[0]), resolveType(args[1]), name == "ReadonlyMap");
   }
   if (name == "Set" || name == "ReadonlySet") {
     if (!nargs(1)) return T.unknown();
-    return T.set(resolveType(args[0]));
+    return T.set(resolveType(args[0]), name == "ReadonlySet");
   }
   if (name == "Uint8Array") { noArgs(); return T.bytes(); }
   if (name == "ArrayBuffer") { noArgs(); return T.arrayBuffer(); }
@@ -815,7 +815,7 @@ void Checker::resolveInterface(InterfaceSym* is) {
     else {
       bool uo = m.optional && hasUndefined(pt);
       if (m.optional) pt = T.optional(pt, false, true);
-      sh->props.push_back({m.name, pt, m.optional, uo});
+      sh->props.push_back({m.name, pt, m.optional, uo, m.readonly});
     }
   }
   scope = savedScope;

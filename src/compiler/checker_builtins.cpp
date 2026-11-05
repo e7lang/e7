@@ -497,6 +497,17 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
     return errT(m->loc, std::string(isCall ? "method" : "property") + " '" + name + "' does not exist on type '" + typeName(bt) + "'" +
                             suggestMember(bt, name));
   };
+  // readonly T[] / ReadonlyMap / ReadonlySet have no mutating methods (as in TypeScript)
+  if (bt->ro && isCall) {
+    static const char* const arrMut[] = {"push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin"};
+    static const char* const mapMut[] = {"set", "delete", "clear"};
+    static const char* const setMut[] = {"add", "delete", "clear"};
+    bool mut = false;
+    if (bt->t == TT::Array) for (const char* x : arrMut) mut = mut || name == x;
+    if (bt->t == TT::Map) for (const char* x : mapMut) mut = mut || name == x;
+    if (bt->t == TT::Set) for (const char* x : setMut) mut = mut || name == x;
+    if (mut) return errT(m->loc, "property '" + name + "' does not exist on type '" + typeName(bt) + "'");
+  }
   auto cb = [&](Expr* arg, const std::vector<Type*>& ps, Type* ret) {
     return callbackType(this, P, T, arg, ps, ret, [&](Expr* x, Type* t) { return check(x, t); },
                         [&](Loc lo, const std::string& msg) { err(lo, msg); });
@@ -687,7 +698,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         if (args.size() == 1) args.push_back(N(INFINITY));
         if (!argsMatch(e, args, {num, num}, 2, "slice")) return T.unknown();
         native("Array.slice");
-        return bt;
+        return T.array(bt->elem);  // a new (mutable) array, also from a readonly one
       }
       if (meth("splice")) {
         if (args.empty()) return errT(e->loc, "splice requires a start index");
@@ -712,13 +723,13 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return bt;
       }
       if (meth("concat")) {
-        if (args.empty()) { native("Array.slice"); args.push_back(N(0)); args.push_back(N(INFINITY)); check(args[0], num); check(args[1], num); return bt; }
+        if (args.empty()) { native("Array.slice"); args.push_back(N(0)); args.push_back(N(INFINITY)); check(args[0], num); check(args[1], num); return T.array(bt->elem); }
         for (Expr*& a : args) {
-          Type* t = check(a, bt);
-          if (t != bt) return errT(a->loc, "concat arguments must be arrays of type '" + typeName(bt) + "'");
+          Type* t = check(a, T.array(bt->elem));
+          if (t != T.array(bt->elem) && t != T.array(bt->elem, true)) return errT(a->loc, "concat arguments must be arrays of type '" + typeName(bt) + "'");
         }
         native("Array.concat");
-        return bt;
+        return T.array(bt->elem);
       }
       if (meth("indexOf") || meth("lastIndexOf")) {
         if (args.size() == 1) args.push_back(N(name == "indexOf" ? 0 : INFINITY));
@@ -776,7 +787,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
           e->intrinsic = IN_ARR_MAP;
           return T.array(r);
         }
-        if (name == "filter") { e->intrinsic = IN_ARR_FILTER; return bt; }
+        if (name == "filter") { e->intrinsic = IN_ARR_FILTER; return T.array(bt->elem); }
         if (name == "forEach") { e->intrinsic = IN_ARR_FOREACH; return T.voidT(); }
         if (name == "some") { e->intrinsic = IN_ARR_SOME; return boo; }
         if (name == "every") { e->intrinsic = IN_ARR_EVERY; return boo; }

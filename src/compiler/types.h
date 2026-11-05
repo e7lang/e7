@@ -34,6 +34,7 @@ struct Type {
   ObjShape* shape = nullptr;
   std::vector<Type*> elems;   // Tuple
   bool hasNull = false, hasUndef = false;  // Optional
+  bool ro = false;  // Array / Tuple / Map / Set: readonly T[], readonly [A, B], ReadonlyMap, ReadonlySet (no mutation)
   EnumSym* en = nullptr;
 };
 
@@ -44,7 +45,7 @@ struct ObjShape {
   std::vector<Type*> typeArgs;
   // undefOk: an optional property whose declared type includes undefined ('x?: T | undefined'); only
   // those may be set to undefined (TypeScript's exactOptionalPropertyTypes)
-  struct Prop { std::string name; Type* type; bool optional; bool undefOk = false; };
+  struct Prop { std::string name; Type* type; bool optional; bool undefOk = false; bool readonly = false; };
   std::vector<Prop> props;
   struct Method { std::string name; Type* fn; };
   std::vector<Method> methods;
@@ -278,11 +279,11 @@ class Types {
   Type* caught() { return caught_; }
   Type* date() { return date_; }
   Type* intT(uint8_t vt) { return ints_[vt]; }
-  Type* array(Type* e);
-  Type* set(Type* e);
-  Type* map(Type* k, Type* v);
+  Type* array(Type* e, bool ro = false);
+  Type* set(Type* e, bool ro = false);
+  Type* map(Type* k, Type* v, bool ro = false);
   Type* func(const std::vector<Type*>& params, Type* ret, const std::vector<bool>& opt = {}, bool rest = false);
-  Type* tuple(const std::vector<Type*>& elems);
+  Type* tuple(const std::vector<Type*>& elems, bool ro = false);
   Type* optional(Type* base, bool null, bool undef);
   Type* classType(ClassSym* c);
   Type* objectType(ObjShape* s);  // nominal (interface) object type

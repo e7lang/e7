@@ -460,7 +460,13 @@ class Parser {
   TypeNode* parsePrimaryType() {
     Loc l = loc();
     if (isP("<")) fail("generic function types (<T>(x: T) => T) are not supported; use a concrete function type");
-    if (isKw("readonly")) { i++; return parseTypeNoUnion(); }
+    if (isKw("readonly")) {
+      i++;
+      TypeNode* t = parseTypeNoUnion();
+      if (t->k != TNK::Array && t->k != TNK::Tuple) fail("'readonly' type modifier is only permitted on array and tuple types");
+      t->readonly = true;
+      return t;
+    }
     if (isKw("keyof") || isKw("typeof") || isKw("infer") || isKw("unique"))
       fail("'" + cur().text + "' types are not supported");
     if (isP("(")) {

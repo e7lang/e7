@@ -850,7 +850,26 @@ std::string Checker::memberWriteError(Expr* target) {
     if (f.readonly && !inOwnCtor) return "cannot assign to '" + n + "' because it is a read-only property";
     return "";
   }
+  if (target->intrinsic == IN_ARR_LEN) {
+    Type* ot = target->a->type ? baseOf(target->a->type) : nullptr;
+    if (ot && ot->ro) return "cannot assign to 'length' because it is a read-only property";
+    return "";
+  }
   if (target->intrinsic != 0 || !target->native.empty()) return "cannot assign to '" + n + "'";
+  if (target->a->type && baseOf(target->a->type)->t == TT::Object) {
+    const ObjShape::Prop* p = baseOf(target->a->type)->shape->findProp(n);
+    if (p && p->readonly) return "cannot assign to '" + n + "' because it is a read-only property";
+  }
+  return "";
+}
+
+// an element of a readonly array or tuple
+std::string Checker::indexWriteError(Expr* target) {
+  target = strip(target);
+  if (target->k != EK::Index || !target->a->type) return "";
+  Type* ot = baseOf(target->a->type);
+  if ((ot->t == TT::Array || ot->t == TT::Tuple) && ot->ro)
+    return "index signature in type '" + typeName(ot) + "' only permits reading";
   return "";
 }
 
@@ -865,6 +884,7 @@ Type* Checker::checkUpdate(Expr* e) {
     return errT(e->loc, "'" + e->raw + "' on an array length is not supported; write 'a.length = a.length " +
                             e->raw.substr(0, 1) + " 1' instead");
   std::string werr = memberWriteError(target);
+  if (werr.empty()) werr = indexWriteError(target);
   if (!werr.empty()) return errT(e->loc, werr);
   Type* st = storageTypeOf(e->a);
   if (Type* dt = declaredMemberType(target)) {
@@ -1106,7 +1126,7 @@ Type* Checker::checkAssign(Expr* e) {
     if (target->k == EK::Member && target->intrinsic == IN_ARR_LEN) {
       // only arrays have a writable length (string / Uint8Array length is read-only, as in TypeScript)
       Type* ot = target->a->type ? baseOf(target->a->type) : nullptr;
-      if (!ot || ot->t != TT::Array)
+      if (!ot || ot->t != TT::Array || ot->ro)
         return errT(e->loc, "cannot assign to 'length' because it is a read-only property");
       if (op != "=")
         return errT(e->loc, "'" + op + "' on an array length is not supported; write 'a.length = a.length " +
@@ -1114,6 +1134,9 @@ Type* Checker::checkAssign(Expr* e) {
       target->intrinsic = IN_ARR_LENGTH_SET;
     } else if (target->k == EK::Member) {
       std::string werr = memberWriteError(target);
+      if (!werr.empty()) return errT(e->loc, werr);
+    } else {
+      std::string werr = indexWriteError(target);
       if (!werr.empty()) return errT(e->loc, werr);
     }
     if (target->k == EK::Index && target->a->type && baseOf(target->a->type)->t == TT::String)

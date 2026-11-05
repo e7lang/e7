@@ -26,6 +26,7 @@ struct TypeNode {
   std::string name;                  // Ref
   std::vector<TypeNode*> args;       // Ref type args / Tuple elems / Union members
   TypeNode* elem = nullptr;          // Array
+  bool readonly = false;             // `readonly T[]` / `readonly [A, B]`
   struct Param { std::string name; TypeNode* type; bool optional = false; bool rest = false; };
   std::vector<Param> params;         // Func
   TypeNode* ret = nullptr;           // Func

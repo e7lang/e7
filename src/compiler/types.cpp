@@ -41,29 +41,32 @@ static std::string ptrKey(const void* p) {
   return b;
 }
 
-Type* Types::array(Type* e) {
-  std::string k = "A" + ptrKey(e);
+Type* Types::array(Type* e, bool ro) {
+  std::string k = (ro ? "a" : "A") + ptrKey(e);
   auto it = interned_.find(k);
   if (it != interned_.end()) return it->second;
   Type* t = mk(TT::Array);
   t->elem = e;
+  t->ro = ro;
   return interned_[k] = t;
 }
-Type* Types::set(Type* e) {
-  std::string k = "S" + ptrKey(e);
+Type* Types::set(Type* e, bool ro) {
+  std::string k = (ro ? "s" : "S") + ptrKey(e);
   auto it = interned_.find(k);
   if (it != interned_.end()) return it->second;
   Type* t = mk(TT::Set);
   t->elem = e;
+  t->ro = ro;
   return interned_[k] = t;
 }
-Type* Types::map(Type* kk, Type* v) {
-  std::string k = "M" + ptrKey(kk) + "," + ptrKey(v);
+Type* Types::map(Type* kk, Type* v, bool ro) {
+  std::string k = (ro ? "m" : "M") + ptrKey(kk) + "," + ptrKey(v);
   auto it = interned_.find(k);
   if (it != interned_.end()) return it->second;
   Type* t = mk(TT::Map);
   t->key = kk;
   t->val = v;
+  t->ro = ro;
   return interned_[k] = t;
 }
 Type* Types::func(const std::vector<Type*>& params, Type* ret, const std::vector<bool>& opt, bool rest) {
@@ -84,13 +87,14 @@ Type* Types::func(const std::vector<Type*>& params, Type* ret, const std::vector
   t->ret = ret;
   return interned_[k] = t;
 }
-Type* Types::tuple(const std::vector<Type*>& elems) {
-  std::string k = "T";
+Type* Types::tuple(const std::vector<Type*>& elems, bool ro) {
+  std::string k = ro ? "t" : "T";
   for (Type* e : elems) k += ptrKey(e) + ",";
   auto it = interned_.find(k);
   if (it != interned_.end()) return it->second;
   Type* t = mk(TT::Tuple);
   t->elems = elems;
+  t->ro = ro;
   return interned_[k] = t;
 }
 Type* Types::optional(Type* base, bool null, bool undef) {
@@ -130,7 +134,7 @@ Type* Types::objectType(ObjShape* s) {
 }
 Type* Types::anonObject(const std::vector<ObjShape::Prop>& props) {
   std::string k = "{";
-  for (auto& p : props) k += p.name + ":" + ptrKey(p.type) + (p.optional ? "?" : "") + (p.undefOk ? "!" : "") + ";";
+  for (auto& p : props) k += p.name + ":" + ptrKey(p.type) + (p.optional ? "?" : "") + (p.undefOk ? "!" : "") + (p.readonly ? "r" : "") + ";";
   auto it = interned_.find(k);
   if (it != interned_.end()) return it->second;
   shapes.emplace_back(new ObjShape());
@@ -194,13 +198,13 @@ static std::string typeNameB(const Type* t, int& budget) {
     case TT::Array: {
       std::string e = typeNameB(t->elem, budget);
       if (t->elem->t == TT::Optional || t->elem->t == TT::Func) e = "(" + e + ")";
-      return e + "[]";
+      return (t->ro ? "readonly " : "") + e + "[]";
     }
     case TT::Bytes: return "Uint8Array";
     case TT::ArrayBuffer: return "ArrayBuffer";
     case TT::DataView: return "DataView";
-    case TT::Map: return "Map<" + typeNameB(t->key, budget) + ", " + typeNameB(t->val, budget) + ">";
-    case TT::Set: return "Set<" + typeNameB(t->elem, budget) + ">";
+    case TT::Map: return (t->ro ? "ReadonlyMap<" : "Map<") + typeNameB(t->key, budget) + ", " + typeNameB(t->val, budget) + ">";
+    case TT::Set: return (t->ro ? "ReadonlySet<" : "Set<") + typeNameB(t->elem, budget) + ">";
     case TT::Func: {
       std::string s = "(";
       for (size_t i = 0; i < t->params.size(); i++) {
@@ -220,7 +224,7 @@ static std::string typeNameB(const Type* t, int& budget) {
     case TT::Tuple: {
       std::string s = "[";
       for (size_t i = 0; i < t->elems.size(); i++) s += (i ? ", " : "") + typeNameB(t->elems[i], budget);
-      return s + "]";
+      return (t->ro ? "readonly " : "") + s + "]";
     }
     case TT::Optional: {
       std::string s = typeNameB(t->elem, budget);

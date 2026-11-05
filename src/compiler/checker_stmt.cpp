@@ -75,10 +75,19 @@ bool Checker::assignable(Type* src, Type* dst) {
     case TT::Class:
       return src->t == TT::Class && isAncestor(dst->cls, src->cls);
     case TT::Array:
+      // a mutable array is assignable to a readonly one, not the other way round (as in TypeScript)
+      if (src->t == TT::Array && src->ro && !dst->ro) return false;
+      if (src->t == TT::Array && src->elem == dst->elem) return true;
       // arrays of references are covariant (as in TypeScript); representation is identical
       return src->t == TT::Array && kindOf(src->elem) == K_R && kindOf(dst->elem) == K_R &&
              !isBoxedOptional(src->elem) && !isBoxedOptional(dst->elem) && src->elem->t != TT::Func &&
              dst->elem->t != TT::Func && assignable(src->elem, dst->elem);
+    case TT::Tuple:
+      return src->t == TT::Tuple && dst->ro && src->elems == dst->elems;
+    case TT::Map:
+      return src->t == TT::Map && dst->ro && src->key == dst->key && src->val == dst->val;
+    case TT::Set:
+      return src->t == TT::Set && dst->ro && src->elem == dst->elem;
     case TT::Object:
       return structurallyAssignable(src, dst);
     case TT::Number:
