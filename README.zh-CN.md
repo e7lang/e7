@@ -200,6 +200,14 @@ VS Code 扩展 **E7 Language**（[editors/vscode](editors/vscode)，发布者 `e
 都附带 `.vsix`）在输入时给出 E7 编译器自己的诊断，并提供 *E7: Run File*、*E7: Compile to Bytecode*、*E7: Show Bytecode* 命令。
 它作用于 `*.e7` 文件、导入 `"e7:..."` 模块的 `.ts` 文件，以及匹配 `e7.files` 设置的文件。
 
+### 7. 调试
+
+`e7 debug script.ts` 是一个小型命令行调试器（`b file:line`、`c`、`n`、`s`、`finish`、`bt`、`locals`、
+`p name.field`、`list`），执行到 `debugger;` 语句时会停下。宿主程序可通过 C 调试 API（`e7_debug_*`：断点、单步、
+暂停、调用栈、可展开的变量）获得同样的能力，JavaScript 则通过 WebAssembly 构建的 JSON 协议使用（可据此实现
+VS Code 调试适配器）。用 `e7c --debug` 编译可在 `.e7b` 中保留变量名和列号，运行时错误随之报告
+`at f (file.ts:12:5)`。详见 [docs/DEBUGGING.md](docs/DEBUGGING.md)。
+
 ## 测试你的脚本
 
 把测试写在 `*.test.ts` 文件里，导出名字以 `test` 开头的函数，并使用内置模块 `e7:test` 提供的断言
@@ -374,6 +382,7 @@ tests/ bench/ docs/                            third_party/     BearSSL（MIT）
 - [docs/SPEC.md](docs/SPEC.md)：语言规范（语法、类型系统、数值语义、标准库、与 TS 的差异）
 - [docs/EMBEDDING.md](docs/EMBEDDING.md)：C API、Android/iOS/Windows 集成、安全建议
 - [docs/BYTECODE.md](docs/BYTECODE.md)：`.e7b` 格式、指令集、验证规则、签名格式
+- [docs/DEBUGGING.md](docs/DEBUGGING.md)：`e7 debug`、调试信息、C 调试 API 与 WebAssembly JSON 协议
 - [docs/DESIGN.md](docs/DESIGN.md)：设计方案与决策记录
 - [docs/PRODUCTION.md](docs/PRODUCTION.md)：生产就绪检查清单（验证项与证据）
 

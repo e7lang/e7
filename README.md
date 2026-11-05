@@ -204,6 +204,15 @@ attached to each [release](https://github.com/e7lang/e7/releases/latest)) adds t
 diagnostics as you type, *E7: Run File*, *E7: Compile to Bytecode* and *E7: Show Bytecode*. It works on
 `*.e7` files, `.ts` files that import `"e7:..."` modules and files matching the `e7.files` setting.
 
+### 7. Debugging
+
+`e7 debug script.ts` is a small command-line debugger (`b file:line`, `c`, `n`, `s`, `finish`, `bt`, `locals`,
+`p name.field`, `list`); `debugger;` statements stop there. Hosts get the same through the C debug API
+(`e7_debug_*`: breakpoints, stepping, pause, call stack, expandable variables) and JavaScript through the
+WebAssembly build's JSON protocol, the basis for a VS Code debug adapter. Compile with `e7c --debug` to keep
+variable names and columns in `.e7b` files; runtime errors then report `at f (file.ts:12:5)`. See
+[docs/DEBUGGING.md](docs/DEBUGGING.md).
+
 ## Testing your scripts
 
 Put tests in `*.test.ts` files, export functions whose names start with `test`, and use the assertions from the
@@ -380,6 +389,7 @@ tests/ bench/ docs/                            third_party/     BearSSL (MIT), M
 - [docs/SPEC.md](docs/SPEC.md): language specification (syntax, types, numeric semantics, standard library, differences from TS)
 - [docs/EMBEDDING.md](docs/EMBEDDING.md): C API, Android/iOS/Windows integration, security guidance
 - [docs/BYTECODE.md](docs/BYTECODE.md): `.e7b` format, instruction set, verification rules, signature format
+- [docs/DEBUGGING.md](docs/DEBUGGING.md): `e7 debug`, debug information, the C debug API and the WebAssembly JSON protocol
 - [docs/DESIGN.md](docs/DESIGN.md): design and decision record
 - [docs/PRODUCTION.md](docs/PRODUCTION.md): production-readiness checklist with evidence
 

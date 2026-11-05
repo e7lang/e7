@@ -32,6 +32,7 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 | `e7_config_init` / `e7_vm_new` / `e7_vm_free` | Create/destroy a VM. Config: `memory_limit`, `stack_slots`, `max_frames`, `suspend_on_budget`, `require_signature`, `trusted_keys` |
 | `e7_load(vm, data, len, &module)` | Verify signature → parse → verify → link native functions → run module top-level code |
 | `e7_compile` / `e7_load_source` | Compile source (errors are formatted as `file:line:col: error: ...`) |
+| `e7_compile_ex(src, len, name, &opts, ...)` | Compile with options: `E7_COMPILE_DEBUG` (debug information) and a `read_file` callback for imports |
 | `e7_call(vm, module, "fn", args, n, &ret)` | Call an `export function` |
 | `e7_set_budget(vm, ticks)` | Instruction budget for subsequent execution (≤0 means unlimited) |
 | `e7_resume` / `e7_abort_suspended` | Resume / abandon a suspended call |
@@ -41,6 +42,7 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 | `e7_seed_random` | Fix the `Math.random` seed |
 | `e7_sign_module` / `e7_public_key` | Ed25519 signing tools (usually used on the server) |
 | `e7_last_error` | Most recent error message (including the script call stack) |
+| `e7_debug_*` | Debugger: breakpoints, stepping, pause, call stack and variables ([§2.4](#24-debugging)) |
 
 **Value type** `e7_value`: `E7_NUMBER`(double), `E7_BOOL`, `E7_INT`/`E7_UINT`(64-bit), `E7_STRING`(UTF-8 pointer+length),
 `E7_BYTES`, `E7_HANDLE`, `E7_VOID`, `E7_NULL`. Returned strings/bytes are owned by the VM and are **valid until the next call into that VM**.
@@ -49,7 +51,8 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 `1..8` = `i8 u8 i16 u16 i32 u32 i64 u64`. Example: `"sy>s"` means `(string, Uint8Array) => string`.
 
 **Error codes**: `E7_OK`, `E7_SUSPENDED`, `E7_ERR_RUNTIME` (script error/throw/abort), `E7_ERR_BUDGET`, `E7_ERR_MEMORY`,
-`E7_ERR_STACK`, `E7_ERR_LOAD`, `E7_ERR_VERIFY`, `E7_ERR_SIGNATURE`, `E7_ERR_NOT_FOUND`, `E7_ERR_ARGS`, `E7_ERR_COMPILE`, `E7_ERR_STATE`.
+`E7_ERR_STACK`, `E7_ERR_LOAD`, `E7_ERR_VERIFY`, `E7_ERR_SIGNATURE`, `E7_ERR_NOT_FOUND`, `E7_ERR_ARGS`, `E7_ERR_COMPILE`, `E7_ERR_STATE`,
+and `E7_PAUSED` (only with a debugger attached in pause-to-host mode).
 The VM remains usable after any error; module globals are preserved.
 
 ### 2.1 Host functions
@@ -101,7 +104,38 @@ Without suspension enabled, an exhausted budget returns `E7_ERR_BUDGET`, which g
 (settled after the call returns), so the budget also caps the total time a script can spend in heavy native functions. While a call is suspended, no new `e7_call` can be started (`E7_ERR_STATE`);
 use `e7_abort_suspended` to abandon it.
 
-### 2.4 Threads
+### 2.4 Debugging
+
+A host can debug the scripts it runs (an in-app developer console, a remote debugger, tests). Compile with debug
+information, attach a debugger before loading, and handle stops either in a callback or by getting `E7_PAUSED`
+back from `e7_load` / `e7_call`:
+
+```c
+static e7_debug_action on_stop(e7_vm* vm, const e7_debug_stop* st, void* user) {
+  fprintf(stderr, "stopped at %s:%u:%u in %s\n", st->where.file, st->where.line, st->where.column, st->where.function);
+  const e7_debug_scope* scopes;
+  size_t n = e7_debug_scopes(vm, 0, &scopes);                 // Locals, Closure, Globals of frame 0
+  for (size_t i = 0; i < n; i++) {
+    const e7_debug_variable* v;
+    size_t nv = e7_debug_variables(vm, scopes[i].ref, 0, 0, &v);
+    for (size_t k = 0; k < nv; k++) fprintf(stderr, "  %s: %s = %s\n", v[k].name, v[k].type, v[k].value);
+  }
+  return E7_DEBUG_STEP_OVER;                                   // or block here until the user decides
+}
+
+e7_compile_options opts = {E7_COMPILE_DEBUG, NULL, NULL};
+e7_compile_ex(src, len, "main.ts", &opts, &bc, &bc_len, &errs);
+e7_debug_attach(vm, on_stop, NULL);                           // NULL callback: pause-to-host (E7_PAUSED)
+e7_debug_set_breakpoint(vm, "main.ts", 12);
+e7_load(vm, bc, bc_len, &mod);
+```
+
+`e7_debug_pause` can be called from another thread while a script runs. Without an attached debugger the VM
+runs its normal interpreter and the debugger costs nothing; with debug information, runtime error traces also
+show columns (`at f (main.ts:12:5)`). See [DEBUGGING.md](DEBUGGING.md) for the execution models, stepping
+semantics, the inspection API and the `e7 debug` command-line debugger.
+
+### 2.5 Threads
 
 A VM may be used from only one thread; different VMs share no state and can run in parallel on different threads. For concurrency, create one VM per thread
 (each can load the same `.e7b`).
@@ -269,7 +303,8 @@ if (r.ok) console.log(r.result); else console.error(r.status, r.error);
 ```
 
 `.e7b` files are portable: bytecode produced by `compile()` loads in the native VM (`e7_load`) and vice
-versa. The `e7-js` command (`run`, `check`, `compile -o`, `disasm`) covers the `e7` / `e7c` workflow
+versa. The WebAssembly module also exports a debugger session API (`e7w_dbg_*`, JSON events) for debug
+adapters running the VM in a worker; see [DEBUGGING.md §7](DEBUGGING.md#7-webassembly--javascript-the-json-protocol). The `e7-js` command (`run`, `check`, `compile -o`, `disasm`) covers the `e7` / `e7c` workflow
 without a native build, and the VS Code extension ([editors/vscode](../editors/vscode)) uses the same
 package for diagnostics and *Run File*.
 

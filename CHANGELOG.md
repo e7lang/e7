@@ -5,6 +5,22 @@ All notable changes to E7 / e7vm are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Debugger** ([docs/DEBUGGING.md](docs/DEBUGGING.md)):
+  - Optional debug information in bytecode (`e7c --debug`, always when running from source, `e7_compile_ex` with
+    `E7_COMPILE_DEBUG`): columns, statement boundaries, local / parameter / captured variable names. Stored as a
+    line-table extension that older VMs skip.
+  - C debug API (`e7_debug_*`): breakpoints by file and line, step in / over / out, pause from any thread, stops on
+    runtime errors and `debugger;`, call stack, scopes, expandable variables, path evaluation; synchronous
+    callback or pause-to-host (`E7_PAUSED`, `e7_debug_resume`). No cost without an attached debugger.
+  - `e7 debug`: a command-line debugger.
+  - WebAssembly: `e7w_compile_ex` and the `e7w_dbg_*` session API with JSON events for debug adapters.
+- `debugger;` statement (`DEBUGGER` instruction; a no-op without a debugger).
+
+### Changed
+- Runtime error stack traces show columns (`at f (file.ts:12:5)`) for modules with debug information, which
+  includes every program run from source with `e7` / `e7 test`. Release bytecode keeps `file:line`.
+
 ## [1.0.1] - 2026-11-04
 
 ### Added

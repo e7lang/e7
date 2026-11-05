@@ -264,8 +264,8 @@ class VM {
   friend class Debugger;
   int execute(size_t entryDepth);
   int runFrames();
-  template <bool DBG>
-  int run();
+  int runNormal();  // the interpreter (interp_loop.inc)
+  int runDebug();   // the same loop with debugger checks, used only while a debugger is attached
   Slot invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32_t argc);
   StrObj* intToStringObj(Slot v, uint8_t vt);
   StrObj* numToStringObj(double d);
