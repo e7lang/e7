@@ -536,6 +536,13 @@ struct Gen {
   void genObjectLit(Expr* e, uint16_t dst);
   void genConsoleLog(Expr* e);
   void genCallbackLoop(Expr* e, uint16_t dst);
+  void genFlat(Expr* e, uint16_t dst);
+  void flattenInto(uint16_t res, uint16_t arr, int levels);
+  void genObjectEnum(Expr* e, uint16_t dst);
+  void genObjectAssign(Expr* e, uint16_t dst);
+  void genReplaceFn(Expr* e, uint16_t dst);
+  // for (i = 0; i < length(arr); i++) body(element register): elements read with the kind of et
+  void forEachElem(uint16_t arr, Type* et, const std::function<void(uint16_t)>& body);
   FuncSym* accessorFn(Expr* m, bool set, Type** fnType);
   uint16_t accessorReceiver(Expr* m);
   void accessorCall(Expr* m, uint16_t obj, bool set, uint16_t v, uint16_t dst);
@@ -933,6 +940,20 @@ void Gen::genFunctionOnce(FuncSym* f) {
   Loc start = f->declStmt ? f->declStmt->loc : f->arrow ? f->arrow->loc : f->body ? f->body->loc : Loc();
   line(start);
   prologue(f);
+  if (f->trampField >= 0) {
+    // object literal method: call the closure stored in the field (register 0 is the object)
+    uint16_t clo = temp(K_R);
+    emit(OP_GETF_R, clo, 0, (uint16_t)f->trampField);
+    std::vector<uint16_t> args;
+    for (size_t i = 0; i < f->type->params.size(); i++) args.push_back((uint16_t)(1 + i));
+    Kind rk = kindOf(f->type->ret);
+    uint16_t r = rk == K_V ? kNoReg : temp(rk);
+    callClosure(clo, f->type, args, r);
+    static const uint16_t rets[3] = {OP_RET_I, OP_RET_F, OP_RET_R};
+    if (rk == K_V) emit(OP_RET_V);
+    else emit(rets[rk], r);
+    return;
+  }
   if (f->isAbstract) {
     // never called: abstract classes cannot be instantiated and concrete subclasses override it
     uint16_t r = temp(K_R);
@@ -3252,8 +3273,20 @@ void Gen::genCall(Expr* e, uint16_t dst) {
     case IN_ARR_MAP: case IN_ARR_FILTER: case IN_ARR_FOREACH: case IN_ARR_REDUCE: case IN_ARR_REDUCE_RIGHT:
     case IN_ARR_SOME: case IN_ARR_EVERY: case IN_ARR_FIND: case IN_ARR_FINDINDEX: case IN_ARR_FINDLAST:
     case IN_ARR_FINDLASTINDEX: case IN_ARR_FROM_LENGTH: case IN_MAP_FOREACH: case IN_SET_FOREACH: case IN_BYTES_FOREACH:
-    case IN_ARRAY_FROM:
+    case IN_ARRAY_FROM: case IN_ARR_FLATMAP:
       genCallbackLoop(e, dst);
+      return;
+    case IN_ARR_FLAT:
+      genFlat(e, dst);
+      return;
+    case IN_OBJECT_VALUES: case IN_OBJECT_ENTRIES:
+      genObjectEnum(e, dst);
+      return;
+    case IN_OBJECT_ASSIGN:
+      genObjectAssign(e, dst);
+      return;
+    case IN_STR_REPLACE_FN:
+      genReplaceFn(e, dst);
       return;
     default:
       err(e->loc, "internal error: unsupported call lowering " + std::to_string(e->intrinsic));
@@ -3398,6 +3431,13 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
   }
   uint16_t obj = temp(K_R);
   emit(OP_NEW, obj, (uint16_t)c->classIdx);
+  if (e->var) {
+    // `this` of the methods (method shorthand): a fresh cell per evaluation of the literal
+    VarSym* self = e->var;
+    if (varReg.count(self) && self->captured) emit(OP_NEWCELL, varReg[self], VT_REF);
+    else declareLocal(self);
+    writeVar(self, obj);
+  }
   std::vector<bool> set(c->fields.size(), false);
   for (auto& p : e->props) {
     int fi = c->fieldIdx[p.key];
@@ -3517,7 +3557,7 @@ void Gen::genCallbackLoop(Expr* e, uint16_t dst) {
   emit(isBytes ? OP_BLENI : OP_ALENI, n, coll);
   uint16_t res = kNoReg;
   uint16_t acc = kNoReg;
-  if (in == IN_ARR_MAP || in == IN_ARR_FILTER) {
+  if (in == IN_ARR_MAP || in == IN_ARR_FILTER || in == IN_ARR_FLATMAP) {
     res = temp(K_R);
     Type* outE = baseOf(e->type)->elem;
     emit(OP_NEWARR, res, vtOf(outE), 0);
@@ -3595,6 +3635,14 @@ void Gen::genCallbackLoop(Expr* e, uint16_t dst) {
   callClosure(clo, ft, args, r);
   switch (in) {
     case IN_ARR_MAP: emit(op3(K(ft->ret), OP_APUSH_I, OP_APUSH_F, OP_APUSH_R), res, r); break;
+    case IN_ARR_FLATMAP:
+      if (e->bval) {  // an array result is flattened one level (a new copy of its elements)
+        uint16_t cnt = temp(K_F);
+        callNative("Array.pushArray", {res, r}, cnt, 'F');
+      } else {
+        emit(op3(K(ft->ret), OP_APUSH_I, OP_APUSH_F, OP_APUSH_R), res, r);
+      }
+      break;
     case IN_ARR_FILTER: {
       Label* skip = newLabel();
       jump(OP_JF, r, skip);
@@ -3616,7 +3664,7 @@ void Gen::genCallbackLoop(Expr* e, uint16_t dst) {
   Label* done = newLabel();
   place(end);
   switch (in) {
-    case IN_ARR_MAP: case IN_ARR_FILTER: if (d != kNoReg) mov(d, res, K_R); break;
+    case IN_ARR_MAP: case IN_ARR_FILTER: case IN_ARR_FLATMAP: if (d != kNoReg) mov(d, res, K_R); break;
     case IN_ARR_SOME: if (d != kNoReg) loadInt(d, 0); break;
     case IN_ARR_EVERY: if (d != kNoReg) loadInt(d, 1); break;
     case IN_ARR_FIND: case IN_ARR_FINDLAST: if (d != kNoReg) emit(OP_LOADUNDEF, d); break;
@@ -3634,6 +3682,225 @@ void Gen::genCallbackLoop(Expr* e, uint16_t dst) {
     default: break;
   }
   place(done);
+}
+
+void Gen::forEachElem(uint16_t arr, Type* et, const std::function<void(uint16_t)>& body) {
+  size_t m0 = mark();
+  uint16_t i = temp(K_I), n = temp(K_I), c = temp(K_I), v = temp(K(et));
+  Label* top = newLabel();
+  Label* end = newLabel();
+  loadInt(i, 0);
+  place(top);
+  emit(OP_ALENI, n, arr);  // the array may change length while the body runs
+  emit(OP_LT_I, c, i, n);
+  jump(OP_JF, c, end);
+  emit(op3(K(et), OP_AGETI_I, OP_AGETI_F, OP_AGETI_R), v, arr, i);
+  body(v);
+  emit(OP_ADDI_I, i, i, 1);
+  jump(OP_JMP, 0, top);
+  place(end);
+  release(m0);
+}
+
+// arr.flat(depth): the elements of `levels` nested array levels, in order (holes - undefined
+// elements of new Array<T[]>(n) - are skipped, as in JavaScript)
+void Gen::flattenInto(uint16_t res, uint16_t arr, int levels) {
+  forEachElem(arr, T.array(T.unknown()), [&](uint16_t sub) {
+    Label* skip = newLabel();
+    jump(OP_JNULLISH, sub, skip);
+    if (levels == 1) {
+      uint16_t cnt = temp(K_F);
+      callNative("Array.pushArray", {res, sub}, cnt, 'F');
+    } else {
+      flattenInto(res, sub, levels - 1);
+    }
+    place(skip);
+  });
+}
+
+void Gen::genFlat(Expr* e, uint16_t dst) {
+  Expr* callee = strip(e->a);
+  uint16_t d = dst == kNoReg ? temp(K_R) : dst;
+  uint16_t src = temp(K_R);
+  genInto(callee->a, src);
+  for (Expr* a : e->list) genDiscard(a);  // the (constant) depth
+  int levels = (int)e->ival;
+  if (levels == 0) {
+    uint16_t z = temp(K_F), inf = temp(K_F);
+    loadNum(z, 0);
+    loadNum(inf, INFINITY);
+    callNative("Array.slice", {src, z, inf}, d, 'R');
+    return;
+  }
+  uint16_t res = temp(K_R);
+  emit(OP_NEWARR, res, vtOf(baseOf(e->type)->elem), 0);
+  flattenInto(res, src, levels);
+  mov(d, res, K_R);
+}
+
+// Object.values(o) / Object.entries(o): the own enumerable properties in their run-time order
+// (Object.keys), each read by name. A property that the static type does not declare (an object
+// with more properties than its type, e.g. a subclass instance) has an unknown type: an e7 error.
+void Gen::genObjectEnum(Expr* e, uint16_t dst) {
+  bool entries = e->intrinsic == IN_OBJECT_ENTRIES;
+  Expr* objE = e->list[0];
+  Type* ot = baseOf(objE->type);
+  Type* at = baseOf(e->type);
+  Type* vt = entries ? at->elem->elems[1] : at->elem;
+  std::vector<std::pair<std::string, Type*>> props = enumerableProps(ot);
+  uint16_t d = dst == kNoReg ? temp(K_R) : dst;
+  uint16_t obj = temp(K_R), keys = temp(K_R), res = temp(K_R);
+  genInto(objE, obj);
+  callNative("Object.keys", {obj}, keys, 'R');
+  emit(OP_NEWARR, res, vtOf(entries ? at->elem : vt), 0);
+  std::vector<uint32_t> nameConsts;
+  for (auto& p : props) nameConsts.push_back(kStr(utf8ToUtf16(p.first)));
+  forEachElem(keys, T.string(), [&](uint16_t k) {
+    Label* next = newLabel();
+    for (size_t pi = 0; pi < props.size(); pi++) {
+      size_t m1 = mark();
+      Label* no = newLabel();
+      uint16_t nm = temp(K_R), eq = temp(K_I);
+      emitBx(OP_LOADK_S, nm, nameConsts[pi]);
+      emit(OP_SEQ, eq, k, nm);
+      jump(OP_JF, eq, no);
+      Type* pt = props[pi].second;
+      uint16_t raw = temp(K(pt));
+      D->icNames.push_back(nameConsts[pi]);
+      emit(op3(K(pt), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, obj, (uint16_t)(D->icNames.size() - 1));
+      uint16_t v = temp(K(vt));
+      unboxNarrowed(v, raw, pt, vt);
+      if (entries) {
+        uint16_t tup = temp(K_R);
+        emit(OP_NEW, tup, (uint16_t)e->cls->classIdx);
+        emit(OP_SETF_R, tup, 0, k);
+        emit(op3(K(vt), OP_SETF_I, OP_SETF_F, OP_SETF_R), tup, 1, v);
+        emit(OP_APUSH_R, res, tup);
+      } else {
+        emit(op3(K(vt), OP_APUSH_I, OP_APUSH_F, OP_APUSH_R), res, v);
+      }
+      jump(OP_JMP, 0, next);
+      place(no);
+      release(m1);
+    }
+    size_t m1 = mark();
+    uint16_t msg = temp(K_R), tail = temp(K_R);
+    loadStr(msg, utf8ToUtf16(std::string(entries ? "Object.entries" : "Object.values") +
+                             ": the object has a property that its type '" + typeName(ot) + "' does not declare: "));
+    emit(OP_SCAT, msg, msg, k);
+    loadStr(tail, u" (an e7 limit: the property type is unknown)");
+    emit(OP_SCAT, msg, msg, tail);
+    emit(OP_ABORT, msg);
+    release(m1);
+    place(next);
+  });
+  mov(d, res, K_R);
+}
+
+// Object.assign(target, ...sources) with a target that is not an object literal: copies the
+// properties of each source's static type into the target (like object spread); optional
+// properties only when they are present (not undefined). Returns the target.
+void Gen::genObjectAssign(Expr* e, uint16_t dst) {
+  uint16_t tgt = temp(K_R);
+  genInto(e->list[0], tgt);
+  Type* tt = baseOf(e->list[0]->type);
+  for (size_t si = 1; si < e->list.size(); si++) {
+    size_t m0 = mark();
+    uint16_t src = temp(K_R);
+    genInto(e->list[si], src);
+    for (auto& p : enumerableProps(baseOf(e->list[si]->type))) {
+      size_t m1 = mark();
+      Type* sv = p.second;
+      Type* dt = nullptr;
+      int fi = -1;
+      if (tt->t == TT::Class) {
+        auto it = tt->cls->fieldIdx.find(p.first);
+        if (it != tt->cls->fieldIdx.end()) { fi = it->second; dt = tt->cls->fields[fi].type; }
+        else dt = tt->cls->abstractProp(p.first);
+      } else {
+        dt = tt->shape->findProp(p.first)->type;
+      }
+      uint32_t nc = kStr(utf8ToUtf16(p.first));
+      uint16_t raw = temp(K(sv));
+      D->icNames.push_back(nc);
+      emit(op3(K(sv), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, src, (uint16_t)(D->icNames.size() - 1));
+      Label* skip = newLabel();
+      if (sv->t == TT::Optional && sv->hasUndef) {
+        uint16_t c = temp(K_I);
+        emit(OP_ISUNDEF, c, raw);
+        jump(OP_JT, c, skip);
+      }
+      uint16_t v = temp(K(dt));
+      if (isBoxedOptional(sv) && !isBoxedOptional(dt) && kindOf(dt) != K_R) unboxNarrowed(v, raw, sv, dt);
+      else boxIfNeeded(v, raw, sv, dt);
+      if (fi >= 0) {
+        emit(op3(K(dt), OP_SETF_I, OP_SETF_F, OP_SETF_R), tgt, (uint16_t)fi, v);
+      } else {
+        D->icNames.push_back(nc);
+        emit(op3(K(dt), OP_SETN_I, OP_SETN_F, OP_SETN_R), tgt, (uint16_t)(D->icNames.size() - 1), v);
+      }
+      place(skip);
+      release(m1);
+    }
+    release(m0);
+  }
+  if (dst != kNoReg) mov(dst, tgt, K_R);
+}
+
+// s.replace(pattern, fn) / s.replaceAll(pattern, fn) with a string pattern (JavaScript's
+// algorithm: matches at indexOf positions, an empty pattern matches at every position; the
+// replacement function gets (match, offset, string))
+void Gen::genReplaceFn(Expr* e, uint16_t dst) {
+  Expr* callee = strip(e->a);
+  bool all = e->bval;
+  Type* ft = e->list[1]->type;
+  uint16_t d = dst == kNoReg ? temp(K_R) : dst;
+  uint16_t s = temp(K_R), pat = temp(K_R), fn = temp(K_R);
+  genInto(callee->a, s);
+  genInto(e->list[0], pat);
+  genInto(e->list[1], fn);
+  uint16_t n = temp(K_F), plen = temp(K_F), advance = temp(K_F), pos = temp(K_F), last = temp(K_F);
+  uint16_t zero = temp(K_F), one = temp(K_F), out = temp(K_R), piece = temp(K_R), r = temp(K_R), endF = temp(K_F);
+  uint16_t c = temp(K_I);
+  emit(OP_SLEN, n, s);
+  emit(OP_SLEN, plen, pat);
+  loadNum(zero, 0);
+  loadNum(one, 1);
+  callNative("Math.max", {plen, one}, advance, 'F');
+  loadStr(out, u"");
+  loadNum(last, 0);
+  callNative("String.indexOf", {s, pat, zero}, pos, 'F');
+  Label* top = newLabel();
+  Label* done = newLabel();
+  place(top);
+  emit(OP_LT_F, c, pos, zero);
+  jump(OP_JT, c, done);
+  callNative("String.slice", {s, last, pos}, piece, 'R');
+  emit(OP_SCAT, out, out, piece);
+  std::vector<uint16_t> args;
+  if (ft->params.size() > 0) args.push_back(pat);
+  if (ft->params.size() > 1) args.push_back(pos);
+  if (ft->params.size() > 2) args.push_back(s);
+  callClosure(fn, ft, args, r);
+  emit(OP_SCAT, out, out, r);
+  emit(OP_ADD_F, last, pos, plen);
+  if (all) {
+    // next match from pos + max(1, |pattern|), while that is within the string
+    emit(OP_ADD_F, endF, pos, advance);
+    emit(OP_LT_F, c, n, endF);
+    Label* more = newLabel();
+    jump(OP_JF, c, more);
+    loadNum(pos, -1);
+    jump(OP_JMP, 0, top);
+    place(more);
+    callNative("String.indexOf", {s, pat, endF}, pos, 'F');
+    jump(OP_JMP, 0, top);
+  }
+  place(done);
+  uint16_t inf = temp(K_F);
+  loadNum(inf, INFINITY);
+  callNative("String.slice", {s, last, inf}, piece, 'R');
+  emit(OP_SCAT, d, out, piece);
 }
 
 void Gen::genNew(Expr* e, uint16_t d) {

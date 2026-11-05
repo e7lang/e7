@@ -263,6 +263,19 @@ inline int intBits(const Type* t) {
 }
 // Base type of optional (or itself)
 inline Type* baseOf(Type* t) { return t->t == TT::Optional ? t->elem : t; }
+// Own enumerable properties a value of a class / object type has (name, storage type): fields
+// except #private ones, and abstract properties (declared by the subclass); object type properties.
+inline std::vector<std::pair<std::string, Type*>> enumerableProps(Type* t) {
+  std::vector<std::pair<std::string, Type*>> out;
+  if (t->t == TT::Class) {
+    for (auto& f : t->cls->fields)
+      if (f.name.empty() || f.name[0] != '#') out.push_back({f.name, f.type});
+    for (auto& ap : t->cls->abstractProps) out.push_back({ap.first, ap.second});
+  } else if (t->t == TT::Object) {
+    for (auto& p : t->shape->props) out.push_back({p.name, p.type});
+  }
+  return out;
+}
 // Optional primitives are stored boxed.
 inline bool isBoxedOptional(const Type* t) {
   return t->t == TT::Optional && kindOf(t->elem) != K_R;

@@ -207,13 +207,17 @@ Type* Checker::checkIdent(Expr* e) {
 }
 
 // ------------------------------------------------------------------ records
-Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& fields, bool tuple) {
-  // find identical layout (names + value types)
+Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& fields, bool tuple,
+                         const std::vector<std::pair<std::string, Type*>>* methods) {
+  size_t nm = methods ? methods->size() : 0;
+  // find identical layout (names + value types, and the same methods)
   for (ClassSym* c : recordClasses) {
-    if (c->fields.size() != fields.size() || c->isTuple != tuple) continue;
+    if (c->fields.size() != fields.size() || c->isTuple != tuple || c->vtable.size() != nm) continue;
     bool same = true;
     for (size_t i = 0; i < fields.size() && same; i++)
       if (c->fields[i].name != fields[i].first || vtOf(c->fields[i].type) != vtOf(fields[i].second)) same = false;
+    for (size_t i = 0; i < nm && same; i++)
+      if (c->vtable[i].name != (*methods)[i].first || c->vtable[i].fn->type != (*methods)[i].second) same = false;
     if (same) return c->type;
   }
   ClassSym* c = P.make<ClassSym>();
@@ -228,6 +232,28 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
     c->fields.push_back({f.first, f.second, nullptr, false, c, Loc()});
   }
   c->type = T.classType(c);
+  // methods of an object literal (method shorthand, or function properties implementing an
+  // interface's methods): vtable entries that call the closure stored in the field of that name,
+  // so that calls through interface types (by name) reach them
+  for (size_t i = 0; i < nm; i++) {
+    const std::string& mn = (*methods)[i].first;
+    FuncSym* t = P.make<FuncSym>();
+    t->name = mn;
+    t->qualName = mn;
+    t->cls = c;
+    t->isMethod = true;
+    t->isTopLevel = true;
+    t->trampField = c->fieldIdx[mn];
+    t->type = (*methods)[i].second;
+    t->sigResolved = t->checked = true;
+    t->file = curFile;
+    t->thisVar = newVar("this", c->type, true, Loc());
+    t->thisVar->isThis = true;
+    t->thisVar->owner = t;
+    P.funcs.push_back(t);
+    c->methodIdx[mn] = (int)c->vtable.size();
+    c->vtable.push_back({mn, t});
+  }
   c->classIdx = (int)P.classes.size();
   P.classes.push_back(c);
   recordClasses.push_back(c);
@@ -275,9 +301,27 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
   }
   Type* et = elemExp;
   std::vector<Type*> types;
+  // [[1], []]: an empty array element takes its type from the other elements
+  auto isEmptyArr = [](Expr* x) {
+    x = strip(x);
+    return x->k == EK::Array && x->list.empty() && !x->type;
+  };
+  Type* emptyCtx = nullptr;
+  if (!elemExp) {
+    bool anyEmpty = false;
+    for (Expr* x : e->list) anyEmpty |= isEmptyArr(x);
+    if (anyEmpty)
+      for (Expr* x : e->list)
+        if (!isEmptyArr(x) && x->k != EK::Spread) {
+          Type* t = x->type ? x->type : check(x, nullptr);
+          if (baseOf(t)->t == TT::Array) { emptyCtx = baseOf(t); break; }
+        }
+  }
   for (Expr*& x : e->list) {
     Type* t;
-    if (x->k == EK::Spread) {
+    if (!elemExp && emptyCtx && isEmptyArr(x)) {
+      t = check(x, emptyCtx);
+    } else if (x->k == EK::Spread) {
       Type* st = x->type;  // checked by expandSpreads
       if (st->t == TT::Array || st->t == TT::Set) t = st->elem;
       else if (st->t == TT::String) t = T.string();
@@ -304,8 +348,24 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
 
 Type* Checker::checkObject(Expr* e, Type* expected) {
   Type* exp = expected ? baseOf(expected) : nullptr;
-  bool anySpread = false;
-  for (auto& p : e->props) anySpread |= p.spread;
+  bool anySpread = false, anyMethod = false;
+  for (auto& p : e->props) {
+    anySpread |= p.spread;
+    anyMethod |= p.method;
+  }
+  if (anySpread && anyMethod) {
+    for (auto& p : e->props)
+      if (p.method) return errT(p.loc, "method shorthand in an object literal with spread properties is not supported; use a class");
+  }
+  // a method (shorthand) has its own `this`: the object; it is captured from a hidden variable
+  // that the object literal sets when it creates the object
+  auto checkMethod = [&](ObjProp& p, VarSym* self, Type* want) -> Type* {
+    pushScope();
+    scope->names["this"] = self;
+    Type* t = check(p.value, want);
+    popScope();
+    return t;
+  };
   if (anySpread) {
     // { ...a, k: v, ...b }: later entries override earlier ones; a key keeps its first position
     std::vector<std::string> names;
@@ -403,15 +463,35 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       if (e->props[i].key == e->props[j].key) return errT(e->props[i].loc, "duplicate property '" + e->props[i].key + "'");
   if (exp && exp->t == TT::Object) {
     ObjShape* sh = exp->shape;
-    if (!sh->methods.empty())
-      return errT(e->loc, "object literals cannot implement '" + typeName(exp) + "' (it has methods); use a class");
-    std::vector<std::pair<std::string, Type*>> fields;
+    for (auto& m : sh->methods)
+      if (m.name.compare(0, 4, "get ") == 0 || m.name.compare(0, 4, "set ") == 0)
+        return errT(e->loc, "object literals cannot implement the accessor '" + m.name.substr(4) + "' of '" + typeName(exp) +
+                                "'; use a class");
+    VarSym* self = nullptr;
+    if (anyMethod) {
+      self = newVar("this", exp, true, e->loc);
+      self->owner = curFn;
+    }
+    std::vector<std::pair<std::string, Type*>> fields, methods;
     for (auto& p : e->props) {
       const ObjShape::Prop* sp = sh->findProp(p.key);
-      if (!sp) { err(p.loc, "object literal may only specify known properties; '" + p.key + "' does not exist in '" + typeName(exp) + "'"); continue; }
-      check(p.value, sp->type);
-      coerce(p.value, sp->type);
-      fields.push_back({p.key, sp->type});
+      const ObjShape::Method* sm = sp ? nullptr : sh->findMethod(p.key);
+      if (sp) {
+        if (p.method) checkMethod(p, self, sp->type);
+        else check(p.value, sp->type);
+        coerce(p.value, sp->type);
+        fields.push_back({p.key, sp->type});
+      } else if (sm) {
+        // the interface's method is implemented by a function property (shorthand or arrow)
+        Type* t = p.method ? checkMethod(p, self, sm->fn) : check(p.value, sm->fn);
+        if (t != sm->fn && t->t != TT::Unknown)
+          err(p.loc, "property '" + p.key + "' of type '" + typeName(t) + "' does not match the method '" + p.key + "' of '" +
+                         typeName(exp) + "' (" + typeName(sm->fn) + ")");
+        fields.push_back({p.key, sm->fn});
+        methods.push_back({p.key, sm->fn});
+      } else {
+        err(p.loc, "object literal may only specify known properties; '" + p.key + "' does not exist in '" + typeName(exp) + "'");
+      }
     }
     for (auto& sp : sh->props) {
       bool present = false;
@@ -421,8 +501,74 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
         err(e->loc, "property '" + sp.name + "' is missing in object literal of type '" + typeName(exp) + "'");
       fields.push_back({sp.name, sp.type});
     }
-    e->cls = recordFor(fields)->cls;
+    for (auto& m : sh->methods) {
+      bool present = false;
+      for (auto& p : e->props) if (p.key == m.name) present = true;
+      if (!present) err(e->loc, "method '" + m.name + "' is missing in object literal of type '" + typeName(exp) + "'");
+    }
+    e->cls = recordFor(fields, false, methods.empty() ? nullptr : &methods)->cls;
+    e->var = self;
     return exp;
+  }
+  if (anyMethod && !(exp && exp->t != TT::Unknown)) {
+    // { n: 2, twice(x: number) { return x * this.n; } }: the type has the properties and methods
+    // ({ n: number; twice(x: number): number }); `this` is that type
+    T.shapes.emplace_back(new ObjShape());
+    ObjShape* sh = T.shapes.back().get();
+    Type* selfT = T.objectType(sh);
+    VarSym* self = newVar("this", selfT, true, e->loc);
+    self->owner = curFn;
+    std::vector<Type*> propT(e->props.size(), nullptr);
+    for (size_t i = 0; i < e->props.size(); i++) {
+      ObjProp& p = e->props[i];
+      if (p.method) continue;
+      Type* t = check(p.value, nullptr);
+      if (t->t == TT::Null || t->t == TT::Undefined) {
+        err(p.loc, "cannot infer the type of property '" + p.key + "' from null/undefined; declare an interface");
+        t = T.unknown();
+      }
+      if (t->t == TT::Void) { err(p.loc, "property value cannot be void"); t = T.unknown(); }
+      propT[i] = t;
+      sh->props.push_back({p.key, t, false});
+    }
+    // methods with a complete signature are part of `this` before any body is checked
+    std::vector<bool> known(e->props.size(), false);
+    for (size_t i = 0; i < e->props.size(); i++) {
+      ObjProp& p = e->props[i];
+      if (!p.method) continue;
+      Expr* a = p.value;
+      bool complete = a->retType != nullptr;
+      for (auto& q : a->params) complete = complete && q.type && !q.init && !q.pattern;
+      if (!complete) continue;
+      std::vector<Type*> ps;
+      std::vector<bool> opt;
+      bool rest = false;
+      for (auto& q : a->params) {
+        Type* qt = resolveType(q.type);
+        if (q.optional) qt = T.optional(qt, false, true);
+        ps.push_back(qt);
+        opt.push_back(q.optional);
+        rest |= q.rest;
+      }
+      propT[i] = T.func(ps, resolveType(a->retType), opt, rest);
+      known[i] = true;
+      sh->methods.push_back({p.key, propT[i]});
+    }
+    for (size_t i = 0; i < e->props.size(); i++) {
+      ObjProp& p = e->props[i];
+      if (!p.method) continue;
+      Type* t = checkMethod(p, self, nullptr);
+      if (!known[i]) {
+        propT[i] = t;
+        if (t->t == TT::Func) sh->methods.push_back({p.key, t});
+      }
+    }
+    std::vector<std::pair<std::string, Type*>> fields, methods;
+    for (size_t i = 0; i < e->props.size(); i++) fields.push_back({e->props[i].key, propT[i]});
+    for (auto& m : sh->methods) methods.push_back({m.name, m.fn});
+    e->cls = recordFor(fields, false, &methods)->cls;
+    e->var = self;
+    return selfT;
   }
   if (exp && exp->t != TT::Unknown) {
     if (exp->t == TT::Class) return errT(e->loc, "an object literal cannot be used as class '" + typeName(exp) + "'; use 'new'");
@@ -886,14 +1032,29 @@ Type* Checker::checkCondExpr(Expr* e, Type* expected) {
   std::vector<Fact> tf, ff;
   factsFrom(e->a, true, tf);
   factsFrom(e->a, false, ff);
-  pushScope();
-  applyFacts(tf);
-  Type* bt = check(e->b, expected);
-  popScope();
+  // c ? [x] : []: an empty array literal takes the type of the other branch
+  auto isEmptyArr = [](Expr* x) {
+    x = strip(x);
+    return x->k == EK::Array && x->list.empty();
+  };
+  bool emptyB = !expected && isEmptyArr(e->b) && !isEmptyArr(e->c);
+  Type *bt = nullptr, *ct = nullptr;
+  if (!emptyB) {
+    pushScope();
+    applyFacts(tf);
+    bt = check(e->b, expected);
+    popScope();
+  }
   pushScope();
   applyFacts(ff);
-  Type* ct = check(e->c, expected);
+  ct = check(e->c, expected ? expected : (isEmptyArr(e->c) && bt && baseOf(bt)->t == TT::Array ? baseOf(bt) : nullptr));
   popScope();
+  if (emptyB) {
+    pushScope();
+    applyFacts(tf);
+    bt = check(e->b, baseOf(ct)->t == TT::Array ? baseOf(ct) : nullptr);
+    popScope();
+  }
   Type* t;
   if (expected && expected->t != TT::Bool) {
     if (assignable(bt, expected) && assignable(ct, expected)) t = expected;
@@ -973,7 +1134,7 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
     f->arrow = e;
     f->parent = curFn;
     f->defScope = scope;
-    f->isArrowThis = e->intrinsic != IN_FUNC_EXPR;
+    f->isArrowThis = e->intrinsic != IN_FUNC_EXPR && e->intrinsic != IN_OBJ_METHOD;
     f->qualName = (curFn && !curFn->isInit ? curFn->qualName + "." : "") + nm;
     e->fn = f;
   }

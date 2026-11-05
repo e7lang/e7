@@ -261,6 +261,93 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       nat("Object.keys");
       return T.array(str);
     }
+    if (isCall && (name == "values" || name == "entries")) {
+      // the property types of the static type must all be the same (as TypeScript types the result);
+      // the properties are enumerated at run time (Object.keys order), see genObjectEnum
+      if (args.size() != 1 || args[0]->k == EK::Spread) return errT(l, "Object." + name + " expects one argument");
+      Type* t = check(args[0], nullptr);
+      if (t->t == TT::Unknown) return t;
+      Type* b = baseOf(t);
+      if (t->t == TT::Optional || (b->t != TT::Object && b->t != TT::Class))
+        return errT(args[0]->loc, "Object." + name + " requires an object");
+      std::vector<std::pair<std::string, Type*>> props = enumerableProps(b);
+      if (props.empty()) return errT(args[0]->loc, "Object." + name + " of an object type without properties is not supported");
+      Type* vt = nullptr;
+      for (auto& p : props) {
+        Type* pt = p.second;
+        if (pt->t == TT::Optional && pt->hasUndef) pt = pt->hasNull ? T.optional(pt->elem, true, false) : pt->elem;
+        if (!vt) vt = pt;
+        else if (vt != pt)
+          return errT(args[0]->loc, "Object." + name + " needs properties of one type; '" + typeName(b) + "' has '" +
+                                        typeName(vt) + "' and '" + typeName(pt) + "' (use Map<string, T> for dynamic keys)");
+      }
+      e->intrinsic = name == "values" ? IN_OBJECT_VALUES : IN_OBJECT_ENTRIES;
+      if (name == "entries") {
+        Type* tt = T.tuple({str, vt});
+        e->cls = tupleRecord(tt);
+        return T.array(tt);
+      }
+      return T.array(vt);
+    }
+    if (isCall && name == "assign") {
+      if (args.size() < 2) return errT(l, "Object.assign expects a target and at least one source");
+      for (Expr* a : args)
+        if (a->k == EK::Spread) return errT(a->loc, "spread arguments are not supported for 'Object.assign'");
+      Expr* target = strip(args[0]);
+      if (target->k == EK::Object) {
+        // Object.assign({ ... }, a, b) is the object literal { ..., ...a, ...b }
+        for (size_t i = 1; i < args.size(); i++) {
+          ObjProp sp;
+          sp.loc = args[i]->loc;
+          sp.spread = true;
+          sp.value = args[i];
+          target->props.push_back(sp);
+        }
+        args.resize(1);
+        check(args[0], expected);
+        e->intrinsic = IN_NUMBER;  // identity
+        e->raw = "identity";
+        return args[0]->type;
+      }
+      // the target keeps its type: it must have every property of the sources
+      Type* tt = check(args[0], nullptr);
+      if (tt->t == TT::Unknown) return tt;
+      Type* tb = baseOf(tt);
+      if (tt->t == TT::Optional || (tb->t != TT::Object && tb->t != TT::Class))
+        return errT(args[0]->loc, "Object.assign requires an object target");
+      if (tb->t == TT::Class) resolveClass(tb->cls);
+      for (size_t i = 1; i < args.size(); i++) {
+        Type* st = check(args[i], nullptr);
+        if (st->t == TT::Unknown) return st;
+        Type* sb = baseOf(st);
+        if (st->t == TT::Optional || (sb->t != TT::Object && sb->t != TT::Class))
+          return errT(args[i]->loc, "Object.assign sources must be objects");
+        for (auto& p : enumerableProps(sb)) {
+          Type* dt = nullptr;
+          if (tb->t == TT::Class) {
+            auto it = tb->cls->fieldIdx.find(p.first);
+            if (it != tb->cls->fieldIdx.end()) dt = tb->cls->fields[it->second].type;
+            else if (tb->cls->getterSlot(p.first) >= 0 || tb->cls->setterSlot(p.first) >= 0)
+              return errT(args[i]->loc, "Object.assign: '" + p.first + "' is an accessor of the target; assign it directly");
+            else dt = tb->cls->abstractProp(p.first);
+          } else if (const ObjShape::Prop* tp = tb->shape->findProp(p.first)) {
+            dt = tp->type;
+          }
+          if (!dt)
+            return errT(args[i]->loc, "Object.assign: the target type '" + typeName(tb) + "' has no property '" + p.first +
+                                          "' (e7 objects cannot gain properties; assign to an object literal: Object.assign({}, ...))");
+          Type* sv = p.second;
+          Type* svBase = sv->t == TT::Optional && sv->hasUndef ? (sv->hasNull ? T.optional(sv->elem, true, false) : sv->elem) : sv;
+          bool ok = sv == dt || svBase == dt ||
+                    (kindOf(sv) == K_R && kindOf(dt) == K_R && !isBoxedOptional(sv) && !isBoxedOptional(dt) && assignable(sv, dt));
+          if (!ok)
+            return errT(args[i]->loc, "Object.assign: property '" + p.first + "' of type '" + typeName(sv) +
+                                          "' is not assignable to '" + typeName(dt) + "'");
+        }
+      }
+      e->intrinsic = IN_OBJECT_ASSIGN;
+      return tt;
+    }
     if (isCall && name == "freeze") {
       if (args.size() != 1) return errT(l, "Object.freeze expects one argument");
       Type* t = check(args[0], nullptr);
