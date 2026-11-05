@@ -9,6 +9,11 @@ Delivery: CDN / API response returns app.e7b (optionally wrapped in TLS)
 App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + verifies bytecode → e7_call()
 ```
 
+For apps that receive modules over the air, [DEPLOYMENT.md](DEPLOYMENT.md) describes the complete flow: key
+management and rotation, signed manifests, staged rollout, kill switch, rollback, `e7c --target` per client VM
+version, sizing limits from measurements, error reporting and a shadow-run phase. `E7ModuleManager` (Java/Kotlin
+and Swift) implements the client side.
+
 - **Signing is optional.** A plain `e7c app.ts -o app.e7b` module runs anywhere. Signing only adds a
   guarantee that the module came from you, which matters when it is downloaded at runtime. The rules:
 
@@ -41,6 +46,10 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 | `e7_set_print` | Take over `console.log` output |
 | `e7_seed_random` | Fix the `Math.random` seed |
 | `e7_sign_module` / `e7_public_key` | Ed25519 signing tools (usually used on the server) |
+| `e7_sign_detached` / `e7_verify_detached` | Detached Ed25519 signatures of other files, e.g. update manifests (`e7c --sign-file` / `--verify-file`; [DEPLOYMENT.md](DEPLOYMENT.md#3-manifests)) |
+| `e7_version` / `e7_version_number` | Library version, as text and as `major << 16 \| minor << 8 \| patch` |
+| `e7_inspect(data, len, &info)` | Read a module's header without loading it: format, required e7vm version, signature, debug information |
+| `e7_gc_stats_get(vm, &stats)` | GC statistics (collections, pause times, heap and peak heap), for sizing `memory_limit` |
 | `e7_last_error` | Most recent error message (including the script call stack) |
 | `e7_debug_*` | Debugger: breakpoints, stepping, pause, call stack and variables ([§2.4](#24-debugging)) |
 
@@ -52,7 +61,8 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 
 **Error codes**: `E7_OK`, `E7_SUSPENDED`, `E7_ERR_RUNTIME` (script error/throw/abort), `E7_ERR_BUDGET`, `E7_ERR_MEMORY`,
 `E7_ERR_STACK`, `E7_ERR_LOAD`, `E7_ERR_VERIFY`, `E7_ERR_SIGNATURE`, `E7_ERR_NOT_FOUND`, `E7_ERR_ARGS`, `E7_ERR_COMPILE`, `E7_ERR_STATE`,
-and `E7_PAUSED` (only with a debugger attached in pause-to-host mode).
+`E7_ERR_VERSION` (the module's format or required e7vm version is newer than this VM: deliver a build made with
+`e7c --target`), and `E7_PAUSED` (only with a debugger attached in pause-to-host mode).
 The VM remains usable after any error; module globals are preserved.
 
 ### 2.1 Host functions
@@ -201,6 +211,9 @@ vm.close()
 ```
 Arguments: `Double/Float` → number, `Int/Long` → integer, `Boolean`, `String`, `ByteArray` → Uint8Array, `KeyHandle`.
 Returns: `Double`, `Long`, `Boolean`, `String`, `ByteArray`, or `null`. Errors are `E7Exception(status, message)`.
+`E7VM.Config().gcGrowthPercent(n)`, `vm.gcStats()`, `E7VM.versionNumber()`, `E7VM.inspect(bytes)` and
+`E7VM.signDetached` / `verifyDetached` mirror the C functions of the same names. For over-the-air delivery use
+`E7ModuleManager` (signed manifest, rollout, kill switch, rollback; see [DEPLOYMENT.md](DEPLOYMENT.md#4-client-integration)).
 
 ### 3.3 Building from source
 
@@ -216,7 +229,8 @@ Returns: `Double`, `Long`, `Boolean`, `String`, `ByteArray`, or `null`. Errors a
 `platform/android/shared-test` on desktop JVMs (Linux x64/arm64, macOS, Windows) against the bundled
 libraries, and as an instrumented test on an Android emulator (API 30, x86_64) against the AAR. It checks the
 AAR (all four ABIs, consumer rules, 16 KB alignment) and the jar, and uploads the AAR as the `e7-android-aar`
-build artifact. `platform/java/test/E7VMTest.java` additionally runs in `ci.yml`.
+build artifact. The suite includes the `E7ModuleManager` scenarios (`ModuleManagerScenarios.java`), which
+`platform/java/test/E7VMTest.java` and `ModuleManagerTest.java` additionally run without JUnit in `ci.yml`.
 
 Releases call it with `publish: true`: artifacts go to GitHub Packages, and to Maven Central (Central Portal
 bundle via `scripts/maven-central-bundle.sh`) when the repository has the secrets `MAVEN_CENTRAL_USERNAME`,
@@ -241,7 +255,7 @@ targets: [
 Then `import E7VM`. The C API is also available as `import CE7VM` (e.g. for the `E7_ERR_*` status codes).
 
 **XCFramework (manual integration).** `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` (CMake + Xcode);
-add it together with `platform/ios/E7VM/E7VM.swift` to the app target.
+add it together with `platform/ios/E7VM/E7VM.swift` (and `E7ModuleManager.swift` for over-the-air updates) to the app target.
 
 ```swift
 import E7VM
@@ -257,6 +271,8 @@ if case let .string(sig) = try vm.call(module, "sign", .string("a=1&b=2"), .hand
 Values are `E7Value` cases: `.number(Double)`, `.int(Int64)`, `.uint(UInt64)`, `.bool`, `.string`, `.bytes(Data)`,
 `.handle(KeyHandle)` and `.void`. Errors are `E7Error(status, message)` (`isSuspended` for time-slicing with `resume()`).
 `E7VM.compile(_:)`, `E7VM.sign(_:seed:)` and `E7VM.publicKey(seed:)` compile and sign modules (e.g. in tests or tooling).
+`E7VM(gcGrowthPercent:)`, `vm.gcStats()`, `E7VM.versionNumber`, `E7VM.inspect(_:)` and `E7VM.signDetached` /
+`verifyDetached` mirror the C API; `E7ModuleManager` handles over-the-air delivery ([DEPLOYMENT.md](DEPLOYMENT.md#4-client-integration)).
 The wrapper is tested in CI by `Tests/E7VMTests` (`swift test` on macOS and on an iOS simulator).
 
 e7vm uses no JIT and allocates no executable memory, which meets the App Store requirements for interpreted code (delivered scripts should not change the app's primary purpose).
@@ -311,6 +327,7 @@ package for diagnostics and *Run File*.
 ## 7. Security recommendations
 
 1. **When scripts are downloaded at runtime, enable signature checking** (`require_signature` + built-in public key); keep the private key only on the build server or an HSM.
+   Sign the update manifest too (detached signature), so that rollouts and the kill switch cannot be forged; see [DEPLOYMENT.md](DEPLOYMENT.md).
 2. Set `memory_limit` (e.g. 16–64 MiB) and an instruction budget; for scripts driven by external input, set a smaller `max_frames`.
 3. Provide keys through `KeyHandle`; do not pass them to scripts as string/byte arguments.
 4. Register only the host functions you need, and validate their arguments on the host side.

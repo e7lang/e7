@@ -1,4 +1,5 @@
 // e7c — E7 compiler command line.
+#include <algorithm>
 #include <cstring>
 #include <random>
 
@@ -24,8 +25,61 @@ static int usage() {
           "  e7c --keygen <name>        writes <name>.seed (secret) and <name>.pub (public key, hex)\n"
           "  e7c --disasm-file <file.e7b>\n"
           "  e7c --info <file.e7b>       format, required e7vm version, signature, exports\n"
+          "  e7c --sign-file <file> --sign <seed-hex-file> [-o <file>.sig]\n"
+          "                             detached Ed25519 signature (hex) of any file, e.g. manifest.json\n"
+          "  e7c --verify-file <file> --trust <pub-hex-file>... [--sig <file>.sig]\n"
+          "                             checks a detached signature against one or more public keys\n"
           "  e7c --version\n");
   return 2;
+}
+
+static bool readHexFile(const std::string& path, size_t n, std::vector<uint8_t>& out) {
+  std::string hex;
+  return readAll(path, hex) && parseHex(hex, out) && out.size() == n;
+}
+
+// e7c --sign-file <file> --sign <seed-file> [-o out]: writes <file>.sig, the hex detached signature
+// (e7_sign_detached) followed by a newline.
+static int signDetachedFile(const std::string& file, const std::string& seedFile, std::string out) {
+  if (seedFile.empty()) { fprintf(stderr, "e7c: --sign-file needs --sign <seed-hex-file>\n"); return 2; }
+  std::string data;
+  if (!readAll(file, data)) { fprintf(stderr, "e7c: cannot read %s\n", file.c_str()); return 1; }
+  std::vector<uint8_t> seed;
+  if (!readHexFile(seedFile, 32, seed)) {
+    fprintf(stderr, "e7c: invalid signing key file %s (expects 64 hex chars)\n", seedFile.c_str());
+    return 1;
+  }
+  uint8_t sig[64];
+  e7_status st = e7_sign_detached((const uint8_t*)data.data(), data.size(), seed.data(), sig);
+  std::fill(seed.begin(), seed.end(), 0);
+  if (st != E7_OK) { fprintf(stderr, "e7c: signing failed\n"); return 1; }
+  if (out.empty()) out = file + ".sig";
+  std::string text = toHex(sig, 64) + "\n";
+  if (!writeAll(out, text.data(), text.size())) { fprintf(stderr, "e7c: cannot write %s\n", out.c_str()); return 1; }
+  return 0;
+}
+
+// e7c --verify-file <file> --trust <pub-file>... [--sig <sig-file>]: exit code 0 if the detached
+// signature (default <file>.sig) was made by one of the public keys.
+static int verifyDetachedFile(const std::string& file, std::string sigPath, const std::vector<std::string>& trust) {
+  if (trust.empty()) { fprintf(stderr, "e7c: --verify-file needs --trust <pub-hex-file>\n"); return 2; }
+  if (sigPath.empty()) sigPath = file + ".sig";
+  std::string data;
+  if (!readAll(file, data)) { fprintf(stderr, "e7c: cannot read %s\n", file.c_str()); return 1; }
+  std::vector<uint8_t> sig, keys;
+  if (!readHexFile(sigPath, 64, sig)) {
+    fprintf(stderr, "e7c: invalid signature file %s (expects 128 hex chars)\n", sigPath.c_str());
+    return 1;
+  }
+  for (const std::string& t : trust) {
+    std::vector<uint8_t> pk;
+    if (!readHexFile(t, 32, pk)) { fprintf(stderr, "e7c: invalid public key file %s (expects 64 hex chars)\n", t.c_str()); return 1; }
+    keys.insert(keys.end(), pk.begin(), pk.end());
+  }
+  e7_status st = e7_verify_detached((const uint8_t*)data.data(), data.size(), sig.data(), keys.data(), keys.size() / 32);
+  if (st != E7_OK) { fprintf(stderr, "e7c: %s: signature NOT valid for the trusted keys\n", file.c_str()); return 1; }
+  printf("%s: signature ok\n", file.c_str());
+  return 0;
 }
 
 int main(int argc, char** argv) {
@@ -34,7 +88,8 @@ int main(int argc, char** argv) {
   _setmode(_fileno(stderr), _O_BINARY);
 #endif
   if (argc < 2) return usage();
-  std::string input, output, signFile;
+  std::string input, output, signFile, detachedFile, verifyFile, sigFile;
+  std::vector<std::string> trustFiles;
   bool disasm = false, checkOnly = false, excerpt = true, debugInfo = false;
   uint32_t target = 0;
   for (int i = 1; i < argc; i++) {
@@ -42,6 +97,10 @@ int main(int argc, char** argv) {
     if (a == "--version" || a == "-v") { printf("e7c %s\n", E7_VERSION); return 0; }
     else if (a == "-o" && i + 1 < argc) output = argv[++i];
     else if (a == "--sign" && i + 1 < argc) signFile = argv[++i];
+    else if (a == "--sign-file" && i + 1 < argc) detachedFile = argv[++i];
+    else if (a == "--verify-file" && i + 1 < argc) verifyFile = argv[++i];
+    else if (a == "--trust" && i + 1 < argc) trustFiles.push_back(argv[++i]);
+    else if (a == "--sig" && i + 1 < argc) sigFile = argv[++i];
     else if (a == "--disasm") disasm = true;
     else if (a == "--check") checkOnly = true;
     else if (a == "--debug" || a == "-g") debugInfo = true;
@@ -98,6 +157,8 @@ int main(int argc, char** argv) {
     } else if (a.size() && a[0] == '-') return usage();
     else input = a;
   }
+  if (!detachedFile.empty()) return signDetachedFile(detachedFile, signFile, output);
+  if (!verifyFile.empty()) return verifyDetachedFile(verifyFile, sigFile, trustFiles);
   if (input.empty()) return usage();
   e7::CompileOptions copts;
   copts.debugInfo = debugInfo;

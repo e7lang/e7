@@ -54,7 +54,7 @@ let package = Package(
       name: "E7VM",
       dependencies: ["CE7VM"],
       path: "platform/ios/E7VM",
-      sources: ["E7VM.swift"]
+      sources: ["E7VM.swift", "E7ModuleManager.swift"]
     ),
     .testTarget(
       name: "E7VMTests",

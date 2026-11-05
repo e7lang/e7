@@ -85,6 +85,83 @@ static int keyProvider(void*, int64_t id, const uint8_t** key, size_t* len) {
   return 0;
 }
 
+static std::string hex(const uint8_t* p, size_t n) {
+  static const char* hx = "0123456789abcdef";
+  std::string s;
+  for (size_t i = 0; i < n; i++) { s += hx[p[i] >> 4]; s += hx[p[i] & 15]; }
+  return s;
+}
+
+// e7_sign_detached / e7_verify_detached (manifest signatures)
+static void testDetachedSignatures() {
+  uint8_t seedA[32], seedB[32], pkA[32], pkB[32];
+  for (int i = 0; i < 32; i++) { seedA[i] = (uint8_t)(i + 1); seedB[i] = (uint8_t)(0xA0 + i); }
+  e7_public_key(seedA, pkA);
+  e7_public_key(seedB, pkB);
+  const char* manifest = "{\"version\":\"2\",\"killSwitch\":false}";
+  const uint8_t* data = (const uint8_t*)manifest;
+  size_t len = strlen(manifest);
+  uint8_t sig[64];
+  CHECK(e7_sign_detached(data, len, seedA, sig) == E7_OK);
+  // known answer: pins the message format "e7-detached-v1\0" || data (Ed25519 is deterministic)
+  CHECK(hex(pkA, 32) == "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664");
+  CHECK(hex(sig, 64) ==
+        "1549a30db54e6fc64e15efee8a9b5222a22be751830dd98dd5f97d30c1bc6b09"
+        "2cdaa2efdc5a609a338b827ca32a0a9d1d9212ffd3eb51bfc9eb3b073487e607");
+  CHECK(e7_verify_detached(data, len, sig, pkA, 1) == E7_OK);
+  uint8_t keys[64];
+  memcpy(keys, pkB, 32);
+  memcpy(keys + 32, pkA, 32);
+  CHECK(e7_verify_detached(data, len, sig, keys, 2) == E7_OK);         // any trusted key (key rotation)
+  CHECK(e7_verify_detached(data, len, sig, pkB, 1) == E7_ERR_SIGNATURE);  // untrusted signer
+  CHECK(e7_verify_detached(data, len, sig, pkA, 0) == E7_ERR_SIGNATURE);  // no keys: nothing is trusted
+  CHECK(e7_verify_detached(data, len - 1, sig, pkA, 1) == E7_ERR_SIGNATURE);
+  std::string tampered = manifest;
+  tampered.replace(tampered.find("false"), 5, "true ");
+  CHECK(e7_verify_detached((const uint8_t*)tampered.data(), tampered.size(), sig, pkA, 1) == E7_ERR_SIGNATURE);
+  uint8_t bad[64];
+  memcpy(bad, sig, 64);
+  bad[10] ^= 1;
+  CHECK(e7_verify_detached(data, len, bad, pkA, 1) == E7_ERR_SIGNATURE);
+  // deterministic; empty data is allowed
+  uint8_t sig2[64];
+  CHECK(e7_sign_detached(data, len, seedA, sig2) == E7_OK && memcmp(sig, sig2, 64) == 0);
+  CHECK(e7_sign_detached(nullptr, 0, seedA, sig2) == E7_OK);
+  CHECK(e7_verify_detached(nullptr, 0, sig2, pkA, 1) == E7_OK);
+  CHECK(e7_verify_detached(data, len, sig2, pkA, 1) == E7_ERR_SIGNATURE);
+  // argument checks
+  CHECK(e7_sign_detached(nullptr, 3, seedA, sig2) == E7_ERR_ARGS);
+  CHECK(e7_sign_detached(data, len, nullptr, sig2) == E7_ERR_ARGS);
+  CHECK(e7_sign_detached(data, len, seedA, nullptr) == E7_ERR_ARGS);
+  CHECK(e7_verify_detached(nullptr, 3, sig, pkA, 1) == E7_ERR_ARGS);
+  CHECK(e7_verify_detached(data, len, nullptr, pkA, 1) == E7_ERR_ARGS);
+  CHECK(e7_verify_detached(data, len, sig, nullptr, 1) == E7_ERR_ARGS);
+  // domain separation: a module signature trailer is not a valid detached signature of the module
+  // bytes, and a detached signature cannot be appended to make a signed module
+  std::vector<uint8_t> bc = compile("export function f(): number { return 1; }");
+  uint8_t* signedMod = nullptr;
+  size_t signedLen = 0;
+  CHECK(e7_sign_module(bc.data(), bc.size(), seedA, &signedMod, &signedLen) == E7_OK && signedLen == bc.size() + 76);
+  if (signedMod) {
+    CHECK(e7_verify_detached(bc.data(), bc.size(), signedMod + signedLen - 64, pkA, 1) == E7_ERR_SIGNATURE);
+    uint8_t dsig[64];
+    CHECK(e7_sign_detached(bc.data(), bc.size(), seedA, dsig) == E7_OK);
+    std::vector<uint8_t> forged(signedMod, signedMod + signedLen);
+    memcpy(forged.data() + forged.size() - 64, dsig, 64);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.require_signature = 1;
+    cfg.trusted_keys = pkA;
+    cfg.num_trusted_keys = 1;
+    e7_vm* vm = e7_vm_new(&cfg);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, signedMod, signedLen, &m) == E7_OK);
+    CHECK(e7_load(vm, forged.data(), forged.size(), &m) == E7_ERR_SIGNATURE);
+    e7_vm_free(vm);
+    e7_free(signedMod);
+  }
+}
+
 int main() {
   // ---- basic call / marshaling
   {
@@ -509,6 +586,7 @@ int main() {
     CHECK(e7_gc_stats_get(vm, &gs) == E7_ERR_ARGS);
     e7_vm_free(vm);
   }
+  testDetachedSignatures();
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

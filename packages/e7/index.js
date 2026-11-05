@@ -7,7 +7,8 @@ export const version = "0.2.0";
 
 const STATUS = [
   "ok", "suspended", "runtime_error", "budget_exceeded", "out_of_memory", "stack_overflow", "load_error",
-  "verify_error", "signature_error", "not_found", "bad_arguments", "compile_error", "invalid_state",
+  "verify_error", "signature_error", "not_found", "bad_arguments", "compile_error", "invalid_state", "paused",
+  "version_error",
 ];
 
 export const DEFAULT_BUDGET = 100_000_000;
@@ -149,6 +150,20 @@ function hexToBytes(h) {
   return out;
 }
 
+// "0.2" | "0.2.1" | "v0.2" | 0x000200 -> version text for e7w_compile_target (validated in C)
+function targetString(t) {
+  if (typeof t === "number") {
+    if (!Number.isInteger(t) || t < 0 || t > 0xffffff) throw new E7Error(`invalid target version ${t}`);
+    return versionString(t);
+  }
+  if (typeof t !== "string") throw new TypeError('compile(): target must be a version string such as "0.2"');
+  return t;
+}
+
+function versionString(v) {
+  return `${(v >> 16) & 0xff}.${(v >> 8) & 0xff}.${v & 0xff}`;
+}
+
 function parseNumber(v) {
   if (typeof v === "number") return v;
   return v === "-0" ? -0 : Number(v); // "NaN", "Infinity", "-Infinity"
@@ -198,8 +213,11 @@ class E7 {
     m._e7w_files_clear();
     try {
       for (const [k, v] of files) this._withString(k, (kp) => this._withString(v, (vp, vl) => m._e7w_file_add(kp, vp, vl)));
+      const flags = options.debug ? 1 : 0;
+      const target = options.target == null ? "" : targetString(options.target);
       const st = this._withString(source, (sp, sl) =>
-        this._withString(fileName, (np) => (options.debug ? m._e7w_compile_ex(sp, sl, np, 1) : m._e7w_compile(sp, sl, np))));
+        this._withString(fileName, (np) => this._withString(target, (tp) => m._e7w_compile_target(sp, sl, np, flags, tp))));
+      if (st === 10) throw new E7Error(this._json(m._e7w_diagnostics())[0]?.message ?? "invalid compile options");
       if (st === 0) {
         const ptr = m._e7w_bytes_ptr();
         const len = m._e7w_bytes_len();
@@ -223,6 +241,27 @@ class E7 {
   /** Type checks a source file; returns its diagnostics ([] when it compiles). */
   check(source, options = {}) {
     return this.compile(source, options).diagnostics;
+  }
+
+  /**
+   * Reads a module's header without loading it (e7_inspect): bytecode format, the oldest e7vm that
+   * can run it, signature trailer, debug information, and whether this VM can load it.
+   */
+  inspect(bytecode) {
+    const b = toBytes(bytecode);
+    if (!b) throw new TypeError("inspect(): expected bytecode (Uint8Array)");
+    const i = this._withBytes(b, (p, n) => this._json(this._m._e7w_inspect(p, n)));
+    return {
+      ok: i.status === 0,
+      status: STATUS[i.status] ?? `status_${i.status}`,
+      code: i.status,
+      format: i.format,
+      requiresVersion: i.format >= 2 ? versionString(i.requires) : null,
+      requiresVersionNumber: i.requires,
+      signed: i.signed,
+      keyId: i.signed ? i.keyId : null,
+      debugInfo: i.debug,
+    };
   }
 
   /** Lists the exported functions of a module with their host signatures. */
@@ -657,5 +696,6 @@ export const check = (source, options) => call("check", [source, options]);
 export const run = (input, options) => call("run", [input, options]);
 export const disassemble = (input, options) => call("disassemble", [input, options]);
 export const listExports = (input, options) => call("listExports", [input, options]);
+export const inspect = (bytecode) => call("inspect", [bytecode]);
 
-export default { init, compile, check, run, disassemble, listExports, formatDiagnostics, createDebugSession, version };
+export default { init, compile, check, run, disassemble, listExports, inspect, formatDiagnostics, createDebugSession, version };

@@ -289,6 +289,17 @@ E7_API e7_status e7_sign_module(const uint8_t* e7b, size_t len, const uint8_t se
                                 size_t* out_len);
 E7_API void e7_public_key(const uint8_t secret_seed[32], uint8_t public_key[32]);
 
+/* ---- detached signatures (update manifests, configuration files; see docs/DEPLOYMENT.md) ----
+ * Ed25519 over the domain-separated message "e7-detached-v1\0" || data, so that a detached signature
+ * can never be confused with a module signature (or the other way round).
+ * e7_sign_detached: E7_OK, or E7_ERR_ARGS for NULL pointers.
+ * e7_verify_detached: E7_OK if sig was made by one of the num_trusted_keys * 32-byte public keys,
+ * E7_ERR_SIGNATURE if not (or if no key is given), E7_ERR_ARGS for NULL pointers. data may be NULL
+ * when len is 0. */
+E7_API e7_status e7_sign_detached(const uint8_t* data, size_t len, const uint8_t secret_seed[32], uint8_t sig_out[64]);
+E7_API e7_status e7_verify_detached(const uint8_t* data, size_t len, const uint8_t sig[64], const uint8_t* trusted_keys,
+                                    size_t num_trusted_keys);
+
 #ifdef __cplusplus
 }
 #endif

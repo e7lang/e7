@@ -120,12 +120,12 @@ jobs:
         run: |
           jar="$(ls platform/android/jvm/build/libs/e7vm-*.jar | grep -v -e sources -e javadoc)"
           unzip -l "$jar"
-          for f in org/e7vm/E7VM.class org/e7vm/NativeLoader.class \
+          for f in org/e7vm/E7VM.class org/e7vm/NativeLoader.class org/e7vm/E7ModuleManager.class \
                    org/e7vm/native/linux-x86_64/libe7vm_jni.so org/e7vm/native/linux-aarch64/libe7vm_jni.so \
                    org/e7vm/native/macos/libe7vm_jni.dylib org/e7vm/native/windows-x86_64/e7vm_jni.dll; do
             unzip -l "$jar" "$f" > /dev/null || { echo "missing $f in $jar" >&2; exit 1; }
           done
-          if unzip -l "$jar" | grep -q E7VMTest; then echo "test classes leaked into $jar" >&2; exit 1; fi
+          if unzip -l "$jar" | grep -q -e E7VMTest -e ModuleManagerScenarios; then echo "test classes leaked into $jar" >&2; exit 1; fi
           # Smoke test: the published jar alone, examples/embed/sign.ts
           mkdir -p smoke && cat > smoke/Smoke.java <<'EOF'
           import java.nio.file.*;
@@ -180,8 +180,8 @@ jobs:
           unzip -l "$aar" proguard.txt > /dev/null || { echo "missing consumer proguard.txt" >&2; exit 1; }
           rm -rf aar-x && mkdir aar-x && unzip -q "$aar" -d aar-x
           unzip -l aar-x/classes.jar
-          unzip -l aar-x/classes.jar org/e7vm/E7VM.class org/e7vm/NativeLoader.class > /dev/null
-          if unzip -l aar-x/classes.jar | grep -q E7VMTest; then echo "test classes leaked into the AAR" >&2; exit 1; fi
+          unzip -l aar-x/classes.jar org/e7vm/E7VM.class org/e7vm/NativeLoader.class org/e7vm/E7ModuleManager.class > /dev/null
+          if unzip -l aar-x/classes.jar | grep -q -e E7VMTest -e ModuleManagerScenarios; then echo "test classes leaked into the AAR" >&2; exit 1; fi
           cat aar-x/proguard.txt
           # 16 KB page size support (Android 15+): 64-bit libraries need LOAD segments aligned to >= 0x4000
           readelf="$(find "$ANDROID_NDK_LATEST_HOME" -name llvm-readelf -type f | head -1)"
@@ -251,7 +251,7 @@ jobs:
                   for c in s.iter("testcase"):
                       print(s.get("hostname", ""), c.get("classname"), c.get("name"), "FAILED" if len(c) else "ok")
           print(f"{t} instrumented tests, {f} failed")
-          sys.exit(1 if f or t < 9 else 0)
+          sys.exit(1 if f or t < 20 else 0)  # E7VMApiTest (12) + E7ModuleManagerTest (8)
           EOF
       - uses: actions/upload-artifact@v4
         if: always()

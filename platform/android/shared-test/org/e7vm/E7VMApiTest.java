@@ -215,6 +215,64 @@ public class E7VMApiTest {
     }
   }
 
+  /** versionNumber, inspect (E7Exception.VERSION for modules that need a newer VM). */
+  @Test
+  public void versionAndInspect() {
+    int vn = E7VM.versionNumber();
+    assertEquals(E7VM.version(), (vn >> 16) + "." + ((vn >> 8) & 255) + "." + (vn & 255));
+    byte[] code = E7VM.compile(APP, "app.ts");
+    E7VM.ModuleInfo info = E7VM.inspect(E7VM.sign(code, seed()));
+    assertTrue(info.canRun());
+    assertEquals(2, info.format);
+    assertEquals("0.2.0", info.requiresVersionString());
+    assertTrue(info.isSigned);
+    assertEquals(8, info.keyId.length);
+    assertFalse(info.hasDebugInfo);
+    E7VM.ModuleInfo newer = E7VM.inspect(ModuleManagerScenarios.withRequires(code, 0x630000));
+    assertEquals(E7Exception.VERSION, newer.status);
+    assertEquals("99.0.0", newer.requiresVersionString());
+    assertFalse(newer.isSigned);
+    try (E7VM vm = new E7VM()) {
+      vm.load(ModuleManagerScenarios.withRequires(code, 0x630000));
+      fail("a module that needs e7vm 99 must be rejected");
+    } catch (E7Exception e) {
+      assertEquals(E7Exception.VERSION, e.status);
+    }
+    assertEquals(E7Exception.LOAD, E7VM.inspect(new byte[] {1, 2, 3}).status);
+  }
+
+  @Test
+  public void gcStatsAndGrowth() {
+    try (E7VM vm = new E7VM(new E7VM.Config().gcGrowthPercent(150))) {
+      E7VM.Module m = vm.loadSource("let keep: number[][] = [];\n"
+          + "export function churn(): number { for (let i = 0; i < 20000; i++) { keep.push([i]); if (keep.length > 500) keep = []; } return keep.length; }",
+          "gc.ts");
+      vm.call(m, "churn");
+      vm.collectGarbage();
+      E7VM.GcStats gs = vm.gcStats();
+      assertTrue(gs.toString(), gs.collections >= 1 && gs.maxPauseNanos > 0 && gs.totalPauseNanos >= gs.maxPauseNanos);
+      assertEquals(vm.memoryUsed(), gs.heapBytes);
+      assertTrue(gs.peakHeapBytes >= gs.heapBytes);
+    }
+  }
+
+  /** Detached signatures (manifests): known answer, key rotation, tampering. */
+  @Test
+  public void detachedSignatures() {
+    byte[] manifest = "{\"version\":\"2\",\"killSwitch\":false}".getBytes(StandardCharsets.UTF_8);
+    byte[] sig = E7VM.signDetached(manifest, seed());
+    assertEquals("1549a30db54e6fc64e15efee8a9b5222a22be751830dd98dd5f97d30c1bc6b09"
+        + "2cdaa2efdc5a609a338b827ca32a0a9d1d9212ffd3eb51bfc9eb3b073487e607", E7ModuleManager.hex(sig));
+    byte[] pub = E7VM.publicKey(seed()), other = E7VM.publicKey(new byte[32]);
+    assertTrue(E7VM.verifyDetached(manifest, sig, pub));
+    assertTrue(E7VM.verifyDetached(manifest, sig, other, pub));
+    assertFalse(E7VM.verifyDetached(manifest, sig, other));
+    byte[] tampered = manifest.clone();
+    tampered[3] ^= 1;
+    assertFalse(E7VM.verifyDetached(tampered, sig, pub));
+    assertFalse(E7VM.verifyDetached(manifest, new byte[64], pub));
+  }
+
   @Test
   public void closedVm() {
     E7VM vm = new E7VM();

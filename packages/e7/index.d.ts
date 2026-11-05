@@ -25,6 +25,11 @@ export interface CompileOptions {
   readFile?: (path: string) => string | undefined;
   /** Add debug information (statement boundaries, local variable names, columns) to the bytecode. */
   debug?: boolean;
+  /**
+   * Oldest e7vm that must run the module, e.g. "0.2" (or a number major << 16 | minor << 8 | patch).
+   * Features newer than the target are compile errors. Default: this VM's version. Throws E7Error if malformed.
+   */
+  target?: string | number;
 }
 
 export interface CompileResult {
@@ -36,7 +41,8 @@ export interface CompileResult {
 
 export type Status =
   | "ok" | "runtime_error" | "budget_exceeded" | "out_of_memory" | "stack_overflow" | "load_error"
-  | "verify_error" | "signature_error" | "not_found" | "bad_arguments" | "compile_error" | "invalid_state";
+  | "verify_error" | "signature_error" | "not_found" | "bad_arguments" | "compile_error" | "invalid_state"
+  | "paused" | "version_error";
 
 /** Values accepted as arguments of an exported function. */
 export type E7Argument = number | bigint | boolean | string | Uint8Array | ArrayBuffer | null;
@@ -77,6 +83,26 @@ export interface ExportInfo {
   returns: string;
 }
 
+/** Header of a .e7b module (e7_inspect). */
+export interface ModuleInfo {
+  /** true if this VM can load the module's format and version (the signature is not checked). */
+  ok: boolean;
+  /** "ok", "version_error" (format or required e7vm too new) or "load_error" (not a module / corrupted). */
+  status: Status;
+  code: number;
+  /** Bytecode format version (2 for e7vm 0.2). */
+  format: number;
+  /** Oldest e7vm that can run the module, e.g. "0.2.0" (null for format 1). */
+  requiresVersion: string | null;
+  /** The same as major << 16 | minor << 8 | patch. */
+  requiresVersionNumber: number;
+  /** An Ed25519 signature trailer is present (not verified here). */
+  signed: boolean;
+  /** First 8 bytes of SHA-256(public key) of the signing key, hex; null when unsigned. */
+  keyId: string | null;
+  debugInfo: boolean;
+}
+
 export interface InitOptions {
   /** The contents of e7wasm.wasm (skips fetching / reading the file). */
   wasmBinary?: ArrayBuffer | Uint8Array;
@@ -99,6 +125,7 @@ export interface E7 {
   run(input: string | Uint8Array, options?: RunOptions): RunResult;
   disassemble(input: string | Uint8Array, options?: CompileOptions): string;
   listExports(input: string | Uint8Array, options?: CompileOptions): ExportInfo[];
+  inspect(bytecode: Uint8Array): ModuleInfo;
 }
 
 // ------------------------------------------------------------------ debugger
@@ -238,6 +265,7 @@ export declare function check(source: string, options?: CompileOptions): Promise
 export declare function run(input: string | Uint8Array, options?: RunOptions): Promise<RunResult>;
 export declare function disassemble(input: string | Uint8Array, options?: CompileOptions): Promise<string>;
 export declare function listExports(input: string | Uint8Array, options?: CompileOptions): Promise<ExportInfo[]>;
+export declare function inspect(bytecode: Uint8Array): Promise<ModuleInfo>;
 export declare function formatDiagnostics(diagnostics: Diagnostic[]): string;
 export declare function normalizePath(path: string): string;
 
@@ -248,6 +276,7 @@ declare const _default: {
   run: typeof run;
   disassemble: typeof disassemble;
   listExports: typeof listExports;
+  inspect: typeof inspect;
   formatDiagnostics: typeof formatDiagnostics;
   createDebugSession: typeof createDebugSession;
   version: string;

@@ -25,6 +25,10 @@ footer  "E7B$" u32 crc32       CRC32 of all preceding bytes
 [sig]   "E7S1" keyId[8] sig[64]  optional: Ed25519 signature (covers all preceding bytes, incl. footer); keyId = first 8 bytes of SHA-256(public key)
 ```
 
+Detached signatures of other files (update manifests; `e7_sign_detached`, `e7c --sign-file`) are Ed25519 over
+`"e7-detached-v1\0" || file bytes`, stored separately (`<file>.sig`, 128 hex digits); the prefix keeps them
+distinct from module signatures. See [DEPLOYMENT.md](DEPLOYMENT.md#3-manifests).
+
 - **line table**: `(pc, line)` pairs sorted by pc (a frame's line is that of the last pair with `pc <= ip`). A function
   whose code comes from a source file other than the entry file (imported modules, and module initialization in
   multi-file programs) appends an extension after the pairs: `(0xFFFFFFFF, 0x53454C46)` followed by

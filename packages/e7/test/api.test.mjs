@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as e7mod from "@e7lang/e7";
-import e7default, { init, compile, check, run, disassemble, listExports, formatDiagnostics, version, E7Error } from "@e7lang/e7";
+import e7default, { init, compile, check, run, disassemble, listExports, inspect, formatDiagnostics, version, E7Error } from "@e7lang/e7";
 
 const fixture = (f) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), "utf8");
 const SIGN = fixture("sign.ts");
@@ -18,7 +18,7 @@ test("version and init", async () => {
   assert.equal(await init(), e7, "init() is idempotent");
   assert.match(e7.version, /^\d+\.\d+\.\d+/);
   assert.equal(typeof e7default.run, "function");
-  for (const k of ["init", "compile", "check", "run", "disassemble", "listExports", "formatDiagnostics", "E7Error"]) assert.ok(k in e7mod, k);
+  for (const k of ["init", "compile", "check", "run", "disassemble", "listExports", "inspect", "formatDiagnostics", "E7Error"]) assert.ok(k in e7mod, k);
 });
 
 test("lazy init: module functions work without init()", async () => {
@@ -243,6 +243,55 @@ test("listExports", async () => {
   const t = await listExports(TYPES);
   assert.deepEqual(t.find((e) => e.name === "add"), { name: "add", params: ["i32", "i32"], returns: "i32" });
 });
+
+test("compile: target version", async () => {
+  const e7 = await init();
+  const [major, minor] = e7.version.split(".").map(Number);
+  assert.equal((await compile(SIGN, { target: `${major}.${minor}` })).ok, true);
+  assert.equal((await compile(SIGN, { target: (major << 16) | (minor << 8) })).ok, true);
+  const old = await compile(SIGN, { target: "0.1" });
+  assert.equal(old.ok, false);
+  assert.match(old.diagnostics[0].message, /--target 0\.1\.0 is not supported/);
+  await assert.rejects(compile(SIGN, { target: "zero.two" }), (e) => e instanceof E7Error && /invalid target version/.test(e.message));
+  await assert.rejects(compile(SIGN, { target: {} }), TypeError);
+});
+
+test("inspect", async () => {
+  const e7 = await init();
+  const { bytecode } = await compile(SIGN);
+  const info = await inspect(bytecode);
+  assert.equal(info.ok, true);
+  assert.equal(info.status, "ok");
+  assert.equal(info.format, 2);
+  assert.equal(info.requiresVersion, "0.2.0");
+  assert.equal(info.requiresVersionNumber, 0x000200);
+  assert.equal(info.signed, false);
+  assert.equal(info.keyId, null);
+  assert.equal(info.debugInfo, false);
+  assert.equal(e7.inspect((await compile(SIGN, { debug: true })).bytecode).debugInfo, true);
+  // a module that needs a newer VM: patch the `requires` header field (offset 12) and the checksum
+  const b = bytecode.slice();
+  new DataView(b.buffer).setUint32(12, 0x630000, true);
+  new DataView(b.buffer).setUint32(b.length - 4, crc32(b.subarray(0, b.length - 8)), true);
+  const newer = await inspect(b);
+  assert.equal(newer.ok, false);
+  assert.equal(newer.status, "version_error");
+  assert.equal(newer.requiresVersion, "99.0.0");
+  const r = await run(b);
+  assert.equal(r.status, "version_error");
+  assert.equal(r.code, 14);
+  assert.equal((await inspect(new Uint8Array([1, 2, 3]))).status, "load_error");
+  await assert.rejects(inspect("source"), TypeError);
+});
+
+function crc32(p) {
+  let c = 0xffffffff;
+  for (const x of p) {
+    c ^= x;
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return ~c >>> 0;
+}
 
 test("synchronous instance API", async () => {
   const e7 = await init();

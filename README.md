@@ -411,6 +411,7 @@ tests/ bench/ docs/                            third_party/     BearSSL (MIT), M
 
 - [docs/SPEC.md](docs/SPEC.md): language specification (syntax, types, numeric semantics, standard library, differences from TS)
 - [docs/EMBEDDING.md](docs/EMBEDDING.md): C API, Android/iOS/Windows integration, security guidance
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): delivering modules to apps: keys and rotation, signed manifests, staged rollout, kill switch, rollback, `--target`, limits, error reporting, shadow runs
 - [docs/BYTECODE.md](docs/BYTECODE.md): `.e7b` format, instruction set, verification rules, signature format
 - [docs/DEBUGGING.md](docs/DEBUGGING.md): `e7 debug`, debug information, the C debug API and the WebAssembly JSON protocol
 - [docs/DESIGN.md](docs/DESIGN.md): design and decision record

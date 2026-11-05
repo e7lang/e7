@@ -43,11 +43,12 @@ synchronous API, `const e7 = await init()` and call the same methods on `e7` (`e
 | Function | Returns |
 |---|---|
 | `init(options?)` | `Promise<E7>`: synchronous instance; `e7.version` is the VM version. Options: `wasmBinary`, `wasmURL`, `locateFile` |
-| `compile(source, { fileName?, files?, readFile?, debug? })` | `{ ok, bytecode?: Uint8Array, diagnostics: Diagnostic[] }` |
+| `compile(source, { fileName?, files?, readFile?, debug?, target? })` | `{ ok, bytecode?: Uint8Array, diagnostics: Diagnostic[] }`; `target: "0.2"` = the module must run on e7vm 0.2 (newer features are errors) |
 | `check(source, options?)` | `Diagnostic[]` (empty when the file compiles) |
 | `run(sourceOrBytecode, { budget?, memoryLimit?, seed?, call?, args?, ...compileOptions })` | `{ ok, status, code, output: string[], result, error, diagnostics? }` |
 | `disassemble(sourceOrBytecode, options?)` | bytecode listing (throws `E7Error` with `.diagnostics` on compile errors) |
 | `listExports(sourceOrBytecode, options?)` | `[{ name, params: ["string", "i32", ...], returns }]` |
+| `inspect(bytecode)` | `{ ok, status, code, format, requiresVersion: "0.2.0", requiresVersionNumber, signed, keyId, debugInfo }`: the module header, without loading it (`status` `"version_error"` = this VM is too old) |
 | `createDebugSession({ entry, source?, files?, readFile?, call?, args?, memoryLimit?, budget?, slice?, breakOnError? })` | `Promise<DebugSession>`: a debugger on its own WebAssembly instance (see below) |
 | `formatDiagnostics(diagnostics)` | `"file:line:column: error: message"` lines |
 | `version` | version of this package |
@@ -57,8 +58,8 @@ synchronous API, `const e7 = await init()` and call the same methods on `e7` (`e
 - **run**: executes the top-level statements, then `call` with `args` (default: `main()` if exported).
   `output` has one entry per `console.log`. `status` is one of `ok`, `runtime_error`,
   `budget_exceeded`, `out_of_memory`, `stack_overflow`, `load_error`, `verify_error`,
-  `signature_error`, `not_found`, `bad_arguments`, `compile_error` (`code` is the numeric
-  `e7_status` from `e7.h`). `budget` defaults to 100,000,000 instructions (0 = unlimited),
+  `signature_error`, `not_found`, `bad_arguments`, `compile_error`, `version_error` (the module needs a
+  newer VM) (`code` is the numeric `e7_status` from `e7.h`). `budget` defaults to 100,000,000 instructions (0 = unlimited),
   `memoryLimit` to 64 MiB; `seed` makes `Math.random` deterministic.
 - **Values**: `number`, `boolean`, `string`, `Uint8Array` and `null` map directly. Integer parameters
   (`i8` ... `u64`) accept integral numbers or `bigint`; `i64`/`u64` results are returned as `bigint`,
