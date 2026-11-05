@@ -1,6 +1,8 @@
+<img src="docs/logo.svg" width="72" alt="E7 logo" align="right">
+
 # e7vm — the E7 language and virtual machine
 
-[![CI](https://github.com/e7lang/e7/actions/workflows/ci.yml/badge.svg)](https://github.com/e7lang/e7/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/e7lang/e7)](https://github.com/e7lang/e7/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Playground](https://img.shields.io/badge/try-playground-10b981)](https://e7lang.github.io/playground)
+[![CI](https://github.com/e7lang/e7/actions/workflows/ci.yml/badge.svg)](https://github.com/e7lang/e7/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/e7lang/e7)](https://github.com/e7lang/e7/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Playground](https://img.shields.io/badge/try-playground-ff6a2b)](https://e7lang.github.io/playground)
 
 **English** | [简体中文](README.zh-CN.md) · Website: [e7lang.github.io](https://e7lang.github.io) · [**Try it in your browser**](https://e7lang.github.io/playground) · [Download](https://github.com/e7lang/e7/releases/latest)
 

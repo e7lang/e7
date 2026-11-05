@@ -6,6 +6,7 @@
   "publisher": "e7lang",
   "license": "MIT",
   "icon": "images/icon.png",
+  "galleryBanner": { "color": "#14161c", "theme": "dark" },
   "homepage": "https://e7lang.github.io",
   "bugs": { "url": "https://github.com/e7lang/e7/issues" },
   "repository": {
