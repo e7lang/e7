@@ -1,6 +1,7 @@
 const shims = {
   "e7:crypto": new URL("./e7-crypto.mjs", import.meta.url).href,
   "e7:encoding": new URL("./e7-encoding.mjs", import.meta.url).href,
+  "e7:json": new URL("./e7-json.mjs", import.meta.url).href,
   "e7:test": new URL("./e7-test.mjs", import.meta.url).href,
 };
 export async function resolve(specifier, context, next) {

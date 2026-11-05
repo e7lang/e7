@@ -1102,6 +1102,37 @@ Type* Checker::checkAs(Expr* e) {
     e->intrinsic = IN_JSON_PARSE;
     return target;
   }
+  // tryParse(text) as T | null (e7:json): the same typed parse, null instead of an error
+  auto isTryParse = [&](Expr* c) {
+    if (c->k != EK::Call) return false;
+    Expr* f = strip(c->a);
+    if (f->k == EK::Ident) {
+      Sym* s = lookup(f->raw);
+      return s && s->k == SymK::Builtin && static_cast<BuiltinSym*>(s)->id == "e7:json.tryParse";
+    }
+    if (f->k == EK::Member && f->raw == "tryParse" && strip(f->a)->k == EK::Ident) {
+      Sym* s = lookup(strip(f->a)->raw);
+      return s && s->k == SymK::Namespace && static_cast<NamespaceSym*>(s)->builtin &&
+             static_cast<NamespaceSym*>(s)->module == "e7:json";
+    }
+    return false;
+  };
+  if (isTryParse(inner)) {
+    if (e->raw == "satisfies")
+      return errT(e->loc, "tryParse must be used with a type assertion: tryParse(text) as MyType | null");
+    if (inner->list.size() != 1) return errT(e->loc, "tryParse takes exactly one argument");
+    if (inner->list[0]->k == EK::Spread) return errT(inner->list[0]->loc, "spread is not supported here");
+    check(inner->list[0], T.string());
+    if (!coerce(inner->list[0], T.string())) return T.unknown();
+    if (target->t == TT::Null || target->t == TT::Undefined)
+      return errT(e->loc, "tryParse needs a type to parse into: tryParse(text) as MyType | null");
+    if (target->t != TT::Optional || !target->hasNull)
+      return errT(e->loc, "tryParse returns null when the text is not valid JSON of the expected type: write tryParse(text) as " +
+                              typeName(target) + " | null");
+    inner->type = target;
+    e->intrinsic = IN_JSON_TRY_PARSE;
+    return target;
+  }
   Type* t = check(e->a, target);
   if (e->raw == "satisfies") {
     coerce(e->a, target);

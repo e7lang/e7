@@ -278,6 +278,8 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
   - Signatures and key exchange: Ed25519, X25519, ECDSA P-256/384/521 (raw or strict DER), RSA PKCS#1 v1.5 and PSS.
   - Also CRC32, secure random bytes, and `KeyHandle`.
 - **`e7:encoding`.** hex, base64, base64url, base32, UTF-8, PEM, plus byte concat and compare.
+- **`e7:json`.** `tryParse(text) as T | null` validates like `JSON.parse` but returns `null` for malformed or
+  mismatching (untrusted) input; `lastError()` says why, e.g. `expected a number at $.amount`.
 - **Execution control.**
   - The instruction budget also covers heavy native calls.
   - Optional suspend/resume (`e7_resume`) for time-slicing on the UI thread.

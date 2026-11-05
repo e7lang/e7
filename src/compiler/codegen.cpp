@@ -296,6 +296,7 @@ struct Gen {
   }
   static std::string kindSuffixOf(Type* t) { return std::string(1, kindChar(K(t))); }
   std::string jsonDescriptor(Type* t);
+  Loc jsonLoc_;  // the JSON.parse / tryParse expression whose descriptor is being built (errors)
   void loadInt(uint16_t dst, int64_t v) {
     if (v >= INT32_MIN && v <= INT32_MAX) emitBx(OP_LOADI, dst, (uint32_t)(int32_t)v);
     else emitBx(OP_LOADK_I, dst, kInt(v));
@@ -1819,11 +1820,25 @@ void Gen::genInto(Expr* e, uint16_t dst) {
         Expr* call = strip(e->a);
         uint16_t text = gen(call->list[0]);
         uint16_t desc = temp(K_R);
+        jsonLoc_ = e->loc;
         loadStr(desc, utf8ToUtf16(jsonDescriptor(e->type)));
         uint16_t boxed = temp(K_R);
         callNative("JSON.parse", {text, desc}, boxed, 'R');
         if (kindOf(e->type) != K_R) emit(kindOf(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, d, boxed);
         else mov(d, boxed, K_R);
+        release(m0);
+        return;
+      }
+      if (e->intrinsic == IN_JSON_TRY_PARSE) {
+        // e->type is T | null; the document is parsed as T (a JSON null document is a mismatch)
+        Expr* call = strip(e->a);
+        uint16_t text = gen(call->list[0]);
+        uint16_t desc = temp(K_R);
+        jsonLoc_ = e->loc;
+        loadStr(desc, utf8ToUtf16(jsonDescriptor(T.optional(e->type->elem, false, e->type->hasUndef))));
+        uint16_t res = temp(K_R);
+        callNative("JSON.tryParse", {text, desc}, res, 'R');
+        mov(d, res, K_R);
         release(m0);
         return;
       }
@@ -3254,7 +3269,7 @@ std::string Gen::jsonDescriptor(Type* t) {
     case TT::Object: {
       std::vector<std::pair<std::string, Type*>> fs;
       for (auto& p : t->shape->props) fs.push_back({p.name, p.type});
-      if (!t->shape->methods.empty()) { err(Loc(), "JSON.parse target type has methods"); return "s"; }
+      if (!t->shape->methods.empty()) { err(jsonLoc_, "JSON.parse target type has methods"); return "s"; }
       Type* rt = C.recordFor(fs);
       ClassSym* c = rt->cls;
       std::string s = "{" + std::to_string(c->classIdx) + ":" + std::to_string(fs.size()) + ":";
@@ -3268,10 +3283,10 @@ std::string Gen::jsonDescriptor(Type* t) {
       return s;
     }
     case TT::Map:
-      if (t->key->t != TT::String) { err(Loc(), "JSON.parse only supports Map<string, T>"); return "s"; }
+      if (t->key->t != TT::String) { err(jsonLoc_, "JSON.parse only supports Map<string, T>"); return "s"; }
       return "M" + jsonDescriptor(t->val);
     default:
-      err(Loc(), "type '" + typeName(t) + "' cannot be produced by JSON.parse");
+      err(jsonLoc_, "type '" + typeName(t) + "' cannot be produced by JSON.parse");
       return "s";
   }
 }

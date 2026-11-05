@@ -1,0 +1,67 @@
+good: ok ""
+amount as string: null "expected a number at $.amount"
+missing id: null "missing property at $.id"
+paid as number: null "expected a boolean at $.paid"
+note as number: null "expected a string at $.note"
+tags[1] as number: null "expected a string at $.tags[1]"
+tags as object: null "expected an array at $.tags"
+to missing: null "missing property at $.to"
+to.iban missing: null "missing property at $.to.iban"
+root is array: null "expected an object at $"
+root is null: null "expected an object at $"
+again good: ok ""
+{"id":1}
+nullable T, null document: null "expected a number at $"
+[null] ""
+7 ""
+tuple ok: ok ""
+tuple too short: null "tuple has the wrong number of elements at $"
+tuple too long: null "tuple has the wrong number of elements at $"
+tuple element: null "expected a number at $[1]"
+tuple as object: null "expected a tuple array at $"
+3 10.5 0 ""
+map value: null "expected a number at $.tax"
+map as array: null "expected an object at $"
+2 0
+nested map: null "expected a number at $.a.x[1]"
+true 1
+i32 ok: ok ""
+i32 fraction: null "expected an integer at $"
+i32 too big: null "integer out of range at $"
+u8 negative: null "integer out of range at $[1]"
+i64 1e400: null "integer out of range at $"
+255 0
+[1e+308,null,null,0,1.2345678901234568e+29] Infinity
+"" true SyntaxError: unexpected end of input at position 0
+"   " true SyntaxError: unexpected end of input at position 3
+"{" true SyntaxError: expected property name at position 1
+"[1,]" true SyntaxError: unexpected token at position 3
+"[1 2]" true SyntaxError: expected ',' or ']' at position 3
+"{\"a\" 1}" true SyntaxError: expected ':' at position 5
+"{a: 1}" true SyntaxError: expected property name at position 1
+"tru" true SyntaxError: unexpected token at position 0
+"nul" true SyntaxError: unexpected token at position 0
+"01" true SyntaxError: unexpected data after JSON value at position 1
+"1." true SyntaxError: bad number at position 2
+"-" true SyntaxError: bad number at position 1
+"1e+" true SyntaxError: bad number at position 3
+"\"abc" true SyntaxError: unterminated string at position 4
+"\"\\x\"" true SyntaxError: bad escape at position 3
+"\"\\u12G4\"" true SyntaxError: bad unicode escape at position 3
+"\"a\tb\"" true SyntaxError: bad control character in string at position 3
+"[1] x" true SyntaxError: unexpected data after JSON value at position 4
+"{} {}" true SyntaxError: unexpected data after JSON value at position 3
+"NaN" true SyntaxError: unexpected token at position 0
+"'a'" true SyntaxError: unexpected token at position 0
+"﻿1" true SyntaxError: unexpected token at position 0
+[1,2] ""
+éé 😀 2 1 55296 56320 2
+"\"\\/\b\f\n\r\t"
+1 55296 ""
+true expected a number at $.café
+true expected a number at $[0]
+true SyntaxError: nesting deeper than 256 levels at position 256
+true SyntaxError: nesting deeper than 256 levels at position 256
+true SyntaxError: nesting deeper than 256 levels at position 1280
+667 ""
+true 1 SyntaxError: unexpected end of input at position 1

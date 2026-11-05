@@ -57,9 +57,47 @@ patterns only (no regex). Strings are UTF-16 like JavaScript; `for (const ch of 
 ## JSON and Date
 
 - `JSON.stringify(value, null, indent?)`; `JSON.parse(text) as T` validates against `T`
-  (`T` may be an object type, array, tuple, primitive, nullable/optional fields, or `Map<string, V>`).
+  (`T` may be an object type, array, tuple, primitive, nullable/optional fields, or `Map<string, V>`); a mismatch
+  ends the call. For untrusted input use `tryParse(text) as T | null` from `e7:json` (below).
 - `Date` (UTC): `Date.now/parse/UTC`, constructors, all `get*`/`getUTC*`, `getTime`, `setTime`,
   `toISOString`, `toJSON`, `toString`, `toUTCString`. Other `set*` methods are missing: compute with `Date.UTC`.
+
+## `e7:json`
+
+`tryParse(text) as T | null` — the same typed, validating parse as `JSON.parse(text) as T` (same `T`), but a
+syntax error or a value of the wrong shape gives `null` instead of ending the call. Use it for untrusted input.
+`lastError()` returns why the last `tryParse` failed (`"expected a number at $.amount"`, `"missing property at $.id"`,
+`"SyntaxError: unexpected end of input at position 8"`), or `""` after a success.
+
+- The `as T | null` is required (`tryParse(text)` alone or `as T` without `| null` is a compile error).
+- A document that is just `null` counts as a mismatch, even when `T` is nullable; check `lastError()` if you must
+  tell a JSON `null` apart from bad input. Nested nullable values work as usual.
+- Nesting deeper than 256 levels gives `null`. Running out of instruction budget or memory is still an error.
+- On Node.js (tests with the shim) only syntax errors are detected; the shape is checked by E7 only.
+
+```ts
+import { tryParse, lastError } from "e7:json";
+
+interface Order { id: string; items: { sku: string; qty: number }[]; note?: string }
+
+const ok = tryParse('{"id": "A1", "items": [{"sku": "pen", "qty": 2}]}') as Order | null;
+console.log(ok !== null ? ok.items[0].qty : -1, JSON.stringify(lastError())); // 2 ""
+
+const wrong = tryParse('{"id": "A1", "items": [{"sku": "pen", "qty": "2"}]}') as Order | null;
+console.log(wrong === null, lastError()); // true expected a number at $.items[0].qty
+
+const broken = tryParse('{"id": ') as Order | null;
+console.log(broken === null, lastError()); // true SyntaxError: unexpected end of input at position 7
+
+const prices = tryParse('{"pen": 1.5, "pad": 3}') as Map<string, number> | null;
+console.log(prices?.get("pad")); // 3
+```
+
+```ts e7-reject
+import { tryParse } from "e7:json";
+interface Order { id: string }
+const o = tryParse("{}") as Order; // error: write tryParse(text) as Order | null
+```
 
 ## `e7:encoding`
 

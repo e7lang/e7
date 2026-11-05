@@ -273,6 +273,8 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
   - 签名与密钥交换：Ed25519、X25519、ECDSA P-256/384/521（raw 或严格 DER）、RSA PKCS#1 v1.5 / PSS。
   - 另有 CRC32、安全随机数、`KeyHandle`。
 - **`e7:encoding`。** hex、base64、base64url、base32、UTF-8、PEM，以及字节拼接与比较。
+- **`e7:json`。** `tryParse(text) as T | null` 与 `JSON.parse` 同样按类型校验，但对格式错误或结构不符的（不可信）输入
+  返回 `null` 而不是终止脚本；`lastError()` 给出原因，例如 `expected a number at $.amount`。
 - **执行控制。**
   - 指令预算同时覆盖重型原生函数调用。
   - 可选的挂起/恢复（`e7_resume`），用于在 UI 线程上分片执行。

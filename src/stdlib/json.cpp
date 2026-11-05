@@ -174,6 +174,14 @@ E7_NATIVE(j_stringifyIndentStr) {
 }
 
 // ------------------------------------------------------------------ parse
+// A malformed document or a value that does not match the target type. JSON.parse turns it into a
+// runtime error; e7:json tryParse into null (+ lastError). Every other failure (out of memory,
+// budget, a bad descriptor in the bytecode) is a VM error and is never caught here.
+struct JsonFail {
+  bool syntax;
+  std::string msg;  // without the "JSON.parse: " prefix
+};
+
 struct JNode {
   enum T { Null, Bool, Num, Str, Arr, Obj } t = Null;
   bool b = false;
@@ -188,8 +196,16 @@ struct JParser {
   const char16_t* s;
   size_t n, i = 0;
   int depth = 0;
+  size_t tempBytes = 0, checkedAt = 0;  // transient C++ memory held by the tree (memory limit)
   [[noreturn]] void fail(const char* what) {
-    vm.error("SyntaxError: JSON.parse: %s at position %zu", what, i);
+    throw JsonFail{true, std::string(what) + " at position " + std::to_string(i)};
+  }
+  void account(size_t bytes) {
+    tempBytes += bytes;
+    if (tempBytes - checkedAt >= (64u << 10)) {
+      checkedAt = tempBytes;
+      vm.checkTemp(tempBytes);
+    }
   }
   void ws() {
     while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
@@ -244,7 +260,7 @@ struct JParser {
             v = v * 16 + h;
           }
           i += 4;
-          out += (char16_t)v;
+          out += (char16_t)v;  // lone surrogates are kept, as in JavaScript
           break;
         }
         default: fail("bad escape");
@@ -254,6 +270,7 @@ struct JParser {
   }
   JNode value() {
     if (++depth > 256) fail("nesting deeper than 256 levels");
+    account(sizeof(JNode) + 16);
     JNode v;
     if (i >= n) fail("unexpected end of input");
     char16_t c = s[i];
@@ -266,6 +283,7 @@ struct JParser {
         ws();
         if (i >= n || s[i] != '"') fail("expected property name");
         std::u16string k = string();
+        account(k.size() * sizeof(char16_t));
         ws();
         if (i >= n || s[i] != ':') fail("expected ':'");
         i++;
@@ -296,6 +314,7 @@ struct JParser {
     } else if (c == '"') {
       v.t = JNode::Str;
       v.str = string();
+      account(v.str.size() * sizeof(char16_t));
     } else if (lit("true")) { v.t = JNode::Bool; v.b = true; }
     else if (lit("false")) { v.t = JNode::Bool; v.b = false; }
     else if (lit("null")) { v.t = JNode::Null; }
@@ -334,7 +353,7 @@ struct Builder {
   ModuleRT* mod;
   const std::string& d;
   [[noreturn]] void fail(const std::string& path, const char* what) {
-    vm.error("JSON.parse: %s at %s", what, path.empty() ? "$" : path.c_str());
+    throw JsonFail{false, std::string(what) + " at " + (path.empty() ? std::string("$") : path)};
   }
   // The descriptor comes from bytecode, so it is validated once up front (grammar, bounds, depth);
   // build() and skip() rely on it being well-formed.
@@ -554,16 +573,48 @@ struct Builder {
   }
 };
 
+// Parses `text` against the descriptor; throws JsonFail for a malformed or mismatching document.
+static Slot parseTyped(VM& vm, StrObj* text, const std::string& desc) {
+  Builder b{vm, currentModule(vm), desc};
+  if (b.validate(0, 0) != desc.size()) vm.error("bad JSON descriptor");
+  JParser p{vm, text->chars(), text->len};
+  JNode root = p.parse();
+  Slot v = b.build(&root, 0, "$");
+  return boxValue(vm, v, b.vtOfDesc(0) != VT_REF && desc[0] != '?' && desc[0] != '~' ? b.vtOfDesc(0) : (uint8_t)VT_REF);
+}
+
 E7_NATIVE(j_parse) {
   E7_UNUSED;
   StrObj* text = S(vm, a[0]);
   std::string desc = strUtf8(S(vm, a[1]));
-  JParser p{vm, text->chars(), text->len};
-  JNode root = p.parse();
-  Builder b{vm, currentModule(vm), desc};
-  if (b.validate(0, 0) != desc.size()) vm.error("bad JSON descriptor");
-  Slot v = b.build(&root, 0, "$");
-  r->r = boxValue(vm, v, b.vtOfDesc(0) != VT_REF && desc[0] != '?' && desc[0] != '~' ? b.vtOfDesc(0) : (uint8_t)VT_REF).r;
+  std::string msg;
+  try {
+    r->r = parseTyped(vm, text, desc).r;
+    return;
+  } catch (JsonFail& f) {
+    msg = (f.syntax ? "SyntaxError: JSON.parse: " : "JSON.parse: ") + f.msg;
+  }
+  vm.error("%s", msg.c_str());
+}
+
+// e7:json tryParse: like JSON.parse, but a malformed or mismatching document gives null and sets
+// lastError(). Budget, memory and descriptor errors still stop the script.
+E7_NATIVE(j_tryParse) {
+  E7_UNUSED;
+  StrObj* text = S(vm, a[0]);
+  std::string desc = strUtf8(S(vm, a[1]));
+  try {
+    r->r = parseTyped(vm, text, desc).r;
+    vm.jsonLastError.clear();
+  } catch (JsonFail& f) {
+    vm.jsonLastError = (f.syntax ? "SyntaxError: " : "") + f.msg;
+    r->r = nullptr;
+  }
+}
+
+E7_NATIVE(j_lastError) {
+  E7_UNUSED;
+  r->r = vm.newString(utf8ToUtf16(vm.jsonLastError));
 }
 
 void registerJsonNatives(VM& vm) {
@@ -571,6 +622,8 @@ void registerJsonNatives(VM& vm) {
   vm.registerNative("JSON.stringifyIndent", "RF>R", j_stringifyIndent);
   vm.registerNative("JSON.stringifyIndentStr", "RR>R", j_stringifyIndentStr);
   vm.registerNative("JSON.parse", "RR>R", j_parse);
+  vm.registerNative("JSON.tryParse", "RR>R", j_tryParse);
+  vm.registerNative("JSON.lastError", ">R", j_lastError);
 }
 
 }  // namespace e7

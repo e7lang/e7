@@ -304,6 +304,56 @@ int main() {
     CHECK(e7_memory_used(vm) < (4u << 20));
     e7_vm_free(vm);
   }
+  // ---- e7:json tryParse: budget and memory exhaustion stay errors (never a null result)
+  {
+    auto bc = compile(R"(
+      import { tryParse, lastError } from "e7:json";
+      export function count(t: string): number { const r = tryParse(t) as number[] | null; return r === null ? -1 : r.length; }
+      export function err(): string { return lastError(); }
+      export function countAll(t: string): number {
+        let n = 0;
+        for (let k = 0; k < 3; k++) { const r = tryParse(t) as number[] | null; n += r === null ? -1 : r.length; }
+        return n;
+      }
+    )");
+    std::string doc = "[";
+    for (int i = 0; i < 300000; i++) doc += i ? ",0" : "0";
+    std::string garbage = doc + "]x";
+    doc += "]";
+    e7_vm* vm = e7_vm_new(nullptr);
+    e7_module* m;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_value a = str(doc.c_str()), ret;
+    CHECK(e7_call(vm, m, "count", &a, 1, &ret) == E7_OK && ret.v.num == 300000);
+    a = str(garbage.c_str());
+    CHECK(e7_call(vm, m, "count", &a, 1, &ret) == E7_OK && ret.v.num == -1);
+    CHECK(e7_call(vm, m, "err", nullptr, 0, &ret) == E7_OK && ret.type == E7_STRING &&
+          std::string(ret.v.str.ptr, ret.v.str.len).find("unexpected data after JSON value") != std::string::npos);
+    // the parse is charged by the size of the text (after the native returns: the next budget
+    // check stops the script, whether the parse succeeded or gave null)
+    e7_set_budget(vm, 20000);
+    a = str(doc.c_str());
+    CHECK(e7_call(vm, m, "countAll", &a, 1, &ret) == E7_ERR_BUDGET);
+    e7_set_budget(vm, 20000);
+    a = str(garbage.c_str());
+    CHECK(e7_call(vm, m, "countAll", &a, 1, &ret) == E7_ERR_BUDGET);
+    e7_set_budget(vm, 0);
+    CHECK(e7_call(vm, m, "countAll", &a, 1, &ret) == E7_OK && ret.v.num == -3);
+    e7_set_budget(vm, 0);
+    e7_vm_free(vm);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.memory_limit = 4u << 20;
+    vm = e7_vm_new(&cfg);
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    a = str(doc.c_str());
+    CHECK(e7_call(vm, m, "count", &a, 1, &ret) == E7_ERR_MEMORY);
+    a = str(garbage.c_str());
+    CHECK(e7_call(vm, m, "count", &a, 1, &ret) == E7_ERR_MEMORY);
+    a = str("[1,2]");
+    CHECK(e7_call(vm, m, "count", &a, 1, &ret) == E7_OK && ret.v.num == 2);
+    e7_vm_free(vm);
+  }
   // ---- stack depth
   {
     e7_vm* vm = e7_vm_new(nullptr);

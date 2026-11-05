@@ -487,10 +487,10 @@ void Checker::declareFile(FileInfo* fi) {
 void Checker::bindImports(FileInfo* fi, Stmt* s) {
   bool builtinMod = s->from.rfind("e7:", 0) == 0;
   if (builtinMod) {
-    if (s->from != "e7:crypto" && s->from != "e7:encoding" && s->from != "e7:test") {
+    if (s->from != "e7:crypto" && s->from != "e7:encoding" && s->from != "e7:json" && s->from != "e7:test") {
       std::string alt = closestName(s->from, builtinModuleNames());
       err(s->loc, "unknown builtin module '" + s->from + "'" +
-                      (alt.empty() ? "; the builtin modules are e7:crypto, e7:encoding and e7:test"
+                      (alt.empty() ? "; the builtin modules are e7:crypto, e7:encoding, e7:json and e7:test"
                                    : "; did you mean '" + alt + "'?"));
       return;
     }

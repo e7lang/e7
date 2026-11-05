@@ -211,6 +211,9 @@ class VM {
   void* hostKeyUd = nullptr;
   int (*hostKeyFn)(void* ud, int64_t id, const uint8_t** key, size_t* len) = nullptr;
 
+  // message of the last failed e7:json tryParse ("" after a successful one)
+  std::string jsonLastError;
+
   const VMConfig& config() const { return cfg_; }
   ModuleRT* currentModule() const { return frames_.empty() ? nullptr : frames_.back().fn->mod; }
   uint32_t nativeDepth() const { return nativeDepth_; }

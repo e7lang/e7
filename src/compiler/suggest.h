@@ -66,15 +66,17 @@ inline const std::vector<std::string>& builtinModuleExports(const std::string& m
       "ecdsaSign", "ecdsaVerify", "ecdsaPublicKey", "rsaVerify", "rsaSign"};
   static const std::vector<std::string> test = {"assert", "assertEqual", "assertNotEqual", "assertClose",
                                                 "assertThrows", "fail"};
+  static const std::vector<std::string> json = {"tryParse", "lastError"};
   static const std::vector<std::string> none;
   if (module == "e7:encoding") return encoding;
   if (module == "e7:crypto") return crypto;
   if (module == "e7:test") return test;
+  if (module == "e7:json") return json;
   return none;
 }
 
 inline const std::vector<std::string>& builtinModuleNames() {
-  static const std::vector<std::string> names = {"e7:crypto", "e7:encoding", "e7:test"};
+  static const std::vector<std::string> names = {"e7:crypto", "e7:encoding", "e7:json", "e7:test"};
   return names;
 }
 

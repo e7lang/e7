@@ -327,7 +327,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
     }
     return bad();
   }
-  if (M == "e7:crypto" || M == "e7:encoding" || M == "e7:test") {
+  if (M == "e7:crypto" || M == "e7:encoding" || M == "e7:json" || M == "e7:test") {
     BuiltinSym tmp;
     std::string id = M + "." + name;
     const auto& names = builtinModuleExports(M);
@@ -553,6 +553,15 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
       return T.voidT();
     }
     return errT(l, "module 'e7:test' has no function '" + n + "'" + didYouMean(n, builtinModuleExports("e7:test")));
+  }
+  // ------------------------------------------------------------ e7:json
+  // (tryParse(text) as T | null is handled in checkAs; reaching here means the assertion is missing)
+  if (id == "e7:json.tryParse")
+    return errT(l, "tryParse must be used with a type assertion: tryParse(text) as MyType | null");
+  if (id == "e7:json.lastError") {
+    if (!argsMatch(e, args, {}, 0, "lastError")) return T.unknown();
+    nat("JSON.lastError");
+    return str;
   }
   // ------------------------------------------------------------ e7:encoding
   if (id.rfind("e7:encoding.", 0) == 0) {

@@ -106,6 +106,18 @@ const port = parsePort("8080");
 console.log(port === null ? "invalid" : `port ${port}`);
 ```
 
+The `try { JSON.parse(...) } catch` habit becomes `tryParse` from `e7:json`, which returns `null` for malformed
+or mismatching JSON:
+
+```ts
+import { tryParse, lastError } from "e7:json";
+function parseCount(text: string): number {
+  const n = tryParse(text) as number | null;
+  return n === null ? 0 : n;
+}
+console.log(parseCount("41") + 1, parseCount("oops"), lastError());
+```
+
 In tests, `assertThrows` from `e7:test` can check that a call fails.
 
 ### User-defined generics
@@ -260,7 +272,8 @@ console.log(order.id, order.items[0].qty, order.note ?? "(none)");
 ```
 
 The text is validated against the type while parsing; a mismatch stops the call with the path
-(`JSON.parse: expected a number at $.amount`). Extra fields are ignored.
+(`JSON.parse: expected a number at $.amount`). Extra fields are ignored. For untrusted input write
+`tryParse(text) as Order | null` (from `e7:json`): same validation, but `null` instead of ending the call.
 
 ### Destructuring with defaults or rest
 
@@ -311,7 +324,7 @@ console.log(first, second, rest.join(","));
 
 - `import { a, b as c } from "./x"` (extension optional), `import * as ns from "./x"`, `import type`,
   `export function/const/class/interface/type/enum`, `export { a, b as c }`. No circular imports.
-- Built-in modules: `e7:crypto`, `e7:encoding`, `e7:test` (see stdlib.md and testing.md).
+- Built-in modules: `e7:crypto`, `e7:encoding`, `e7:json`, `e7:test` (see stdlib.md and testing.md).
 - Host functions: `declare function name(a: string, n: number): string;` with host types only
   (`number boolean string`, `i8`..`u64`, `Uint8Array`, `KeyHandle`, `void` result).
 - `export function`s of the entry file are callable by the host; their parameters and results must be host
