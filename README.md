@@ -177,7 +177,7 @@ Kotlin, Swift and C# use the same flow: create the VM (optionally with a trusted
 then `call("sign", ...)`. In Swift, add the package with Swift Package Manager and call it directly:
 
 ```swift
-// Package.swift: .package(url: "https://github.com/e7lang/e7.git", from: "0.2.1")
+// Package.swift: .package(url: "https://github.com/e7lang/e7.git", from: "0.2.5")
 //                .product(name: "E7VM", package: "e7")
 import E7VM
 
@@ -191,7 +191,7 @@ On Android, add the AAR from Maven:
 
 ```kotlin
 dependencies {
-    implementation("org.e7vm:e7vm-android:0.2.1")   // or org.e7vm:e7vm:0.2.1 for desktop JVMs
+    implementation("org.e7vm:e7vm-android:0.2.5")   // or org.e7vm:e7vm:0.2.5 for desktop JVMs
 }
 ```
 
@@ -327,7 +327,7 @@ The full language reference is in [docs/SPEC.md](docs/SPEC.md).
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
 | Android | Maven `org.e7vm:e7vm-android` (AAR), or `cd platform/android && ./gradlew :library:assembleRelease`, or `ANDROID_NDK_HOME=... platform/android/build_android.sh` | Java/Kotlin: `platform/java/org/e7vm` |
 | JVM (desktop) | Maven `org.e7vm:e7vm` (jar with JNI libraries for Linux, macOS, Windows) | Java/Kotlin: `platform/java/org/e7vm` |
-| iOS / macOS (Swift) | Swift Package Manager: `.package(url: "https://github.com/e7lang/e7.git", from: "0.2.1")`, or `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `.product(name: "E7VM", package: "e7")` (`platform/ios/E7VM/E7VM.swift`) |
+| iOS / macOS (Swift) | Swift Package Manager: `.package(url: "https://github.com/e7lang/e7.git", from: "0.2.5")`, or `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift: `.product(name: "E7VM", package: "e7")` (`platform/ios/E7VM/E7VM.swift`) |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]` (VS 2022) | C/C++, C#: `platform/windows/E7VM.cs` |
 | .NET (Windows / Linux / macOS) | `dotnet add package E7VM` | C#: NuGet package [`E7VM`](https://www.nuget.org/packages/E7VM) |
 | WebAssembly (Node.js, browsers) | `emcmake cmake -S . -B build-wasm && cmake --build build-wasm` → `e7wasm.js` + `e7wasm.wasm` | JavaScript: npm `@e7lang/e7` ([packages/e7](packages/e7)) |

@@ -1,7 +1,7 @@
 // swift-tools-version:5.9
 // Swift Package Manager manifest: builds e7vm (VM + compiler + BearSSL + Monocypher) from source.
 //
-//   dependencies: [.package(url: "https://github.com/e7lang/e7.git", from: "0.2.1")]
+//   dependencies: [.package(url: "https://github.com/e7lang/e7.git", from: "0.2.5")]
 //   .target(name: "App", dependencies: [.product(name: "E7VM", package: "e7")])
 //
 // Keep the source lists in sync with E7_CORE_SRC / E7_VM_SRC / E7_COMPILER_SRC in CMakeLists.txt.

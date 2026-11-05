@@ -9,7 +9,7 @@ name: Maven
 # Publishing only happens when called from another workflow with publish: true, e.g. from release.yml:
 #   maven:
 #     uses: ./.github/workflows/maven.yml
-#     with: { version: "0.2.1", publish: true }
+#     with: { version: "0.2.5", publish: true }
 #     secrets: inherit
 #     permissions: { contents: write, packages: write, id-token: write, attestations: write }
 # It then publishes to GitHub Packages (always), to Maven Central (only if the MAVEN_CENTRAL_* and SIGNING_*
@@ -21,7 +21,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Version to build/publish, e.g. 0.2.1 (a leading v is ignored)"
+        description: "Version to build/publish, e.g. 0.2.5 (a leading v is ignored)"
         type: string
         required: true
       publish:
