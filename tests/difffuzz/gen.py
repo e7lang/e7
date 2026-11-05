@@ -91,7 +91,8 @@ class Gen:
         self.loop_depth = 0
         self.in_fn = False
         # nullable / class variables tested in an enclosing condition: tsc narrows them there (to `never`
-        # in a dead branch) and e7 rejects a second `x !== null` as "always true", so they are not used
+        # in a dead branch, where `x?.m()` or `x instanceof C` are errors), so they are used there only in
+        # comparisons with null and `??` (vars(narrowed_ok=True))
         self.blocked = set()
         self.guards = [set()]  # per scope: variables blocked by guard() until the scope ends
 
@@ -107,21 +108,21 @@ class Gen:
     def pick(self, xs):
         return self.r.choice(xs)
 
-    def vars(self, t, mutable=None):
+    def vars(self, t, mutable=None, narrowed_ok=False):
         out, seen = [], set()
         for sc in reversed(self.scopes):  # innermost first: a shadowed name has the inner type
             for (nm, ty, mu) in reversed(sc):
                 if nm in seen:
                     continue
                 seen.add(nm)
-                if nm in self.blocked:
+                if nm in self.blocked and not (narrowed_ok and ty in (NNUM, USTR)):
                     continue
                 if ty == t and (mutable is None or mu == mutable):
                     out.append(nm)
         return out
 
-    def var(self, t):
-        vs = self.vars(t)
+    def var(self, t, narrowed_ok=False):
+        vs = self.vars(t, narrowed_ok=narrowed_ok)
         return self.pick(vs) if vs else None
 
     def declare(self, name, t, mutable):
@@ -262,7 +263,7 @@ class Gen:
             if f:
                 return f"{f}({self.num(d - 1)})"
         if k == 22:
-            n = self.var(NNUM)
+            n = self.var(NNUM, narrowed_ok=True)
             if n:
                 return self.pick([f"({n} ?? {self.num(d - 1)})", f"({n} !== null ? {n} * 2 : -1)"])
         if k == 23:
@@ -313,7 +314,7 @@ class Gen:
         nf = [f for (f, t, _) in c.all_fields() if t == NUM]
         opts = [f"{nm}.m({self.num(d - 1)})", f"{nm}.total()"]
         opts += [f"{nm}.{f}" for f in nf]
-        opts.append(f"{c.chain()[-1].name}.count")
+        opts.append(f"{self.pick(c.chain()).name}.count")
         return self.pick(opts)
 
     def call_fn(self, t, d):
@@ -431,6 +432,9 @@ class Gen:
             u = self.var(USTR)
             if u:
                 return self.pick([f"({u} ?? \"none\")", f"({u}?.toUpperCase() ?? \"-\")", f"String({u}?.length)"])
+            u = self.var(USTR, narrowed_ok=True)
+            if u:
+                return f"({u} ?? \"none\")"
             n = self.var(NNUM)
             if n:
                 return f"({n}?.toFixed(2) ?? \"null\")"
@@ -535,12 +539,13 @@ class Gen:
                 a = f"({a} + 0n)"
             return f"({a} {op} {b})"
         if k == 13:
-            n = self.var(NNUM)
+            n = self.var(NNUM, narrowed_ok=True)
             if n:
-                return self.pick([f"({n} === null)", f"({n} !== null && {n} > 0)", f"({n} == null)"])
-            u = self.var(USTR)
+                return self.pick([f"({n} === null)", f"({n} !== null && {n} > 0)", f"({n} == null)",
+                                  f"(null !== {n})", f"({n} != undefined)"])
+            u = self.var(USTR, narrowed_ok=True)
             if u:
-                return f"({u} !== undefined)"
+                return self.pick([f"({u} !== undefined)", f"({u} === undefined || {u} === null)"])
         if k == 14:
             e = self.call_fn(BOOL, d)
             if e:
@@ -746,10 +751,13 @@ class Gen:
         if v and self.chance(0.3):
             return f"{{ ...{v}, id: {self.num(d)} }}"
         parts = [f"id: {self.num(d)}", f"label: {self.string(d)}"]
-        # `score` is always present (maybe undefined): a property added later goes to the end of the key
-        # order in JavaScript, and an object spread of such an object has another order in e7
-        parts.append(f"score: {self.pick([self.num(d), 'undefined'] if typed else [self.num(d)])}")
+        # `score` may be left out: a property added later goes to the end of the key order in JavaScript (and
+        # in e7's layout of the literal, while only one optional property is missing)
+        if self.chance(0.75):
+            parts.append(f"score: {self.pick([self.num(d), 'undefined'] if typed else [self.num(d)])}")
         parts.append(f"tags: {self.sarr(d)}")
+        if self.chance(0.3):
+            self.r.shuffle(parts)
         return "{ " + ", ".join(parts) + " }"
 
     def gen(self, t, d):
@@ -780,9 +788,7 @@ class Gen:
             entries = ", ".join(f"[{self.num(0)}, {self.string(0)}]" for _ in range(self.r.randrange(0, 4)))
             return f"new Map<number, string>([{entries}])"
         if t == SETN:
-            # the argument is a variable or a literal: e7 mis-types some calls such as Array.of(...) or
-            # map((x, i) => ...) when the Set constructor gives them a contextual type (compiler issue)
-            return self.pick([f"new Set<number>({self.narr(0)})", "new Set<number>()"])
+            return self.pick([f"new Set<number>({self.narr(max(d - 1, 0))})", "new Set<number>()"])
         if t == NNUM:  # always through a call: a literal initializer would narrow the declared type in tsc
             return f"maybe({self.num(d - 1)})"
         if t == USTR:
@@ -873,14 +879,14 @@ class Gen:
             s = self.pick([f"{nm} = BigInt.asIntN(256, {self.big(d)});",
                            f"{nm} = BigInt.asIntN(200, {nm} {self.pick(['+', '-', '*', '^'])} {self.big(d)});"])
         elif ty == NNUM:
-            # `x ??= v` narrows x to number for the rest of the scope, and e7 then rejects a later `x !== null`
-            # (which tsc accepts): use ??= on a block-local copy only
+            # `x ??= v` narrows x to number for the rest of the scope (later `x !== null` tests are fine); in v,
+            # x is null (blocked)
             t = self.fresh("t")
-            s = self.pick([f"{nm} = maybe(-1);", f"{nm} = maybe({self.num(d)});",
+            s = self.pick([f"{nm} = maybe(-1);", f"{nm} = maybe({self.num(d)});", f"{nm} ??= {self.blocking(nm, lambda: self.num(d))};",
                            f"{{ let {t}: number | null = {nm}; {t} ??= {self.num(d)}; console.log({t}); }}"])
         elif ty == USTR:
             t = self.fresh("t")
-            s = self.pick([f"{nm} = maybeStr(\"\");",
+            s = self.pick([f"{nm} = maybeStr(\"\");", f"{nm} ??= {self.blocking(nm, lambda: self.string(d))};",
                            f"{{ let {t}: string | undefined = {nm}; {t} ??= {self.string(d)}; console.log({t}); }}"])
         elif ty in INTS:
             s = self.pick([f"{nm} = {self.intx(ty, d)};", f"{nm} = {ty}({nm} + {self.intx(ty, d)});"])
@@ -909,7 +915,8 @@ class Gen:
                            f"{nm}.length = Math.min({nm}.length, {r.randrange(0, 6)});",
                            f"console.log({nm}.splice({self.small()}, {self.small()}).join(\",\"));",
                            f"console.log({nm}.push({self.num(d)}), {nm}.length);"])
-            if self.loop_depth > 0 and "push" in s:
+            # bounded in loops (a for...of over the array itself would not end)
+            if self.loop_depth > 0 and ("push" in s or "unshift" in s or f"{nm}[{nm}.length]" in s):
                 s = f"if ({nm}.length < 40) {s}"
         elif ty == SARR:
             s = self.pick([f"{nm}.push({self.string(d)});", f"{nm}.pop();", f"{nm}.sort();", f"{nm}.reverse();",
@@ -1159,7 +1166,8 @@ class Gen:
         k = self.r.randrange(3)
         if k == 0:
             a, b = self.fresh(), self.fresh()
-            self.emit(ind, f"const [{a}, {b}] = {self.tup(d)};")
+            src = self.tup(d) if self.chance(0.5) else f"[{self.num(d)}, {self.string(d)}]"
+            self.emit(ind, f"const [{a}, {b}] = {src};")
             self.declare(a, NUM, False)
             self.declare(b, STR, False)
         elif k == 1:
@@ -1238,7 +1246,7 @@ class Gen:
             if not use_pp:
                 for (f, t, ro) in own:
                     lines.append(f"    this.{f} = {f};")
-            lines.append(f"    {c.name}.count++;" if not parent else f"    {c.chain()[-1].name}.count += 10;")
+            lines.append(f"    {c.name}.count++;" if not parent else f"    {self.pick(c.chain()).name}.count += 10;")
             lines.append("  }")
             # methods: m(x), total(), describe(), kind(), bump(d)
             self.push()
@@ -1330,9 +1338,8 @@ class Gen:
                                "  let s = base;", "  for (const x of xs) s = s * 2 + x;", "  return s + xs.length;", "}"]
                 self.funcs.append((nm, [NUM, "rest"], NUM))
             elif kind == "opt":
-                # the default does not use `a`: e7 fails to compile `b = a` when a closure captures `a`
-                dflt = self.num(0)
                 self.declare("a", NUM, False)
+                dflt = self.pick([self.num(0), "a", f"a * {self.num(0)}"])
                 body = self.num(2)
                 self.lines += [f"function {nm}(a: number, b: number = {dflt}, c?: number): number {{",
                                f"  return {body} + b * 2 + (c ?? 0.5);", "}"]
