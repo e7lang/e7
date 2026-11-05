@@ -48,6 +48,22 @@ elseif(EMSCRIPTEN)
 else()
   add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-trigraphs -fexceptions)
 endif()
+if(NOT MSVC)
+  # JS numbers (and fdlibm, for Math.* and **) round every operation: no contraction of a*b+c into
+  # fused multiply-adds, which clang does by default (arm64) and GCC in its GNU modes. The files whose
+  # results it would change also have a pragma, for builds without this flag (SwiftPM).
+  add_compile_options(-ffp-contract=off)
+endif()
+
+# 32-bit x86: do double arithmetic in SSE2 registers, not with the x87 FPU, whose extended precision
+# rounds twice (JS numbers and fdlibm need every operation rounded once to double).
+if(NOT MSVC AND NOT EMSCRIPTEN AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+  include(CheckCXXSourceCompiles)
+  check_cxx_source_compiles("#if !defined(__i386__)\n#error not x86\n#endif\nint main() { return 0; }" E7_TARGET_I386)
+  if(E7_TARGET_I386)
+    add_compile_options(-msse2 -mfpmath=sse)
+  endif()
+endif()
 
 if(E7_SANITIZE)
   add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined)
@@ -99,7 +115,8 @@ if(NOT MSVC)
 endif()
 
 # ---------------------------------------------------------------- core / compiler / VM
-set(E7_CORE_SRC src/core/utf.cpp src/core/numfmt.cpp src/core/serialize.cpp src/core/verify.cpp src/core/disasm.cpp)
+set(E7_CORE_SRC src/core/utf.cpp src/core/numfmt.cpp src/core/serialize.cpp src/core/verify.cpp src/core/disasm.cpp
+  third_party/fdlibm/ieee754.cpp)
 set(E7_VM_SRC
   src/vm/vm.cpp src/vm/interp.cpp src/vm/debug.cpp
   src/stdlib/core.cpp src/stdlib/string.cpp src/stdlib/array.cpp src/stdlib/map.cpp src/stdlib/math.cpp

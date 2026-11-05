@@ -1,6 +1,20 @@
 // Math natives (JavaScript semantics).
+//
+// The transcendental functions and pow come from the fdlibm port in third_party/fdlibm (the code V8
+// uses), never from the platform C library: their results are bit-identical to Node.js (x64) on
+// every platform. The rest are exact IEEE operations (sqrt, floor, ...) or exact JS algorithms.
 #include <algorithm>
+
+#include "../../third_party/fdlibm/ieee754.h"
 #include "util.h"
+
+// JS arithmetic is never contracted into fused multiply-adds (hypot below must round each step as
+// V8 does); clang contracts within an expression by default (CMake also passes -ffp-contract=off).
+#if defined(__clang__)
+#pragma STDC FP_CONTRACT OFF
+#elif defined(_MSC_VER)
+#pragma fp_contract(off)
+#endif
 
 namespace e7 {
 
@@ -23,38 +37,31 @@ MATH1(round, jsRound(x))
 MATH1(trunc, std::trunc(x))
 MATH1(sign, jsSign(x))
 MATH1(sqrt, std::sqrt(x))
-MATH1(cbrt, std::cbrt(x))
-MATH1(exp, std::exp(x))
-MATH1(expm1, std::expm1(x))
-MATH1(log, std::log(x))
-MATH1(log1p, std::log1p(x))
-MATH1(log2, std::log2(x))
-MATH1(log10, std::log10(x))
-MATH1(sin, std::sin(x))
-MATH1(cos, std::cos(x))
-MATH1(tan, std::tan(x))
-MATH1(asin, std::asin(x))
-MATH1(acos, std::acos(x))
-MATH1(atan, std::atan(x))
-MATH1(sinh, std::sinh(x))
-MATH1(cosh, std::cosh(x))
-MATH1(tanh, std::tanh(x))
-MATH1(asinh, std::asinh(x))
-MATH1(acosh, std::acosh(x))
-MATH1(atanh, std::atanh(x))
+MATH1(cbrt, fdlibm::cbrt(x))
+MATH1(exp, fdlibm::exp(x))
+MATH1(expm1, fdlibm::expm1(x))
+MATH1(log, fdlibm::log(x))
+MATH1(log1p, fdlibm::log1p(x))
+MATH1(log2, fdlibm::log2(x))
+MATH1(log10, fdlibm::log10(x))
+MATH1(sin, fdlibm::sin(x))
+MATH1(cos, fdlibm::cos(x))
+MATH1(tan, fdlibm::tan(x))
+MATH1(asin, fdlibm::asin(x))
+MATH1(acos, fdlibm::acos(x))
+MATH1(atan, fdlibm::atan(x))
+MATH1(sinh, fdlibm::sinh(x))
+MATH1(cosh, fdlibm::cosh(x))
+MATH1(tanh, fdlibm::tanh(x))
+MATH1(asinh, fdlibm::asinh(x))
+MATH1(acosh, fdlibm::acosh(x))
+MATH1(atanh, fdlibm::atanh(x))
 MATH1(fround, (double)(float)x)
 MATH1(clz32, (double)([](uint32_t v) { int c = 0; if (!v) return 32; while (!(v & 0x80000000u)) { v <<= 1; c++; } return c; })((uint32_t)doubleToInt64Bits(x)))
 
-E7_NATIVE(m_atan2) { E7_UNUSED; r->f = std::atan2(a[0].f, a[1].f); }
-E7_NATIVE(m_pow) {
-  E7_UNUSED;
-  double x = a[0].f, y = a[1].f;
-  if (y != y) r->f = NAN;
-  else if (y == 0) r->f = 1;
-  else if ((x == 1 || x == -1) && std::isinf(y)) r->f = NAN;
-  else if (y == 0.5 && !std::signbit(x)) r->f = std::sqrt(x);  // as V8 (fdlibm): C libraries may be 1 ulp off
-  else r->f = std::pow(x, y);
-}
+E7_NATIVE(m_atan2) { E7_UNUSED; r->f = fdlibm::atan2(a[0].f, a[1].f); }
+// fdlibm::pow has the ECMAScript special cases ((+-1) ** (+-Infinity) is NaN); same function as **.
+E7_NATIVE(m_pow) { E7_UNUSED; r->f = fdlibm::pow(a[0].f, a[1].f); }
 E7_NATIVE(m_imul) {
   E7_UNUSED;
   int32_t x = (int32_t)(uint32_t)doubleToInt64Bits(a[0].f), y = (int32_t)(uint32_t)doubleToInt64Bits(a[1].f);
@@ -104,7 +111,7 @@ E7_NATIVE(m_hypotArray) {
   if (inf) { r->f = INFINITY; return; }
   if (nan) { r->f = NAN; return; }
   if (mx == 0) { r->f = 0; return; }
-  // scaled sum with compensation (as in V8)
+  // scaled sum with compensation, exactly V8's MathHypot (src/builtins/math.tq)
   double sum = 0, comp = 0;
   for (uint32_t i = 0; i < arr->len; i++) {
     double d = arr->data[i].f / mx;

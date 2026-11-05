@@ -180,7 +180,15 @@ try {
 - Integer literals are `number` by default. `/` is floating-point division, `%` is as in JS (sign follows the dividend, including `-0`).
 - `& | ^ ~ << >> >>>` first apply ToInt32/ToUint32 (as in JS); the result is `number`.
 - `NaN`, `Infinity`, `-0` behavior and formatting (`String(x)`, `toFixed`, `toPrecision`, `toExponential`, `toString(radix)`) are the same as JS.
-- No fast-math optimizations: results are bit-identical across Android/iOS/Windows.
+- No fast-math optimizations: results are bit-identical across Android/iOS/Windows/Linux/macOS/WebAssembly, on
+  every architecture (no fused multiply-add contraction; SSE2, not x87, on 32-bit x86).
+- `Math.acos acosh asin asinh atan atanh atan2 cbrt cos cosh exp expm1 log log1p log2 log10 sin sinh tan tanh pow`
+  and `**` use V8's fdlibm code (`third_party/fdlibm`), never the platform C library: every result is the same
+  double as in Node.js 22 on x64 (verified bit for bit on millions of arguments per function, docs/PRODUCTION.md). `Math.hypot`
+  is V8's algorithm; `sqrt fround round trunc floor ceil abs sign clz32 imul max min` are exact. Node.js itself is
+  not uniform here: its arm64 builds contract fdlibm into fused multiply-adds (about 0.1% of `sin`, `log`, ...
+  results differ in the last bit), and Node.js 23+ computes `Math.pow` / `**` with the C library's pow unless run
+  with `--no-use-std-math-pow` (`10 ** -5` is `0.000009999999999999999` in e7 and Node.js 22, `0.00001` there).
 
 ### 4.2 Fixed-width integers (E7 extension)
 - Values annotated with types such as `u32` are true machine integers: `+ - *` wrap around; `/` is **truncating integer division**, `%` is integer remainder; division by 0 is a runtime error.
