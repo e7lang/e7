@@ -13,6 +13,7 @@ audit of the verifier, the loading path, the C API and the crypto wrappers.
 |---|---|---|
 | Language/standard library semantics | `tests/run_tests.py`: 82 cases, compared **byte-for-byte** against Node.js 22 output (differential testing) + expected output + compile-error cases | All pass |
 | TS compatibility | `tests/tsc/check.sh`: tsc 5.6 `--strict` checks all cases and examples | All pass |
+| Differential fuzzing (0.2.5) | `tests/difffuzz`: random well-typed programs in the E7 subset, each checked with tsc 5.6 `--strict`, run on e7 and Node.js; mismatches minimized by delta debugging. ctest `difffuzz_smoke` (40 programs) on every build, 5,000 per night (`.github/workflows/difffuzz.yml`) | About 44,000 programs locally (Node.js 24); 10 standard library bugs fixed (`tests/cases/lang/difffuzz_regressions.ts`), compiler issues reported; final 10,000 (seeds 40–44): no mismatch. Known: `sin`, `exp`, `log`, ... come from the C library (V8: fdlibm) and can differ in the last bit |
 | C API | `tests/capi_test.cpp`: argument encoding/decoding, host functions, KeyHandle, signatures, budget suspend/resume, memory/stack limits, reuse after errors | Pass |
 | Locale independence | `tests/locale_test.cpp` (number parsing/formatting under de_DE) | Pass |
 | Bindings | JNI (OpenJDK 21 `E7VMTest`), iOS xcframework build, Android NDK build, C# (Windows) | Pass |

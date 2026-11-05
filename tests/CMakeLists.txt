@@ -7,6 +7,11 @@ if(Python3_FOUND)
   find_program(NODE_EXECUTABLE node)
   if(NODE_EXECUTABLE AND TARGET e7)
     add_test(NAME language_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_tests.py --e7 $<TARGET_FILE:e7> --node ${NODE_EXECUTABLE})
+    # differential fuzzing smoke test: a few random programs (tests/difffuzz, seed fixed) on e7 and Node.js;
+    # the nightly workflow .github/workflows/difffuzz.yml runs thousands
+    add_test(NAME difffuzz_smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/difffuzz/run.py
+             --e7 $<TARGET_FILE:e7> --node ${NODE_EXECUTABLE} --seed 1 --count 40 --min-time 60
+             --out ${CMAKE_CURRENT_BINARY_DIR}/difffuzz)
   endif()
   if(TARGET e7 AND TARGET e7c)
     # the AI skill (skills/e7): every code block / example must behave as the skill claims
