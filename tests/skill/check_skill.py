@@ -5,7 +5,7 @@ Every fenced code block in the skill's Markdown files is checked against the rea
   ```ts            a complete program: must compile and run without error (e7 runs top-level code and main())
   ```ts e7-reject  TypeScript that E7 rejects: must fail to compile with a normal diagnostic (no crash)
   ```ts fragment   not checked (partial code)
-Other languages (bash, kotlin, ...) are ignored. Every examples/*.ts must compile and run, and
+Other languages (bash, kotlin, ...) and the evals/ folder (test prompts) are ignored. Every examples/*.ts must compile and run, and
 examples/*.test.ts must pass `e7 test`. references/e7.d.ts must be identical to lib/e7.d.ts.
 
     check_skill.py --e7 build/e7 --e7c build/e7c [--root .]
@@ -37,6 +37,8 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         for md in sorted(skill.rglob("*.md")):
+            if "evals" in md.relative_to(skill).parts:
+                continue  # eval prompts quote arbitrary user code (often plain TypeScript); they are inputs, not claims
             text = md.read_text()
             for m in FENCE.finditer(text):
                 lang, tag, code = m.group(1), m.group(2).strip(), m.group(3)
