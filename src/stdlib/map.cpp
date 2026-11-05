@@ -34,7 +34,7 @@ static uint32_t hashDyn(VM& vm, Slot k, KeyMode km) {
     for (uint32_t l : b->mag) h = h * 1099511628211ull + l;
     return mix64(h);
   }
-  if (o->type == OT::Box) {
+  if (o->type == OT::Box && !(o->flags & 1)) {  // boxed primitives by value; a Date (flag 1) is an object
     auto* bx = static_cast<BoxObj*>(o);
     return hashDyn(vm, bx->v, bx->vt == VT_NUMBER ? KM_NUM : KM_INT);
   }
@@ -51,6 +51,9 @@ static bool keyEq(VM& vm, Slot a, Slot b, KeyMode km) {
   Obj* y = b.r;
   if (x == y) return true;
   if (!x || !y) return false;
+  if ((x->flags & 1) || (y->flags & 1)) {  // Dates are objects: compared by identity, as in JavaScript
+    if (x->type == OT::Box || y->type == OT::Box) return false;
+  }
   if (x->type == OT::Box && y->type == OT::Box) {
     auto* bx = static_cast<BoxObj*>(x);
     auto* by = static_cast<BoxObj*>(y);

@@ -132,7 +132,7 @@ struct Stringifier {
       auto* in = static_cast<InstObj*>(o);
       out += u'{';
       bool any = false;
-      for (uint32_t i = 0; i < in->cls->nfields; i++) {
+      for (uint32_t i : jsFieldOrder(in->cls)) {
         Slot fv = in->fields()[i];
         uint8_t fvt = in->cls->fieldVT[i];
         if (fvt == VT_REF && (fv.r == vm.undef() || (fv.r && fv.r->type == OT::Closure))) continue;

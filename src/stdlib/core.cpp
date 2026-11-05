@@ -778,6 +778,29 @@ std::string formatLog(VM& vm, ArrObj* a) {
 
 }  // namespace
 
+// Field indices of a class / record in JavaScript property order: array-index keys ascending first, then the
+// others in definition order (Object.keys, JSON.stringify, console.log).
+std::vector<uint32_t> jsFieldOrder(const ClassRT* c) {
+  std::vector<std::pair<uint64_t, uint32_t>> idx;
+  std::vector<uint32_t> out;
+  out.reserve(c->nfields);
+  for (uint32_t i = 0; i < c->nfields; i++) {
+    uint64_t k;
+    if (arrayIndexKey(c->fieldNames[i], k)) idx.push_back({k, i});
+    else out.push_back(i);
+  }
+  if (idx.empty()) return out;
+  std::stable_sort(idx.begin(), idx.end(), [](const std::pair<uint64_t, uint32_t>& x, const std::pair<uint64_t, uint32_t>& y) {
+    return x.first < y.first;
+  });
+  std::vector<uint32_t> order;
+  order.reserve(c->nfields);
+  for (auto& e : idx) order.push_back(e.second);
+  order.insert(order.end(), out.begin(), out.end());
+  return order;
+}
+
+
 // one value on a single line (assertion messages, debugger): `depth` nested levels are already used up
 std::string inspectValue(VM& vm, Slot v, uint8_t vt, int depth, bool top) {
   if (top && vt == VT_REF && v.r && v.r->type == OT::String) return strUtf8(static_cast<StrObj*>(v.r));
@@ -958,7 +981,8 @@ E7_NATIVE(n_objectKeys) {
   if (!o || o->type != OT::Instance) vm.error("Object.keys requires an object");
   auto* in = static_cast<InstObj*>(o);
   ArrObj* arr = vm.newArray(VT_REF, in->cls->nfields);
-  for (uint32_t i = 0; i < in->cls->nfields; i++) {
+  VM::TempRoot keep(vm, arr);
+  for (uint32_t i : jsFieldOrder(in->cls)) {
     if (in->cls->fieldVT[i] == VT_REF && in->fields()[i].r == vm.undef()) continue;
     vm.arrayPush(arr, slotR(vm.newStringUtf8(in->cls->fieldNames[i])));
   }

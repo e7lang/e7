@@ -87,4 +87,7 @@ int32_t mapFind(VM& vm, MapObj* m, Slot k);
 ModuleRT* currentModule(VM& vm);
 
 void jsonMapSet(VM& vm, MapObj* m, Slot k, Slot v);  // map.cpp
+struct ClassRT;
+std::vector<uint32_t> jsFieldOrder(const ClassRT* c);  // JavaScript property order (core.cpp)
+
 }  // namespace e7
