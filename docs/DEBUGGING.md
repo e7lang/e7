@@ -4,10 +4,12 @@ E7 programs can be debugged with breakpoints, stepping and variable inspection:
 
 - from the command line with **`e7 debug`** (a small gdb-like debugger),
 - from a host application through the **C debug API** in [`include/e7/e7.h`](../include/e7/e7.h),
-- from JavaScript (a VS Code debug adapter, a web IDE) through the **WebAssembly entry points** in
-  [`tools/e7wasm.cpp`](../tools/e7wasm.cpp), which speak a small JSON protocol.
+- in **VS Code** with the E7 extension (F5 on an E7 file, see [§8](#8-vs-code)),
+- from JavaScript through **`createDebugSession()`** of the npm package `@e7lang/e7` ([§8.2](#82-javascript-createdebugsession)),
+  built on the **WebAssembly entry points** in [`tools/e7wasm.cpp`](../tools/e7wasm.cpp), which speak a small JSON
+  protocol ([§7](#7-webassembly--javascript-the-json-protocol)).
 
-All three use the same debugger in the VM ([`src/vm/debug.h`](../src/vm/debug.h)). It costs nothing when no
+All of them use the same debugger in the VM ([`src/vm/debug.h`](../src/vm/debug.h)). It costs nothing when no
 debugger is attached (see [§6](#6-design-notes)).
 
 ## 1. Quick start
@@ -323,7 +325,85 @@ if (ev.event === "stopped") postMessage(ev);  // then answer stackTrace / variab
 The same file builds natively (`E7W_NATIVE_MAIN`, target `e7wasm_native` in the test build) with a command mode
 used by `tests/debug/wasm_debug_test.py`: `e7wasm_native prog.ts --dbg "bp prog.ts 12" "launch" "stack" ...`.
 
-## 8. Limitations (phase 1)
+## 8. VS Code
+
+The E7 extension ([editors/vscode](../editors/vscode)) contributes the debug type `e7`. Press **F5** in an E7
+file without a `launch.json` (or run **E7: Debug File**) to debug it; a launch configuration can choose the
+function and its arguments:
+
+```json
+{ "type": "e7", "request": "launch", "name": "Debug total", "program": "${workspaceFolder}/prices.ts",
+  "call": "total", "args": [[3, 4.5]], "stopOnEntry": false, "budget": 0, "memoryLimit": 67108864 }
+```
+
+`program` is the entry file; `call` the exported function to run after the top-level code (default `main` if it
+is exported); `args` JSON arguments for `call`; `budget` an instruction budget (0 = unlimited); `memoryLimit`
+the VM heap limit in bytes. The *Runtime errors* exception breakpoint (on by default) maps to
+`e7w_dbg_break_on_error`.
+
+### 8.1 Design
+
+- The **debug adapter runs in the extension host** (`DebugAdapterInlineImplementation`,
+  [`src/debug.js`](../editors/vscode/src/debug.js), built on `@vscode/debugadapter`). No separate process.
+- The **VM runs in a worker thread** ([`src/debugWorker.js`](../editors/vscode/src/debugWorker.js)) on its own
+  WebAssembly instance, through `createDebugSession()`. The extension host never runs script code, and *Stop*
+  can always end a script by terminating the worker (even inside a long native call).
+- The script runs in **time slices** (200,000 instructions): between slices the worker handles messages, so
+  *Pause* stops an infinite loop at its next statement. To slice top-level code too, the session always starts
+  with a stop on entry and continues past it unless `stopOnEntry` was asked for.
+- Paths: the entry file is compiled under its base name, imports relative to its directory. Breakpoint files
+  are passed relative to that directory and frame files (`lib/util.ts`) are resolved back to workspace paths.
+  Columns are converted from UTF-8 bytes to UTF-16.
+
+| DAP request / event | E7 |
+|---|---|
+| `initialize` | capabilities: `configurationDone`, hover evaluation, `terminate`, `exceptionInfo`, the `runtimeErrors` filter |
+| `launch` | compiles (errors go to the Debug Console and fail the launch), sends `initialized`, waits for `configurationDone`, then `e7w_dbg_launch`; `breakpoint` events report the breakpoints resolved by the load |
+| `setBreakpoints` | `e7w_dbg_set_breakpoints` (verified + adjusted lines) |
+| `setExceptionBreakpoints` | `e7w_dbg_break_on_error` |
+| `threads` | one thread, `E7` |
+| `stackTrace` / `scopes` / `variables` | `e7w_dbg_stack` / `_scopes` / `_variables` (frame id = index + 1, `ref` = `variablesReference`; arrays, tuples, `Uint8Array` and `Set` report `indexedVariables` and are paged) |
+| `evaluate` (watch, hover, repl) | `e7w_dbg_evaluate` |
+| `continue` / `next` / `stepIn` / `stepOut` | `e7w_dbg_resume` |
+| `pause` | `e7w_dbg_pause` (between slices) |
+| `exceptionInfo` | the runtime error message |
+| `terminate` / `disconnect` | `e7w_dbg_terminate`, then the worker is stopped |
+| `stopped` | reasons `entry`, `breakpoint`, `step`, `debugger statement`, `pause`, `exception` (with the message) |
+| `output` | `console.log` lines (`stdout`); the result or the runtime error when the script ends |
+| `exited` / `terminated` | exit code 0, or the `e7_status` of the error |
+
+### 8.2 JavaScript: `createDebugSession()`
+
+`@e7lang/e7` wraps the JSON protocol in a promise-based API (types in
+[`packages/e7/index.d.ts`](../packages/e7/index.d.ts)). Each session has its own WebAssembly instance:
+
+```js
+import { createDebugSession } from "@e7lang/e7";
+import { readFileSync } from "node:fs";
+
+const s = await createDebugSession({
+  entry: "main.ts",                                  // imports resolve from its directory
+  readFile: (p) => readFileSync(new URL(p, base), "utf8"),   // or files: { "main.ts": ..., "lib/util.ts": ... }
+  call: "total", args: [[3, 4.5]],                   // default: main() if exported
+  memoryLimit: 64 << 20, budget: 0, slice: 200_000,
+});
+s.on("output", (line) => console.log(line));
+s.setBreakpoints("lib/util.ts", [12]);               // -> [{ id, requestedLine, line, verified }]
+let ev = await s.launch({ stopOnEntry: false });     // StoppedEvent or TerminatedEvent
+while (ev.event === "stopped") {
+  const [frame] = s.stack();                         // { id, name, file, line, column }
+  const [locals] = s.scopes(frame.id);               // { name: "Locals", ref, count }
+  console.log(ev.reason, frame, s.variables(locals.ref), s.evaluate(frame.id, "items.length"));
+  ev = await s.next();                               // or continue(), stepIn(), stepOut()
+}
+console.log(ev.status, ev.result);                   // "ok" 17.5 (or the error)
+```
+
+`pause()` takes effect at the next statement while a `launch()` / `continue()` / ... promise is pending (it then
+resolves with reason `pause`); `terminate()` ends the session at any time (status `"aborted"`). Compile errors
+make `createDebugSession()` throw an `E7Error` with `diagnostics`. The `budget` is counted in whole slices.
+
+## 9. Limitations (phase 1)
 
 - No conditional breakpoints, logpoints, watch expressions with operators, or changing variables.
 - Pause-to-host mode skips stops inside callbacks from natives (sort comparators, `assertThrows` bodies).

@@ -74,45 +74,38 @@ async function children(s, ref, extra = {}) {
   return Object.fromEntries(variables.map((v) => [v.name, v]));
 }
 
+// ids of the sessions that have ended (recorded from before() on)
+const ended = new Set();
+
 async function end(session) {
-  const done = new Promise((resolve) => {
-    const d = vscode.debug.onDidTerminateDebugSession((s) => {
-      if (s.id === session.id) {
-        d.dispose();
-        resolve();
-      }
-    });
-  });
+  if (ended.has(session.id)) return;
   await vscode.debug.stopDebugging(session);
-  await done;
+  await waitFor(() => ended.has(session.id), "end of the debug session");
 }
 
-function terminatedSoon(session) {
-  return new Promise((resolve) => {
-    const d = vscode.debug.onDidTerminateDebugSession((s) => {
-      if (s.id === session.id) {
-        d.dispose();
-        resolve();
-      }
-    });
-  });
-}
+const terminatedSoon = (session) => waitFor(() => ended.has(session.id), "end of the debug session");
 
 describe("E7 debugger", function () {
   this.timeout(90000);
   let tracker;
+  let onEnd;
 
   before(async () => {
     const ext = vscode.extensions.getExtension("e7lang.e7");
     await ext.activate();
+    onEnd = vscode.debug.onDidTerminateDebugSession((s) => ended.add(s.id));
     tracker = vscode.debug.registerDebugAdapterTrackerFactory("e7", {
       createDebugAdapterTracker: (session) => ({ onDidSendMessage: (m) => logOf(session).messages.push(m) }),
     });
   });
-  after(() => tracker.dispose());
+  after(() => {
+    tracker.dispose();
+    onEnd.dispose();
+  });
   afterEach(async () => {
     vscode.debug.removeBreakpoints(vscode.debug.breakpoints);
-    if (vscode.debug.activeDebugSession) await end(vscode.debug.activeDebugSession);
+    const s = vscode.debug.activeDebugSession;
+    if (s && !ended.has(s.id)) await end(s);
   });
 
   const bp = (file, line) => new vscode.SourceBreakpoint(new vscode.Location(vscode.Uri.file(file), new vscode.Position(line - 1, 0)));

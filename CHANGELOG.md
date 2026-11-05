@@ -22,6 +22,12 @@ All notable changes to E7 / e7vm are listed here. The format follows
     callback or pause-to-host (`E7_PAUSED`, `e7_debug_resume`). No cost without an attached debugger.
   - `e7 debug`: a command-line debugger.
   - WebAssembly: `e7w_compile_ex` and the `e7w_dbg_*` session API with JSON events for debug adapters.
+  - **VS Code debugging**: the E7 extension contributes the `e7` debug type (F5 on an E7 file, *E7: Debug File*,
+    launch configurations with `program`, `call`, `args`, `stopOnEntry`, `budget`, `memoryLimit`): breakpoints,
+    stepping, pause, call stack, variables, watch / hover evaluation, `debugger;` and runtime-error stops. An
+    inline debug adapter drives the WebAssembly VM in a worker thread.
+  - `@e7lang/e7`: `createDebugSession()` (promise-based debug session over the WebAssembly protocol, time-sliced so
+    that `pause()` works) and a `debug` compile option.
 - `debugger;` statement (`DEBUGGER` instruction; a no-op without a debugger).
 
 ### Fixed

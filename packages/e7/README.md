@@ -43,11 +43,12 @@ synchronous API, `const e7 = await init()` and call the same methods on `e7` (`e
 | Function | Returns |
 |---|---|
 | `init(options?)` | `Promise<E7>`: synchronous instance; `e7.version` is the VM version. Options: `wasmBinary`, `wasmURL`, `locateFile` |
-| `compile(source, { fileName?, files?, readFile? })` | `{ ok, bytecode?: Uint8Array, diagnostics: Diagnostic[] }` |
+| `compile(source, { fileName?, files?, readFile?, debug? })` | `{ ok, bytecode?: Uint8Array, diagnostics: Diagnostic[] }` |
 | `check(source, options?)` | `Diagnostic[]` (empty when the file compiles) |
 | `run(sourceOrBytecode, { budget?, memoryLimit?, seed?, call?, args?, ...compileOptions })` | `{ ok, status, code, output: string[], result, error, diagnostics? }` |
 | `disassemble(sourceOrBytecode, options?)` | bytecode listing (throws `E7Error` with `.diagnostics` on compile errors) |
 | `listExports(sourceOrBytecode, options?)` | `[{ name, params: ["string", "i32", ...], returns }]` |
+| `createDebugSession({ entry, source?, files?, readFile?, call?, args?, memoryLimit?, budget?, slice?, breakOnError? })` | `Promise<DebugSession>`: a debugger on its own WebAssembly instance (see below) |
 | `formatDiagnostics(diagnostics)` | `"file:line:column: error: message"` lines |
 | `version` | version of this package |
 
@@ -66,6 +67,11 @@ synchronous API, `const e7 = await init()` and call the same methods on `e7` (`e
   paths relative to the entry file) and/or a synchronous `readFile(path)` callback, e.g.
   `readFile: (p) => fs.readFileSync(p, "utf8")`. `e7:*` standard modules are built in.
 - Every `run` uses a fresh VM; nothing is shared between runs.
+- **Debugging**: a `DebugSession` has `setBreakpoints(file, lines)`, `launch({ stopOnEntry })`,
+  `continue()`, `next()`, `stepIn()`, `stepOut()` (each resolves with a `stopped` or `terminated` event),
+  `pause()`, `stack()`, `scopes(frameId)`, `variables(ref, start, count)`, `evaluate(frameId, "a.b[0]")`,
+  `terminate()` and `on("output" | "stopped" | "terminated", fn)`. Scripts run in time slices, so `pause()`
+  stops infinite loops. See [docs/DEBUGGING.md](https://github.com/e7lang/e7/blob/main/docs/DEBUGGING.md#82-javascript-createdebugsession).
 
 ## Command line
 

@@ -209,7 +209,8 @@ diagnostics as you type, *E7: Run File*, *E7: Compile to Bytecode* and *E7: Show
 `e7 debug script.ts` is a small command-line debugger (`b file:line`, `c`, `n`, `s`, `finish`, `bt`, `locals`,
 `p name.field`, `list`); `debugger;` statements stop there. Hosts get the same through the C debug API
 (`e7_debug_*`: breakpoints, stepping, pause, call stack, expandable variables) and JavaScript through the
-WebAssembly build's JSON protocol, the basis for a VS Code debug adapter. Compile with `e7c --debug` to keep
+WebAssembly build's JSON protocol (`createDebugSession()` in `@e7lang/e7`). In VS Code, the E7 extension debugs
+E7 files with F5: breakpoints, stepping, variables, watch and hover. Compile with `e7c --debug` to keep
 variable names and columns in `.e7b` files; runtime errors then report `at f (file.ts:12:5)`. See
 [docs/DEBUGGING.md](docs/DEBUGGING.md).
 

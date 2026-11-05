@@ -204,8 +204,9 @@ VS Code 扩展 **E7 Language**（[editors/vscode](editors/vscode)，发布者 `e
 
 `e7 debug script.ts` 是一个小型命令行调试器（`b file:line`、`c`、`n`、`s`、`finish`、`bt`、`locals`、
 `p name.field`、`list`），执行到 `debugger;` 语句时会停下。宿主程序可通过 C 调试 API（`e7_debug_*`：断点、单步、
-暂停、调用栈、可展开的变量）获得同样的能力，JavaScript 则通过 WebAssembly 构建的 JSON 协议使用（可据此实现
-VS Code 调试适配器）。用 `e7c --debug` 编译可在 `.e7b` 中保留变量名和列号，运行时错误随之报告
+暂停、调用栈、可展开的变量）获得同样的能力，JavaScript 则通过 WebAssembly 构建的 JSON 协议使用
+（`@e7lang/e7` 中的 `createDebugSession()`）。在 VS Code 中，E7 扩展可按 F5 调试 E7 文件：断点、单步、变量、
+监视与悬停求值。用 `e7c --debug` 编译可在 `.e7b` 中保留变量名和列号，运行时错误随之报告
 `at f (file.ts:12:5)`。详见 [docs/DEBUGGING.md](docs/DEBUGGING.md)。
 
 ## 用 AI 助手编写 E7
