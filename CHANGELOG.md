@@ -10,6 +10,18 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+### Added
+- SPEC section 0.1 defines the subset: TypeScript 5.6 `tsc` with `strict` and `exactOptionalPropertyTypes`
+  (`tests/tsc/tsconfig.json`) is the upper bound, ECMAScript as implemented by Node.js 22 is the run-time behaviour,
+  and three rules select the features, with **types known at compile time** as the fixed rule that is never relaxed.
+
+### Changed
+- Optional properties and fields follow tsc's `exactOptionalPropertyTypes`: `x?: T` may be left out but not set to
+  `undefined` (by an object literal, an assignment, or a spread of a property that may hold `undefined`). Programs
+  that did so are now compile errors, as they are for tsc with that option; declare `x?: T | undefined` to keep them.
+- `scripts/macos.sh release` runs the full macOS test first (unless it already passed at the same commit with
+  nothing skipped).
+
 ### Fixed
 - A generic instantiated with `void` (for example `run(() => { ... })` with `run<T>(f: () => T)`) could store or pass
   the void result and crash the compiler with an internal error; storing it in a property or passing it as an

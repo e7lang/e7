@@ -107,7 +107,11 @@ rejected (about 17 of them are compiler-only work, listed under P1).
   compile time** as the fixed rule that is never relaxed.
 - TYPESCRIPT.md: every TypeScript feature with its status, reason and alternative, generated from sample programs
   that CI checks against the compiler and Node.js.
+- Optional properties follow tsc's `exactOptionalPropertyTypes`: `x?: T` is left out, not set to `undefined`.
+  This narrows the `Object.keys` / `console.log` difference for properties holding `undefined` (SPEC section 9)
+  to properties whose declared type includes `undefined`.
 - Fixes from an independent security review of the 0.2.5 VM changes.
+- `scripts/macos.sh release` runs the full macOS test first, so a release cannot skip it.
 
 ## 0.3 (planned)
 
@@ -115,6 +119,9 @@ Candidates must satisfy the rules of SPEC section 0.1; features that need run-ti
 `unknown`, general unions, index signatures, `keyof` / conditional / mapped types) stay out.
 
 - Generators and iterators, `async` / `await` (coroutines in the VM).
+- Objects of interface / object types keep a property that holds `undefined` as an own property (a presence bit
+  per optional property, a bytecode change), removing the last `Object.keys` / spread / `console.log` difference
+  for `undefined` in SPEC section 9.
 - Pilot feedback: whatever the first production pilot needs.
 - A C# `E7ModuleManager` (Kotlin/Java and Swift have one).
 
