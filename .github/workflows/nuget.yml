@@ -1,7 +1,10 @@
 name: NuGet
 
-# Builds the e7vm shared library for every desktop platform, packs the E7VM NuGet package
-# (platform/dotnet/E7VM) and tests it from a local feed on Linux, Windows and macOS.
+# Builds the e7vm shared library for Linux and Windows, packs the E7VM NuGet package
+# (platform/dotnet/E7VM) and tests it from a local feed on Linux and Windows. The macOS library is built
+# and tested on a maintainer's Mac (scripts/macos.sh); for a release it is taken from the draft release
+# v<version> (e7-<version>-macos-natives.tar.gz, uploaded by scripts/macos.sh release), and CI packs
+# without publishing leave it out.
 # Release integration: call it with `uses: ./.github/workflows/nuget.yml`, `with: { version: 0.2.5, publish: true }`
 # and `secrets: inherit`; the caller must grant `contents: write`, `packages: write`, `id-token: write` and
 # `attestations: write` (build provenance attestation of the .nupkg).
@@ -47,8 +50,6 @@ jobs:
               cmake: '-G Ninja -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"', lib: build/libe7vm.so }
           - { rid: linux-arm64, os: ubuntu-22.04-arm,
               cmake: '-G Ninja -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"', lib: build/libe7vm.so }
-          - { rid: osx, os: macos-14,
-              cmake: '-G Ninja "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0', lib: build/libe7vm.dylib }
           - { rid: win-x64, os: windows-2022,
               cmake: '-G "Visual Studio 17 2022" -A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', lib: build/Release/e7vm.dll }
     name: native (${{ matrix.rid }})
@@ -99,6 +100,15 @@ jobs:
         with: { dotnet-version: "8.0.x" }
       - uses: actions/download-artifact@v4
         with: { pattern: e7vm-native-*, path: native, merge-multiple: true }
+      - name: macOS library (built locally by scripts/macos.sh release)
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ inputs.version }}"; v="${v#v}"
+          gh release download "v$v" -p "e7-$v-macos-natives.tar.gz" -D "$RUNNER_TEMP" -R "$GITHUB_REPOSITORY" || {
+            echo "::error::e7-$v-macos-natives.tar.gz is not on the draft release v$v: run scripts/macos.sh release $v first"; exit 1; }
+          tar -xzf "$RUNNER_TEMP/e7-$v-macos-natives.tar.gz" -C . native/osx
       - name: Version
         id: ver
         run: |
@@ -110,16 +120,18 @@ jobs:
         run: |
           find native -type f | sort
           dotnet pack platform/dotnet/E7VM -c Release -o out \
-            -p:Version=${{ steps.ver.outputs.version }} -p:E7NativeDir="$PWD/native" -p:E7RequireNative=true
+            -p:Version=${{ steps.ver.outputs.version }} -p:E7NativeDir="$PWD/native" \
+            -p:E7RequireNative=${{ inputs.publish && 'true' || 'false' }}
       - name: Check package contents
         run: |
           ls -l out
           nupkg="out/E7VM.${{ steps.ver.outputs.version }}.nupkg"
+          osx=""
+          [ "${{ inputs.publish }}" = "true" ] && osx="runtimes/osx-arm64/native/libe7vm.dylib runtimes/osx-x64/native/libe7vm.dylib"
           unzip -l "$nupkg"
           for f in README.md lib/netstandard2.0/E7.dll lib/net8.0/E7.dll \
                    runtimes/win-x64/native/e7vm.dll runtimes/linux-x64/native/libe7vm.so \
-                   runtimes/linux-arm64/native/libe7vm.so runtimes/osx-arm64/native/libe7vm.dylib \
-                   runtimes/osx-x64/native/libe7vm.dylib; do
+                   runtimes/linux-arm64/native/libe7vm.so $osx; do
             unzip -l "$nupkg" | grep -q " $f\$" || { echo "missing in package: $f" >&2; exit 1; }
           done
           test -f "out/E7VM.${{ steps.ver.outputs.version }}.snupkg"
@@ -140,8 +152,6 @@ jobs:
           - { os: ubuntu-24.04, rid: linux-x64 }
           - { os: ubuntu-24.04-arm, rid: linux-arm64 }
           - { os: windows-2022, rid: win-x64 }
-          - { os: macos-14, rid: osx-arm64 }
-          - { os: macos-15-intel, rid: osx-x64 }
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     defaults:

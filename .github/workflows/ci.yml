@@ -69,15 +69,15 @@ jobs:
   # Forward compatibility (docs/BYTECODE.md section 5): modules compiled by the current e7c with
   # --target 0.2 run on the e7 of earlier releases with the same output; modules that need a newer VM
   # are rejected with E7_ERR_VERSION. `base` (E7_COMPAT_BASE) is the previous release: bump it after
-  # each release. v0.2.0 also runs, with the programs whose output 0.2.1 bug fixes changed (Error
-  # values in instanceof / String / JSON.stringify; the JSON nesting-limit message) as known differences.
+  # each release. Programs whose output changed only because a newer VM fixed library behaviour are listed
+  # with the reason in tests/compat/forward-allow/<base>.txt.
   forward-compat:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { base: v0.2.1, allow: "" }
-          - { base: v0.2.0, allow: "--allow tests/cases/lang/error_values.ts --allow tests/cases/lib/json_try_shape.ts" }
+          - { base: v0.2.1 }
+          - { base: v0.2.0 }
     name: forward-compat (${{ matrix.base }})
     runs-on: ubuntu-24.04
     env:
@@ -99,7 +99,8 @@ jobs:
       - name: Run current modules on ${{ env.E7_COMPAT_BASE }}
         run: |
           python3 tests/compat/forward_compat.py --old-e7 build-base/e7 --e7 build/e7 --e7c build/e7c \
-            --base "$E7_COMPAT_BASE" --summary "$GITHUB_STEP_SUMMARY" ${{ matrix.allow }} \
+            --base "$E7_COMPAT_BASE" --summary "$GITHUB_STEP_SUMMARY" \
+            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/^[[:space:]]*/--allow /' "tests/compat/forward-allow/$E7_COMPAT_BASE.txt") \
             tests/cases/lang/*.ts tests/cases/lib/*.ts examples/*.ts
 
   # Coverage of the VM, stdlib, crypto, C API and compiler over the whole ctest suite (clang
@@ -195,30 +196,7 @@ jobs:
       - name: All version declarations agree
         run: python3 scripts/check-versions.py
 
-  macos:
-    runs-on: macos-14
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: release, flags: "-DCMAKE_BUILD_TYPE=Release" }
-          - { name: debug-asan, flags: "-DCMAKE_BUILD_TYPE=Debug -DE7_SANITIZE=ON" }
-    name: macos (${{ matrix.name }})
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: "22" }
-      - run: cmake -S . -B build ${{ matrix.flags }}
-      - run: cmake --build build -j
-      - run: ctest --test-dir build --output-on-failure
-
-  ios:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - run: platform/ios/build_xcframework.sh
-      - uses: actions/upload-artifact@v4
-        with: { name: e7vm.xcframework, path: build-ios/e7vm.xcframework }
+  # macOS / iOS builds and tests run on a maintainer's Mac: scripts/macos.sh test (see CONTRIBUTING.md)
 
   android:
     runs-on: ubuntu-24.04

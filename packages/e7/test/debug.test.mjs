@@ -122,12 +122,18 @@ test("runtime error stops with the message, then terminates", async () => {
 
 test("pause an infinite loop (in a call and in top-level code), terminate", async () => {
   const s = await session({ call: "spin", slice: 10_000 });
-  const running = s.launch();
-  await new Promise((r) => setTimeout(r, 50));
-  assert.equal(s.state, "running");
-  s.pause();
-  const ev = await running;
-  assert.equal(ev.reason, "pause");
+  let running = s.launch();
+  let ev;
+  // a slow machine may still be in the top-level code after the first wait: continue and pause again
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(s.state, "running");
+    s.pause();
+    ev = await running;
+    assert.equal(ev.reason, "pause");
+    if (ev.frame.name === "spin") break;
+    running = s.continue();
+  }
   assert.equal(ev.frame.name, "spin");
   assert.ok(Number(locals(s).i.value) > 0);
   const again = s.continue();

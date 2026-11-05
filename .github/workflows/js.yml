@@ -96,7 +96,6 @@ jobs:
           - { os: ubuntu-24.04, node: "18", browser: false }
           - { os: ubuntu-24.04, node: "20", browser: false }
           - { os: ubuntu-24.04, node: "22", browser: true }
-          - { os: macos-14, node: "22", browser: false }
           - { os: windows-2022, node: "22", browser: false }
     runs-on: ${{ matrix.os }}
     defaults:

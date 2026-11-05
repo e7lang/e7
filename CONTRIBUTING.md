@@ -28,8 +28,24 @@ Before sending a PR, please also run:
 | TypeScript compatibility | `npm i -g typescript@5.6 && tests/tsc/check.sh` |
 | Switch dispatch | configure with `-DE7_NO_COMPUTED_GOTO=ON` |
 
-CI runs all of these plus macOS, Windows (MSVC and clang-cl), 32-bit, Android, iOS, WebAssembly and
-the language bindings.
+CI (GitHub Actions) runs all of these plus Linux, Windows (MSVC and clang-cl), 32-bit, Android,
+WebAssembly and the language bindings. **macOS and iOS run on a maintainer's Mac**, not on GitHub:
+`scripts/macos.sh test` builds and tests Release and ASan + UBSan, SwiftPM on macOS, the package on an
+iOS simulator, the XCFramework and, when the tools are installed, the JNI library with the JVM tests
+(a JDK), the C# binding (`dotnet`) and the WebAssembly build with the npm tests (`brew install
+emscripten`). Run it before merging changes that can affect Apple platforms and before every release.
+
+### Releasing
+
+1. Bump the version (`scripts/check-versions.py` lists every place), update `CHANGELOG.md`, push to `main`
+   and wait for CI.
+2. On a Mac: `scripts/macos.sh test`, then `scripts/macos.sh release <version>`. This builds the universal
+   macOS archive and the macOS native libraries for the jar and the NuGet package, tests them, and uploads
+   them to a draft release `v<version>` at the current commit.
+3. Push the tag it prints (`git tag -a v<version> ... && git push origin v<version>`). The release workflow
+   builds Linux and Windows, takes the macOS files from the draft, packages everything, attests the files it
+   built and publishes the release.
+4. On a Mac: `scripts/macos.sh verify <version>` installs the release with Homebrew and runs it.
 
 ### Stability checks
 

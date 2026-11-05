@@ -34,19 +34,14 @@ jobs:
               cmake: '-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"' }
           - { platform: linux-arm64, os: ubuntu-22.04-arm,
               cmake: '-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"' }
-          - { platform: macos-universal, os: macos-14,
-              cmake: '-G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0' }
           - { platform: windows-x64, os: windows-2022,
               cmake: '-G "Visual Studio 17 2022" -A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded' }
     name: build (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     env:
       # Optional code signing; each step below is skipped when its secrets are not configured.
-      # macOS: APPLE_CERT_P12 (base64 Developer ID Application .p12), APPLE_CERT_PASSWORD,
-      #        APPLE_SIGNING_IDENTITY ("Developer ID Application: Name (TEAMID)"),
-      #        APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD (app-specific password, for notarization)
+      # (macOS files are built, signed and notarized on a maintainer's Mac: scripts/macos.sh release)
       # Windows: WINDOWS_CERT_PFX (base64 .pfx), WINDOWS_CERT_PASSWORD
-      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
       WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
     defaults:
       run:
@@ -77,34 +72,6 @@ jobs:
         run: cmake --build build --config Release -j 4
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
-      - name: Sign and notarize (macOS)
-        if: runner.os == 'macOS' && env.APPLE_CERT_P12 != ''
-        env:
-          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          kc="$RUNNER_TEMP/sign.keychain-db"; kcpw="$(uuidgen)"
-          echo "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security create-keychain -p "$kcpw" "$kc"
-          security set-keychain-settings -lut 3600 "$kc"
-          security unlock-keychain -p "$kcpw" "$kc"
-          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$kc"
-          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc" >/dev/null
-          for b in build/e7 build/e7c; do
-            codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$b"
-            codesign --verify --strict --verbose=2 "$b"
-          done
-          ditto -c -k --keepParent build/e7 "$RUNNER_TEMP/e7.zip"
-          ditto -c -k --keepParent build/e7c "$RUNNER_TEMP/e7c.zip"
-          for z in e7 e7c; do
-            xcrun notarytool submit "$RUNNER_TEMP/$z.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
-              --password "$APPLE_APP_PASSWORD" --wait
-          done
-          rm -f "$RUNNER_TEMP/cert.p12"
       - name: Sign (Windows)
         if: runner.os == 'Windows' && env.WINDOWS_CERT_PFX != ''
         env:
@@ -181,6 +148,20 @@ jobs:
           upload-release-assets: false
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
+      # macOS files are built and tested on a maintainer's Mac and uploaded to a draft release v<version>
+      # before the tag is pushed (scripts/macos.sh release <version>); this workflow publishes that draft.
+      - name: macOS files from the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VER: ${{ steps.tag.outputs.version }}
+        run: |
+          mkdir -p dist-macos
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D dist-macos \
+            -p "e7-$VER-macos-universal.tar.gz" -p "e7-$VER-macos-universal.tar.gz.sha256" || {
+            echo "::error::the draft release $TAG has no macOS files: run scripts/macos.sh release $VER on a Mac first"; exit 1; }
+          (cd dist-macos && shasum -a 256 -c ./*.sha256)
+          cp dist-macos/* dist/
       - name: Add the SBOM to the release files
         run: cp "$RUNNER_TEMP/e7-${{ steps.tag.outputs.version }}.spdx.json" dist/
       - name: Homebrew formula and Scoop manifest
@@ -193,11 +174,12 @@ jobs:
       # Build provenance (SLSA, signed with this workflow's identity) for every file attached to the
       # release; verify with `gh attestation verify <file> --repo e7lang/e7`. The language packages
       # (.nupkg, .aar / .jar, .tgz / .vsix) are attested by their reusable workflows below.
+      # The macOS archive is built on a maintainer's Mac and is not attested (its .sha256 is published).
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            dist/*.tar.gz
+            dist/*-linux-*.tar.gz
             dist/*.zip
             dist/*.spdx.json
             dist/e7.rb
@@ -220,7 +202,8 @@ jobs:
 
           Each archive contains \`bin/\`, \`include/e7/e7.h\`, \`lib/\`, \`bindings/\` (C#, Swift, Java/Kotlin), \`types/e7.d.ts\`, \`examples/\`.
           Verify downloads with the matching \`.sha256\` file, and their build provenance with
-          \`gh attestation verify <file> --repo e7lang/e7\` (every archive and package is attested).
+          \`gh attestation verify <file> --repo e7lang/e7\` (every Linux and Windows archive and every package is
+          attested; the macOS archive is built and tested on a maintainer's Mac with \`scripts/macos.sh release\`).
           Software bill of materials (SPDX): \`e7-${TAG#v}.spdx.json\`.
 
           **Packages** (attached below as well)
@@ -241,6 +224,8 @@ jobs:
           NOTES
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
+            # the draft prepared by scripts/macos.sh release: publish it
+            gh release edit "$TAG" --draft=false --latest --title "E7 $TAG" --notes-file notes.md -R "$GITHUB_REPOSITORY"
           else
             # creates the tag at the built commit when it does not exist yet (manual publish)
             gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "E7 $TAG" --notes-file notes.md -R "$GITHUB_REPOSITORY"
@@ -281,17 +266,13 @@ jobs:
     secrets: inherit
     permissions: { contents: write, id-token: write, attestations: write }
 
-  swift:
-    needs: publish
-    uses: ./.github/workflows/swift.yml
-
   # Install the published release the way users will, and run it.
   verify-homebrew:
     needs: publish
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-24.04]
+        os: [ubuntu-24.04]  # macOS: scripts/macos.sh verify <version> on a Mac
     runs-on: ${{ matrix.os }}
     steps:
       - name: brew install from the release's formula

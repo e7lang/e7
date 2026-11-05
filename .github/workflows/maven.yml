@@ -3,8 +3,11 @@ name: Maven
 # Builds and tests the Maven artifacts (Gradle build in platform/android):
 #   org.e7vm:e7vm-android  AAR: Java API + libe7vm_jni.so (arm64-v8a, armeabi-v7a, x86_64, x86)
 #   org.e7vm:e7vm          JAR: Java API + JNI libraries for linux-x86_64, linux-aarch64, macos (universal), windows-x86_64
-# Tests: the JUnit suite platform/android/shared-test runs on desktop JVMs (Linux x64/arm64, macOS, Windows)
+# Tests: the JUnit suite platform/android/shared-test runs on desktop JVMs (Linux x64/arm64, Windows)
 # against the bundled libraries, and as an instrumented test on an Android emulator against the AAR.
+# The macOS JNI library is built and tested on a maintainer's Mac (scripts/macos.sh); for a release it is
+# taken from the draft release v<version> (e7-<version>-macos-natives.tar.gz, uploaded by
+# scripts/macos.sh release), and CI builds without publishing leave it out of the jar.
 #
 # Publishing only happens when called from another workflow with publish: true, e.g. from release.yml:
 #   maven:
@@ -55,8 +58,6 @@ jobs:
               cmake: '-G Ninja -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"' }
           - { platform: linux-aarch64, os: ubuntu-22.04-arm,
               cmake: '-G Ninja -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"' }
-          - { platform: macos, os: macos-14,
-              cmake: '-G Ninja "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0' }
           - { platform: windows-x86_64, os: windows-2022,
               cmake: '-G "Visual Studio 17 2022" -A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded' }
     name: jvm natives (${{ matrix.platform }})
@@ -111,6 +112,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - uses: actions/download-artifact@v4
         with: { pattern: "natives-*", path: natives, merge-multiple: true }
+      - name: macOS JNI library (built locally by scripts/macos.sh release)
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ inputs.version }}"; v="${v#v}"
+          gh release download "v$v" -p "e7-$v-macos-natives.tar.gz" -D "$RUNNER_TEMP" -R "$GITHUB_REPOSITORY" || {
+            echo "::error::e7-$v-macos-natives.tar.gz is not on the draft release v$v: run scripts/macos.sh release $v first"; exit 1; }
+          tar -xzf "$RUNNER_TEMP/e7-$v-macos-natives.tar.gz" -C . natives/macos
+          ls -l natives/*/
       - name: Build, test and stage org.e7vm:e7vm
         working-directory: platform/android
         run: |
@@ -120,9 +131,11 @@ jobs:
         run: |
           jar="$(ls platform/android/jvm/build/libs/e7vm-*.jar | grep -v -e sources -e javadoc)"
           unzip -l "$jar"
+          macos=""
+          [ "${{ inputs.publish }}" = "true" ] && macos=org/e7vm/native/macos/libe7vm_jni.dylib
           for f in org/e7vm/E7VM.class org/e7vm/NativeLoader.class org/e7vm/E7ModuleManager.class \
                    org/e7vm/native/linux-x86_64/libe7vm_jni.so org/e7vm/native/linux-aarch64/libe7vm_jni.so \
-                   org/e7vm/native/macos/libe7vm_jni.dylib org/e7vm/native/windows-x86_64/e7vm_jni.dll; do
+                   org/e7vm/native/windows-x86_64/e7vm_jni.dll $macos; do
             unzip -l "$jar" "$f" > /dev/null || { echo "missing $f in $jar" >&2; exit 1; }
           done
           if unzip -l "$jar" | grep -q -e E7VMTest -e ModuleManagerScenarios; then echo "test classes leaked into $jar" >&2; exit 1; fi

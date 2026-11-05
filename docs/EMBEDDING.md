@@ -279,7 +279,7 @@ Values are `E7Value` cases: `.number(Double)`, `.int(Int64)`, `.uint(UInt64)`, `
 `E7VM.compile(_:)`, `E7VM.sign(_:seed:)` and `E7VM.publicKey(seed:)` compile and sign modules (e.g. in tests or tooling).
 `E7VM(gcGrowthPercent:)`, `vm.gcStats()`, `E7VM.versionNumber`, `E7VM.inspect(_:)` and `E7VM.signDetached` /
 `verifyDetached` mirror the C API; `E7ModuleManager` handles over-the-air delivery ([DEPLOYMENT.md](DEPLOYMENT.md#4-client-integration)).
-The wrapper is tested in CI by `Tests/E7VMTests` (`swift test` on macOS and on an iOS simulator).
+The wrapper is tested by `Tests/E7VMTests` (`swift test` on macOS and on an iOS simulator; `scripts/macos.sh test`).
 
 e7vm uses no JIT and allocates no executable memory, which meets the App Store requirements for interpreted code (delivered scripts should not change the app's primary purpose).
 

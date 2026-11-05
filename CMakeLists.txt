@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
 project(e7vm VERSION 0.2.5 LANGUAGES C CXX)
 
+# 32-bit x86: use SSE2 for doubles. x87 computes with 80-bit intermediates, which changes results that must
+# match JavaScript bit for bit (number formatting, Math). SSE2 is part of every x86 CPU e7 targets (and of
+# the Android x86 ABI; MSVC uses it by default).
+if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(i.86|x86|X86|x86_64|AMD64|amd64)$" AND NOT MSVC AND NOT EMSCRIPTEN)
+  add_compile_options(-msse2 -mfpmath=sse)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
