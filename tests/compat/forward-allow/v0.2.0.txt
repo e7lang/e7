@@ -10,6 +10,8 @@ tests/cases/lang/difffuzz_regressions.ts      # number formatting, Date, -0 Map 
 tests/cases/lang/map_date_keys.ts             # Map/Set compare Date keys by identity (0.2.5)
 tests/cases/lang/map_iteration_mutation.ts    # iteration after compaction / clear (0.2.5)
 tests/cases/lang/object_key_order.ts          # array-index keys first in Object.keys / JSON.stringify (0.2.5)
+tests/cases/lang/math_fdlibm.ts               # Math from V8's fdlibm instead of the platform libm (0.2.5)
+tests/cases/lang/math_pow_fdlibm.ts           # same, for ** and Math.pow
 # fixed in 0.2.1
 tests/cases/lang/error_values.ts              # Error values in instanceof / String / JSON.stringify (0.2.1)
 tests/cases/lib/json_try_shape.ts             # JSON nesting-limit message (0.2.1)

@@ -48,8 +48,16 @@
     <E7Native Include="$(E7NativeDir)/linux-arm64/libe7vm.so" Rid="linux-arm64" />
     <E7Native Include="$(E7NativeDir)/osx/libe7vm.dylib" Rid="osx-arm64" />
     <E7Native Include="$(E7NativeDir)/osx/libe7vm.dylib" Rid="osx-x64" />
-    <None Include="@(E7Native)" Pack="true" PackagePath="runtimes/%(Rid)/native/" Visible="false" />
   </ItemGroup>
+
+  <!-- Pack the native libraries that exist (a CI build without publishing has no macOS library: it is
+       built on a Mac by scripts/macos.sh release); E7RequireNative=true makes a missing one an error. -->
+  <Target Name="E7AddNative" BeforeTargets="_GetPackageFiles" Condition="'$(E7NativeDir)' != ''">
+    <ItemGroup>
+      <None Include="@(E7Native)" Condition="Exists('%(E7Native.FullPath)')" Pack="true"
+            PackagePath="runtimes/%(E7Native.Rid)/native/" Visible="false" />
+    </ItemGroup>
+  </Target>
 
   <Target Name="E7CheckNative" BeforeTargets="GenerateNuspec" Condition="'$(E7RequireNative)' == 'true'">
     <Error Condition="'$(E7NativeDir)' == ''" Text="E7RequireNative=true but E7NativeDir is not set" />
