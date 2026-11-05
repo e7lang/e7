@@ -41,6 +41,7 @@ class Checker {
 
   // shared helpers (also used by codegen)
   static bool isNullish(Type* t) { return t->t == TT::Null || t->t == TT::Undefined; }
+  static bool hasUndefined(Type* t) { return t && (t->t == TT::Undefined || (t->t == TT::Optional && t->hasUndef)); }
 
  private:
   Program& P;
@@ -213,6 +214,9 @@ class Checker {
   bool checkLValue(Expr* e);
   std::string memberWriteError(Expr* target);  // "" when the member may be written here
   Type* declaredMemberType(Expr* target);
+  std::string exactOptionalError(const std::string& name, Type* declared, Type* value);
+  const char* exactOptionalTarget(Expr* target);
+  bool spreadExact(const std::string& name, Type* t, bool absentIfUndef, Type* exp, Loc loc);
   void checkArgs(Expr* call, Type* fnType, std::vector<Expr*>& args, size_t skip = 0);
   void expandSpreads(std::vector<Expr*>& args);
   Type* checkBuiltinCall(Expr* e, const std::string& id, Type* expected);

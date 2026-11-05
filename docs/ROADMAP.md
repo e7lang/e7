@@ -100,9 +100,21 @@ rejected (about 17 of them are compiler-only work, listed under P1).
 - `console.log` of long arrays and nested objects formatted like Node.js (multi-line).
 - Generics: generic functions, classes, interfaces and type aliases, compiled by monomorphization (no VM change).
 
+## 0.2.6: the subset defined
+
+- SPEC section 0.1: what defines E7 (tsc 5.6 with `strict` and `exactOptionalPropertyTypes` as the upper bound,
+  ECMAScript as implemented by Node.js 22 for run-time behaviour, and the selection rules), with **types known at
+  compile time** as the fixed rule that is never relaxed.
+- TYPESCRIPT.md: every TypeScript feature with its status, reason and alternative, generated from sample programs
+  that CI checks against the compiler and Node.js.
+- Fixes from an independent security review of the 0.2.5 VM changes.
+
 ## 0.3 (planned)
 
-- `finally`.
+Candidates must satisfy the rules of SPEC section 0.1; features that need run-time type information (`any`,
+`unknown`, general unions, index signatures, `keyof` / conditional / mapped types) stay out.
+
+- Generators and iterators, `async` / `await` (coroutines in the VM).
 - Pilot feedback: whatever the first production pilot needs.
 - A C# `E7ModuleManager` (Kotlin/Java and Swift have one).
 

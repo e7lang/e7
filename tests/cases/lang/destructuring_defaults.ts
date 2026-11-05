@@ -47,7 +47,7 @@ console.log(host, port, tags, count, delay);
 // renaming with a default, nested defaults
 const { host: h = "h", retry: { count: n = 1 } = { count: 2 } } = { host: "given", retry: { count: undefined } } as {
   host?: string;
-  retry?: { count?: number };
+  retry?: { count?: number | undefined };
 };
 console.log(h, n);
 

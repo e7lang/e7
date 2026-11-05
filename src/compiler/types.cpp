@@ -130,7 +130,7 @@ Type* Types::objectType(ObjShape* s) {
 }
 Type* Types::anonObject(const std::vector<ObjShape::Prop>& props) {
   std::string k = "{";
-  for (auto& p : props) k += p.name + ":" + ptrKey(p.type) + (p.optional ? "?" : "") + ";";
+  for (auto& p : props) k += p.name + ":" + ptrKey(p.type) + (p.optional ? "?" : "") + (p.undefOk ? "!" : "") + ";";
   auto it = interned_.find(k);
   if (it != interned_.end()) return it->second;
   shapes.emplace_back(new ObjShape());

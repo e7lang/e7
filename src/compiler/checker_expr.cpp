@@ -492,9 +492,15 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
             return errT(p.loc, "spreading a value of abstract class type '" + t->cls->name +
                                    "' with abstract properties is not supported (their subclass fields are not known)");
           for (auto& f : t->cls->fields)
-            if (f.name[0] != '#') entries[pi].push_back({f.name, f.type});  // #private fields are not copied
+            if (f.name[0] != '#') {  // #private fields are not copied
+              if (!spreadExact(f.name, f.type, f.optional && !f.undefOk, exp, p.loc)) return T.unknown();
+              entries[pi].push_back({f.name, f.type});
+            }
         } else if (t->t == TT::Object) {
-          for (auto& pr : t->shape->props) entries[pi].push_back({pr.name, pr.type});
+          for (auto& pr : t->shape->props) {
+            if (!spreadExact(pr.name, pr.type, pr.optional && !pr.undefOk, exp, p.loc)) return T.unknown();
+            entries[pi].push_back({pr.name, pr.type});
+          }
         } else if (t->t != TT::Unknown) {
           return errT(p.loc, "only objects can be spread into an object literal (got '" + typeName(t) + "')");
         }
@@ -502,6 +508,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       }
       const ObjShape::Prop* sp = exp && exp->t == TT::Object ? exp->shape->findProp(p.key) : nullptr;
       Type* t = check(p.value, sp ? sp->type : nullptr);
+      if (sp && sp->optional && !sp->undefOk && hasUndefined(t)) { err(p.loc, exactOptionalError(p.key, sp->type, t)); continue; }
       if (sp && t->t == TT::Void) { err(p.loc, "property value cannot be void: a void function returns no value in E7 (return a value, or make the field optional and leave it out)"); continue; }
       if (sp) coerce(p.value, sp->type);
       else if (t->t == TT::Null || t->t == TT::Undefined || t->t == TT::Void) {
@@ -570,8 +577,10 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       const ObjShape::Prop* sp = sh->findProp(p.key);
       const ObjShape::Method* sm = sp ? nullptr : sh->findMethod(p.key);
       if (sp) {
-        if (p.method) checkMethod(p, self, sp->type);
-        else if (check(p.value, sp->type)->t == TT::Void) { err(p.loc, "property value cannot be void: a void function returns no value in E7 (return a value, or make the field optional and leave it out)"); continue; }
+        Type* vt = p.method ? checkMethod(p, self, sp->type) : check(p.value, sp->type);
+        if (!p.method && sp->optional && !sp->undefOk && hasUndefined(vt)) { err(p.loc, exactOptionalError(p.key, sp->type, vt)); continue; }
+        if (p.method) {}
+        else if (vt->t == TT::Void) { err(p.loc, "property value cannot be void: a void function returns no value in E7 (return a value, or make the field optional and leave it out)"); continue; }
         coerce(p.value, sp->type);
         fields.push_back({p.key, sp->type});
       } else if (sm) {
@@ -759,6 +768,37 @@ static Type* storageTypeOf(Expr* x) {
 
 // Declared (not narrowed) type of an accessor or abstract property that is written; nullptr for
 // other targets.
+// exactOptionalPropertyTypes: 'x?: T' may be left out but not set to undefined; 'x?: T | undefined' may be
+std::string Checker::exactOptionalError(const std::string& name, Type* declared, Type* value) {
+  std::string base = typeName(declared->t == TT::Optional ? declared->elem : declared);
+  return "type '" + typeName(value) + "' is not assignable to the optional property '" + name + "?: " + base +
+         "' (exactOptionalPropertyTypes): leave the property out, or declare it '" + name + "?: " + base + " | undefined'";
+}
+
+// a spread copies a property that may hold undefined into an optional property that may not
+bool Checker::spreadExact(const std::string& name, Type* t, bool absentIfUndef, Type* exp, Loc loc) {
+  if (absentIfUndef || !hasUndefined(t) || !exp || exp->t != TT::Object) return true;
+  const ObjShape::Prop* sp = exp->shape->findProp(name);
+  if (!sp || !sp->optional || sp->undefOk) return true;
+  err(loc, exactOptionalError(name, sp->type, t));
+  return false;
+}
+
+// the optional property or field a member target writes, when its declared type leaves out undefined
+const char* Checker::exactOptionalTarget(Expr* target) {
+  target = strip(target);
+  if (target->k != EK::Member || target->intrinsic != 0) return nullptr;
+  if (target->field >= 0 && target->cls) {
+    auto& f = target->cls->fields[target->field];
+    return f.optional && !f.undefOk ? f.name.c_str() : nullptr;
+  }
+  if (target->field < 0 && target->a->type && baseOf(target->a->type)->t == TT::Object) {
+    const ObjShape::Prop* p = baseOf(target->a->type)->shape->findProp(target->raw);
+    return p && p->optional && !p->undefOk ? p->name.c_str() : nullptr;
+  }
+  return nullptr;
+}
+
 Type* Checker::declaredMemberType(Expr* target) {
   target = strip(target);
   if (target->k != EK::Member) return nullptr;
@@ -1083,6 +1123,8 @@ Type* Checker::checkAssign(Expr* e) {
   std::string key = pathKey(e->a);
   if (op == "=") {
     Type* rt = check(e->b, lt);
+    if (const char* on = target->k == EK::Member ? exactOptionalTarget(target) : nullptr; on && hasUndefined(rt))
+      return errT(e->loc, exactOptionalError(on, lt, rt));
     coerce(e->b, lt);
     invalidatePath(key);
     if (lt->t == TT::Optional && rt->t != TT::Optional && !isNullish(rt) && rt->t != TT::Unknown) setNarrow(key, rt == lt->elem ? lt->elem : baseOf(lt));

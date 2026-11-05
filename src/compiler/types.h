@@ -42,7 +42,9 @@ struct ObjShape {
   std::string name;  // interface name or empty
   GenericSym* origin = nullptr;  // instance of a generic interface: the template and its type arguments
   std::vector<Type*> typeArgs;
-  struct Prop { std::string name; Type* type; bool optional; };
+  // undefOk: an optional property whose declared type includes undefined ('x?: T | undefined'); only
+  // those may be set to undefined (TypeScript's exactOptionalPropertyTypes)
+  struct Prop { std::string name; Type* type; bool optional; bool undefOk = false; };
   std::vector<Prop> props;
   struct Method { std::string name; Type* fn; };
   std::vector<Method> methods;
@@ -133,7 +135,7 @@ struct ClassSym : Sym {
   ClassSym() : Sym(SymK::Class) {}
   Stmt* decl = nullptr;
   ClassSym* parent = nullptr;
-  struct Field { std::string name; Type* type; Expr* init; bool optional; ClassSym* owner; Loc loc; bool readonly = false; };
+  struct Field { std::string name; Type* type; Expr* init; bool optional; ClassSym* owner; Loc loc; bool readonly = false; bool undefOk = false; };
   std::vector<Field> fields;  // full layout, inherited first
   struct Method { std::string name; FuncSym* fn; };
   std::vector<Method> vtable;

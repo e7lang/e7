@@ -12,7 +12,8 @@
     ],
     "moduleDetection": "force",
     "useDefineForClassFields": true,
-    "types": []
+    "types": [],
+    "exactOptionalPropertyTypes": true
   },
   "files": [
     "../../lib/e7.d.ts"

@@ -6,6 +6,39 @@ constructs whose types cannot be determined statically, or that cannot be compil
 
 Source file extension is `.ts` (recommended, supported directly by IDEs) or `.e7`; the compiled output is `.e7b`.
 
+### 0.1 What defines E7
+
+There is no official standard for a subset of TypeScript (TypeScript itself has had no maintained specification
+since 1.8; `--strict` is a set of type-checking options, not a subset of the language). E7 is therefore defined by
+three references that can each be checked mechanically:
+
+1. **Upper bound: TypeScript 5.6 `tsc`** with the configuration in
+   [`tests/tsc/tsconfig.json`](../tests/tsc/tsconfig.json): `strict` (which includes `strictNullChecks`,
+   `noImplicitAny`, `useUnknownInCatchVariables`, ...) and `exactOptionalPropertyTypes`, with `lib/e7.d.ts`
+   declaring the built-in modules and integer types. Every E7 program must type-check there; CI checks every test
+   and example. The TypeScript version changes only in a minor E7 release, after the test suite passes with the new
+   version.
+2. **Run-time semantics: ECMAScript (ECMA-262)**, as implemented by Node.js 22 (V8). An E7 program prints what the
+   same program prints on Node.js; CI compares every test byte for byte, and a differential fuzzer compares random
+   programs. The differences that remain are listed in section 9: E7 extensions (fixed-width integers), E7
+   checks that end the call where JavaScript would continue, and a few output details that later releases remove.
+3. **The subset itself: this specification**, built from three rules. A TypeScript feature is in E7 when all three
+   hold:
+   - **Types are known at compile time — the fixed rule.** Every value has a static type that fixes its
+     representation; nothing is decided by inspecting values at run time. This rule is never relaxed: a feature
+     that needs it relaxed stays out of E7, however common it is in TypeScript. It excludes `any`, `unknown` as a
+     declared type, unions other than with `null`/`undefined`, index signatures, `keyof`/conditional/mapped types,
+     `eval`, and dynamic property access.
+   - **The bytecode is verifiable.** The compiled module can be checked completely by the bytecode verifier before
+     it runs, so a malicious module cannot corrupt memory (docs/BYTECODE.md section 3).
+   - **Behaviour equals JavaScript.** If E7 cannot reproduce JavaScript's behaviour exactly, the construct is a
+     compile error rather than something that runs differently (section 9 lists the exceptions that remain).
+
+   Features that satisfy the rules but are not implemented yet (generators, `async`, regular expressions, ...) are
+   listed as such. [TYPESCRIPT.md](TYPESCRIPT.md) lists every TypeScript feature with its status, the reason and
+   what to write instead; each row is a sample program that CI compiles (and, for supported features, compares with
+   Node.js), so the table always matches the compiler.
+
 ---
 
 ## 1. Lexical structure
@@ -49,6 +82,9 @@ User-defined generics are supported (section 2.3).
 - Identical types; `null`/`undefined` → the corresponding nullable type; `T` → `T | null | undefined`.
 - Subclass → superclass; class/object type → interface (**structural**: every property of the target exists in the source with the same type, and every method signature is the same).
 - Arrays of reference elements are covariant (`Circle[]` → `Shape[]`, consistent with TS).
+- Optional properties and fields follow tsc's `exactOptionalPropertyTypes`: `x?: T` may be left out but not set to
+  `undefined` (by an object literal, an assignment or a spread of a property that may hold `undefined`); declare
+  `x?: T | undefined` to allow it.
 - Numeric enum → `number`, string enum → `string`.
 - Function types: parameter and return types must match; an arrow function used as a callback may **declare fewer parameters** (extra arguments are ignored), and a `void`-returning context accepts any return value.
 - There is **no implicit conversion** between fixed-width integers and `number`, or between integers of different widths; use explicit conversions such as `u32(x)` or `Number(x)`.
@@ -427,7 +463,7 @@ or host function that was running (or that called back into the script, like `Ar
 | Fixed-width integer arithmetic | Floating point | Machine integers that wrap around |
 | `console.log` of functions | `[Function: f]` (name inferred from the variable or property) | `[Function (anonymous)]` for arrow functions and function expressions; `%o` does not list their hidden properties |
 | `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null` |
-| An object property explicitly set to `undefined` (`{ id: 1, score: undefined }`, `r.score = undefined`, or copied by a spread) | An own property: listed by `Object.keys` / `entries` / `values`, copied by spread, printed as `score: undefined` by `console.log` | Objects of interface / object types (object literals) store a missing optional property as `undefined`, so a property holding `undefined` *is* missing: `Object.keys` / `entries` / `values`, spread and `console.log` leave it out. `JSON.stringify` omits it in both. Fields of class instances are always own properties, as in JavaScript (also when `undefined`) |
+| An object property set to `undefined` (possible only when its declared type includes `undefined`: `score: number \| undefined` or `score?: number \| undefined`; an optional `score?: number` cannot be set to `undefined`, as with tsc's `exactOptionalPropertyTypes`) | An own property: listed by `Object.keys` / `entries` / `values`, copied by spread, printed as `score: undefined` by `console.log` | Objects of interface / object types (object literals) store a missing optional property as `undefined`, so a property holding `undefined` *is* missing: `Object.keys` / `entries` / `values`, spread and `console.log` leave it out. `JSON.stringify` omits it in both. Fields of class instances are always own properties, as in JavaScript (also when `undefined`) |
 | Key order of optional properties added later | A property added to an object goes last | The property order of an object is its layout, fixed when it is created: an object literal puts the optional properties of its type that it does not set last, in declaration order, so properties added later appear in JavaScript's order unless several are added in another order |
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
 | JSON of the wrong shape | Accepted (no validation) | `JSON.parse(text) as T` ends the call (not catchable); `tryParse(text) as T \| null` from `e7:json` returns `null`. Syntax errors are a catchable `SyntaxError` in both |

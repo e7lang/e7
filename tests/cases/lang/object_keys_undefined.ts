@@ -1,9 +1,10 @@
 // the fields of a class instance are own properties also when they hold undefined; a record property
-// holding undefined is a missing optional property (SPEC section 9), which JSON.stringify omits in both
+// holding undefined is a missing optional property (SPEC section 9), which JSON.stringify omits in both.
+// Only an optional property whose type includes undefined may be set to it (exactOptionalPropertyTypes)
 interface Rec {
   id: number;
-  score?: number;
-  tags?: string[];
+  score?: number | undefined;
+  tags?: string[] | undefined;
 }
 class C {
   a: number = 1;

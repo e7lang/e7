@@ -529,7 +529,7 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
         resolveClass(t->cls);
         for (auto& f : t->cls->fields)
           if (f.name[0] != '#' && std::find(named.begin(), named.end(), f.name) == named.end())
-            props.push_back({f.name, f.type, f.optional});
+            props.push_back({f.name, f.type, f.optional, f.undefOk});
         if (!t->cls->abstractProps.empty())
           err(el.loc, "a rest property of an abstract class type with abstract properties is not supported");
       } else if (t->t == TT::Object) {

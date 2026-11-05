@@ -637,8 +637,9 @@ Type* Checker::resolveType(TypeNode* n) {
       if (!hasMethods) {
         for (auto& m : n->members) {
           Type* pt = resolveType(m.type);
+          bool uo = m.optional && hasUndefined(pt);
           if (m.optional) pt = T.optional(pt, false, true);
-          props.push_back({m.name, pt, m.optional});
+          props.push_back({m.name, pt, m.optional, uo});
         }
         return T.anonObject(props);
       }
@@ -648,8 +649,9 @@ Type* Checker::resolveType(TypeNode* n) {
         Type* pt = resolveType(m.type);
         if (m.method) sh->methods.push_back({m.accessor == 1 ? "get " + m.name : m.accessor == 2 ? "set " + m.name : m.name, pt});
         else {
+          bool uo = m.optional && hasUndefined(pt);
           if (m.optional) pt = T.optional(pt, false, true);
-          sh->props.push_back({m.name, pt, m.optional});
+          sh->props.push_back({m.name, pt, m.optional, uo});
         }
       }
       return T.objectType(sh);
@@ -811,8 +813,9 @@ void Checker::resolveInterface(InterfaceSym* is) {
     }
     if (m.method) sh->methods.push_back({m.accessor == 1 ? "get " + m.name : m.accessor == 2 ? "set " + m.name : m.name, pt});
     else {
+      bool uo = m.optional && hasUndefined(pt);
       if (m.optional) pt = T.optional(pt, false, true);
-      sh->props.push_back({m.name, pt, m.optional});
+      sh->props.push_back({m.name, pt, m.optional, uo});
     }
   }
   scope = savedScope;
@@ -937,7 +940,7 @@ void Checker::resolveClass(ClassSym* c) {
 
   c->isAbstract = d->isAbstract;
   if (c->parent) c->abstractProps = c->parent->abstractProps;
-  auto addField = [&](const std::string& name, Type* t, Expr* init, bool optional, Loc l, bool readonly) {
+  auto addField = [&](const std::string& name, Type* t, Expr* init, bool optional, Loc l, bool readonly, bool undefOk) {
     if (name[0] == '#' && c->fieldIdx.count(name) && c->fields[c->fieldIdx[name]].owner != c) {
       err(l, "private field '" + name + "' is also declared by a base class; e7 needs distinct private names in a class hierarchy");
       return;
@@ -956,7 +959,7 @@ void Checker::resolveClass(ClassSym* c) {
       c->abstractProps.erase(name);
     }
     c->fieldIdx[name] = (int)c->fields.size();
-    c->fields.push_back({name, t, init, optional, c, l, readonly});
+    c->fields.push_back({name, t, init, optional, c, l, readonly, undefOk});
   };
   // parameter properties come first (TS emits them first in the constructor)
   if (ctorDecl) {
@@ -964,8 +967,9 @@ void Checker::resolveClass(ClassSym* c) {
       if (!p.isProperty) continue;
       if (!p.type) { err(p.loc, "parameter property '" + p.name + "' needs a type annotation"); continue; }
       Type* t = resolveType(p.type);
+      bool uo = p.optional && hasUndefined(t);
       if (p.optional) t = T.optional(t, false, true);
-      addField(p.name, t, nullptr, p.optional, p.loc, p.readonly);
+      addField(p.name, t, nullptr, p.optional, p.loc, p.readonly, uo);
     }
   }
   // methods; accessors are methods named "get x" / "set x" (not valid identifiers, so they cannot
@@ -1110,8 +1114,10 @@ void Checker::resolveClass(ClassSym* c) {
       continue;
     }
     Type* t = nullptr;
+    bool uo = false;
     if (m.type) {
       t = resolveType(m.type);
+      uo = m.optional && hasUndefined(t);
       if (m.optional) t = T.optional(t, false, true);
     } else if (m.init) {
       // infer from initializer, checked in constructor context
@@ -1127,7 +1133,7 @@ void Checker::resolveClass(ClassSym* c) {
       err(m.loc, "field '" + m.name + "' needs a type annotation or initializer");
       t = T.unknown();
     }
-    addField(m.name, t, m.init, m.optional, m.loc, m.readonly);
+    addField(m.name, t, m.init, m.optional, m.loc, m.readonly, uo);
   }
   if (!c->defScope) scope = savedScope;
   curFn = savedFn;
