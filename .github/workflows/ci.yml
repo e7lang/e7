@@ -136,8 +136,7 @@ jobs:
       # in a headless browser, so changes here cannot silently break the online playground.
       - name: Website + playground end-to-end
         run: |
-          git clone --depth 1 --branch docusaurus https://github.com/e7lang/e7lang.github.io.git site \
-            || git clone --depth 1 https://github.com/e7lang/e7lang.github.io.git site
+          git clone --depth 1 https://github.com/e7lang/e7lang.github.io.git site
           cd site
           cp ../build-wasm/e7wasm.js ../build-wasm/e7wasm.wasm static/playground/
           npm ci --no-audit --no-fund
