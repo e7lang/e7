@@ -111,7 +111,10 @@ type arguments gets its own copy of the function, class or type, checked and com
   variables support only plain patterns (no defaults or rest); a rest element must bind a name.
 - Object spread `{ ...a, k: v, ...b }`: the source may be an object type or a class instance (only fields are copied, not methods); later properties with the same name override earlier ones;
   **optional** properties in the source override only when present (same as TS: in `{ retries: 3, ...opts }`, `retries` has type `number`).
-  The property order of the result is fixed at compile time: a possibly missing property that is later assigned by an explicit property is placed at the end (consistent with JS when that property is missing).
+  The properties of the result are in JavaScript's order (entries in source order, a key keeps its first position): the
+  first spread source whose type is an object type contributes its properties in their run-time order (the value is
+  tested against the classes and object layouts it can have), other spread sources in the order of their type. A possibly missing property that is later assigned by an
+  explicit property is placed at the end (consistent with JS when that property is missing).
 - `if / else`, `while`, `do...while`, `for(;;)`, `for...of` (arrays, strings by code point, `Uint8Array`, `Map`, `Set`,
   `arr.entries()/keys()/values()`, `map.keys()/values()/entries()`), `switch` (with fall-through), `break/continue` (including labels),
   labeled blocks, `try`/`catch`/`finally` (section 3.1). **Not supported**: `for...in`, `with`.
@@ -412,7 +415,9 @@ or host function that was running (or that called back into the script, like `Ar
 | Elements of `new Array<T>(n)` | Holes (read as `undefined`) | `0` / `false` / `null` (`undefined` for reference types) |
 | Fixed-width integer arithmetic | Floating point | Machine integers that wrap around |
 | `console.log` of functions | `[Function: f]` (name inferred from the variable or property) | `[Function (anonymous)]` for arrow functions and function expressions; `%o` does not list their hidden properties |
-| `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }`; `x: undefined` for a property set to `undefined` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null`; an object-literal field holding `undefined` is not shown (the same as a missing optional property) |
+| `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null` |
+| An object property explicitly set to `undefined` (`{ id: 1, score: undefined }`, `r.score = undefined`, or copied by a spread) | An own property: listed by `Object.keys` / `entries` / `values`, copied by spread, printed as `score: undefined` by `console.log` | Objects of interface / object types (object literals) store a missing optional property as `undefined`, so a property holding `undefined` *is* missing: `Object.keys` / `entries` / `values`, spread and `console.log` leave it out. `JSON.stringify` omits it in both. Fields of class instances are always own properties, as in JavaScript (also when `undefined`) |
+| Key order of optional properties added later | A property added to an object goes last | The property order of an object is its layout, fixed when it is created: an object literal puts the optional properties of its type that it does not set last, in declaration order, so properties added later appear in JavaScript's order unless several are added in another order |
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
 | JSON of the wrong shape | Accepted (no validation) | `JSON.parse(text) as T` ends the call (not catchable); `tryParse(text) as T \| null` from `e7:json` returns `null`. Syntax errors are a catchable `SyntaxError` in both |
 | `Array.join` / `console.log("%s")` of class instances | Calls the class's `toString()` | `"[object Object]"` (`String(x)`, template literals and `+` do call `toString()`) |

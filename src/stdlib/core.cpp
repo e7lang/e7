@@ -984,7 +984,9 @@ E7_NATIVE(n_objectKeys) {
   ArrObj* arr = vm.newArray(VT_REF, in->cls->nfields);
   VM::TempRoot keep(vm, arr);
   for (uint32_t i : jsFieldOrder(in->cls)) {
-    if (in->cls->fieldVT[i] == VT_REF && in->fields()[i].r == vm.undef()) continue;
+    // a record (object literal) property holding undefined is a missing optional property; the fields
+    // of a class instance are always own properties (also when undefined), as in JavaScript
+    if (in->cls->isRecord && in->cls->fieldVT[i] == VT_REF && in->fields()[i].r == vm.undef()) continue;
     if (privateField(in->cls, i)) continue;
     vm.arrayPush(arr, slotR(vm.newStringUtf8(in->cls->fieldNames[i])));
   }

@@ -1220,7 +1220,7 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
         std::vector<std::pair<std::string, Type*>> fs;
         for (auto& p : rt->shape->props) fs.push_back({p.name, p.type});
         ClassSym* rc = C.recordFor(fs)->cls;
-        emit(OP_NEW, r, (uint16_t)rc->classIdx);
+        std::vector<uint16_t> vs;
         for (size_t k = 0; k < fs.size(); k++) {
           Kind fk = K(fs[k].second);
           uint16_t v = temp(fk);
@@ -1230,7 +1230,57 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
             D->icNames.push_back(kStr(utf8ToUtf16(fs[k].first)));
             emit(op3(fk, OP_GETN_I, OP_GETN_F, OP_GETN_R), v, src, (uint16_t)(D->icNames.size() - 1));
           }
-          emit(op3(fk, OP_SETF_I, OP_SETF_F, OP_SETF_R), r, (uint16_t)rc->fieldIdx[fs[k].first], v);
+          vs.push_back(v);
+        }
+        auto build = [&](ClassSym* bc) {
+          emit(OP_NEW, r, (uint16_t)bc->classIdx);
+          for (size_t k = 0; k < fs.size(); k++)
+            emit(op3(K(fs[k].second), OP_SETF_I, OP_SETF_F, OP_SETF_R), r, (uint16_t)bc->fieldIdx[fs[k].first], vs[k]);
+        };
+        // an object type: the properties in the run-time order of the value (as JavaScript copies them),
+        // for each class or object layout it can have with another order (see Checker::spreadOrders)
+        std::vector<std::pair<ClassSym*, ClassSym*>> alts;
+        if (t->t == TT::Object && fs.size() > 1) {
+          for (size_t ci = 0; ci < P.classes.size(); ci++) {
+            ClassSym* kc = P.classes[ci];
+            if (kc->isTuple || kc->genericRole == 1 || kc->classIdx < 0 || kc == rc) continue;
+            bool all = true;
+            for (auto& f : fs) all = all && kc->fieldIdx.count(f.first);
+            if (!all) continue;
+            auto re = fs;
+            std::stable_sort(re.begin(), re.end(), [&](const std::pair<std::string, Type*>& x, const std::pair<std::string, Type*>& y) {
+              return kc->fieldIdx[x.first] < kc->fieldIdx[y.first];
+            });
+            bool same = true;
+            for (size_t k = 0; k < re.size() && same; k++) same = re[k].first == fs[k].first;
+            if (!same) alts.push_back({kc, C.recordFor(re)->cls});
+          }
+        }
+        if (alts.empty()) {
+          build(rc);
+        } else {
+          Label* done = newLabel();
+          uint16_t tst = temp(K_I);
+          std::vector<ClassSym*> built;
+          for (size_t ai = 0; ai < alts.size(); ai++) {
+            ClassSym* bc = alts[ai].second;
+            if (std::find(built.begin(), built.end(), bc) != built.end()) continue;
+            built.push_back(bc);
+            Label* use = newLabel();
+            Label* next = newLabel();
+            for (size_t aj = ai; aj < alts.size(); aj++) {
+              if (alts[aj].second != bc) continue;
+              emit(OP_INSTOF, tst, src, (uint16_t)alts[aj].first->classIdx);
+              jump(OP_JT, tst, use);
+            }
+            jump(OP_JMP, 0, next);
+            place(use);
+            build(bc);
+            jump(OP_JMP, 0, done);
+            place(next);
+          }
+          build(rc);
+          place(done);
         }
       }
       destructure(sub, r, rt);
@@ -3492,7 +3542,6 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
       genInto(v, vals[i]);
     }
     uint16_t obj = temp(K_R);
-    emit(OP_NEW, obj, (uint16_t)c->classIdx);
     auto readSpread = [&](int si, const std::string& name, Type*& sft) -> uint16_t {
       Type* st = e->props[si].value->type;
       uint16_t raw;
@@ -3509,30 +3558,33 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
       }
       return raw;
     };
+    // the field values (in the order of `c`), then the object: a `c`, or a record with the same fields
+    // in the order of the run-time class of a spread source (see Checker::spreadOrders)
+    std::vector<uint16_t> fv(c->fields.size(), kNoReg);
     for (size_t fi = 0; fi < c->fields.size(); fi++) {
       Type* ft = c->fields[fi].type;
+      if (e->fieldSrc[fi] < 0 && K(ft) != K_R) continue;  // absent: only reference fields hold undefined
+      fv[fi] = temp(K(ft));
+    }
+    for (size_t fi = 0; fi < c->fields.size(); fi++) {
+      if (fv[fi] == kNoReg) continue;
+      Type* ft = c->fields[fi].type;
       int si = e->fieldSrc[fi];
-      size_t m0 = mark();
-      uint16_t v;
+      uint16_t v = fv[fi];
+      size_t m1 = mark();
       if (si < 0) {
-        if (K(ft) != K_R) { release(m0); continue; }
-        v = temp(K_R);
         emit(OP_LOADUNDEF, v);
       } else if (!e->props[si].spread) {
-        v = vals[si];
+        mov(v, vals[si], K(ft));
       } else {
         Type* sft;
         uint16_t raw = readSpread(si, c->fields[fi].name, sft);
-        v = temp(K(ft));
         boxIfNeeded(v, raw, sft, ft);
       }
+      release(m1);
       // later optional spreads override only when the property is present
-      if (!e->fieldCond[fi].empty()) {
-        uint16_t nv = temp(K(ft));
-        mov(nv, v, K(ft));
-        v = nv;
-      }
       for (int ci : e->fieldCond[fi]) {
+        m1 = mark();
         Type* sft;
         uint16_t raw = readSpread(ci, c->fields[fi].name, sft);
         uint16_t t = temp(K_I);
@@ -3541,9 +3593,45 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
         jump(OP_JT, t, skip);
         unboxNarrowed(v, raw, sft, ft);
         place(skip);
+        release(m1);
       }
-      emit(op3(K(ft), OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)fi, v);
-      release(m0);
+    }
+    auto build = [&](ClassSym* rc) {
+      emit(OP_NEW, obj, (uint16_t)rc->classIdx);
+      for (size_t fi = 0; fi < c->fields.size(); fi++) {
+        if (fv[fi] == kNoReg) continue;
+        int ti = rc == c ? (int)fi : rc->fieldIdx[c->fields[fi].name];
+        emit(op3(K(c->fields[fi].type), OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)ti, fv[fi]);
+      }
+    };
+    if (e->spreadAltSrc >= 0) {
+      Label* done = newLabel();
+      std::vector<ClassSym*> built;
+      for (size_t ai = 0; ai < e->spreadAltCls.size(); ai++) {
+        ClassSym* rc = e->spreadAltCls[ai];
+        if (std::find(built.begin(), built.end(), rc) != built.end()) continue;
+        built.push_back(rc);
+        // every tested class with this order jumps to one copy of the construction
+        Label* use = newLabel();
+        Label* next = newLabel();
+        size_t m1 = mark();
+        uint16_t t = temp(K_I);
+        for (size_t aj = ai; aj < e->spreadAltCls.size(); aj++) {
+          if (e->spreadAltCls[aj] != rc) continue;
+          emit(OP_INSTOF, t, vals[e->spreadAltSrc], (uint16_t)e->spreadAltTest[aj]->classIdx);
+          jump(OP_JT, t, use);
+        }
+        release(m1);
+        jump(OP_JMP, 0, next);
+        place(use);
+        build(rc);
+        jump(OP_JMP, 0, done);
+        place(next);
+      }
+      build(c);
+      place(done);
+    } else {
+      build(c);
     }
     mov(d, obj, K_R);
     return;

@@ -367,6 +367,7 @@ void Checker::run() {
     FuncSym* f = P.funcs[i];
     if (!f->checked && !f->isInit && !f->isNative) checkFunction(f);
   }
+  spreadOrders();
   // exports of the entry file
   if (!fileInfos.empty()) {
     FileInfo* entry = fileInfos.back().get();

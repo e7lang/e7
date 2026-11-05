@@ -105,6 +105,11 @@ struct Expr {
   std::vector<ObjProp> props;
   std::vector<int> fieldSrc;  // object literal with spreads: prop index supplying each record field (-1 = absent)
   std::vector<std::vector<int>> fieldCond;  // later optional spread sources: override only when not undefined
+  // object literal with spreads: the property order follows the run-time order of spread source
+  // `spreadAltSrc` (an object type): when that value is an instance of spreadAltTest[i] (OP_INSTOF), the
+  // result is a spreadAltCls[i] (the same fields in another order); otherwise a `cls`
+  int spreadAltSrc = -1;
+  std::vector<ClassSym*> spreadAltTest, spreadAltCls;
   std::vector<TypeNode*> typeArgs;
   TypeNode* asType = nullptr;
   bool prefix = false;    // update
