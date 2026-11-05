@@ -12,6 +12,14 @@
 
 namespace e7 {
 
+// E7_GC_STRESS (testing only, CMake option): a collection at every safepoint and at every allocation
+// where a collection is allowed, so that a missing root shows up at once (under ASan) instead of
+// depending on when the heap happens to reach its next collection threshold.
+#ifndef E7_GC_STRESS
+#define E7_GC_STRESS 0
+#endif
+constexpr bool kGCStress = E7_GC_STRESS != 0;
+
 class VM;
 struct ModuleRT;
 class Debugger;  // debug.h
@@ -284,9 +292,32 @@ class VM {
   // Natives building large temporary (non-heap) buffers call this so that transient memory is also
   // bounded by the configured memory limit.
   void checkTemp(size_t bytes) {
+    if (E7_UNLIKELY(injectFailure())) errorCode(ERR_MEMORY, "out of memory (injected failure)");
     if (bytes > cfg_.memoryLimit || bytes_ + bytes > cfg_.memoryLimit)
       errorCode(ERR_MEMORY, "out of memory (limit %zu bytes)", cfg_.memoryLimit);
   }
+
+  // ---- testing hooks (tests only, through src/capi/testing.h; not part of the C API) ----
+  // Makes the n-th heap allocation, positive external-memory charge or checkTemp() from now on
+  // fail with ERR_MEMORY (n = 1: the next one), once or, if `persistent`, together with every later
+  // one; 0 disables. allocationCount() counts all of them since the VM was created (also without an
+  // injected failure).
+  void injectAllocationFailure(uint64_t n, bool persistent = false) {
+    failAt_ = n ? allocSeq_ + n : UINT64_MAX;
+    failPersistent_ = persistent;
+    failFired_ = false;
+  }
+  uint64_t allocationCount() const { return allocSeq_; }
+  bool injectedFailureFired() const { return failFired_; }
+  // Budget exhausted inside a callback from a native (which cannot suspend): refill it with `ticks`
+  // instead of failing with ERR_BUDGET (0 = off). Lets the equivalence runs (tests/equiv_test.cpp)
+  // use a budget slice of 1 with programs that pass callbacks to natives.
+  void setCallbackBudgetRefill(int64_t ticks) { testCallbackRefill_ = ticks; }
+  // Heap consistency: bytesAllocated() equals the sum of the sizes of all objects plus their
+  // external buffers, every reference held by an object or a root points to a live object, no
+  // object is left marked, and (when no call is running or suspended) the per-call execution state
+  // is reset. Returns false with a description of the first problem.
+  bool checkHeap(std::string* why) const;
   // RAII: no collection while host code holds fresh objects only in C++ locals
   struct GCPause {
     VM& v;
@@ -308,6 +339,16 @@ class VM {
   StrObj* intToStringObj(Slot v, uint8_t vt);
   StrObj* numToStringObj(double d);
   void* allocRaw(OT t, size_t size);
+  // allocation-failure injection (testing hooks above): true for the allocation chosen to fail
+  bool injectFailure() {
+    if (E7_LIKELY(++allocSeq_ < failAt_)) return false;
+    if (!failPersistent_) failAt_ = UINT64_MAX;
+    failFired_ = true;
+    return true;
+  }
+  uint64_t allocSeq_ = 0, failAt_ = UINT64_MAX;
+  bool failFired_ = false, failPersistent_ = false;
+  int64_t testCallbackRefill_ = 0;
   void maybeGC();
   void markRoots();
   void mark(Obj* o) {

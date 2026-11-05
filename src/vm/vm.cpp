@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <new>
+#include <unordered_set>
 
 namespace e7 {
 
@@ -442,6 +443,11 @@ std::string VM::stackTrace() const {
 
 // ------------------------------------------------------------------ heap
 void* VM::allocRaw(OT t, size_t size) {
+#if E7_GC_STRESS
+  // testing (E7_GC_STRESS): collect wherever the emergency collection below would be allowed
+  if (nativeDepth_ == 0 && gcInhibit_ == 0) collectGarbage();
+#endif
+  if (E7_UNLIKELY(injectFailure())) errorCode(ERR_MEMORY, "out of memory (injected failure)");
   if (E7_UNLIKELY(bytes_ + size > cfg_.memoryLimit)) {
     // Emergency collection. Safe when no native code is running: every live reference is then
     // held in a register, a global, a pinned object or the object graph.
@@ -463,6 +469,10 @@ void* VM::allocRaw(OT t, size_t size) {
 
 void VM::accountExternal(int64_t delta) {
   if (delta > 0) {
+#if E7_GC_STRESS
+    if (nativeDepth_ == 0 && gcInhibit_ == 0) collectGarbage();
+#endif
+    if (E7_UNLIKELY(injectFailure())) errorCode(ERR_MEMORY, "out of memory (injected failure)");
     if (bytes_ + (size_t)delta > cfg_.memoryLimit && nativeDepth_ == 0 && gcInhibit_ == 0) collectGarbage();
     if (bytes_ + (size_t)delta > cfg_.memoryLimit)
       errorCode(ERR_MEMORY, "out of memory (limit %zu bytes)", cfg_.memoryLimit);
@@ -613,36 +623,132 @@ void VM::unpin(Obj* o) {
   if (it != pins_.end() && --it->second == 0) pins_.erase(it);
 }
 
-void VM::freeObj(Obj* o) {
-  bytes_ -= o->size;
+// Bytes accounted for an object's storage outside its block (freeObj subtracts them with o->size).
+static size_t externalBytes(const Obj* o) {
   switch (o->type) {
-    case OT::Array: {
-      auto* a = static_cast<ArrObj*>(o);
-      bytes_ -= (size_t)a->cap * 8;
-      free(a->data);
-      break;
-    }
-    case OT::Buffer: {
-      auto* b = static_cast<BufObj*>(o);
-      bytes_ -= b->len;
-      free(b->data);
-      break;
-    }
+    case OT::Array: return (size_t)static_cast<const ArrObj*>(o)->cap * 8;
+    case OT::Buffer: return static_cast<const BufObj*>(o)->len;
     case OT::Map: {
-      auto* m = static_cast<MapObj*>(o);
-      bytes_ -= m->entries.capacity() * sizeof(MapEntry) + m->buckets.capacity() * 4;
-      m->~MapObj();
-      break;
+      auto* m = static_cast<const MapObj*>(o);
+      return m->entries.capacity() * sizeof(MapEntry) + m->buckets.capacity() * 4;
     }
-    case OT::BigInt: {
-      auto* b = static_cast<BigObj*>(o);
-      bytes_ -= b->mag.capacity() * sizeof(uint32_t);
-      b->~BigObj();
-      break;
-    }
+    case OT::BigInt: return static_cast<const BigObj*>(o)->mag.capacity() * sizeof(uint32_t);
+    default: return 0;
+  }
+}
+
+void VM::freeObj(Obj* o) {
+  bytes_ -= o->size + externalBytes(o);
+  switch (o->type) {
+    case OT::Array: free(static_cast<ArrObj*>(o)->data); break;
+    case OT::Buffer: free(static_cast<BufObj*>(o)->data); break;
+    case OT::Map: static_cast<MapObj*>(o)->~MapObj(); break;
+    case OT::BigInt: static_cast<BigObj*>(o)->~BigObj(); break;
     default: break;
   }
   free(o);
+}
+
+bool VM::checkHeap(std::string* why) const {
+  auto fail = [&](const std::string& m) {
+    if (why) *why = m;
+    return false;
+  };
+  std::unordered_set<const Obj*> all;
+  size_t sum = 0;
+  for (const Obj* o = objects_; o; o = o->gcNext) {
+    if (!all.insert(o).second) return fail("the object list has a cycle");
+    if (o->marked) return fail("an object is left marked outside a collection");
+    sum += o->size + externalBytes(o);
+  }
+  if (sum != bytes_)
+    return fail("heap accounting: bytesAllocated() = " + std::to_string(bytes_) +
+                ", sum of objects and their buffers = " + std::to_string(sum));
+  auto ref = [&](const Obj* p, const char* where) {
+    return !p || all.count(p) ? true : fail(std::string("dangling reference in ") + where);
+  };
+  for (const Obj* o = objects_; o; o = o->gcNext) {
+    switch (o->type) {
+      case OT::Array: {
+        auto* a = static_cast<const ArrObj*>(o);
+        if (a->len > a->cap || (a->cap && !a->data)) return fail("array length / capacity / data inconsistent");
+        if (a->vt == VT_REF)
+          for (uint32_t i = 0; i < a->len; i++)
+            if (!ref(a->data[i].r, "an array element")) return false;
+        break;
+      }
+      case OT::Buffer:
+        if (!static_cast<const BufObj*>(o)->data && static_cast<const BufObj*>(o)->len) return fail("buffer without data");
+        break;
+      case OT::Bytes: {
+        auto* b = static_cast<const BytesObj*>(o);
+        if (!b->buf) return fail("byte array view without buffer");
+        if (!ref(b->buf, "a byte array view")) return false;
+        if ((uint64_t)b->off + b->len > b->buf->len) return fail("byte array view out of its buffer");
+        break;
+      }
+      case OT::Instance: {
+        auto* in = static_cast<const InstObj*>(o);
+        const Slot* fs = reinterpret_cast<const Slot*>(in + 1);
+        for (uint16_t f : in->cls->refFields)
+          if (!ref(fs[f].r, "an object field")) return false;
+        break;
+      }
+      case OT::Closure: {
+        auto* c = static_cast<const CloObj*>(o);
+        CellObj* const* ups = reinterpret_cast<CellObj* const*>(c + 1);
+        for (uint32_t i = 0; i < c->nup; i++)
+          if (!ref(ups[i], "a closure")) return false;
+        break;
+      }
+      case OT::Cell: {
+        auto* c = static_cast<const CellObj*>(o);
+        if (c->vt == VT_REF && !ref(c->v.r, "a cell")) return false;
+        break;
+      }
+      case OT::Box: {
+        auto* b = static_cast<const BoxObj*>(o);
+        if (b->vt == VT_REF && !ref(b->v.r, "a box")) return false;
+        break;
+      }
+      case OT::Map: {
+        auto* m = static_cast<const MapObj*>(o);
+        uint32_t live = 0;
+        for (auto& e : m->entries) {
+          if (!e.live) continue;
+          live++;
+          if (m->kvt == VT_REF && !ref(e.k.r, "a map key")) return false;
+          if (m->vvt == VT_REF && !ref(e.v.r, "a map value")) return false;
+        }
+        if (live != m->count) return fail("map count does not match its live entries");
+        break;
+      }
+      default: break;
+    }
+  }
+  // roots
+  for (auto& mp : modules) {
+    for (const StrObj* s : mp->strs)
+      if (!ref(s, "a module string constant")) return false;
+    for (size_t i = 0; i < mp->globals.size(); i++)
+      if (mp->m.globals[i].vt == VT_REF && !ref(mp->globals[i].r, "a global")) return false;
+  }
+  for (const Frame& fr : frames_) {
+    const Slot* R = stack_ + fr.base;
+    for (uint16_t r : fr.fn->refRegs)
+      if (!ref(R[r].r, "a register")) return false;
+    if (!ref(fr.closure, "a frame's closure")) return false;
+  }
+  for (auto& kv : pins_)
+    if (!ref(kv.first, "a pinned object")) return false;
+  if (resultKind_ == 'R' && !ref(result_.r, "the call result")) return false;
+  if (!suspended_ && frames_.empty() &&
+      (nativeDepth_ || gcInhibit_ || !tempRoots_.empty() || curNative_ || !callbackNatives_.empty() || catchDepth_ ||
+       pendingCatch_.active))
+    return fail("execution state not reset after the call (native depth " + std::to_string(nativeDepth_) +
+                ", GC inhibit " + std::to_string(gcInhibit_) + ", temp roots " + std::to_string(tempRoots_.size()) +
+                ", catch depth " + std::to_string(catchDepth_) + ")");
+  return true;
 }
 
 void VM::markRoots() {
@@ -857,7 +963,7 @@ int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
   for (uint16_t r : f->refInit) R[r].r = nullptr;
   frames_.push_back(Frame{f, f->code, nullptr, 0, kNoReg, true});
   resultKind_ = 'V';
-  if (gcRequested_) collectGarbage();
+  if (gcRequested_ || kGCStress) collectGarbage();
   return runFrames();
 }
 

@@ -1,3 +1,12 @@
+# E7_GC_STRESS builds (a collection at every safepoint and allocation, CONTRIBUTING.md) run fewer fuzz
+# iterations and leave out tests/cases/lib/gc_stress.ts (see "stability" below)
+set(E7_FUZZ_COMPILE_ITERS 1500)
+set(E7_LANG_TEST_ARGS "")
+if(E7_GC_STRESS)
+  set(E7_FUZZ_COMPILE_ITERS 200)
+  set(E7_LANG_TEST_ARGS --exclude gc_stress.ts)
+endif()
+
 add_executable(capi_test capi_test.cpp)
 target_link_libraries(capi_test PRIVATE e7vm_static)
 add_test(NAME capi_test COMMAND capi_test)
@@ -6,7 +15,7 @@ find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
   find_program(NODE_EXECUTABLE node)
   if(NODE_EXECUTABLE AND TARGET e7)
-    add_test(NAME language_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_tests.py --e7 $<TARGET_FILE:e7> --node ${NODE_EXECUTABLE})
+    add_test(NAME language_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_tests.py --e7 $<TARGET_FILE:e7> --node ${NODE_EXECUTABLE} ${E7_LANG_TEST_ARGS})
   endif()
   if(TARGET e7 AND TARGET e7c)
     # the AI skill (skills/e7): every code block / example must behave as the skill claims
@@ -43,7 +52,7 @@ if(E7_WITH_COMPILER)
   add_executable(fuzz_compile fuzz_compile.cpp)
   target_link_libraries(fuzz_compile PRIVATE e7vm_static)
   file(GLOB E7_FUZZ_CORPUS ${CMAKE_CURRENT_SOURCE_DIR}/cases/lang/*.ts ${CMAKE_CURRENT_SOURCE_DIR}/cases/lib/*.ts)
-  add_test(NAME fuzz_compile COMMAND fuzz_compile 1500 ${E7_FUZZ_CORPUS})
+  add_test(NAME fuzz_compile COMMAND fuzz_compile ${E7_FUZZ_COMPILE_ITERS} ${E7_FUZZ_CORPUS})
 endif()
 
 add_executable(locale_test locale_test.cpp)
@@ -107,4 +116,59 @@ if(E7_WITH_COMPILER)
   # crafted seeds (one per native / property) plus arbitrary bytes (test sources) as operation streams
   add_test(NAME fuzz_natives_replay COMMAND e7_fuzz_natives_replay ${CMAKE_SOURCE_DIR}/fuzz/seeds/natives
            ${CMAKE_CURRENT_SOURCE_DIR}/cases/lib)
+endif()
+
+# ---------------------------------------------------------------- stability (docs/ROADMAP.md 0.2.5, P0)
+# CONTRIBUTING.md, "Stability checks". Under E7_GC_STRESS (a collection at every safepoint and every
+# allocation) tests/cases/lib/gc_stress.ts is left out: 374,000 allocations with ~12,000 live objects
+# would take hours, and every other program exercises the collector under stress.
+if(E7_WITH_COMPILER)
+  find_package(Threads REQUIRED)
+  set(E7_STRESS_EXCLUDE "")
+  set(E7_ALLOC_STRIDE 4000)
+  set(E7_ALLOC_LIB_STRIDE 20)
+  if(E7_GC_STRESS)
+    set(E7_STRESS_EXCLUDE gc_stress)
+    set(E7_ALLOC_STRIDE 200)
+    set(E7_ALLOC_LIB_STRIDE 10)
+  endif()
+  foreach(t alloc_fail_test equiv_test threads_test soak_test)
+    add_executable(${t} ${t}.cpp)
+    target_link_libraries(${t} PRIVATE e7vm_static Threads::Threads)
+    target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  endforeach()
+
+  # allocation-failure injection: the N-th allocation / external charge fails, for every N (thinned out
+  # for the library tests, whose crypto makes each run slower), with a heap consistency check each time
+  file(GLOB E7_ALLOC_FAIL_PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/cases/lang/*.ts ${CMAKE_SOURCE_DIR}/examples/*.ts)
+  add_test(NAME alloc_fail_test COMMAND alloc_fail_test --stride-after ${E7_ALLOC_STRIDE} ${E7_ALLOC_FAIL_PROGRAMS})
+  file(GLOB E7_ALLOC_FAIL_LIB ${CMAKE_CURRENT_SOURCE_DIR}/cases/lib/*.ts ${CMAKE_CURRENT_SOURCE_DIR}/cases/errors/*.ts
+       ${CMAKE_CURRENT_SOURCE_DIR}/cases/modules/*.ts)
+  add_test(NAME alloc_fail_lib COMMAND alloc_fail_test --stride-after ${E7_ALLOC_LIB_STRIDE} --exclude gc_stress
+           ${E7_ALLOC_FAIL_LIB})
+  # the same with every allocation from the N-th on failing, with a budget slice of 1, and under a
+  # stepping debugger that inspects the heap at every stop (also at the stop for the memory error)
+  add_test(NAME alloc_fail_persistent COMMAND alloc_fail_test --persistent --stride-after ${E7_ALLOC_STRIDE}
+           ${E7_ALLOC_FAIL_PROGRAMS})
+  add_test(NAME alloc_fail_slice COMMAND alloc_fail_test --slice --stride-after ${E7_ALLOC_STRIDE} ${E7_ALLOC_FAIL_PROGRAMS})
+  add_test(NAME alloc_fail_debugger COMMAND alloc_fail_test --debugger --stride-after ${E7_ALLOC_STRIDE}
+           ${E7_ALLOC_FAIL_PROGRAMS})
+
+  # equivalence runs: every test program with a budget slice of 1 (suspend / resume at every check) and
+  # under a debugger single-stepping through everything must print exactly what a normal run prints
+  # (switch dispatch: the linux-gcc-switch-dispatch CI job runs this whole suite with E7_NO_COMPUTED_GOTO)
+  file(GLOB_RECURSE E7_EQUIV_PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/cases/*.ts)
+  list(FILTER E7_EQUIV_PROGRAMS EXCLUDE REGEX "/_")
+  if(E7_STRESS_EXCLUDE)
+    list(FILTER E7_EQUIV_PROGRAMS EXCLUDE REGEX "${E7_STRESS_EXCLUDE}")
+  endif()
+  add_test(NAME equiv_slice COMMAND equiv_test --modes slice ${E7_EQUIV_PROGRAMS})
+  add_test(NAME equiv_step COMMAND equiv_test --modes step ${E7_EQUIV_PROGRAMS})
+
+  # several VMs on several threads (each VM used by one thread); CI also runs it under E7_TSAN
+  add_test(NAME threads_test COMMAND threads_test)
+
+  # soak: one VM, 100,000 calls; heap after a full collection, GC statistics and process heap flat
+  # (`soak_test --calls 10000000 -v` for a long run)
+  add_test(NAME soak_test COMMAND soak_test)
 endif()

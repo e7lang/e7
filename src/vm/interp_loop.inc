@@ -39,13 +39,17 @@ int VM::E7_INTERP_NAME() {
 #define TICK(n)                                                    \
   do {                                                             \
     budget_ -= (n);                                                \
-    if (E7_UNLIKELY(budget_ < 0 || gcRequested_)) {                \
+    if (E7_UNLIKELY(budget_ < 0 || gcRequested_ || kGCStress)) {   \
       fr->ip = ip;                                                 \
-      if (gcRequested_ && nativeDepth_ == 0) collectGarbage();     \
+      if ((gcRequested_ || kGCStress) && nativeDepth_ == 0) collectGarbage(); \
       if (budget_ < 0) {                                           \
         if (cfg_.suspendOnBudget && nativeDepth_ == 0) return ERR_SUSPENDED; \
-        budget_ = 0;                                               \
-        errorCode(ERR_BUDGET, "instruction budget exhausted");     \
+        if (E7_UNLIKELY(testCallbackRefill_ > 0) && nativeDepth_ > 0) { \
+          setBudget(testCallbackRefill_); /* testing hook (vm.h) */ \
+        } else {                                                   \
+          budget_ = 0;                                             \
+          errorCode(ERR_BUDGET, "instruction budget exhausted");   \
+        }                                                          \
       }                                                            \
     }                                                              \
   } while (0)

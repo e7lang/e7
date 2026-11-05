@@ -860,3 +860,6 @@ e7_status e7_verify_detached(const uint8_t* data, size_t len, const uint8_t sig[
 }
 
 }  // extern "C"
+
+// ---------------------------------------------------------------- testing hooks (src/capi/testing.h)
+e7::VM* e7_testing_vm(e7_vm* v) { return v ? v->vm.get() : nullptr; }
