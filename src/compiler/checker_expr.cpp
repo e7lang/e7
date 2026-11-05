@@ -1380,6 +1380,15 @@ void Checker::staticShadow(ClassSym* c, const std::string& name, VarSym* inherit
   c->staticShadows[name] = sh;
 }
 
+// a '.' / '[' link after '?.' in the same chain: the previous link's own type (before the chain made it
+// optional) must not be nullable, as in TypeScript (`a?.b.c` with an optional `b` is an error)
+static bool chainedOnNullable(Expr* e) {
+  if (!e->chained || !e->a) return false;
+  Expr* x = e->a;
+  while (x->k == EK::Paren && x->a) x = x->a;
+  return x->innerType && x->innerType->t == TT::Optional;
+}
+
 Type* Checker::checkMember(Expr* e, Type* expected) {
   Expr* obj = strip(e->a);
   const std::string& name = e->raw;
@@ -1449,7 +1458,8 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
                             " instanceof Error) { ... ." + name + " ... }");
   Type* bt = ot;
   if (ot->t == TT::Optional) {
-    if (!e->optional) return errT(e->loc, "object is possibly '" + std::string(ot->hasNull ? "null" : "undefined") + "'; use '?.' or a check");
+    if (!e->optional || chainedOnNullable(e))
+      return errT(e->loc, "object is possibly '" + std::string(ot->hasNull ? "null" : "undefined") + "'; use '?.' or a check");
     bt = ot->elem;
   } else if (e->optional) {
     // '?.' on non-nullable: allowed, behaves like '.'
@@ -1532,7 +1542,7 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
 Type* Checker::checkIndex(Expr* e) {
   Type* ot = check(e->a, nullptr);
   if (ot->t == TT::Optional) {
-    if (!e->optional) return errT(e->loc, "object is possibly null or undefined; use '?.[' or a check");
+    if (!e->optional || chainedOnNullable(e)) return errT(e->loc, "object is possibly null or undefined; use '?.[' or a check");
     // a?.[i]: undefined when a is null or undefined (the index is not evaluated then)
     Type* r = checkIndexOn(e, ot->elem);
     if (r->t == TT::Unknown) return r;

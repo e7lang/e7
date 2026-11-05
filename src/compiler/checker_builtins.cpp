@@ -316,7 +316,8 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
   if (ot->t == TT::Unknown) { for (Expr* a : e->list) check(a, nullptr); return T.unknown(); }
   Type* bt = ot;
   if (ot->t == TT::Optional) {
-    if (!m->optional) return errT(m->loc, "object is possibly null or undefined; use '?.' or a check");
+    if (!m->optional || (m->chained && m->a && m->a->innerType && m->a->innerType->t == TT::Optional))
+      return errT(m->loc, "object is possibly null or undefined; use '?.' or a check");
     bt = ot->elem;
     e->optional = true;
   }

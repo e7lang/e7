@@ -43,6 +43,8 @@ index signatures, `unknown`, `keyof`, regular expressions, generators, overloads
   are compared by identity. `Object.keys` / `JSON.stringify` list array-index keys first; object spread and rest keep
   the source's run-time property order; `Object.keys` lists class fields holding `undefined`.
 - The compiler no longer rejects comparisons with `null` / `undefined` that tsc accepts ("always true/false").
+- Optional chains short-circuit as in TypeScript: `a?.b.c`, `a?.b[i]` and `a?.m().n()` are `undefined` when `a` is
+  (before, the links after `?.` were rejected as accesses on a possibly undefined value).
 
 ### Fixed
 - Found by the new stability checks: a data race and leak in the compiler on static class fields (two threads

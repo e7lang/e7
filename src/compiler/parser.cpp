@@ -1569,6 +1569,7 @@ class Parser {
     } else {
       e = parsePrimary();
     }
+    bool inChain = false;  // after a '?.': later links belong to the same short-circuiting chain
     while (true) {
       Loc ml = loc();
       if (isP(".")) {
@@ -1577,9 +1578,11 @@ class Parser {
         m->a = e;
         m->nameLoc = loc();
         m->raw = memberName();
+        if (inChain) m->optional = m->chained = true;
         e = m;
       } else if (isP("?.")) {
         i++;
+        inChain = true;
         if (isP("(")) {
           Expr* c = A.expr(EK::Call, ml);
           c->a = e;
@@ -1606,6 +1609,7 @@ class Parser {
         i++;
         Expr* ix = A.expr(EK::Index, ml);
         ix->a = e;
+        if (inChain) ix->optional = ix->chained = true;
         int saved = noIn;
         noIn = 0;
         ix->b = parseExpr();

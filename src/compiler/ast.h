@@ -89,6 +89,7 @@ struct Expr {
   Loc nameLoc;           // Member: position of the property name
   Type* type = nullptr;  // filled by checker
   Type* innerType = nullptr;  // optional chaining: type of the member/call result before '?.' widening
+  bool chained = false;       // a '.' / '[' link after a '?.' of the same chain: short-circuited with it
   // literal data
   double num = 0;
   bool isIntLit = false;     // Num: written as integer literal
