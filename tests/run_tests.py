@@ -18,6 +18,16 @@ def run(cmd, timeout=120):
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, env=env)
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 
+def run_node(node, shim, f):
+    # Type stripping first: the transform (amaro / swc) that --experimental-transform-types adds has
+    # miscompiled expressions (Node 24.21: `32 / (-(9 / 1000))` printed -0.0035...). It is needed only for
+    # parameter properties (`constructor(public x: number)`) and enums.
+    r = run([node, "--experimental-strip-types", "--no-warnings", "--import", shim, f])
+    # (early Node 22 releases reported ERR_INVALID_TYPESCRIPT_SYNTAX for them)
+    if r[0] != 0 and ("ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" in r[2] or "ERR_INVALID_TYPESCRIPT_SYNTAX" in r[2]):
+        r = run([node, "--experimental-transform-types", "--no-warnings", "--import", shim, f])
+    return r
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--e7", default=os.path.join(ROOT, "..", "build", "e7"))
@@ -61,7 +71,7 @@ def main():
                 if os.path.exists(outfile) and not a.update:
                     want = open(outfile, encoding="utf-8").read()
                 else:
-                    nrc, want, nerr = run([a.node, "--experimental-transform-types", "--no-warnings", "--import", shim, f])
+                    nrc, want, nerr = run_node(a.node, shim, f)
                     if nrc != 0:
                         ok, why = False, f"node failed: {nerr}"
                     if a.update and ok:

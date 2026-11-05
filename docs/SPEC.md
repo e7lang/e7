@@ -55,6 +55,9 @@ User-defined generics are supported (section 2.3).
 
 ### 2.2 Type inference and narrowing
 - Variables, return values, arrow function parameters (contextual typing), and object/array literals can all be inferred; an empty array `[]` needs an annotation or a contextual type.
+  As in tsc, an array literal destructured by an array pattern is a tuple when its elements have different types
+  (`const [n, s] = [1, "x"]` binds a `number` and a `string`; nested patterns and literals likewise); with elements of
+  compatible types it is an array. `as const` is not supported (annotate the type instead).
 - A recursive function that omits its return type is an error; an explicit annotation is required.
 - Narrowing: `x === null`, `x !== undefined`, `x == null`, truthiness checks `if (x)`, `instanceof`, combinations with `&&`/`||`/`!`,
   early `return/throw/break/continue`, `x ??= v`, and assignment. Property paths are supported (after `this.head !== null`, `this.head.next` can be used directly).
@@ -108,7 +111,10 @@ type arguments gets its own copy of the function, class or type, checked and com
   variables support only plain patterns (no defaults or rest); a rest element must bind a name.
 - Object spread `{ ...a, k: v, ...b }`: the source may be an object type or a class instance (only fields are copied, not methods); later properties with the same name override earlier ones;
   **optional** properties in the source override only when present (same as TS: in `{ retries: 3, ...opts }`, `retries` has type `number`).
-  The property order of the result is fixed at compile time: a possibly missing property that is later assigned by an explicit property is placed at the end (consistent with JS when that property is missing).
+  The properties of the result are in JavaScript's order (entries in source order, a key keeps its first position): the
+  first spread source whose type is an object type contributes its properties in their run-time order (the value is
+  tested against the classes and object layouts it can have), other spread sources in the order of their type. A possibly missing property that is later assigned by an
+  explicit property is placed at the end (consistent with JS when that property is missing).
 - `if / else`, `while`, `do...while`, `for(;;)`, `for...of` (arrays, strings by code point, `Uint8Array`, `Map`, `Set`,
   `arr.entries()/keys()/values()`, `map.keys()/values()/entries()`), `switch` (with fall-through), `break/continue` (including labels),
   labeled blocks, `try`/`catch`/`finally` (section 3.1). **Not supported**: `for...in`, `with`.
@@ -206,7 +212,9 @@ try {
 
 ### 4.4 Equality and logic
 - Only `===` / `!==` are allowed; `== null` / `!= null` are allowed as a special case meaning "is null or undefined".
-- Comparing types with no overlap (such as `string === number`) is a compile error (same as TS).
+- Comparing types with no overlap (such as `string === number`) is a compile error (same as TS). Any value can be compared
+  with `null` / `undefined` (also a non-nullable one, or a variable narrowed to a non-nullable type, as tsc accepts); the
+  result of such a comparison is known at compile time. A `void` value cannot be compared.
 - `&&` and `||` can be used with any type in conditions (by truthiness); in value position, `a || b` returns a value (types must be compatible), and `&&` is boolean only.
 - `??`, `??=`, `?.` (members, element access `a?.[i]`, method calls, function calls) are the same as JS.
 
@@ -231,7 +239,11 @@ try {
   `super.method()`, `implements` (checked structurally), `instanceof`. Method overrides require identical signatures.
   `public/private/protected` modifiers are accepted but not enforced. `readonly` is enforced at compile time as in TypeScript: a readonly
   field (or parameter property) can only be assigned through `this` in its own class's constructor, and a `static readonly` field only by its
-  initializer. Mutable static fields can be written with `=`, compound assignment and `++`/`--`. Writing an array's `length` truncates or
+  initializer. Mutable static fields can be written with `=`, compound assignment and `++`/`--`. Static fields, methods and accessors
+  are **inherited** as in JavaScript: `B.x` reads the static member of the nearest base class that has one; writing an inherited
+  static field through a subclass (`B.x = v`, compound assignment, `++`) gives that subclass its own copy (the base class keeps
+  its value), which the subclass and its own subclasses read from then on. `#private` static members are not inherited (as in
+  JavaScript, `B.#x` is an error). Writing an array's `length` truncates or
   extends it (`a.length = n`); compound assignment and `++`/`--` on `length` are not supported, and `length` of strings and `Uint8Array`
   is read-only. Members of an imported namespace (`import * as ns`) cannot be assigned.
   Arrow function fields can capture `this`.
@@ -411,7 +423,9 @@ or host function that was running (or that called back into the script, like `Ar
 | Elements of `new Array<T>(n)` | Holes (read as `undefined`) | `0` / `false` / `null` (`undefined` for reference types) |
 | Fixed-width integer arithmetic | Floating point | Machine integers that wrap around |
 | `console.log` of functions | `[Function: f]` (name inferred from the variable or property) | `[Function (anonymous)]` for arrow functions and function expressions; `%o` does not list their hidden properties |
-| `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }`; `x: undefined` for a property set to `undefined` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null`; an object-literal field holding `undefined` is not shown (the same as a missing optional property) |
+| `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null` |
+| An object property explicitly set to `undefined` (`{ id: 1, score: undefined }`, `r.score = undefined`, or copied by a spread) | An own property: listed by `Object.keys` / `entries` / `values`, copied by spread, printed as `score: undefined` by `console.log` | Objects of interface / object types (object literals) store a missing optional property as `undefined`, so a property holding `undefined` *is* missing: `Object.keys` / `entries` / `values`, spread and `console.log` leave it out. `JSON.stringify` omits it in both. Fields of class instances are always own properties, as in JavaScript (also when `undefined`) |
+| Key order of optional properties added later | A property added to an object goes last | The property order of an object is its layout, fixed when it is created: an object literal puts the optional properties of its type that it does not set last, in declaration order, so properties added later appear in JavaScript's order unless several are added in another order |
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
 | JSON of the wrong shape | Accepted (no validation) | `JSON.parse(text) as T` ends the call (not catchable); `tryParse(text) as T \| null` from `e7:json` returns `null`. Syntax errors are a catchable `SyntaxError` in both |
 | `Array.join` / `console.log("%s")` of class instances | Calls the class's `toString()` | `"[object Object]"` (`String(x)`, template literals and `+` do call `toString()`) |

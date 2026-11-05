@@ -1417,7 +1417,7 @@ class Parser {
       Tok op = t[i];
       if (op.k == TK::Ident && (op.text == "as" || op.text == "satisfies")) {
         i++;
-        if (isKw("const")) fail("'as const' is not supported");
+        if (isKw("const")) fail("'as const' is not supported (readonly literal types); annotate the type instead, such as const t: [number, string] = [1, \"x\"]");
         Expr* e = A.expr(EK::As, l);
         e->a = lhs;
         e->asType = parseType();

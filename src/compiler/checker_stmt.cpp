@@ -1,5 +1,6 @@
 // Checker: relations, functions and statements.
 #include <algorithm>
+#include <functional>
 
 #include "checker.h"
 
@@ -569,6 +570,49 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
   }
 }
 
+// `const [a, b] = [1, "x"]`: like tsc, an array literal destructured by an array pattern is a tuple
+// when its elements have different types (`[number, string]`); with compatible element types it stays
+// an array (a default can then apply past its end). Nested patterns and literals work the same way.
+Type* Checker::checkArrayPatInit(VarDecl& d, Expr* init) {
+  auto strip = [](Expr* e) {
+    while (e && e->k == EK::Paren) e = e->a;
+    return e;
+  };
+  std::function<bool(Type*, Type*)> unifiable = [&](Type* a, Type* b) {  // unify() would not fail
+    if (a == b) return true;
+    auto loose = [](Type* t) {
+      return t->t == TT::Never || t->t == TT::Unknown || t->t == TT::Null || t->t == TT::Undefined;
+    };
+    if (loose(a) || loose(b)) return true;
+    if (a->t == TT::Optional || b->t == TT::Optional) return unifiable(baseOf(a), baseOf(b));
+    if (a->t == TT::Class && b->t == TT::Class)
+      for (ClassSym* c = a->cls; c; c = c->parent)
+        if (isAncestor(c, b->cls)) return true;
+    return assignable(a, b) || assignable(b, a);
+  };
+  Expr* lit = strip(init);
+  if (!d.isArrayPat || lit->k != EK::Array || lit->list.empty()) return check(init, nullptr);
+  for (Expr* x : lit->list) {
+    Expr* sx = strip(x);
+    // spreads, and empty array elements (typed from the other elements): an array, as before
+    if (x->k == EK::Spread || (sx->k == EK::Array && sx->list.empty())) return check(init, nullptr);
+  }
+  std::vector<Type*> ts;
+  for (size_t i = 0; i < lit->list.size(); i++) {
+    Expr* x = lit->list[i];
+    VarDecl* sub = i < d.elems.size() && !d.elems[i].isRest ? &d.elems[i] : nullptr;
+    Type* t = sub && sub->isArrayPat ? checkArrayPatInit(*sub, x) : check(x, nullptr);
+    ts.push_back(t);
+  }
+  bool same = true;
+  for (Type* t : ts) {
+    if (t->t == TT::Null || t->t == TT::Undefined || t->t == TT::Void || t->t == TT::Unknown) return check(init, nullptr);
+    same = same && unifiable(ts[0], t);
+  }
+  // the elements are checked already (checkArray keeps their types)
+  return check(init, same ? nullptr : T.tuple(ts));
+}
+
 void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
   bool simple = !d.isArrayPat && !d.isObjPat;
   if (d.generic) return;  // top-level `const f = <T>(...) => ...` (see declareFile)
@@ -621,7 +665,7 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
   Type* declared = d.type ? resolveType(d.type) : nullptr;
   Type* t = declared;
   if (d.init) {
-    Type* it = check(d.init, declared);
+    Type* it = !declared && d.isArrayPat ? checkArrayPatInit(d, d.init) : check(d.init, declared);
     if (declared) coerce(d.init, declared);
     else {
       if (it->t == TT::Null || it->t == TT::Undefined) {

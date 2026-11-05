@@ -1,0 +1,26 @@
+// arguments of the Set and Map constructors are checked once, with the contextual type
+const s1 = new Set<number>([1, 2].map((x) => x).map((x, i) => i));
+console.log(s1.size, [...s1].join(","));
+const s2 = new Set<number>(Array.of(1.5, 2, 1.5));
+console.log(s2.size, [...s2].join(","));
+const s3 = new Set([3, 4, 3].filter((x, i) => i < 2));
+console.log(s3.size);
+const s4 = new Set<number>(s2);
+s4.add(9);
+console.log(s2.size, s4.size);
+const s5: Set<string> = new Set(["a", "b"].map((x, i) => x + i));
+console.log([...s5].join(","));
+const s6 = new Set<number>(Array.of<number>());
+console.log(s6.size);
+const s7 = new Set<number>(Array.from({ length: 3 }, (_: unknown, i) => i * 2));
+console.log([...s7].join(","));
+const pairs: [string, number][] = [["a", 1], ["b", 2]];
+const m1 = new Map<string, number>(pairs.map(([k, v], i) => [k, v + i]));
+console.log(JSON.stringify([...m1]));
+const m2 = new Map<string, number>(m1);
+m2.set("c", 3);
+console.log(m1.size, m2.size);
+const m3 = new Map<number, string>(Array.of<[number, string]>([1, "x"], [2, "y"]));
+console.log(JSON.stringify([...m3.entries()]));
+const m4 = new Map(["p", "q"].map((x, i): [string, number] => [x, i]));
+console.log(JSON.stringify([...m4]));

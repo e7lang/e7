@@ -359,6 +359,102 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
   return T.array(et);
 }
 
+// The properties of an object literal with spreads, in JavaScript order: entries[i] are the properties
+// that e->props[i] supplies (a spread: those of the source's type, in their order); a later entry
+// overrides an earlier one and a key keeps its first position.
+static void spreadUpsert(const std::vector<ObjProp>& props, const std::vector<std::vector<std::pair<std::string, Type*>>>& entries,
+                         std::vector<std::string>& names, std::vector<Type*>& types, std::vector<int>& src,
+                         std::vector<std::vector<int>>& cond) {
+  auto upsert = [&](const std::string& k, Type* t, int idx) {
+    for (size_t i = 0; i < names.size(); i++)
+      if (names[i] == k) {
+        // an optional spread property only overrides when present (TS semantics)
+        Type* bt = baseOf(t);
+        if (props[idx].spread && t->t == TT::Optional && t->hasUndef && !t->hasNull && bt == baseOf(types[i])) {
+          cond[i].push_back(idx);
+          return;
+        }
+        if (types[i]->t == TT::Optional && types[i]->hasUndef && src[i] >= 0 && props[src[i]].spread) {
+          // possibly-absent key from a spread: JS places a newly added key last (best static approximation)
+          names.erase(names.begin() + i); types.erase(types.begin() + i);
+          src.erase(src.begin() + i); cond.erase(cond.begin() + i);
+          break;
+        }
+        types[i] = t; src[i] = idx; cond[i].clear();
+        return;
+      }
+    names.push_back(k);
+    types.push_back(t);
+    src.push_back(idx);
+    cond.emplace_back();
+  };
+  for (size_t pi = 0; pi < props.size(); pi++)
+    for (auto& en : entries[pi]) upsert(en.first, en.second, (int)pi);
+}
+
+// After checking: the spread literals whose first spread source has an object type get, for every
+// class or record that such a value can be at run time with its properties in another order, a record
+// with the result's properties in the order JavaScript gives them (the source's own key order). The
+// new records can be spread sources themselves: repeated until no record is added.
+void Checker::spreadOrders() {
+  for (int round = 0; round < 8; round++) {
+    size_t nclasses = P.classes.size();
+    for (auto& sl : spreadLits) {
+      Expr* e = sl.e;
+      e->spreadAltSrc = -1;
+      e->spreadAltTest.clear();
+      e->spreadAltCls.clear();
+      if (!e->cls || !e->type) continue;
+      int si = -1;
+      for (size_t pi = 0; pi < e->props.size() && si < 0; pi++) {
+        Type* vt = e->props[pi].value->type;
+        if (e->props[pi].spread && vt && vt->t == TT::Object && !sl.entries[pi].empty()) si = (int)pi;
+      }
+      if (si < 0) continue;
+      ClassSym* sc = e->cls;
+      const auto& ents = sl.entries[si];
+      for (size_t ci = 0; ci < P.classes.size(); ci++) {
+        ClassSym* k = P.classes[ci];
+        if (k->isTuple || k->genericRole == 1 || k->classIdx < 0 || k == sc) continue;
+        bool all = true;
+        for (auto& en : ents) all = all && k->fieldIdx.count(en.first);
+        if (!all) continue;
+        auto re = ents;
+        std::stable_sort(re.begin(), re.end(), [&](const std::pair<std::string, Type*>& x, const std::pair<std::string, Type*>& y) {
+          return k->fieldIdx[x.first] < k->fieldIdx[y.first];
+        });
+        bool same = true;
+        for (size_t i = 0; i < re.size() && same; i++) same = re[i].first == ents[i].first;
+        if (same) continue;
+        auto entries = sl.entries;
+        entries[si] = re;
+        std::vector<std::string> names;
+        std::vector<Type*> types;
+        std::vector<int> src;
+        std::vector<std::vector<int>> cond;
+        spreadUpsert(e->props, entries, names, types, src, cond);
+        // the same fields (types of the static layout), in this order; absent ones last as before
+        std::vector<std::pair<std::string, Type*>> fields;
+        for (auto& n : names) {
+          auto it = sc->fieldIdx.find(n);
+          if (it != sc->fieldIdx.end()) fields.push_back({n, sc->fields[it->second].type});
+        }
+        for (auto& f : sc->fields)
+          if (std::find(names.begin(), names.end(), f.name) == names.end()) fields.push_back({f.name, f.type});
+        if (fields.size() != sc->fields.size()) continue;
+        bool sameOrder = true;
+        for (size_t i = 0; i < fields.size() && sameOrder; i++) sameOrder = fields[i].first == sc->fields[i].name;
+        if (sameOrder) continue;
+        ClassSym* vc = recordFor(fields)->cls;
+        e->spreadAltTest.push_back(k);
+        e->spreadAltCls.push_back(vc);
+      }
+      if (!e->spreadAltTest.empty()) e->spreadAltSrc = si;
+    }
+    if (P.classes.size() == nclasses) break;
+  }
+}
+
 Type* Checker::checkObject(Expr* e, Type* expected) {
   Type* exp = expected ? baseOf(expected) : nullptr;
   bool anySpread = false, anyMethod = false;
@@ -385,29 +481,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
     std::vector<Type*> types;
     std::vector<int> src;
     std::vector<std::vector<int>> cond;
-    auto upsert = [&](const std::string& k, Type* t, int idx) {
-      for (size_t i = 0; i < names.size(); i++)
-        if (names[i] == k) {
-          // an optional spread property only overrides when present (TS semantics)
-          Type* bt = baseOf(t);
-          if (e->props[idx].spread && t->t == TT::Optional && t->hasUndef && !t->hasNull && bt == baseOf(types[i])) {
-            cond[i].push_back(idx);
-            return;
-          }
-          if (types[i]->t == TT::Optional && types[i]->hasUndef && src[i] >= 0 && e->props[src[i]].spread) {
-            // possibly-absent key from a spread: JS places a newly added key last (best static approximation)
-            names.erase(names.begin() + i); types.erase(types.begin() + i);
-            src.erase(src.begin() + i); cond.erase(cond.begin() + i);
-            break;
-          }
-          types[i] = t; src[i] = idx; cond[i].clear();
-          return;
-        }
-      names.push_back(k);
-      types.push_back(t);
-      src.push_back(idx);
-      cond.emplace_back();
-    };
+    std::vector<std::vector<std::pair<std::string, Type*>>> entries(e->props.size());
     for (size_t pi = 0; pi < e->props.size(); pi++) {
       ObjProp& p = e->props[pi];
       if (p.spread) {
@@ -418,9 +492,9 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
             return errT(p.loc, "spreading a value of abstract class type '" + t->cls->name +
                                    "' with abstract properties is not supported (their subclass fields are not known)");
           for (auto& f : t->cls->fields)
-            if (f.name[0] != '#') upsert(f.name, f.type, (int)pi);  // #private fields are not copied
+            if (f.name[0] != '#') entries[pi].push_back({f.name, f.type});  // #private fields are not copied
         } else if (t->t == TT::Object) {
-          for (auto& pr : t->shape->props) upsert(pr.name, pr.type, (int)pi);
+          for (auto& pr : t->shape->props) entries[pi].push_back({pr.name, pr.type});
         } else if (t->t != TT::Unknown) {
           return errT(p.loc, "only objects can be spread into an object literal (got '" + typeName(t) + "')");
         }
@@ -433,8 +507,10 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
         err(p.loc, "cannot infer the type of property '" + p.key + "'");
         t = T.unknown();
       }
-      upsert(p.key, sp ? sp->type : t, (int)pi);
+      entries[pi].push_back({p.key, sp ? sp->type : t});
     }
+    spreadUpsert(e->props, entries, names, types, src, cond);
+    spreadLits.push_back({e, entries});
     std::vector<std::pair<std::string, Type*>> fields;
     if (exp && exp->t == TT::Object) {
       ObjShape* sh = exp->shape;
@@ -871,12 +947,10 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
     bool lNull = isNullish(lt), rNull = isNullish(rt);
     if (loose && !lNull && !rNull) return errT(e->loc, "use '" + std::string(op == "==" ? "===" : "!==") + "' instead of '" + op + "'");
     if (lNull || rNull) {
+      // tsc accepts comparing any value with null / undefined (also a variable narrowed to a non-nullable
+      // type, or a non-nullable one): the result is then known, but the program is valid
       Type* other = lNull ? rt : lt;
-      if (isNullish(other)) return T.boolean();
-      if (other->t != TT::Optional) {
-        return errT(e->loc, "this comparison is always " + std::string(op[0] == '=' ? "false" : "true") + ": '" +
-                                typeName(other) + "' cannot be null or undefined");
-      }
+      if (other->t == TT::Void) return errT(e->loc, "an expression of type 'void' cannot be compared");
       return T.boolean();
     }
     Type* lb = baseOf(lt);
@@ -1288,6 +1362,24 @@ Type* Checker::checkAccessor(Expr* e, ClassSym* c, const std::string& name, bool
   return t;
 }
 
+// `B.x = v` where x is a static field of a base class: in JavaScript the assignment creates an own
+// property x of B (the base class keeps its value), read from then on through B and its subclasses
+void Checker::staticShadow(ClassSym* c, const std::string& name, VarSym* inherited) {
+  if (c->staticShadows.count(name)) return;
+  auto global = [&](const std::string& n, Type* t) {
+    VarSym* v = newVar(n, t, false, inherited->loc);
+    v->isGlobal = true;
+    v->owner = nullptr;
+    v->globalIdx = (int)P.globals.size();
+    P.globals.push_back(v);
+    return v;
+  };
+  ClassSym::StaticShadow sh;
+  sh.has = global(c->name + "." + name + " (own)", T.boolean());
+  sh.value = global(c->name + "." + name, inherited->type ? inherited->type : T.unknown());
+  c->staticShadows[name] = sh;
+}
+
 Type* Checker::checkMember(Expr* e, Type* expected) {
   Expr* obj = strip(e->a);
   const std::string& name = e->raw;
@@ -1311,15 +1403,25 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
     if (ClassSym* c = classOf(s)) {
       resolveClass(c);
       if (name[0] == '#' && !checkPrivateAccess(e->nameLoc, name, c)) return T.unknown();
-      auto it = c->staticFields.find(name);
-      if (it != c->staticFields.end()) {
-        e->intrinsic = IN_STATIC_FIELD;
-        e->var = it->second;
-        if (!it->second->type) globalVarType(it->second);
-        return it->second->type ? it->second->type : T.unknown();
+      // own static members first, then the base classes' (as JavaScript reads them through the prototype
+      // chain); #private static members are not inherited
+      for (ClassSym* k = c; k; k = name[0] == '#' ? nullptr : k->staticParent) {
+        auto it = k->staticFields.find(name);
+        if (it != k->staticFields.end()) {
+          e->intrinsic = IN_STATIC_FIELD;
+          e->var = it->second;
+          if (!it->second->type) globalVarType(it->second);
+          Type* t = it->second->type ? it->second->type : T.unknown();
+          if (k != c) {
+            // inherited: read through the classes in between, which may have their own copy
+            e->cls = c;
+            if (e == lvalueTarget && lvalueMode >= 1 && !it->second->isConst) staticShadow(c, name, it->second);
+          }
+          return t;
+        }
+        if (Type* at = checkAccessor(e, k, name, true)) return at;
+        if (k->staticMethods.count(name)) return errT(e->loc, "static methods cannot be used as values; wrap in an arrow function");
       }
-      if (Type* at = checkAccessor(e, c, name, true)) return at;
-      if (c->staticMethods.count(name)) return errT(e->loc, "static methods cannot be used as values; wrap in an arrow function");
       return errT(e->loc, "class '" + c->name + "' has no static member '" + name + "'");
     }
   }

@@ -112,6 +112,15 @@ class Checker {
   Type* instantiateType(GenericSym* g, const std::vector<Type*>& args, Loc l);
   Type* genericNamedType(GenericSym* g, const std::vector<TypeNode*>& args, Loc l);
   FuncSym* genericFuncValue(GenericSym* g, Expr* e, Type* expected);
+  void staticShadow(ClassSym* c, const std::string& name, VarSym* inherited);
+  // object literals with spreads: their properties (per entry, in order) for spreadOrders()
+  struct SpreadLit {
+    Expr* e;
+    std::vector<std::vector<std::pair<std::string, Type*>>> entries;
+  };
+  std::vector<SpreadLit> spreadLits;
+  void spreadOrders();
+  Type* checkArrayPatInit(VarDecl& d, Expr* init);
   ClassSym* classOf(Sym* s);  // a class, or the static holder of a generic class
 
   ClassSym* staticInitClass = nullptr;  // class whose static initializers / blocks are being checked

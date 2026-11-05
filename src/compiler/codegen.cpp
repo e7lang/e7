@@ -540,6 +540,7 @@ struct Gen {
   void writeVar(VarSym* v, uint16_t src);
   void genAssign(Expr* e, uint16_t dst);
   void storeTo(Expr* target, uint16_t valueReg);
+  void readStatic(Expr* e, uint16_t d);
   void genBinary(Expr* e, uint16_t dst);
   void binaryOp(const std::string& op, Type* lt, Type* rt, uint16_t dst, uint16_t a, uint16_t b, Loc l);
   void genEquality(Expr* e, uint16_t dst, bool negate);
@@ -820,31 +821,38 @@ void Gen::prologue(FuncSym* f) {
     r++;
   }
   D->nparams = r;
-  // default parameter values
-  if (f->hasDefaults && f->params) {
-    for (size_t i = 0; i < f->params->size(); i++) {
-      Param& p = (*f->params)[i];
-      if (!p.init) continue;
+  // captured parameters / this move into cells, each one after its default value is applied: a later
+  // default (or the body) may read it, or capture it in a closure
+  auto boxParam = [&](VarSym* v) {
+    if (!v->captured) return;
+    uint16_t pr = varReg[v];
+    uint16_t cell = allocReg(K_R);
+    emit(OP_NEWCELL, cell, vtOf(v->type));
+    static const uint16_t setOps[3] = {OP_CSET_I, OP_CSET_F, OP_CSET_R};
+    emit(setOps[K(v->type)], cell, pr);
+    varReg[v] = cell;
+    dbgOpen(v, cell, true, true);
+  };
+  if (f->thisVar && (f->isMethod || f->isCtor)) boxParam(f->thisVar);
+  for (size_t i = 0; i < f->paramSyms.size(); i++) {
+    VarSym* v = f->paramSyms[i];
+    Param* p = f->params && i < f->params->size() ? &(*f->params)[i] : nullptr;
+    // default parameter values
+    if (p && p->init && f->hasDefaults) {
       Label* skip = newLabel();
       size_t m0 = mark();
       uint16_t lim = temp(K_I), cmp = temp(K_I);
       loadInt(lim, (int64_t)i);
       emit(OP_LT_I, cmp, lim, argcReg);  // i < argc: argument was given
       jump(OP_JT, cmp, skip);
-      genInto(p.init, varReg[f->paramSyms[i]]);
+      genInto(p->init, varReg[v]);
       place(skip);
       release(m0);
     }
-  }
-  // closures: a default applies when the argument is undefined; the parameter register holds
-  // `T | undefined`, the variable T (its own register when the representation differs)
-  if (f->arrow && f->params) {
-    for (size_t i = 0; i < f->params->size() && i < f->paramSyms.size(); i++) {
-      Param& p = (*f->params)[i];
-      if (!p.init) continue;
-      Type* outer = f->type->params[i];
-      VarSym* v = f->paramSyms[i];
-      if (outer->t != TT::Optional || !outer->hasUndef) continue;  // never undefined: the default is unused
+    // closures: a default applies when the argument is undefined; the parameter register holds
+    // `T | undefined`, the variable T (its own register when the representation differs)
+    Type* outer = i < f->type->params.size() ? f->type->params[i] : nullptr;
+    if (p && p->init && f->arrow && outer && outer->t == TT::Optional && outer->hasUndef) {
       uint16_t pr = varReg[v];
       uint16_t vr = pr;
       if (K(outer) != K(v->type) || isBoxedOptional(outer) != isBoxedOptional(v->type)) {
@@ -859,25 +867,13 @@ void Gen::prologue(FuncSym* f) {
       emit(OP_ISUNDEF, c, pr);
       jump(OP_JF, c, given);
       release(m0);
-      genInto(p.init, vr);
+      genInto(p->init, vr);
       jump(OP_JMP, 0, done);
       place(given);
       unboxNarrowed(vr, pr, outer, v->type);
       place(done);
     }
-  }
-  // captured parameters / this move into cells
-  std::vector<VarSym*> ps = f->paramSyms;
-  if (f->thisVar && (f->isMethod || f->isCtor)) ps.insert(ps.begin(), f->thisVar);
-  for (VarSym* v : ps) {
-    if (!v->captured) continue;
-    uint16_t pr = varReg[v];
-    uint16_t cell = allocReg(K_R);
-    emit(OP_NEWCELL, cell, vtOf(v->type));
-    static const uint16_t setOps[3] = {OP_CSET_I, OP_CSET_F, OP_CSET_R};
-    emit(setOps[K(v->type)], cell, pr);
-    varReg[v] = cell;
-    dbgOpen(v, cell, true, true);
+    boxParam(v);
   }
 }
 
@@ -1224,7 +1220,7 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
         std::vector<std::pair<std::string, Type*>> fs;
         for (auto& p : rt->shape->props) fs.push_back({p.name, p.type});
         ClassSym* rc = C.recordFor(fs)->cls;
-        emit(OP_NEW, r, (uint16_t)rc->classIdx);
+        std::vector<uint16_t> vs;
         for (size_t k = 0; k < fs.size(); k++) {
           Kind fk = K(fs[k].second);
           uint16_t v = temp(fk);
@@ -1234,7 +1230,57 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
             D->icNames.push_back(kStr(utf8ToUtf16(fs[k].first)));
             emit(op3(fk, OP_GETN_I, OP_GETN_F, OP_GETN_R), v, src, (uint16_t)(D->icNames.size() - 1));
           }
-          emit(op3(fk, OP_SETF_I, OP_SETF_F, OP_SETF_R), r, (uint16_t)rc->fieldIdx[fs[k].first], v);
+          vs.push_back(v);
+        }
+        auto build = [&](ClassSym* bc) {
+          emit(OP_NEW, r, (uint16_t)bc->classIdx);
+          for (size_t k = 0; k < fs.size(); k++)
+            emit(op3(K(fs[k].second), OP_SETF_I, OP_SETF_F, OP_SETF_R), r, (uint16_t)bc->fieldIdx[fs[k].first], vs[k]);
+        };
+        // an object type: the properties in the run-time order of the value (as JavaScript copies them),
+        // for each class or object layout it can have with another order (see Checker::spreadOrders)
+        std::vector<std::pair<ClassSym*, ClassSym*>> alts;
+        if (t->t == TT::Object && fs.size() > 1) {
+          for (size_t ci = 0; ci < P.classes.size(); ci++) {
+            ClassSym* kc = P.classes[ci];
+            if (kc->isTuple || kc->genericRole == 1 || kc->classIdx < 0 || kc == rc) continue;
+            bool all = true;
+            for (auto& f : fs) all = all && kc->fieldIdx.count(f.first);
+            if (!all) continue;
+            auto re = fs;
+            std::stable_sort(re.begin(), re.end(), [&](const std::pair<std::string, Type*>& x, const std::pair<std::string, Type*>& y) {
+              return kc->fieldIdx[x.first] < kc->fieldIdx[y.first];
+            });
+            bool same = true;
+            for (size_t k = 0; k < re.size() && same; k++) same = re[k].first == fs[k].first;
+            if (!same) alts.push_back({kc, C.recordFor(re)->cls});
+          }
+        }
+        if (alts.empty()) {
+          build(rc);
+        } else {
+          Label* done = newLabel();
+          uint16_t tst = temp(K_I);
+          std::vector<ClassSym*> built;
+          for (size_t ai = 0; ai < alts.size(); ai++) {
+            ClassSym* bc = alts[ai].second;
+            if (std::find(built.begin(), built.end(), bc) != built.end()) continue;
+            built.push_back(bc);
+            Label* use = newLabel();
+            Label* next = newLabel();
+            for (size_t aj = ai; aj < alts.size(); aj++) {
+              if (alts[aj].second != bc) continue;
+              emit(OP_INSTOF, tst, src, (uint16_t)alts[aj].first->classIdx);
+              jump(OP_JT, tst, use);
+            }
+            jump(OP_JMP, 0, next);
+            place(use);
+            build(bc);
+            jump(OP_JMP, 0, done);
+            place(next);
+          }
+          build(rc);
+          place(done);
         }
       }
       destructure(sub, r, rt);
@@ -2494,6 +2540,37 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
   }
 }
 
+// A static field (Class.x). Read through a subclass (e->cls) of the class that declares it, it is the
+// first own copy that the classes in between have (created by `Sub.x = v`, as in JavaScript), else
+// the declaring class's.
+void Gen::readStatic(Expr* e, uint16_t d) {
+  std::vector<ClassSym::StaticShadow> chain;
+  for (ClassSym* k = e->cls; k; k = k->staticParent) {
+    auto f = k->staticFields.find(e->raw);
+    if (f != k->staticFields.end() && f->second == e->var) break;
+    auto sh = k->staticShadows.find(e->raw);
+    if (sh != k->staticShadows.end()) chain.push_back(sh->second);
+  }
+  if (chain.empty()) {
+    readVar(e->var, d, e->type);
+    return;
+  }
+  Label* end = newLabel();
+  for (auto& sh : chain) {
+    Label* next = newLabel();
+    size_t m0 = mark();
+    uint16_t c = temp(K_I);
+    readVar(sh.has, c, sh.has->type);
+    jump(OP_JF, c, next);
+    release(m0);
+    readVar(sh.value, d, e->type);
+    jump(OP_JMP, 0, end);
+    place(next);
+  }
+  readVar(e->var, d, e->type);
+  place(end);
+}
+
 // ======================================================================= assignment
 void Gen::storeTo(Expr* target, uint16_t v) {
   Expr* t = strip(target);
@@ -2503,7 +2580,19 @@ void Gen::storeTo(Expr* target, uint16_t v) {
       writeVar(t->var, v);
       break;
     case EK::Member: {
-      if (t->intrinsic == IN_STATIC_FIELD) { writeVar(t->var, v); break; }
+      if (t->intrinsic == IN_STATIC_FIELD) {
+        // an inherited static field written through a subclass: that class's own copy (see readStatic)
+        auto sh = t->cls ? t->cls->staticShadows.find(t->raw) : std::map<std::string, ClassSym::StaticShadow>::iterator();
+        if (t->cls && sh != t->cls->staticShadows.end()) {
+          writeVar(sh->second.value, v);
+          uint16_t one = temp(K_I);
+          loadInt(one, 1);
+          writeVar(sh->second.has, one);
+        } else {
+          writeVar(t->var, v);
+        }
+        break;
+      }
       if (isAccessorMember(t)) {
         uint16_t obj = accessorReceiver(t);
         accessorCall(t, obj, true, v, kNoReg);
@@ -2888,6 +2977,11 @@ void Gen::genEquality(Expr* e, uint16_t d, bool negate) {
     Expr* lit = lNull ? l : r;
     Expr* other = lNull ? r : l;
     uint16_t o = gen(other);
+    if (other->type->t != TT::Optional && kindOf(other->type) != K_R) {
+      // a number / boolean / integer (possibly a narrowed nullable variable) is never null or undefined
+      loadInt(d, negate ? 1 : 0);
+      return;
+    }
     uint16_t res = temp(K_I);
     if (loose) emit(OP_ISNULLISH, res, o);
     else if (lit->type->t == TT::Null) emit(OP_ISNULL, res, o);
@@ -3448,7 +3542,6 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
       genInto(v, vals[i]);
     }
     uint16_t obj = temp(K_R);
-    emit(OP_NEW, obj, (uint16_t)c->classIdx);
     auto readSpread = [&](int si, const std::string& name, Type*& sft) -> uint16_t {
       Type* st = e->props[si].value->type;
       uint16_t raw;
@@ -3465,30 +3558,33 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
       }
       return raw;
     };
+    // the field values (in the order of `c`), then the object: a `c`, or a record with the same fields
+    // in the order of the run-time class of a spread source (see Checker::spreadOrders)
+    std::vector<uint16_t> fv(c->fields.size(), kNoReg);
     for (size_t fi = 0; fi < c->fields.size(); fi++) {
       Type* ft = c->fields[fi].type;
+      if (e->fieldSrc[fi] < 0 && K(ft) != K_R) continue;  // absent: only reference fields hold undefined
+      fv[fi] = temp(K(ft));
+    }
+    for (size_t fi = 0; fi < c->fields.size(); fi++) {
+      if (fv[fi] == kNoReg) continue;
+      Type* ft = c->fields[fi].type;
       int si = e->fieldSrc[fi];
-      size_t m0 = mark();
-      uint16_t v;
+      uint16_t v = fv[fi];
+      size_t m1 = mark();
       if (si < 0) {
-        if (K(ft) != K_R) { release(m0); continue; }
-        v = temp(K_R);
         emit(OP_LOADUNDEF, v);
       } else if (!e->props[si].spread) {
-        v = vals[si];
+        mov(v, vals[si], K(ft));
       } else {
         Type* sft;
         uint16_t raw = readSpread(si, c->fields[fi].name, sft);
-        v = temp(K(ft));
         boxIfNeeded(v, raw, sft, ft);
       }
+      release(m1);
       // later optional spreads override only when the property is present
-      if (!e->fieldCond[fi].empty()) {
-        uint16_t nv = temp(K(ft));
-        mov(nv, v, K(ft));
-        v = nv;
-      }
       for (int ci : e->fieldCond[fi]) {
+        m1 = mark();
         Type* sft;
         uint16_t raw = readSpread(ci, c->fields[fi].name, sft);
         uint16_t t = temp(K_I);
@@ -3497,9 +3593,45 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
         jump(OP_JT, t, skip);
         unboxNarrowed(v, raw, sft, ft);
         place(skip);
+        release(m1);
       }
-      emit(op3(K(ft), OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)fi, v);
-      release(m0);
+    }
+    auto build = [&](ClassSym* rc) {
+      emit(OP_NEW, obj, (uint16_t)rc->classIdx);
+      for (size_t fi = 0; fi < c->fields.size(); fi++) {
+        if (fv[fi] == kNoReg) continue;
+        int ti = rc == c ? (int)fi : rc->fieldIdx[c->fields[fi].name];
+        emit(op3(K(c->fields[fi].type), OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)ti, fv[fi]);
+      }
+    };
+    if (e->spreadAltSrc >= 0) {
+      Label* done = newLabel();
+      std::vector<ClassSym*> built;
+      for (size_t ai = 0; ai < e->spreadAltCls.size(); ai++) {
+        ClassSym* rc = e->spreadAltCls[ai];
+        if (std::find(built.begin(), built.end(), rc) != built.end()) continue;
+        built.push_back(rc);
+        // every tested class with this order jumps to one copy of the construction
+        Label* use = newLabel();
+        Label* next = newLabel();
+        size_t m1 = mark();
+        uint16_t t = temp(K_I);
+        for (size_t aj = ai; aj < e->spreadAltCls.size(); aj++) {
+          if (e->spreadAltCls[aj] != rc) continue;
+          emit(OP_INSTOF, t, vals[e->spreadAltSrc], (uint16_t)e->spreadAltTest[aj]->classIdx);
+          jump(OP_JT, t, use);
+        }
+        release(m1);
+        jump(OP_JMP, 0, next);
+        place(use);
+        build(rc);
+        jump(OP_JMP, 0, done);
+        place(next);
+      }
+      build(c);
+      place(done);
+    } else {
+      build(c);
     }
     mov(d, obj, K_R);
     return;
@@ -4059,7 +4191,7 @@ void Gen::genMember(Expr* e, uint16_t d) {
   switch (e->intrinsic) {
     case IN_CONST_NUM: loadNum(d, e->num); return;
     case IN_CONST_STR: loadStr(d, e->str); return;
-    case IN_STATIC_FIELD: readVar(e->var, d, e->type); return;
+    case IN_STATIC_FIELD: readStatic(e, d); return;
     case IN_DIRECT: genClosure(e->callee, d); return;
     case IN_ARR_LEN: {
       uint16_t obj = gen(e->a);
