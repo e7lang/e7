@@ -6,9 +6,11 @@
 #                                         the XCFramework, and (when the tools are installed) the JNI
 #                                         library with the JVM tests, the C# binding and the WebAssembly
 #                                         build with the npm tests
-#   scripts/macos.sh release <version>    build the macOS release files (universal e7/e7c archive, the
-#                                         native libraries the jar and the NuGet package bundle), test
-#                                         them, and upload them to a *draft* GitHub release v<version>
+#   scripts/macos.sh release <version>    run the full test above (unless it already passed at this
+#                                         commit with nothing skipped), build the macOS release files
+#                                         (universal e7/e7c archive, the native libraries the jar and the
+#                                         NuGet package bundle), test them, and upload them to a *draft*
+#                                         GitHub release v<version>
 #                                         at the current commit. Then push the tag: the release workflow
 #                                         builds the other platforms, packages, and publishes the release.
 #   scripts/macos.sh verify <version>     after publishing: install with Homebrew from the release's formula
@@ -46,8 +48,14 @@ s = json.load(open(sys.argv[1]))["workspace"]["schemes"]
 print(next((x for x in s if x.endswith("-Package")), None) or ("E7VM" if "E7VM" in s else s[0]))' "$1/schemes.json"
 }
 
+# a full test run at a clean commit leaves build-macos/tested-<sha>; release needs one with nothing skipped
+SKIPPED=0
+tested_stamp() { echo "build-macos/tested-$(git rev-parse HEAD)"; }
+
 cmd_test() {
   mkdir -p build-macos
+  local clean=0
+  git diff --quiet && git diff --cached --quiet && clean=1
   step "Release build + ctest"
   cmake -S . -B build-macos/release -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null
   cmake --build build-macos/release -j "$JOBS" >/dev/null
@@ -86,6 +94,7 @@ print(next(x["udid"] for rt, xs in sorted(d.items(), reverse=True) if "iOS" in r
       "-Pe7.nativesDir=$ROOT/build-macos/natives" :jvm:test)
   else
     echo "skipped: JNI / JVM tests (no JDK; set JAVA_HOME)"
+    SKIPPED=1
   fi
 
   if have dotnet; then
@@ -95,6 +104,7 @@ print(next(x["udid"] for rt, xs in sorted(d.items(), reverse=True) if "iOS" in r
     DOTNET_ROLL_FORWARD=Major dotnet run --project platform/windows/test -c Release -- build
   else
     echo "skipped: C# binding (no dotnet)"
+    SKIPPED=1
   fi
 
   if have emcc; then
@@ -106,8 +116,10 @@ print(next(x["udid"] for rt, xs in sorted(d.items(), reverse=True) if "iOS" in r
     (cd packages/e7 && npm test)
   else
     echo "skipped: WebAssembly / npm tests (no emcc: brew install emscripten)"
+    SKIPPED=1
   fi
   step "macOS checks passed"
+  if [ "$clean" = 1 ] && [ "$SKIPPED" = 0 ]; then touch "$(tested_stamp)"; fi
 }
 
 sign_and_notarize() {
@@ -138,6 +150,14 @@ cmd_release() {
   git merge-base --is-ancestor "$sha" origin/main || { echo "push $sha to origin first" >&2; exit 1; }
   if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
     echo "tag $tag already exists on origin: run this before pushing the tag" >&2; exit 1
+  fi
+
+  if [ -f "$(tested_stamp)" ]; then
+    echo "full macOS test already passed at $sha"
+  else
+    step "Full macOS test (scripts/macos.sh test)"
+    cmd_test
+    [ "$SKIPPED" = 0 ] || { echo "release needs every macOS test: install the skipped tools" >&2; exit 1; }
   fi
 
   local out=build-macos/release-$version
