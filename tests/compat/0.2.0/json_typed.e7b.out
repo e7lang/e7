@@ -1,0 +1,7 @@
+A-17 2 office/blue 1.5 true
+2024-01-01 true 2
+x 9
+{"id":1,"name":"pen","tags":["office","blue"],"price":1.5,"meta":{"created":"2024-01-01","flags":[true,false]}}
+3 2
+2 "é\n"
+true

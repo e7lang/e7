@@ -1,0 +1,17 @@
+ok 0
+ok 10
+ok 20
+range too big: 3 RangeError
+range too big: 4 RangeError
+true true false
+RangeError: Division by zero
+true
+true
+TypeError: Reduce of empty array with no initial value
+caught callback 1 in callback
+rethrown inner
+true Error Error: kept Error: kept
+no binding Error TypeError
+caught 3
+2 -1
+a,b

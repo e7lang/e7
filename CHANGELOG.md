@@ -31,8 +31,22 @@ are made now, so that the 0.2.x line can stay compatible. See [docs/ROADMAP.md](
   signature without loading), `e7_version_number()`, `e7_gc_stats_get()` (collections, total and longest pause,
   heap size and peak), `e7_config.gc_growth_percent` (heap growth before the next collection, default 200),
   `e7_compile_options.target_version`, `e7_compile_options_init()`.
-- Compatibility corpus `tests/compat/`: 0.1 modules must be rejected with `E7_ERR_VERSION`; modules from 0.2.x
-  releases must keep running with the same output.
+- Compatibility corpus `tests/compat/`: 0.1 modules must be rejected with `E7_ERR_VERSION`; modules compiled by
+  0.2.0 (`tests/compat/0.2.0/`) must keep running with the same output on every 0.2.x VM.
+- **Over-the-air delivery**: `E7ModuleManager` for Kotlin/Java and Swift (signed manifest, rollout percentage, kill
+  switch, `selfTest()` before activation, rollback to the last good module, bundled fallback, error reports);
+  detached Ed25519 signatures for manifests (`e7_sign_detached` / `e7_verify_detached`, `e7c --sign-file` /
+  `--verify-file`); `tools/manifest.py`; [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+- Bindings: version number, `inspect`, GC statistics and `gcGrowthPercent` in Java/Kotlin, Swift and C#; `target`
+  and `inspect()` in `@e7lang/e7`.
+- **Measurements and gates**: `e7 --stats` and `e7_ticks_used()` (instruction ticks, GC pauses, peak heap); a CI
+  performance gate (exact ticks and peak heap per benchmark, cachegrind instruction count within 3%); a GC pause
+  benchmark (`bench/gc_pause.cpp`); `fuzz_natives`, a fuzzer for the crypto and encoding natives.
+- Releases carry an SPDX SBOM and GitHub build provenance attestations for every file and package.
+
+### Fixed
+- `atoi` was used without `<cstdlib>` (fails with newer libc++); BearSSL's hash vtables are built with
+  `-fno-sanitize=function` so the UBSan fuzzing jobs do not stop on their generic function pointers.
 
 ### Changed (incompatible)
 - **Bytecode format 2.** 0.1 modules are rejected with `E7_ERR_VERSION`: recompile them with e7c 0.2.

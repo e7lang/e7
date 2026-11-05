@@ -1,6 +1,10 @@
 # Roadmap
 
-## 0.2.0: ready for a production pilot
+## 0.2.0: ready for a production pilot (released 2026-11-05)
+
+Everything below shipped in 0.2.0 (see [CHANGELOG.md](../CHANGELOG.md)), with two adjustments: `URIError` is
+catchable too, and detached Ed25519 signatures (`e7_sign_detached` / `e7_verify_detached`, `e7c --sign-file`) were
+added for update manifests.
 
 Goal: a release an app can pilot in production. Every change to the bytecode format or the C ABI that we can
 foresee lands in 0.2, so that from 0.2.x on a minor release line stays compatible. 0.2 does **not** keep
@@ -57,9 +61,14 @@ compatibility with 0.1: `.e7b` files must be recompiled.
 Incremental GC (decided from pilot measurements), `finally`, OSS-Fuzz (after a pilot), a third-party security
 audit, and code-signing certificates / registry accounts (owner actions).
 
+## 0.3 (planned)
+
+- `finally`.
+- Pilot feedback: whatever the first production pilot needs.
+- A C# `E7ModuleManager` (Kotlin/Java and Swift have one).
+
 ## Later
 
 - Production pilot (shadow run, then a small rollout); call E7 production-ready only after a pilot and a
   third-party audit.
 - Incremental GC if pilot data shows pauses that matter on low-end devices.
-- `finally`.
