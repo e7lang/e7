@@ -73,6 +73,7 @@ struct ObjProp {
 struct Expr {
   EK k;
   Loc loc;
+  Loc nameLoc;           // Member: position of the property name
   Type* type = nullptr;  // filled by checker
   Type* innerType = nullptr;  // optional chaining: type of the member/call result before '?.' widening
   // literal data
@@ -117,7 +118,7 @@ struct Expr {
 // ------------------------------------------------------------------ statements
 enum class SK {
   Var, Func, Class, Interface, TypeAlias, Enum, Expr, Block, If, While, DoWhile, For, ForOf, ForIn,
-  Return, Break, Continue, Switch, Labeled, Throw, Empty, Import, Export, Declare
+  Return, Break, Continue, Switch, Labeled, Throw, Empty, Import, Export, Declare, Debugger
 };
 
 struct VarDecl {

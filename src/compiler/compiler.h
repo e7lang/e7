@@ -18,12 +18,18 @@ struct CompileOutput {
   std::string errorText() const;  // "file:line:col: error: msg" lines
 };
 
+struct CompileOptions {
+  bool debugInfo = false;  // emit debug information (see docs/DEBUGGING.md)
+};
+
 // Compiles the program rooted at entryPath. Imports ("./x") are resolved relative to the
 // importing file and read through readFile (tries the path, then .ts and .e7 extensions).
-CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& readFile);
+CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& readFile,
+                             const CompileOptions& opts = CompileOptions());
 
 // Convenience: compile a single in-memory source (no imports of other files).
-CompileOutput compileSource(const std::string& name, const std::string& source);
+CompileOutput compileSource(const std::string& name, const std::string& source,
+                            const CompileOptions& opts = CompileOptions());
 
 // Default file reader (std::ifstream).
 bool readFileFromDisk(const std::string& path, std::string& content);

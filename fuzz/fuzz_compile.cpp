@@ -20,7 +20,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   if (size > 64 * 1024) return 0;  // keep inputs small; the compiler is not the bottleneck being tested
   std::vector<uint8_t> bytes;
   try {
-    e7::CompileOutput co = e7::compileSource("fuzz.ts", std::string((const char*)data, size));
+    e7::CompileOptions opts;
+    opts.debugInfo = true;  // the generated debug information must pass the verifier too
+    e7::CompileOutput co = e7::compileSource("fuzz.ts", std::string((const char*)data, size), opts);
     if (!co.ok) {
       for (const auto& e : co.errors)
         if (e.loc.line == 0 && e.loc.col == 0 && e.msg.rfind("internal compiler error", 0) == 0) {

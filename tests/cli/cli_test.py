@@ -68,10 +68,10 @@ def main():
           "✗ broken.test.ts (compile error)" in out and "did you mean 'total'?" in out and
           "     4 |   assertEqual(totl, 1);\n       |               ^" in out, out)
     check("failing: assertEqual details + stack trace",
-          "assertEqual failed: lists\n      expected: [ 1, 3 ]\n      actual:   [ 1, 2 ]\n        at testAssertEqualFails (cases.test.ts:8)" in out, out)
+          "assertEqual failed: lists\n      expected: [ 1, 3 ]\n      actual:   [ 1, 2 ]\n        at testAssertEqualFails (cases.test.ts:8:3)" in out, out)
     check("failing: output of failing test shown", "    | before the failure" in out, out)
     check("failing: boolean false", "testReturnsFalse" in out and "test returned false" in out, out)
-    check("failing: throw", "thrown on purpose\n        at testThrows (cases.test.ts:11)" in out, out)
+    check("failing: throw", "thrown on purpose\n        at testThrows (cases.test.ts:11:38)" in out, out)
     check("failing: runtime error", "index 2 out of range" in out, out)
     check("failing: budget", "instruction budget exhausted" in out, out)
     check("failing: memory", "out of memory (limit 8000000 bytes)" in out, out)
@@ -81,7 +81,7 @@ def main():
     check("failing: parameters rejected", "test functions must not take parameters" in out, out)
     check("failing: return type rejected", "test functions must return void or boolean" in out, out)
     check("failing: module initialization error",
-          "module initialization failed: index 7 out of range (length 3)\n        at <init> (init.test.ts:3)" in out, out)
+          "module initialization failed: index 7 out of range (length 3)\n        at <init> (init.test.ts:3:18)" in out, out)
 
     # ---- --json
     rc, out, err = run([e7, "test", "--json", "--budget", "1000000", "--mem", "8000000"], cwd=failing)

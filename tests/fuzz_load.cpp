@@ -23,21 +23,52 @@ static const char* kPrograms[] = {
     "export function main(): string { const b = new Uint8Array(4); b[0] = 7; const t: u32 = 0xffffffff; return b.join('') + (t + 1); }",
 };
 
+// Debugger attached to mutated modules with debug information: step through everything and inspect
+// every frame, scope and variable (the debug section is untrusted input too).
+static int stops = 0;
+static void inspectAll(e7_vm* vm, uint32_t ref, int depth) {
+  const e7_debug_variable* v;
+  size_t n = e7_debug_variables(vm, ref, 0, 50, &v);
+  std::vector<uint32_t> refs;
+  for (size_t i = 0; i < n; i++) refs.push_back(v[i].ref);
+  for (uint32_t r : refs)
+    if (r && depth < 3) inspectAll(vm, r, depth + 1);
+}
+static e7_debug_action onStop(e7_vm* vm, const e7_debug_stop*, void*) {
+  const e7_debug_frame* f;
+  size_t nf = e7_debug_stack(vm, &f);
+  for (size_t i = 0; i < nf && i < 4; i++) {
+    const e7_debug_scope* sc;
+    size_t ns = e7_debug_scopes(vm, i, &sc);
+    std::vector<uint32_t> refs;
+    for (size_t k = 0; k < ns; k++) refs.push_back(sc[k].ref);
+    for (uint32_t r : refs) inspectAll(vm, r, 0);
+    const e7_debug_variable* res;
+    e7_debug_evaluate(vm, i, "a[0].x", &res);
+  }
+  return ++stops % 64 ? E7_DEBUG_STEP_IN : E7_DEBUG_CONTINUE;
+}
+
 int main(int argc, char** argv) {
   int iters = argc > 1 ? atoi(argv[1]) : 2000;
   std::mt19937 rng(12345);
   int loaded = 0, ran = 0;
-  for (const char* src : kPrograms) {
+  for (int variant = 0; variant < 2 * (int)(sizeof kPrograms / sizeof *kPrograms); variant++) {
+    const char* src = kPrograms[variant / 2];
+    bool debug = variant % 2;  // odd variants: with debug information and a debugger attached
     uint8_t* out;
     size_t len;
     char* errs = nullptr;
-    if (e7_compile(src, strlen(src), "f.ts", &out, &len, &errs) != E7_OK) {
+    e7_compile_options co;
+    memset(&co, 0, sizeof co);
+    co.flags = debug ? E7_COMPILE_DEBUG : 0;
+    if (e7_compile_ex(src, strlen(src), "f.ts", &co, &out, &len, &errs) != E7_OK) {
       fprintf(stderr, "compile failed: %s\n", errs);
       return 1;
     }
     std::vector<uint8_t> base(out, out + len);
     e7_free(out);
-    for (int it = 0; it < iters; it++) {
+    for (int it = 0; it < (debug ? iters / 3 : iters); it++) {
       std::vector<uint8_t> m = base;
       int nmut = 1 + (int)(rng() % 4);
       for (int k = 0; k < nmut; k++) {
@@ -56,6 +87,11 @@ int main(int argc, char** argv) {
       cfg.memory_limit = 16u << 20;
       e7_vm* vm = e7_vm_new(&cfg);
       e7_set_budget(vm, 200000);
+      if (debug) {
+        e7_debug_attach(vm, onStop, nullptr);
+        e7_debug_set_breakpoint(vm, "f.ts", 1);
+        e7_debug_stop_on_entry(vm);
+      }
       e7_module* mod = nullptr;
       if (e7_load(vm, m.data(), m.size(), &mod) == E7_OK) {
         loaded++;

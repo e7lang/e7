@@ -99,7 +99,9 @@ namespace e7 {
   X(NUM2STR, "RF_", '-') X(INT2STR, "RIv", '-') X(BOOL2STR, "RI_", '-') \
   X(STRTRUTHY, "IR_", '-') \
   X(EQ_R, "IRR", '-') X(NE_R, "IRR", '-') \
-  X(ABORT, "R__", '-')
+  X(ABORT, "R__", '-') \
+  /* `debugger;` statement: no-op unless a debugger is attached */ \
+  X(DEBUGGER, "___", '-')
 
 enum Op : uint16_t {
 #define E7_X(name, fmt, kind) OP_##name,

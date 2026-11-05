@@ -132,7 +132,7 @@ struct Loader {
 
 }  // namespace
 
-CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& readFile) {
+CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& readFile, const CompileOptions& opts) {
   CompileOutput out;
   Program P;
   std::string entry = normalizePath(entryPath);
@@ -157,7 +157,7 @@ CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& rea
   std::string modName = entry;
   size_t sl = modName.find_last_of('/');
   if (sl != std::string::npos) modName = modName.substr(sl + 1);
-  if (!generateModule(P, C, out.module, modName)) {
+  if (!generateModule(P, C, out.module, modName, opts.debugInfo)) {
     out.errors = P.errors;
     return out;
   }
@@ -170,12 +170,12 @@ CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& rea
   return out;
 }
 
-CompileOutput compileSource(const std::string& name, const std::string& source) {
+CompileOutput compileSource(const std::string& name, const std::string& source, const CompileOptions& opts) {
   std::string n = normalizePath(name);
   return compileProgram(n, [&](const std::string& path, std::string& content) {
     if (path == n) { content = source; return true; }
     return false;
-  });
+  }, opts);
 }
 
 }  // namespace e7

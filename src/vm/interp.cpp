@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "../core/numfmt.h"
+#include "debug.h"
 #include "vm.h"
 
 // Computed-goto dispatch. LLVM 15-17 (clang 15-17, Apple clang 15/16 = Xcode 15/16, NDK r26 and
@@ -122,7 +123,10 @@ StrObj* VM::intToStringObj(Slot v, uint8_t vt) {
 
 StrObj* VM::numToStringObj(double d) { return newStringAscii(numberToString(d).c_str()); }
 
-int VM::execute(size_t /*entryDepth*/) {
+// The interpreter is instantiated twice: run<false> is the normal one; run<true> (used only while a
+// debugger is attached) additionally checks the per-instruction debug flags before every instruction.
+template <bool DBG>
+int VM::run() {
   Frame* fr;
   FuncRT* fn;
   ModuleRT* M;
@@ -189,6 +193,7 @@ int VM::execute(size_t /*entryDepth*/) {
 #define CASE(name) L_##name:
 #define DISPATCH()                 \
   do {                             \
+    DBG_HOOK();                    \
     ins = *ip++;                   \
     goto* labels[(uint16_t)ins];   \
   } while (0)
@@ -196,12 +201,23 @@ int VM::execute(size_t /*entryDepth*/) {
 #define CASE(name) case OP_##name:
 #define DISPATCH() goto dispatch
 #endif
+  // debug interpreter only: stop here if a flag of this instruction is enabled in dbgMask_
+#define DBG_HOOK()                                                                                  \
+  do {                                                                                              \
+    if (DBG && E7_UNLIKELY(fn->dbgFlags[(size_t)(ip - fn->code)] &                                  \
+                           dbgMask_.load(std::memory_order_relaxed))) {                             \
+      fr->ip = ip;                                                                                  \
+      int dst_ = dbg_->check(ip);                                                                   \
+      if (dst_) return dst_;                                                                        \
+    }                                                                                               \
+  } while (0)
 
   LOAD_FRAME();
 #if E7_COMPUTED_GOTO
   DISPATCH();
 #else
 dispatch:
+  DBG_HOOK();
   ins = *ip++;
   switch ((uint16_t)ins) {
 #endif
@@ -375,6 +391,7 @@ dispatch:
     bool ent = fr->entry;                       \
     uint16_t dst = fr->retDst;                  \
     frames_.pop_back();                         \
+    if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS); \
     if (ent) { result_ = rv; resultKind_ = kc; return ERR_OK; } \
     LOAD_FRAME();                               \
     if (dst != kNoReg) R[dst] = rv;             \
@@ -760,6 +777,8 @@ dispatch:
     std::string msg = (o && o->type == OT::String) ? strUtf8(static_cast<StrObj*>(o)) : "abort";
     THROW("%s", msg.c_str());
   }
+  // `debugger;`: the debug interpreter has already stopped here (DF_DEBUGGER) when appropriate
+  CASE(DEBUGGER) DISPATCH();
 
 #if !E7_COMPUTED_GOTO
   default:
@@ -767,6 +786,11 @@ dispatch:
   }
 #endif
   return ERR_RUNTIME;  // unreachable
+#undef DBG_HOOK
+#undef DISPATCH
+#undef CASE
 }
+
+int VM::execute(size_t /*entryDepth*/) { return E7_UNLIKELY(dbg_ != nullptr) ? run<true>() : run<false>(); }
 
 }  // namespace e7

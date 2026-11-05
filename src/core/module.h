@@ -21,6 +21,26 @@ struct ClassDesc {
   std::vector<std::string> methodNames;  // parallel to vtable
 };
 
+// Optional debug information of a function (compiled with debug info; see docs/BYTECODE.md).
+struct DebugPos {      // source position of the code from `pc` on (until the next entry)
+  uint32_t pc = 0, line = 0, col = 0;
+};
+struct DebugLocal {    // a named local variable (or parameter) living in a register
+  std::string name;
+  uint32_t reg = 0;
+  uint32_t startPc = 0, endPc = 0;  // live range [startPc, endPc)
+  uint8_t vt = 0;                   // exact value type (VT_*) of the value
+  uint8_t flags = 0;                // kDebugLocalCell: the register holds a cell (captured variable)
+};
+constexpr uint8_t kDebugLocalCell = 1;
+constexpr uint8_t kDebugLocalParam = 2;
+struct FuncDebug {
+  std::vector<DebugPos> pos;        // sorted by pc (instruction -> line/column)
+  std::vector<DebugPos> stmts;      // statement boundaries (strictly increasing pc), with the statement's position
+  std::vector<DebugLocal> locals;
+  std::vector<std::string> upvalNames;  // one per upvalue (may be empty: no names)
+};
+
 struct FuncDesc {
   std::string name;
   uint32_t sig = 0;                 // index into Module::sigs
@@ -30,6 +50,8 @@ struct FuncDesc {
   std::vector<uint32_t> icNames;    // string-constant index per inline-cache slot
   std::vector<uint64_t> code;
   std::vector<uint32_t> lines;      // pairs (pc, line), sorted by pc; optional extension below
+  bool hasDebug = false;            // debug information present (`debug` is meaningful)
+  FuncDebug debug;
 };
 
 // Line-table extension (backward compatible: readers that stop at the first pc greater than the
@@ -39,6 +61,12 @@ struct FuncDesc {
 // (relative to the entry file). Without segments, all code is from the module's entry file.
 constexpr uint32_t kLineExtMarker = 0xFFFFFFFFu;
 constexpr uint32_t kLineExtFiles = 0x53454C46u;  // "FLES"
+// Debug-information extension (after the file segments, if any): (kLineExtMarker, kLineExtDebug),
+// a word count n (< 2^31), then n payload words (see docs/BYTECODE.md). Older readers ignore it
+// (their file-segment scan stops at the first group that is not (marker, pc, marker, index)).
+constexpr uint32_t kLineExtDebug = 0x31474244u;  // "DBG1"
+// Module header flag: the module carries debug information (informational; old readers ignore flags).
+constexpr uint32_t kModuleFlagDebug = 1;
 
 struct NativeImport {
   std::string name;
@@ -71,6 +99,7 @@ struct Module {
   std::vector<GlobalDesc> globals;
   std::vector<ExportDesc> exports;
   uint32_t initFunc = 0;
+  uint32_t flags = 0;  // kModuleFlag*
 };
 
 // Signature string helpers

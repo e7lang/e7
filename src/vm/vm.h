@@ -1,5 +1,6 @@
 // e7vm core virtual machine.
 #pragma once
+#include <atomic>
 #include <exception>
 #include <memory>
 #include <string>
@@ -13,6 +14,7 @@ namespace e7 {
 
 class VM;
 struct ModuleRT;
+class Debugger;  // debug.h
 
 using NativeFn = void (*)(VM& vm, Slot* args, uint32_t nargs, Slot* ret, void* ud);
 
@@ -52,6 +54,7 @@ struct FuncRT {
   std::vector<uint16_t> refInit;  // non-param ref registers (null-initialized on entry)
   std::vector<uint16_t> refRegs;  // all ref registers (GC roots)
   std::vector<InlineCache> ics;
+  std::vector<uint8_t> dbgFlags;  // per pc, only while a debugger is attached (see debug.h)
 };
 
 struct NativeBinding {
@@ -94,7 +97,14 @@ struct E7Error : std::exception {
 enum ErrCode {
   ERR_OK = 0, ERR_SUSPENDED = 1, ERR_RUNTIME = 2, ERR_BUDGET = 3, ERR_MEMORY = 4,
   ERR_STACK = 5, ERR_LOAD = 6, ERR_VERIFY = 7, ERR_SIGNATURE = 8, ERR_NOT_FOUND = 9,
-  ERR_ARGS = 10, ERR_COMPILE = 11, ERR_STATE = 12
+  ERR_ARGS = 10, ERR_COMPILE = 11, ERR_STATE = 12,
+  ERR_PAUSED = 13  // stopped by the debugger (pause-to-host mode): frames are kept, resume() continues
+};
+
+// A source position (file name as shown in stack traces, 1-based line, column 0 = unknown).
+struct SrcLoc {
+  std::string file;
+  uint32_t line = 0, col = 0;
 };
 
 struct VMConfig {
@@ -152,6 +162,16 @@ class VM {
   [[noreturn]] void error(const char* fmt, ...);
   [[noreturn]] void errorCode(int code, const char* fmt, ...);
   std::string stackTrace() const;
+  // Source position of instruction `pc` of f (columns need debug information).
+  static SrcLoc sourceAt(const FuncRT* f, ptrdiff_t pc);
+
+  // ---- debugging (debug.cpp) ----
+  // Attaches a debugger (the VM owns it). Execution then uses the debug interpreter; without a
+  // debugger the normal interpreter runs with no debugging cost at all.
+  void attachDebugger(std::unique_ptr<Debugger> d);
+  void detachDebugger();
+  Debugger* debugger() const { return dbg_.get(); }
+  Slot* stackBase() const { return stack_; }
 
   // ---- heap ----
   StrObj* newString(const char16_t* s, size_t len);
@@ -241,7 +261,11 @@ class VM {
 
  private:
   friend struct Interp;
+  friend class Debugger;
   int execute(size_t entryDepth);
+  int runFrames();
+  template <bool DBG>
+  int run();
   Slot invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32_t argc);
   StrObj* intToStringObj(Slot v, uint8_t vt);
   StrObj* numToStringObj(double d);
@@ -284,6 +308,14 @@ class VM {
   bool suspended_ = false;
   Slot result_{};
   char resultKind_ = 'V';
+
+  // debugging: the attached debugger, the mask of per-pc flag bits that make the debug interpreter
+  // call into it (atomic: e7_debug_pause sets it from other threads), and the number of active
+  // callClosureCatching calls (errors raised inside them are caught, so they do not stop)
+  std::unique_ptr<Debugger> dbg_;
+  std::atomic<uint8_t> dbgMask_{0};
+  size_t dbgRetDepth_ = 0;  // stepping: returning below this frame depth stops at the next instruction
+  int catchDepth_ = 0;
 
   std::unordered_map<std::string, NativeEntry> natives_;
   std::unordered_map<std::string, uint32_t> sigIds_;
