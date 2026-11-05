@@ -192,6 +192,8 @@ jobs:
         with: { node-version: "22" }
       - run: npm install -g typescript@5.6
       - run: tests/tsc/check.sh
+      - name: docs/TYPESCRIPT.md is up to date with tests/ts-features
+        run: python3 scripts/gen-ts-features.py --check
       - name: SwiftPM and CMake build the same sources
         run: python3 scripts/check-source-lists.py
       - name: All version declarations agree

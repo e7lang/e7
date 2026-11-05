@@ -5,3 +5,6 @@ set -e
 cd "$(dirname "$0")"
 ${TSC:-tsc} -p tsconfig.json
 echo "tsc: all E7 programs type-check as strict TypeScript"
+# the TypeScript feature samples (docs/TYPESCRIPT.md), including those E7 rejects, are valid TypeScript
+${TSC:-tsc} -p ../ts-features/tsconfig.json
+echo "tsc: all TypeScript feature samples (tests/ts-features) type-check"

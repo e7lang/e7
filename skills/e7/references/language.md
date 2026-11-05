@@ -3,6 +3,10 @@
 E7 accepts a statically typed subset of TypeScript and runs it with JavaScript semantics. This page lists
 what you can use, what the compiler rejects, and how to write each rejected construct in E7.
 The normative specification is `docs/SPEC.md` in github.com/e7lang/e7.
+The same repository has `docs/TYPESCRIPT.md`, a feature-by-feature table of TypeScript (handbook chapters,
+JavaScript syntax and standard library): supported / partial / unsupported, the reason and the E7 alternative
+for each row, with a sample program per row in `tests/ts-features`. Look a feature up there when this page does
+not cover it.
 
 Code blocks marked `ts` here are complete programs that compile; blocks marked `ts e7-reject` show
 TypeScript that E7 rejects (both kinds are checked against the real compiler in E7's CI).
