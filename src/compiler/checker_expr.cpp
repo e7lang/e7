@@ -401,6 +401,9 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
         Type* t = check(p.value, nullptr);
         if (t->t == TT::Class) {
           resolveClass(t->cls);
+          if (!t->cls->abstractProps.empty())
+            return errT(p.loc, "spreading a value of abstract class type '" + t->cls->name +
+                                   "' with abstract properties is not supported (their subclass fields are not known)");
           for (auto& f : t->cls->fields)
             if (f.name[0] != '#') upsert(f.name, f.type, (int)pi);  // #private fields are not copied
         } else if (t->t == TT::Object) {
