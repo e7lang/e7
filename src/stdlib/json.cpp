@@ -488,7 +488,13 @@ struct Builder {
         double x = v->num;
         static const double lo[] = {0, 0, -128, 0, -32768, 0, -2147483648.0, 0, -9223372036854775808.0, 0};
         static const double hi[] = {0, 0, 127, 255, 32767, 65535, 2147483647.0, 4294967295.0, 9223372036854775807.0, 18446744073709551615.0};
-        if (vt < VT_I8 || vt > VT_U64 || x < lo[vt] || x > hi[vt]) fail(path, "integer out of range");
+        // 2^63 - 1 and 2^64 - 1 are not representable as doubles (they round up to 2^63 / 2^64), so the
+        // 64-bit types use exclusive upper bounds: x < 2^63 (i64) and x < 2^64 (u64).
+        bool inRange = vt >= VT_I8 && vt <= VT_U64 &&
+                       (vt == VT_I64 ? (x >= -9223372036854775808.0 && x < 9223372036854775808.0)
+                        : vt == VT_U64 ? (x >= 0 && x < 18446744073709551616.0)
+                                       : (x >= lo[vt] && x <= hi[vt]));
+        if (!inRange) fail(path, "integer out of range");
         out.i = doubleToInt64Bits(x);
         return out;
       }

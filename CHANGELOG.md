@@ -14,6 +14,10 @@ All notable changes to E7 / e7vm are listed here. The format follows
   `null` for malformed or mismatching input instead of terminating; `lastError()` gives the reason (for example
   `expected a number at $.amount`). Budget and memory exhaustion are still errors.
 
+### Fixed
+- `JSON.parse(...) as T` accepted 2^63 for `i64` and 2^64 for `u64` fields (the limits were compared as doubles);
+  both are now out of range.
+
 ### Changed
 - `JSON.parse` / `tryParse`: the temporary parse tree now counts toward the VM memory limit (`E7_ERR_MEMORY`
   instead of unbounded native memory for huge documents); type errors in `JSON.parse(...) as T` point at the expression.
