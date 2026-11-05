@@ -21,7 +21,8 @@ index signatures, `unknown`, `keyof`, regular expressions, generators, overloads
 ### Added
 - **Generics**: generic functions, arrow functions, classes (including generic methods and inheritance), interfaces and
   type aliases, with constraints, defaults, explicit type arguments and tsc-style inference; compiled by
-  monomorphization, so no VM change (SPEC 2.3).
+  monomorphization, so no VM change (SPEC 2.3). A type parameter with nothing to infer from takes its default, else
+  its constraint; `[]` arguments take their element type from the other arguments.
 - **`finally`**, with JavaScript semantics for `return` / `break` / `continue` / catchable errors and overriding
   completions (E7-specific uncatchable errors still end the call without running it).
 - Classes: getters and setters, `abstract` classes and members, `#private` fields and methods, `static {}` blocks;

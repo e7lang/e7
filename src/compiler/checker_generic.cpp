@@ -198,11 +198,13 @@ int Checker::completeTypeArgs(GenericSym* g, std::vector<Type*>& bound, Loc l) {
   for (size_t i = 0; i < g->params->size(); i++) {
     if (bound[i]) continue;
     TypeParam& tp = (*g->params)[i];
-    if (!tp.def) { missing = (int)i; break; }
+    // nothing to infer from: the default, else the constraint (as tsc does), unless it refers to type parameters
+    TypeNode* fallback = tp.def ? tp.def : (tp.constraint && !mentionsParams(g, tp.constraint) ? tp.constraint : nullptr);
+    if (!fallback) { missing = (int)i; break; }
     std::vector<Type*> prefix(bound.begin(), bound.begin() + (std::ptrdiff_t)i);
     scope = bindTypeParams(g, prefix);
     curFile = g->file;
-    bound[i] = resolveType(tp.def);
+    bound[i] = resolveType(fallback);
     scope = s0;
     curFile = f0;
   }
@@ -437,9 +439,10 @@ bool Checker::inferCall(GenericSym* g, std::vector<Param>* params, TypeNode* ret
       if (rn->k == TNK::Ref && (rn->name == "Array" || rn->name == "ReadonlyArray") && rn->args.size() == 1) return rn->args[0];
       return nullptr;
     };
-    auto isFnArg = [&](Expr* x) {
+    auto isFnArg = [&](Expr* x) {  // checked in the second pass, with the type parameters known so far
       x = strip(x);
       if (x->k == EK::Arrow) return true;
+      if (x->k == EK::Array && x->list.empty()) return true;  // `[]` takes its element type from the others
       if (x->k != EK::Ident) return false;
       Sym* s = lookup(x->raw);
       return s && s->k == SymK::Generic;
