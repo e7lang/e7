@@ -297,7 +297,7 @@ if (out.status !== 0) {
   console.error(`regexp_cli failed (status ${out.status}, signal ${out.signal})\n${out.stderr}`);
   process.exit(1);
 }
-const lines = out.stdout.split('\n');
+const lines = out.stdout.split(/\r?\n/);  // Windows: stdout is in text mode (CRLF)
 let mismatches = 0, budget = 0, known = 0, errors = 0, matches = 0;
 for (let i = 0; i < run.length; i++) {
   const c = run[i];
@@ -314,6 +314,10 @@ for (let i = 0; i < run.length; i++) {
     if (ours.startsWith('E') && ours.endsWith(': ' + newer)) continue;
     theirs = `E\t... ${newer} (Node.js 22)`;
   }
+  // older V8 (Node.js 22) words some messages differently: a decimal escape in a u-mode class
+  // (`[\1]`, `[\00]`) is an "Invalid class escape" there and an "Invalid decimal escape" in Node.js 24
+  if (theirs.endsWith(': Invalid class escape') && ours === theirs.replace(/Invalid class escape$/, 'Invalid decimal escape'))
+    theirs = ours;
   if (theirs.startsWith('E')) errors++;
   else if (theirs.startsWith('M')) matches++;
   if (ours !== theirs) {

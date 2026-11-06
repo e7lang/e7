@@ -234,12 +234,18 @@ async type and offers an async call that settles completions on the VM's thread 
 `call` / `load` / `resume` stay as they were; when they would return `E7_PENDING` they abandon the call and report the
 pending status as an error (nothing else could settle its tickets).
 
-| | Register | Call | Load (top-level `await`) | Synchronous call that would wait |
-|---|---|---|---|---|
-| Java / Kotlin | `registerAsyncNative(name, sig, args -> CompletionStage<?>)` | `callAsync(executor, m, fn, args...)` → `CompletableFuture<Object>`; blocking `callAwait(m, fn, args...)` | `loadAsync(executor, bytes)` / `loadAwait(bytes)` | `E7Exception` with status `PENDING` |
-| Swift | `registerAsyncNative(name, signature:) { args async throws in ... }` | `try await callAsync(m, fn, args...)` | `try await loadAsync(bytes)` | `E7Error` with `isPending` |
-| C# | `RegisterAsyncNative(name, sig, Func<object?[], Task<object?>>)` (or with a `CancellationToken`) | `await CallAsync(m, fn, args...)` (overload with a `CancellationToken`); blocking `CallAwait(m, fn, args...)` | `await LoadAsync(bytes)`; blocking `LoadAwait(bytes)` | `E7Exception` with `E7Status.Pending` |
-| JavaScript | (no host functions) | `run(..., { call })` returns an async export's value | top-level `await` works in `run` | status `"pending"` (cannot occur) |
+- **Java / Kotlin**: register with `registerAsyncNative(name, sig, args -> CompletionStage<?>)`; call with
+  `callAsync(executor, m, fn, args...)` → `CompletableFuture<Object>` or the blocking `callAwait(m, fn, args...)`; load
+  (top-level `await`) with `loadAsync(executor, bytes)` / `loadAwait(bytes)`. A synchronous call that would wait throws
+  `E7Exception` with status `PENDING`.
+- **Swift**: `registerAsyncNative(name, signature:) { args async throws in ... }`; `try await callAsync(m, fn, args...)`;
+  `try await loadAsync(bytes)`. A synchronous call that would wait throws `E7Error` with `isPending`.
+- **C#**: `RegisterAsyncNative(name, sig, Func<object?[], Task<object?>>)` (or with a `CancellationToken`);
+  `await CallAsync(m, fn, args...)` (an overload takes a `CancellationToken`) or the blocking `CallAwait(m, fn, args...)`;
+  `await LoadAsync(bytes)` or the blocking `LoadAwait(bytes)`. A synchronous call that would wait throws `E7Exception`
+  with `E7Status.Pending`.
+- **JavaScript**: no host functions; `run(..., { call })` returns an async export's value and top-level `await` works in
+  `run` (the status `"pending"` cannot occur).
 
 Common rules: a host operation that fails rejects the script's promise with an `Error` carrying the exception's
 message (Swift: the error's description); a value of the wrong type rejects it too, naming the function. Java and C#
