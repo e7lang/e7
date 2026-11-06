@@ -8,7 +8,9 @@ namespace e7 {
 
 // Structural equality used by assertEqual / assertNotEqual: primitives by value (NaN equals NaN),
 // strings / bigints / Uint8Arrays by content, arrays element-wise, class instances and object
-// literals field by field (same class), Maps / Sets by entries (order-insensitive).
+// literals field by field (same class; the values of getters), Maps / Sets by entries (order-insensitive).
+// A getter is script code: it may change the values being compared, so lengths and entries are read
+// again after each comparison, and the values compared are kept reachable.
 static bool deepEq(VM& vm, Slot a, Slot b, uint8_t vt, int depth) {
   vm.chargeWork(1);
   if (vt == VT_NUMBER) return a.f == b.f || (a.f != a.f && b.f != b.f);
@@ -18,6 +20,7 @@ static bool deepEq(VM& vm, Slot a, Slot b, uint8_t vt, int depth) {
   if (x == y) return true;
   if (!x || !y || x->type != y->type) return false;
   if (depth > 64) vm.error("assertEqual: values are nested too deeply to compare");
+  VM::TempRoot keepX(vm, x), keepY(vm, y);
   switch (x->type) {
     case OT::String: return strEq(static_cast<StrObj*>(x), static_cast<StrObj*>(y));
     case OT::BigInt: return bigCmp(static_cast<BigObj*>(x), static_cast<BigObj*>(y)) == 0;
@@ -38,8 +41,9 @@ static bool deepEq(VM& vm, Slot a, Slot b, uint8_t vt, int depth) {
       auto* ax = static_cast<ArrObj*>(x);
       auto* ay = static_cast<ArrObj*>(y);
       if (ax->len != ay->len || ax->vt != ay->vt) return false;
-      for (uint32_t i = 0; i < ax->len; i++)
+      for (uint32_t i = 0; i < ax->len && i < ay->len; i++)
         if (!deepEq(vm, ax->data[i], ay->data[i], ax->vt, depth + 1)) return false;
+      if (ax->len != ay->len) return false;
       if (hasMatchExtra(ax) != hasMatchExtra(ay)) return false;
       if (hasMatchExtra(ax)) {  // regular expression matches: also index, input, groups and indices
         const MatchExtra* mx = matchExtra(ax);
@@ -60,8 +64,21 @@ static bool deepEq(VM& vm, Slot a, Slot b, uint8_t vt, int depth) {
       auto* ix = static_cast<InstObj*>(x);
       auto* iy = static_cast<InstObj*>(y);
       if (ix->cls != iy->cls) return false;
-      for (uint32_t i = 0; i < ix->cls->nfields; i++)
+      for (uint32_t i = 0; i < ix->cls->nfields; i++) {
+        if (accessorKind(ix->cls, i)) {
+          // an accessor property: the getters' values (undefined without a getter)
+          Slot vx{}, vy{};
+          uint8_t tx = VT_REF, ty = VT_REF;
+          vx.r = vy.r = vm.undef();
+          accessorGet(vm, ix, i, &vx, &tx);
+          VM::TempRoot keepVX(vm, tx == VT_REF ? vx.r : nullptr);
+          accessorGet(vm, iy, i, &vy, &ty);
+          VM::TempRoot keepVY(vm, ty == VT_REF ? vy.r : nullptr);
+          if (tx != ty || !deepEq(vm, vx, vy, tx, depth + 1)) return false;
+          continue;
+        }
         if (!deepEq(vm, ix->fields()[i], iy->fields()[i], ix->cls->fieldVT[i], depth + 1)) return false;
+      }
       return true;
     }
     case OT::Map: {
@@ -69,13 +86,14 @@ static bool deepEq(VM& vm, Slot a, Slot b, uint8_t vt, int depth) {
       auto* my = static_cast<MapObj*>(y);
       if (mx->isSet != my->isSet || mx->count != my->count || mx->kvt != my->kvt || mx->vvt != my->vvt) return false;
       for (size_t i = 0; i < mx->entries.size(); i++) {
-        const MapEntry& e = mx->entries[i];
+        const MapEntry e = mx->entries[i];
         if (!e.live) continue;
         int32_t j = mapFind(vm, my, e.k);
         if (j < 0) return false;
-        if (!mx->isSet && !deepEq(vm, e.v, my->entries[(size_t)j].v, mx->vvt, depth + 1)) return false;
+        Slot yv = my->entries[(size_t)j].v;
+        if (!mx->isSet && !deepEq(vm, e.v, yv, mx->vvt, depth + 1)) return false;
       }
-      return true;
+      return mx->count == my->count;
     }
     case OT::Handle: return static_cast<HandleObj*>(x)->id == static_cast<HandleObj*>(y)->id;
     default: return false;

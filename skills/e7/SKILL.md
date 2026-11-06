@@ -34,7 +34,7 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | `arr.map(obj.method)` | `arr.map(x => obj.method(x))` (methods are not values) |
 | `Buffer`, `crypto.subtle`, `require("crypto")`, `fs`, `process` | `Uint8Array`, `e7:crypto`, `e7:encoding`, or a host function |
 | `async function*` (async generators) | an `async` function returning an array, or `for await` over an array of promises |
-| `{ get x() { ... } }` (accessors in object literals) | a class with `get x()`, or a plain property |
+| an object literal `{ get x() { ... } }` passed as `interface I { x: number }` | declare the accessor in the interface: `get x(): number` (object literal accessors need e7vm 0.3.1) |
 
 Behaviour that differs from JavaScript at run time:
 
@@ -63,7 +63,7 @@ ES modules (named, default, namespace imports, re-exports), and E7's machine int
 conditional, `keyof`, `typeof` and template literal types, `Symbol` values, `Proxy` / `Reflect` / `eval`,
 `for...in` / `delete` / `in`, `var`, class expressions and mixins, decorators, namespaces, JSX, `WeakMap` /
 `WeakSet`, `Intl` and locale formatting, timers and I/O (`setTimeout`, `fetch`: the host does them), async
-generators, accessors in object literals, methods used as values. The full table with a reason and a replacement
+generators, methods used as values. The full table with a reason and a replacement
 for each of 250 TypeScript features: [docs/TYPESCRIPT.md](https://github.com/e7lang/e7/blob/main/docs/TYPESCRIPT.md).
 
 For the complete list (destructuring limits, class rules, operators, every standard-library method) read

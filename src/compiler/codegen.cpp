@@ -623,6 +623,8 @@ struct Gen {
   // for (i = 0; i < length(arr); i++) body(element register): elements read with the kind of et
   void forEachElem(uint16_t arr, Type* et, const std::function<void(uint16_t)>& body);
   FuncSym* accessorFn(Expr* m, bool set, Type** fnType);
+  void callGetterByName(uint16_t dst, uint16_t obj, const std::string& name, Type* fn);
+  void readByName(uint16_t dst, uint16_t obj, Type* ot, const std::string& name, Type* t);
   uint16_t accessorReceiver(Expr* m);
   void accessorCall(Expr* m, uint16_t obj, bool set, uint16_t v, uint16_t dst);
   std::vector<uint16_t> genArgs(std::vector<Expr*>& args, Type* ft, bool restPacked, size_t* nGiven);
@@ -664,6 +666,28 @@ FuncSym* Gen::accessorFn(Expr* m, bool set, Type** fnType) {
   }
   *fnType = f ? f->type : nullptr;
   return f;
+}
+
+// Calls the getter "get <name>" (function type fn) of an object by name into dst.
+void Gen::callGetterByName(uint16_t dst, uint16_t obj, const std::string& name, Type* fn) {
+  Kind rk = kindOf(fn->ret);
+  std::string sg = "R>";
+  sg += rk == K_V ? 'V' : kindChar(rk);
+  D->icNames.push_back(kStr(utf8ToUtf16("get " + name)));
+  emit(OP_CALLI, rk == K_V ? kNoReg : dst, obj, 0);
+  emitWord((uint64_t)(uint32_t)(D->icNames.size() - 1) | ((uint64_t)sig(sg) << 32));
+}
+
+// Reads property `name` of a value of object type ot into dst (t: its type): a property by name, or a
+// getter (declared by an interface or an object literal) by a call.
+void Gen::readByName(uint16_t dst, uint16_t obj, Type* ot, const std::string& name, Type* t) {
+  if (ot->t == TT::Object && !ot->shape->findProp(name))
+    if (const ObjShape::Method* g = ot->shape->findMethod("get " + name)) {
+      callGetterByName(dst, obj, name, g->fn);
+      return;
+    }
+  D->icNames.push_back(kStr(utf8ToUtf16(name)));
+  emit(op3(K(t), OP_GETN_I, OP_GETN_F, OP_GETN_R), dst, obj, (uint16_t)(D->icNames.size() - 1));
 }
 
 // Receiver of an accessor call: the object (instance / interface), this (super.x), none (static).
@@ -782,6 +806,7 @@ bool Gen::run(const std::string& name) {
     cd.parent = c->parent ? c->parent->classIdx : -1;
     cd.isRecord = c->isTuple ? 2 : c->isRecord ? 1 : 0;
     cd.cflags = c->presence && cd.isRecord == 1 ? kClassFlagPresence : 0;
+    if (c->hasAccessors && cd.isRecord == 1) cd.cflags |= kClassFlagAccessors;
     for (auto& f : c->fields) cd.fields.push_back(FieldDesc{f.name, vtOf(f.type)});
     for (auto& m : c->vtable) {
       cd.vtable.push_back((uint32_t)m.fn->funcIdx);
@@ -1057,9 +1082,11 @@ void Gen::genFunctionOnce(FuncSym* f) {
   line(start);
   prologue(f);
   if (f->trampField >= 0) {
-    // object literal method: call the closure stored in the field (register 0 is the object)
+    // object literal method: call the closure stored in the field (register 0 is the object); an
+    // accessor: the getter / setter in the accessor pair stored in the field
     uint16_t clo = temp(K_R);
     emit(OP_GETF_R, clo, 0, (uint16_t)f->trampField);
+    if (f->accessor) emit(OP_GETF_R, clo, clo, (uint16_t)(f->accessor - 1));
     std::vector<uint16_t> args;
     for (size_t i = 0; i < f->type->params.size(); i++) args.push_back((uint16_t)(1 + i));
     Kind rk = kindOf(f->type->ret);
@@ -1340,8 +1367,7 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
           if (t->t == TT::Class) {
             emit(op3(fk, OP_GETF_I, OP_GETF_F, OP_GETF_R), v, src, (uint16_t)t->cls->fieldIdx[fs[k].first]);
           } else {
-            D->icNames.push_back(kStr(utf8ToUtf16(fs[k].first)));
-            emit(op3(fk, OP_GETN_I, OP_GETN_F, OP_GETN_R), v, src, (uint16_t)(D->icNames.size() - 1));
+            readByName(v, src, t, fs[k].first, fs[k].second);
           }
           vs.push_back(v);
         }
@@ -1439,10 +1465,10 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
         r = temp(K(et));
         emit(op3(K(et), OP_GETF_I, OP_GETF_F, OP_GETF_R), r, src, (uint16_t)fi);
       } else {
-        et = t->shape->findProp(key)->type;
+        const ObjShape::Prop* sp = t->shape->findProp(key);
+        et = sp ? sp->type : t->shape->findMethod("get " + key)->fn->ret;  // a getter: called
         r = temp(K(et));
-        D->icNames.push_back(kStr(utf8ToUtf16(key)));
-        emit(op3(K(et), OP_GETN_I, OP_GETN_F, OP_GETN_R), r, src, (uint16_t)(D->icNames.size() - 1));
+        readByName(r, src, t, key, et);
       }
     }
     if (useDefault) {
@@ -4271,10 +4297,10 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
         raw = temp(K(sft));
         emit(op3(K(sft), OP_GETF_I, OP_GETF_F, OP_GETF_R), raw, vals[si], (uint16_t)idx);
       } else {
-        sft = st->shape->findProp(name)->type;
+        const ObjShape::Prop* sp = st->shape->findProp(name);
+        sft = sp ? sp->type : st->shape->findMethod("get " + name)->fn->ret;  // a getter of an object literal
         raw = temp(K(sft));
-        D->icNames.push_back(kStr(utf8ToUtf16(name)));
-        emit(op3(K(sft), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, vals[si], (uint16_t)(D->icNames.size() - 1));
+        readByName(raw, vals[si], st, name, sft);
       }
       return raw;
     };
@@ -4403,6 +4429,24 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
   for (auto& p : e->props) {
     int fi = c->fieldIdx[p.key];
     size_t m0 = mark();
+    if (p.accessor) {
+      // the accessor pair [getter, setter, (value)] of the getter and setter of this key, at the first of them
+      if (set[fi]) { release(m0); continue; }
+      ClassSym* pc = C.tupleRecord(c->fields[fi].type);
+      uint16_t pair = temp(K_R);
+      emit(OP_NEW, pair, (uint16_t)pc->classIdx);
+      for (auto& q : e->props)
+        if (q.accessor && q.key == p.key) {
+          size_t m1 = mark();
+          uint16_t clo = gen(q.value);
+          emit(OP_SETF_R, pair, (uint16_t)(q.accessor - 1), clo);
+          release(m1);
+        }
+      emit(OP_SETF_R, obj, (uint16_t)fi, pair);
+      set[fi] = true;
+      release(m0);
+      continue;
+    }
     uint16_t v = gen(p.value);
     emit(op3(K(c->fields[fi].type), OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)fi, v);
     set[fi] = true;
@@ -4715,6 +4759,12 @@ void Gen::genObjectEnum(Expr* e, uint16_t dst) {
   Type* at = baseOf(e->type);
   Type* vt = entries ? at->elem->elems[1] : at->elem;
   std::vector<std::pair<std::string, Type*>> props = enumerableProps(ot);
+  // getters declared by an interface: own properties when the value is an object literal with accessors
+  // (a class's are not, and Object.keys does not list them)
+  if (ot->t == TT::Object && !ot->shape->ownAccessors)
+    for (auto& m : ot->shape->methods)
+      if (m.name.compare(0, 4, "get ") == 0 && !ot->shape->findProp(m.name.substr(4)) && m.fn->ret == vt)
+        props.push_back({m.name.substr(4), m.fn->ret});
   uint16_t d = dst == kNoReg ? temp(K_R) : dst;
   uint16_t obj = temp(K_R), keys = temp(K_R), res = temp(K_R);
   genInto(objE, obj);
@@ -4733,8 +4783,12 @@ void Gen::genObjectEnum(Expr* e, uint16_t dst) {
       jump(OP_JF, eq, no);
       Type* pt = props[pi].second;
       uint16_t raw = temp(K(pt));
-      D->icNames.push_back(nameConsts[pi]);
-      emit(op3(K(pt), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, obj, (uint16_t)(D->icNames.size() - 1));
+      if (ot->t == TT::Object) {
+        readByName(raw, obj, ot, props[pi].first, pt);
+      } else {
+        D->icNames.push_back(nameConsts[pi]);
+        emit(op3(K(pt), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, obj, (uint16_t)(D->icNames.size() - 1));
+      }
       uint16_t v = temp(K(vt));
       unboxNarrowed(v, raw, pt, vt);
       if (entries) {
@@ -4789,8 +4843,13 @@ void Gen::genObjectAssign(Expr* e, uint16_t dst) {
       }
       uint32_t nc = kStr(utf8ToUtf16(p.first));
       uint16_t raw = temp(K(sv));
-      D->icNames.push_back(nc);
-      emit(op3(K(sv), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, src, (uint16_t)(D->icNames.size() - 1));
+      Type* srcT = baseOf(e->list[si]->type);
+      if (srcT->t == TT::Object) {
+        readByName(raw, src, srcT, p.first, sv);
+      } else {
+        D->icNames.push_back(nc);
+        emit(op3(K(sv), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, src, (uint16_t)(D->icNames.size() - 1));
+      }
       Label* skip = newLabel();
       if (sv->t == TT::Optional && sv->hasUndef) {
         uint16_t c = temp(K_I);

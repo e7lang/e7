@@ -151,7 +151,7 @@ int main() {
   }, "bad class flags");
   expectReject("unknown class flag", [&](e7::Module& m) {
     for (auto& c : m.classes)
-      if (c.isRecord == 1) { c.cflags = 2; break; }
+      if (c.isRecord == 1) { c.cflags = 8; break; }
   }, "bad class flags");
   // run time: FIELD_ABSENT on a record whose class has no presence mask
   expectReject("FIELD_ABSENT without a presence mask", [&](e7::Module& m) {

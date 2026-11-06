@@ -70,6 +70,12 @@ struct ObjShape {
   std::vector<Prop> props;
   struct Method { std::string name; Type* fn; };
   std::vector<Method> methods;
+  // the type of an object literal with getters / setters (methods "get x" / "set x"): its values are
+  // always such object literals, whose accessors are own properties (a class's are not), so spread,
+  // rest and Object.values / entries / assign read them; `order` lists the properties and accessors
+  // in the literal's order (JavaScript's property order)
+  bool ownAccessors = false;
+  std::vector<std::string> order;
   const Prop* findProp(const std::string& n) const {
     for (auto& p : props) if (p.name == n) return &p;
     return nullptr;
@@ -194,6 +200,10 @@ struct ClassSym : Sym {
   int state = 0;  // 0 = unresolved, 1 = resolving, 2 = resolved
   bool isRecord = false;
   bool isTuple = false;
+  // record of an object literal with getters / setters: field x holds the accessor pair (a tuple
+  // [getter, setter, value]: the closures, and a slot that is never set whose type is the property's),
+  // vtable entries "get x" / "set x" call them (kClassFlagAccessors)
+  bool hasAccessors = false;
   bool isAbstract = false;
   bool presence = false;  // record whose fields may be absent or hold undefined: a presence mask (D7)
   // generics: 1 = holder of the static members of a generic class (one per template),
@@ -376,6 +386,13 @@ inline std::vector<std::pair<std::string, Type*>> enumerableProps(Type* t) {
     for (auto& f : t->cls->fields)
       if (f.name.empty() || f.name[0] != '#') out.push_back({f.name, f.type});
     for (auto& ap : t->cls->abstractProps) out.push_back({ap.first, ap.second});
+  } else if (t->t == TT::Object && t->shape->ownAccessors) {
+    // an object literal with accessors: its properties and getters (own properties) in the literal's order
+    // (the checker rejects setter-only accessors where they would be read)
+    for (auto& n : t->shape->order) {
+      if (const ObjShape::Prop* p = t->shape->findProp(n)) out.push_back({p->name, p->type});
+      else if (const ObjShape::Method* g = t->shape->findMethod("get " + n)) out.push_back({n, g->fn->ret});
+    }
   } else if (t->t == TT::Object) {
     for (auto& p : t->shape->props) out.push_back({p.name, p.type});
   }

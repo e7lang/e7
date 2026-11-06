@@ -69,6 +69,13 @@ inline bool privateField(const ClassRT* c, uint32_t i) {
   return !c->isRecord && i < c->fieldNames.size() && !c->fieldNames[i].empty() && c->fieldNames[i][0] == '#';
 }
 
+// Records with getters / setters (kClassFlagAccessors): the kind of field i (0 a data property, bit 0 a
+// getter, bit 1 a setter), and the value of accessor property i: calls its getter (false when it has
+// none: the value is undefined). The getter is script code: the garbage collector may run, so the caller
+// keeps the objects it still uses reachable (VM::TempRoot); `in` is rooted here.
+inline uint8_t accessorKind(const ClassRT* c, uint32_t i) { return i < c->accessors.size() ? c->accessors[i] : 0; }
+bool accessorGet(VM& vm, InstObj* in, uint32_t i, Slot* out, uint8_t* vt);
+
 inline Slot slotF(double d) { Slot s; s.f = d; return s; }
 inline Slot slotI(int64_t i) { Slot s; s.i = i; return s; }
 inline Slot slotR(Obj* o) { Slot s; s.r = o; return s; }

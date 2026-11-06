@@ -401,7 +401,7 @@ const r = ({ a } = { a: 1 });
 ### Other rejected syntax
 
 `with`, `delete`, `in`, `new.target`, `eval`, `Symbol` values, `keyof`/`typeof` in type positions, conditional,
-mapped and template literal types, intersection types, accessors in object literals, async generators.
+mapped and template literal types, intersection types, async generators.
 Identifiers are ASCII only. (The comma operator, `void`, tagged templates, `String.raw`, `<T>x` assertions and
 all typed arrays are supported.)
 
@@ -417,6 +417,27 @@ all typed arrays are supported.)
 - Spread arguments: tuples into any parameters (`f(...pair)`), arrays and tuples into rest parameters.
 - Object literal methods `{ n: 2, twice(x: number) { return x * this.n; } }` (`this` is the object); an
   object literal can implement an interface with methods.
+- Object literal getters and setters (e7vm 0.3.1): `this` is the object; the literal implements interfaces that
+  declare the accessors (`get x(): T` / `set x(v: T)`), not ones that declare `x` as a property (read as a field).
+  They are own properties: `Object.keys`, `JSON.stringify`, spread and destructuring see them (calling the getter),
+  `console.log` prints `[Getter]`. A getter without a setter is read-only.
+
+```ts
+interface Temperature { celsius: number; get fahrenheit(): number; set fahrenheit(v: number) }
+const t: Temperature = {
+  celsius: 20,
+  get fahrenheit() { return this.celsius * 1.8 + 32; },
+  set fahrenheit(f) { this.celsius = (f - 32) / 1.8; },
+};
+t.fahrenheit += 18;
+const p = { x: 3, y: 4, get length(): number { return Math.hypot(this.x, this.y); } };
+console.log(t.celsius, p.length, JSON.stringify(p), p);  // 30 5 {"x":3,"y":4,"length":5} { x: 3, y: 4, length: [Getter] }
+```
+
+```ts e7-reject
+interface HasArea { readonly area: number }
+const sq: HasArea = { get area() { return 9; } };
+```
 - `?.` (also `a?.[i]`), `??`, `??=`, `!` (checked at run time), `as T` (upcasts; class downcasts are checked at
   run time).
 - Narrowing works on `=== null`, `!== undefined`, `== null`, truthiness, `instanceof`, early returns, and

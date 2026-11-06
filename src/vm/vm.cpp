@@ -1172,6 +1172,12 @@ ModuleRT* VM::loadModule(Module&& mod) {
       c.methodNames.push_back(d.methodNames[k]);
       c.methodIndex[d.methodNames[k]] = (uint32_t)k;
     }
+    if (d.cflags & kClassFlagAccessors) {
+      c.accessors.assign(c.nfields, 0);
+      for (uint32_t k = 0; k < c.nfields; k++)
+        c.accessors[k] = (uint8_t)((c.methodIndex.count("get " + c.fieldNames[k]) ? 1 : 0) |
+                                   (c.methodIndex.count("set " + c.fieldNames[k]) ? 2 : 0));
+    }
   }
   // regular expression literals (D4): compiled once, shared by the RegExp objects made from them. The
   // compilation is bounded (kLoadRegExpWork steps for the module, the memory limit) and the programs are

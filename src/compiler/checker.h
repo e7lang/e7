@@ -207,6 +207,7 @@ class Checker {
 
   // ---- relations
   bool assignable(Type* src, Type* dst);
+  std::string accessorHint(Type* src, Type* dst);
   bool sameType(Type* a, Type* b) { return a == b; }
   bool structurallyAssignable(Type* src, Type* dst);
   Type* unify(Type* a, Type* b, Loc l, const char* what);
@@ -291,8 +292,14 @@ class Checker {
  public:
   std::vector<ClassSym*> recordClasses;
   ClassSym* tupleRecord(Type* tupleType);
+  // methods "get x" / "set x" with accessors: the getter / setter of the accessor pair in field x
   Type* recordFor(const std::vector<std::pair<std::string, Type*>>& fields, bool tuple = false,
-                  const std::vector<std::pair<std::string, Type*>>* methods = nullptr);
+                  const std::vector<std::pair<std::string, Type*>>* methods = nullptr, bool accessors = false);
+  // the type of field x of a record with accessors (the accessor pair [getter, setter, value of type t])
+  Type* accessorPairType(Type* t);
+  // the own enumerable properties of a type that spread, rest and Object.* read (enumerableProps); an
+  // error (false) for a setter-only accessor of an object literal (its value would be undefined)
+  bool readableProps(Type* t, Loc l, const char* what, std::vector<std::pair<std::string, Type*>>& out);
 };
 
 }  // namespace e7

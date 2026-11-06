@@ -345,6 +345,10 @@ static std::string typeNameB(const Type* t, int& budget) {
       if (!t->shape->name.empty()) return t->shape->name;
       std::string s = "{ ";
       for (auto& p : t->shape->props) s += p.name + (p.optional ? "?: " : ": ") + typeNameB(p.type, budget) + "; ";
+      for (auto& m : t->shape->methods) {
+        if (m.name.compare(0, 4, "get ") == 0) s += m.name + "(): " + typeNameB(m.fn->ret, budget) + "; ";
+        else if (m.name.compare(0, 4, "set ") == 0 && !m.fn->params.empty()) s += m.name + "(v: " + typeNameB(m.fn->params[0], budget) + "); ";
+      }
       return s + "}";
     }
     case TT::Tuple: {

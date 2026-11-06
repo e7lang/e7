@@ -303,7 +303,8 @@ string/byte types) are checked by the interpreter at runtime. So even maliciousl
 - `requires` is the oldest e7vm that can run the module. The compiler computes it from the instructions and native
   functions the module uses (each has a "since" version, `src/core/since.h`), and from features that change how a
   VM must treat it: a class (not a record) with a field named `#...` (a `#private` field, hidden from
-  `Object.keys`, `JSON.stringify` and `console.log` since e7vm 0.2.5) requires 0.2.5; a VM older than `requires` rejects the
+  `Object.keys`, `JSON.stringify` and `console.log` since e7vm 0.2.5) requires 0.2.5, a record with accessors
+  (section 6.5) 0.3.1; a VM older than `requires` rejects the
   module with `E7_ERR_VERSION` instead of failing verification. `e7c --target 0.2` makes newer features compile
   errors, so a server can build modules for the VM versions of the apps in the field.
 - `e7_inspect()` (and `e7c --info`) read the format, `requires` and signature without loading a module.
@@ -332,7 +333,8 @@ funcs   u32 n, n x (str name, u32 sig, u16 nparams, u8 fflags, ...)    fflags ne
   literal. The VM compiles every entry when the module is loaded; a pattern that does not compile fails the load
   (`E7_ERR_LOAD`).
 - **cflags**, bit 0: the instances carry a presence mask (D7): one bit per field after the fields, all set by `NEW`;
-  allowed for records only (`kind` 1). Other bits are 0.
+  allowed for records only (`kind` 1). Bit 1 (0.3.1): a record with accessor properties (section 6.5). Other bits
+  are 0.
 - **fflags**: bits 0-1 the function kind (0 plain, 1 generator, 2 `async`, 3 `async` generator); bits 2-3 the kind
   of the yielded value, bits 4-5 the kind of the value `next(v)` sends, bits 6-7 the kind of the value the body
   returns (generators: none or the yielded kind; `async` functions: the promise's value), each 0 none, 1 `I`,
@@ -384,3 +386,24 @@ Promise, iterator, regular expression and typed array operations are native func
   body (forward-compatibility CI job).
 - The 0.3 promise extends section 5's: every 0.3.x VM runs every module compiled by a 0.2.x or 0.3.x compiler (the
   backward-compatibility CI job runs the suite compiled by the 0.2.6 compiler on the current VM).
+
+### 6.5 Records with accessors (`since 0.3.1`)
+
+Getters and setters in object literals (SPEC section 5) use no new instruction or native function: a record whose
+literal has accessors carries **cflags bit 1** (`kClassFlagAccessors`, records only). In such a record, field `x`
+is an accessor property when the vtable has a method named `get x` and / or `set x`; the field holds the
+**accessor pair**, a tuple (kind 2) of three fields: the getter closure (`() => T`, or null), the setter closure
+(`(v: T) => void`, or null) and a slot that is never written, whose value type is the property's. The methods
+`get x` / `set x` (the targets of `CALLI` by name) load the pair and call its closure. Natives that read
+properties treat the field as JavaScript treats an accessor property: `Object.keys` lists it, `JSON.stringify`
+(also `console.log`'s `%j`) and `e7:test`'s `assertEqual` call the getter (a closure with no parameters whose return
+kind is the slot's; anything else is the runtime error "malformed accessor property"), `console.log` prints
+`[Getter]`, `[Setter]` or `[Getter/Setter]`, and `structuredClone` refuses it (a runtime error; the compiler
+rejects types with accessors).
+
+- Verification: the flag only on records (`kind` 1); a field named by an accessor method is a reference field.
+  The accessor pair is checked when a native calls the getter (above).
+- `requires` is 0.3.1 for a module with the flag (`kRecordAccessorsSince` in `src/core/since.h`); a 0.3.0 VM
+  rejects it with `E7_ERR_VERSION`, and `e7c --target 0.3.0` refuses the program ("the program uses getters and
+  setters in object literals, which needs e7vm 0.3.1"). Modules that do not use the feature compile to the same
+  bytes as before and run on 0.3.0.

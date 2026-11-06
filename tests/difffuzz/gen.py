@@ -1189,7 +1189,7 @@ class Gen:
             self.declare(b, STR, False)
 
     def stmt(self, ind, d):
-        k = self.r.randrange(100)
+        k = self.r.randrange(102)
         if d <= 0:
             k = self.r.choice([0, 30, 50])
         if k < 25:
@@ -1208,8 +1208,10 @@ class Gen:
             self.stmt_destructure(ind, max(d, 1))
         elif k < 99:
             self.stmt_coroutine(ind, max(d, 1))
-        else:
+        elif k < 100:
             self.stmt_regexp(ind, max(d, 1))
+        else:
+            self.stmt_accessors(ind, max(d, 1))
 
     # ---------------------------------------------------------------- regular expressions (0.3)
     REGEXPS = [r"/\d+/", r"/(\w)(\w)?/", r"/(?<w>[a-z]+)/i", r"/\s+/", r"/^./u", r"/(?<=a)b/", r"/x*/",
@@ -1237,6 +1239,49 @@ class Gen:
             self.emit(ind, f"console.log({s}.replaceAll({g}, (m) => String(m.length)));")
         else:
             self.emit(ind, f"console.log(new RegExp({src}, \"g\").exec({s}));")
+
+    # ---------------------------------------------------------------- getters and setters in object literals (0.3.1)
+    def stmt_accessors(self, ind, d):
+        r = self.r
+        k = r.randrange(6)
+        v = self.fresh("acc")
+        if k == 0:
+            # a literal's own type: getter / setter pair, getter only, setter only, a method using them
+            self.emit(ind, f"const {v} = {{ n: {self.num(d - 1)}, s: {self.string(d - 1)}, get twice(): number {{ return this.n * 2; }}, "
+                           f"set twice(x: number) {{ this.n = x / 2; }}, get tag(): string {{ return this.s + \":\" + this.n; }}, "
+                           f"set only(x: string) {{ this.s = x; }}, sum(): number {{ return this.twice + this.n; }} }};")
+            self.emit(ind, f"{v}.twice = {self.num(d - 1)};")
+            if r.random() < 0.5:
+                self.emit(ind, f"{v}.twice {self.pick(['+=', '-=', '*='])} {self.num(d - 1)};")
+            if r.random() < 0.5:
+                self.emit(ind, f"{v}.only = {self.string(d - 1)};")
+            self.emit(ind, f"console.log({v}, {v}.twice, {v}.tag, {v}.sum(), Object.keys({v}), JSON.stringify({v}));")
+        elif k == 1:
+            # through an interface: object literals and class instances
+            self.emit(ind, f"const {v}: AccI[] = [accMake({self.num(d - 1)}), new AccC({self.num(d - 1)}), accMake({self.num(d - 1)})];")
+            self.emit(ind, f"for (const a of {v}) accBump(a, {self.num(d - 1)});")
+            self.emit(ind, f"console.log({v}, {v}.map(a => a.v), JSON.stringify({v}), {v}.map(a => Object.keys(a)));")
+        elif k == 2:
+            # spread, rest and Object.values / entries call the getters
+            self.emit(ind, f"const {v} = {{ a: {self.num(d - 1)}, get b(): number {{ return this.a + 1; }}, c: {self.num(d - 1)} }};")
+            self.emit(ind, f"const {{ a: {v}a, ...{v}r }} = {v};")
+            self.emit(ind, f"console.log({{ ...{v} }}, {v}a, {v}r, Object.values({v}), Object.entries({v}));")
+        elif k == 3:
+            # closures captured by accessors; a counter read through a getter
+            self.emit(ind, f"const {v} = accMake({self.num(d - 1)});")
+            for _ in range(r.randrange(1, 4)):
+                self.emit(ind, f"{v}.v {self.pick(['=', '+=', '-='])} {self.num(d - 1)};")
+            self.emit(ind, f"console.log({v}.v, {v}.reads, {v}.label, {v});")
+        elif k == 4:
+            # nested literals: `this` is the innermost object
+            self.emit(ind, f"const {v} = {{ name: {self.string(d - 1)}, inner: {{ x: {self.num(d - 1)}, get y(): number {{ return this.x * 3; }} }}, "
+                           f"get desc(): string {{ return this.name + \"/\" + this.inner.y; }} }};")
+            self.emit(ind, f"{v}.inner.x = {self.num(d - 1)};")
+            self.emit(ind, f"console.log({v}.desc, {v}, JSON.stringify({v}));")
+        else:
+            # a getter that throws: caught at the read and inside JSON.stringify
+            self.emit(ind, f"const {v} = {{ ok: {self.num(d - 1)}, get bad(): number {{ if (this.ok > {self.num(d - 1)}) throw new RangeError(\"bad \" + this.ok); return this.ok; }} }};")
+            self.emit(ind, f"try {{ console.log({v}.bad, JSON.stringify({v})); }} catch (e) {{ if (e instanceof RangeError) console.log(\"caught\", e.message); }}")
 
     # ---------------------------------------------------------------- generators, async, literal types (0.3)
     def stmt_coroutine(self, ind, d):
@@ -1413,6 +1458,25 @@ class Gen:
             "function compose(f: (x: number) => number, g: (x: number) => number): (x: number) => number {",
             "  return (x: number) => g(f(x));",
             "}",
+            "interface AccI { get v(): number; set v(x: number); readonly label: string }",
+            "function accMake(init: number) {",
+            "  let v = init;",
+            "  let reads = 0;",
+            "  return {",
+            "    label: \"lit\",",
+            "    get v(): number { reads++; return v; },",
+            "    set v(x: number) { v = x; },",
+            "    get reads(): number { return reads; },",
+            "  };",
+            "}",
+            "class AccC implements AccI {",
+            "  label = \"cls\";",
+            "  raw: number;",
+            "  constructor(raw: number) { this.raw = raw; }",
+            "  get v(): number { return this.raw; }",
+            "  set v(x: number) { this.raw = x; }",
+            "}",
+            "function accBump(a: AccI, by: number): void { a.v += by; }",
         ]
         for fi in range(r.randrange(1, 5)):
             kind = self.pick(["num", "num", "str", "bool", "rec", "rest", "opt", "thrower"])

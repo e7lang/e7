@@ -108,6 +108,14 @@ if(E7_WITH_COMPILER)
   add_test(NAME verify_handlers_test COMMAND verify_handlers_test)
 endif()
 
+# getters and setters in object literals (0.3.1): the accessors class flag and accessor pairs
+if(E7_WITH_COMPILER)
+  add_executable(verify_accessors_test verify_accessors_test.cpp)
+  target_link_libraries(verify_accessors_test PRIVATE e7vm_static)
+  target_include_directories(verify_accessors_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  add_test(NAME verify_accessors_test COMMAND verify_accessors_test)
+endif()
+
 add_executable(capi_reentry_test capi_reentry_test.cpp)
 target_link_libraries(capi_reentry_test PRIVATE e7vm_static)
 if(E7_WITH_COMPILER)

@@ -274,11 +274,18 @@ Type* Checker::checkIdent(Expr* e, Type* expected) {
 
 // ------------------------------------------------------------------ records
 Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& fields, bool tuple,
-                         const std::vector<std::pair<std::string, Type*>>* methods) {
+                         const std::vector<std::pair<std::string, Type*>>* methods, bool accessors) {
   size_t nm = methods ? methods->size() : 0;
   // find identical layout (names + value types, and the same methods)
   for (ClassSym* c : recordClasses) {
-    if (c->fields.size() != fields.size() || c->isTuple != tuple || c->vtable.size() != nm) continue;
+    if (c->fields.size() != fields.size() || c->isTuple != tuple || c->vtable.size() != nm || c->hasAccessors != accessors) continue;
+    if (accessors) {
+      // the accessor pairs (field types) decide the getters' and setters' types
+      bool samePairs = true;
+      for (size_t i = 0; i < fields.size() && samePairs; i++)
+        samePairs = c->fields[i].name == fields[i].first && c->fields[i].type == fields[i].second;
+      if (!samePairs) continue;
+    }
     bool same = true;
     for (size_t i = 0; i < fields.size() && same; i++)
       if (c->fields[i].name != fields[i].first || vtOf(c->fields[i].type) != vtOf(fields[i].second)) same = false;
@@ -296,6 +303,7 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
   c->name += "}";
   c->isRecord = true;
   c->isTuple = tuple;
+  c->hasAccessors = accessors;
   c->state = 2;
   for (auto& f : fields) {
     c->fieldIdx[f.first] = (int)c->fields.size();
@@ -305,7 +313,8 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
   c->type = T.classType(c);
   // methods of an object literal (method shorthand, or function properties implementing an
   // interface's methods): vtable entries that call the closure stored in the field of that name,
-  // so that calls through interface types (by name) reach them
+  // so that calls through interface types (by name) reach them; accessors "get x" / "set x" call the
+  // getter / setter of the accessor pair in field x
   for (size_t i = 0; i < nm; i++) {
     const std::string& mn = (*methods)[i].first;
     FuncSym* t = P.make<FuncSym>();
@@ -314,7 +323,12 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
     t->cls = c;
     t->isMethod = true;
     t->isTopLevel = true;
-    t->trampField = c->fieldIdx[mn];
+    if (accessors && (mn.compare(0, 4, "get ") == 0 || mn.compare(0, 4, "set ") == 0) && c->fieldIdx.count(mn.substr(4))) {
+      t->accessor = mn[0] == 'g' ? 1 : 2;
+      t->trampField = c->fieldIdx[mn.substr(4)];
+    } else {
+      t->trampField = c->fieldIdx[mn];
+    }
     t->type = (*methods)[i].second;
     t->sigResolved = t->checked = true;
     t->file = curFile;
@@ -329,6 +343,23 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
   P.classes.push_back(c);
   recordClasses.push_back(c);
   return c->type;
+}
+
+Type* Checker::accessorPairType(Type* t) {
+  return T.tuple({T.func({}, t), T.func({t}, T.voidT()), t});
+}
+
+bool Checker::readableProps(Type* t, Loc l, const char* what, std::vector<std::pair<std::string, Type*>>& out) {
+  Type* b = baseOf(t);
+  if (b->t == TT::Object && b->shape->ownAccessors)
+    for (auto& n : b->shape->order)
+      if (!b->shape->findProp(n) && !b->shape->findMethod("get " + n)) {
+        err(l, std::string(what) + " is not supported for an object with the setter-only accessor '" + n +
+                   "' (its value would be undefined); add a getter");
+        return false;
+      }
+  out = enumerableProps(b);
+  return true;
 }
 
 ClassSym* Checker::tupleRecord(Type* tt) {
@@ -690,17 +721,23 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       p.key = key;
       p.computed = nullptr;
       for (auto& q : e->props)
-        if (&q != &p && !q.spread && q.key == key && !q.computed) return errT(p.loc, "duplicate property '" + key + "'");
+        if (&q != &p && !q.spread && q.key == key && !q.computed && !(p.accessor && q.accessor && p.accessor != q.accessor))
+          return errT(p.loc, "duplicate property '" + key + "'");
     }
-  bool anySpread = false, anyMethod = false;
+  bool anySpread = false, anyMethod = false, anyAccessor = false;
   for (auto& p : e->props) {
     anySpread |= p.spread;
     anyMethod |= p.method;
+    anyAccessor |= p.accessor != 0;
     if (p.coverInit) return errT(p.loc, "'=' is only allowed in a destructuring assignment ({ " + p.key + " = ... } = obj); use ':' in an object literal");
   }
   if (anySpread && anyMethod) {
     for (auto& p : e->props)
       if (p.method) return errT(p.loc, "method shorthand in an object literal with spread properties is not supported; use a class");
+  }
+  if (anySpread && anyAccessor) {
+    for (auto& p : e->props)
+      if (p.accessor) return errT(p.loc, "accessors in an object literal with spread properties are not supported; spread into a separate literal first");
   }
   // a method (shorthand) has its own `this`: the object; it is captured from a hidden variable
   // that the object literal sets when it creates the object
@@ -710,6 +747,38 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
     Type* t = check(p.value, want);
     popScope();
     return t;
+  };
+  // accessors `get k() { ... }` / `set k(v) { ... }`: the getter and the setter of key k
+  auto accessorOf = [&](const std::string& k, int kind) -> ObjProp* {
+    for (auto& p : e->props)
+      if (p.accessor == kind && p.key == k) return &p;
+    return nullptr;
+  };
+  // checks the getter and setter of k (`want`: the property type when known, from the expected type or
+  // the signatures); the property type
+  auto checkAccessorPair = [&](const std::string& k, VarSym* self, Type* want) -> Type* {
+    ObjProp* g = accessorOf(k, 1);
+    ObjProp* st = accessorOf(k, 2);
+    Type* pt = want;
+    if (g) {
+      Type* gt = checkMethod(*g, self, pt ? T.func({}, pt) : nullptr);
+      if (gt->t == TT::Func) {
+        if (gt->ret->t == TT::Void) err(g->loc, "the getter of '" + k + "' must return a value");
+        else if (pt && gt->ret != pt && gt->ret->t != TT::Unknown && pt->t != TT::Unknown)
+          err(g->loc, "the getter of '" + k + "' returns '" + typeName(gt->ret) + "', expected '" + typeName(pt) + "'");
+        else if (!pt) pt = gt->ret;
+      }
+    }
+    if (st) {
+      Type* ft = checkMethod(*st, self, pt ? T.func({pt}, T.voidT()) : nullptr);
+      if (ft->t == TT::Func && !ft->params.empty()) {
+        Type* sp = ft->params[0];
+        if (pt && sp != pt && sp->t != TT::Unknown && pt->t != TT::Unknown)
+          err(st->loc, "the getter and setter of '" + k + "' must have the same type ('" + typeName(pt) + "' and '" + typeName(sp) + "')");
+        else if (!pt) pt = sp;
+      }
+    }
+    return pt ? pt : T.unknown();
   };
   if (anySpread) {
     // { ...a, k: v, ...b }: later entries override earlier ones; a key keeps its first position
@@ -732,6 +801,15 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
               if (!spreadExact(f.name, f.type, f.optional && !f.undefOk, exp, p.loc)) return T.unknown();
               entries[pi].push_back({f.name, f.type});
             }
+        } else if (t->t == TT::Object && t->shape->ownAccessors) {
+          // an object literal with accessors: its properties and the values of its getters, in its order
+          std::vector<std::pair<std::string, Type*>> own;
+          if (!readableProps(t, p.loc, "spread", own)) return T.unknown();
+          for (auto& pr : own) {
+            const ObjShape::Prop* sp = t->shape->findProp(pr.first);
+            if (!spreadExact(pr.first, pr.second, sp && sp->optional && !sp->undefOk, exp, p.loc)) return T.unknown();
+            entries[pi].push_back(pr);
+          }
         } else if (t->t == TT::Object) {
           for (auto& pr : t->shape->props) {
             if (!spreadExact(pr.name, pr.type, pr.optional && !pr.undefOk, exp, p.loc)) return T.unknown();
@@ -795,23 +873,62 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
     return T.anonObject(props);
   }
   for (size_t i = 0; i < e->props.size(); i++)
-    for (size_t j = 0; j < i; j++)
-      if (e->props[i].key == e->props[j].key) return errT(e->props[i].loc, "duplicate property '" + e->props[i].key + "'");
+    for (size_t j = 0; j < i; j++) {
+      const ObjProp& a = e->props[i];
+      const ObjProp& b = e->props[j];
+      if (a.key != b.key || (a.accessor && b.accessor && a.accessor != b.accessor)) continue;  // a getter and its setter
+      if (a.accessor && b.accessor)
+        return errT(a.loc, "an object literal cannot have multiple get/set accessors with the same name ('" + a.key + "')");
+      if (a.accessor || b.accessor)
+        return errT(a.loc, "an object literal cannot have a property and an accessor with the same name ('" + a.key + "')");
+      return errT(a.loc, "duplicate property '" + a.key + "'");
+    }
   if (exp && exp->t == TT::Object) {
     ObjShape* sh = exp->shape;
-    for (auto& m : sh->methods)
-      if (m.name.compare(0, 4, "get ") == 0 || m.name.compare(0, 4, "set ") == 0)
-        return errT(e->loc, "object literals cannot implement the accessor '" + m.name.substr(4) + "' of '" + typeName(exp) +
-                                "'; use a class");
     VarSym* self = nullptr;
-    if (anyMethod) {
+    if (anyMethod || anyAccessor) {
       self = newVar("this", exp, true, e->loc);
       self->owner = curFn;
     }
     std::vector<std::pair<std::string, Type*>> fields, methods;
     for (auto& p : e->props) {
+      if (p.accessor) {
+        // an accessor of the expected type, implemented by the literal's getter / setter (checked once,
+        // at the first of the two)
+        ObjProp* first = accessorOf(p.key, 1);
+        ObjProp* other = accessorOf(p.key, 2);
+        if (!first || (other && other < first)) std::swap(first, other);
+        if (first != &p) continue;
+        const ObjShape::Method* ig = sh->findMethod("get " + p.key);
+        const ObjShape::Method* is = sh->findMethod("set " + p.key);
+        if (const ObjShape::Prop* sp = sh->findProp(p.key)) {
+          err(p.loc, "property '" + p.key + "' is an accessor in the object literal; e7 reads the properties of '" + typeName(exp) +
+                         "' as fields, so declare it there as 'get " + p.key + "(): " + typeName(sp->type) + "'");
+          continue;
+        }
+        if (!ig && !is) {
+          err(p.loc, "object literal may only specify known properties; '" + p.key + "' does not exist in '" + typeName(exp) + "'");
+          continue;
+        }
+        Type* want = ig ? ig->fn->ret : is->fn->params[0];
+        checkAccessorPair(p.key, self, want);
+        bool hasG = accessorOf(p.key, 1) != nullptr, hasS = accessorOf(p.key, 2) != nullptr;
+        if (ig && !hasG) err(p.loc, "the object literal must implement the getter of '" + p.key + "' declared by '" + typeName(exp) + "'");
+        if (is && !hasS) err(p.loc, "the object literal must implement the setter of '" + p.key + "' declared by '" + typeName(exp) + "'");
+        Type* pairT = accessorPairType(want);
+        tupleRecord(pairT);
+        fields.push_back({p.key, pairT});
+        if (hasG) methods.push_back({"get " + p.key, ig ? ig->fn : T.func({}, want)});
+        if (hasS) methods.push_back({"set " + p.key, is ? is->fn : T.func({want}, T.voidT())});
+        continue;
+      }
       const ObjShape::Prop* sp = sh->findProp(p.key);
       const ObjShape::Method* sm = sp ? nullptr : sh->findMethod(p.key);
+      if (!sp && !sm && (sh->findMethod("get " + p.key) || sh->findMethod("set " + p.key))) {
+        err(p.loc, "object literals cannot implement the accessor '" + p.key + "' of '" + typeName(exp) +
+                       "' with a plain property or method; write 'get " + p.key + "() { ... }'");
+        continue;
+      }
       if (sp) {
         Type* vt = p.method ? checkMethod(p, self, sp->type) : check(p.value, sp->type);
         if (!p.method && sp->optional && !sp->undefOk && hasUndefined(vt)) { err(p.loc, exactOptionalError(p.key, sp->type, vt)); continue; }
@@ -840,15 +957,18 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       fields.push_back({sp.name, sp.type});
     }
     for (auto& m : sh->methods) {
+      bool acc = m.name.compare(0, 4, "get ") == 0 || m.name.compare(0, 4, "set ") == 0;
+      std::string nm = acc ? m.name.substr(4) : m.name;
       bool present = false;
-      for (auto& p : e->props) if (p.key == m.name) present = true;
-      if (!present) err(e->loc, "method '" + m.name + "' is missing in object literal of type '" + typeName(exp) + "'");
+      for (auto& p : e->props) if (p.key == nm) present = true;
+      if (!present)
+        err(e->loc, std::string(acc ? "accessor '" : "method '") + nm + "' is missing in object literal of type '" + typeName(exp) + "'");
     }
-    e->cls = recordFor(fields, false, methods.empty() ? nullptr : &methods)->cls;
+    e->cls = recordFor(fields, false, methods.empty() ? nullptr : &methods, anyAccessor)->cls;
     e->var = self;
     return exp;
   }
-  if (anyMethod && !(exp && exp->t != TT::Unknown)) {
+  if ((anyMethod || anyAccessor) && !(exp && exp->t != TT::Unknown)) {
     // { n: 2, twice(x: number) { return x * this.n; } }: the type has the properties and methods
     // ({ n: number; twice(x: number): number }); `this` is that type
     T.shapes.emplace_back(new ObjShape());
@@ -856,10 +976,11 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
     Type* selfT = T.objectType(sh);
     VarSym* self = newVar("this", selfT, true, e->loc);
     self->owner = curFn;
+    sh->ownAccessors = anyAccessor;
     std::vector<Type*> propT(e->props.size(), nullptr);
     for (size_t i = 0; i < e->props.size(); i++) {
       ObjProp& p = e->props[i];
-      if (p.method) continue;
+      if (p.method || p.accessor) continue;
       Type* t = check(p.value, nullptr);
       if (t->t == TT::Null || t->t == TT::Undefined) {
         err(p.loc, "cannot infer the type of property '" + p.key + "' from null/undefined; declare an interface");
@@ -892,8 +1013,37 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       known[i] = true;
       sh->methods.push_back({p.key, propT[i]});
     }
+    // accessors with a declared type (a getter's return type, or a setter's parameter type) are part
+    // of `this` before any body is checked
+    std::map<std::string, Type*> accT;
     for (size_t i = 0; i < e->props.size(); i++) {
       ObjProp& p = e->props[i];
+      if (!p.accessor || accT.count(p.key)) continue;
+      ObjProp* g = accessorOf(p.key, 1);
+      ObjProp* st = accessorOf(p.key, 2);
+      Type* t = nullptr;
+      if (g && g->value->retType) t = resolveType(g->value->retType);
+      else if (st && st->value->params.size() == 1 && st->value->params[0].type) t = resolveType(st->value->params[0].type);
+      if (!t) continue;
+      accT[p.key] = t;
+      if (g) sh->methods.push_back({"get " + p.key, T.func({}, t)});
+      if (st) sh->methods.push_back({"set " + p.key, T.func({t}, T.voidT())});
+    }
+    std::set<std::string> accDone;
+    for (size_t i = 0; i < e->props.size(); i++) {
+      ObjProp& p = e->props[i];
+      if (p.accessor) {
+        if (!accDone.insert(p.key).second) continue;
+        auto known0 = accT.find(p.key);
+        bool wasKnown = known0 != accT.end();
+        Type* t = checkAccessorPair(p.key, self, wasKnown ? known0->second : nullptr);
+        if (!wasKnown && t->t != TT::Unknown) {
+          accT[p.key] = t;
+          if (accessorOf(p.key, 1)) sh->methods.push_back({"get " + p.key, T.func({}, t)});
+          if (accessorOf(p.key, 2)) sh->methods.push_back({"set " + p.key, T.func({t}, T.voidT())});
+        }
+        continue;
+      }
       if (!p.method) continue;
       Type* t = checkMethod(p, self, nullptr);
       if (!known[i]) {
@@ -902,9 +1052,24 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       }
     }
     std::vector<std::pair<std::string, Type*>> fields, methods;
-    for (size_t i = 0; i < e->props.size(); i++) fields.push_back({e->props[i].key, propT[i]});
+    std::set<std::string> accField;
+    for (size_t i = 0; i < e->props.size(); i++) {
+      ObjProp& p = e->props[i];
+      if (p.accessor) {
+        // one field (the accessor pair) at the position of the first of the getter and the setter
+        if (!accField.insert(p.key).second) continue;
+        auto it = accT.find(p.key);
+        Type* pairT = accessorPairType(it != accT.end() ? it->second : T.unknown());
+        tupleRecord(pairT);
+        fields.push_back({p.key, pairT});
+        sh->order.push_back(p.key);
+        continue;
+      }
+      fields.push_back({p.key, propT[i]});
+      if (!p.method) sh->order.push_back(p.key);
+    }
     for (auto& m : sh->methods) methods.push_back({m.name, m.fn});
-    e->cls = recordFor(fields, false, &methods)->cls;
+    e->cls = recordFor(fields, false, &methods, anyAccessor)->cls;
     e->var = self;
     return selfT;
   }
@@ -2080,7 +2245,7 @@ Type* Checker::asConstType(Expr* e) {
   if (e->k == EK::Object) {
     std::vector<ObjShape::Prop> props;
     for (auto& p : e->props) {
-      if (p.spread || p.method || p.shorthand) return nullptr;
+      if (p.spread || p.method || p.accessor || p.shorthand) return nullptr;
       Type* t = asConstType(p.value);
       if (!t) return nullptr;
       props.push_back({p.key, t, false, false, true});

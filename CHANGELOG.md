@@ -10,6 +10,17 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+### Added
+- Getters and setters in object literals (`{ get x() { ... }, set x(v) { ... } }`, docs/SPEC.md section 5): `this`
+  is the object; the accessors are part of the literal's type, so the literal is assignable to interfaces that
+  declare them (`get x(): T` / `set x(v: T)`) and every read or write calls them by name; assigning it to a type
+  that declares `x` as a property is a compile error that says to declare the accessor there (as for classes); a
+  getter without a setter is read-only. They are own properties, as in JavaScript: `Object.keys` lists them,
+  `JSON.stringify`, spread, rest, destructuring and `Object.values` / `entries` / `assign` call the getters, and
+  `console.log` prints `[Getter]` / `[Setter]` / `[Getter/Setter]`. Records with accessors carry a new class flag
+  (docs/BYTECODE.md section 6.5): such a module requires e7vm 0.3.1, other modules compile to the same bytes as
+  before. docs/TYPESCRIPT.md: 154 of 250 features supported, 18 partial, 78 unsupported.
+
 ## [0.3.0] - 2026-11-06
 
 The language complete for its domain (docs/ROADMAP.md, section 0.3; design decisions in docs/DESIGN-0.3.md).
