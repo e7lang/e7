@@ -61,6 +61,12 @@ synchronous API, `const e7 = await init()` and call the same methods on `e7` (`e
   `signature_error`, `not_found`, `bad_arguments`, `compile_error`, `version_error` (the module needs a
   newer VM) (`code` is the numeric `e7_status` from `e7.h`). `budget` defaults to 100,000,000 instructions (0 = unlimited),
   `memoryLimit` to 64 MiB; `seed` makes `Math.random` deterministic.
+- **async**: `call` may name an `async function f(): Promise<T>`; `result` is the promise's value (a
+  rejection gives `runtime_error`). Top-level `await` works too: `run` drains the promise jobs before it
+  returns. This package registers no async host functions (the embedding APIs do: see
+  [Async host functions](https://github.com/e7lang/e7/blob/main/docs/EMBEDDING.md#async-host-functions)),
+  so the C API's `pending` status (15) does not occur here; `e7:test`'s `later(value)` / `laterReject(message)`
+  stand in for host operations in tests.
 - **Values**: `number`, `boolean`, `string`, `Uint8Array` and `null` map directly. Integer parameters
   (`i8` ... `u64`) accept integral numbers or `bigint`; `i64`/`u64` results are returned as `bigint`,
   smaller integer types as `number`.
