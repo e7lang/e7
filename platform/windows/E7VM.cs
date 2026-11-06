@@ -14,10 +14,17 @@
 // bool, string, byte[], KeyHandle or null (void).
 //
 // Thread safety: like the C API, one E7VM must be used by one thread at a time.
+//
+// Async host functions (0.3): `declare function fetchKey(id: string): Promise<Uint8Array>;` in the script,
+//   vm.RegisterAsyncNative("fetchKey", "s>y", async args => await keys.FetchAsync((string)args[0]!));
+//   var sig = await vm.CallAsync(module, "sign", "k1", payload);
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace E7
 {
@@ -39,6 +46,9 @@ namespace E7
         Signature = 8, NotFound = 9, Args = 10, Compile = 11, State = 12, Paused = 13,
         /// <summary>The module's bytecode format or required e7vm version is not supported by this VM (see <see cref="E7VM.Inspect"/>).</summary>
         Version = 14,
+        /// <summary>The call waits for async host functions (<see cref="E7VM.RegisterAsyncNative(string, string, Func{object?[], Task{object?}})"/>).
+        /// Reported by the synchronous Call / Load / Resume, which abandon such a call: use CallAsync / LoadAsync.</summary>
+        Pending = 15,
     }
 
     /// <summary>Header of a module, read without loading it (<see cref="E7VM.Inspect"/>). Mirrors e7_module_info.</summary>
@@ -89,6 +99,7 @@ namespace E7
     {
         public E7Status Status { get; }
         public bool IsSuspended => Status == E7Status.Suspended;
+        public bool IsPending => Status == E7Status.Pending;
         public E7Exception(E7Status status, string message) : base(message) { Status = status; }
     }
 
@@ -160,6 +171,8 @@ namespace E7
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int NativeFn(IntPtr vm, IntPtr args, UIntPtr nargs, IntPtr ret, IntPtr user);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int AsyncNativeFn(IntPtr vm, IntPtr args, UIntPtr nargs, long ticket, IntPtr user);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void PrintFn(IntPtr user, IntPtr text, UIntPtr len);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int KeyFn(IntPtr user, long id, IntPtr key, IntPtr len);
@@ -180,6 +193,10 @@ namespace E7
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern int e7_has_function(IntPtr module, byte[] function);
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern int e7_register_native(IntPtr vm, byte[] name, byte[] signature, NativeFn fn, IntPtr user);
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern void e7_native_error(IntPtr vm, byte[] message);
+        [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern int e7_register_async_native(IntPtr vm, byte[] name, byte[] signature, AsyncNativeFn fn, IntPtr user);
+        [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern int e7_settle(IntPtr vm, long ticket, ref Value value);
+        [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern int e7_settle_error(IntPtr vm, long ticket, byte[] message);
+        [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern UIntPtr e7_open_tickets(IntPtr vm);
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern void e7_set_print(IntPtr vm, PrintFn? fn, IntPtr user);
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern void e7_set_key_provider(IntPtr vm, KeyFn? fn, IntPtr user);
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] private static extern void e7_seed_random(IntPtr vm, ulong seed);
@@ -196,6 +213,8 @@ namespace E7
         // ------------------------------------------------------------------ state
         private IntPtr _vm;
         private readonly List<NativeBox> _natives = new List<NativeBox>();
+        private readonly List<AsyncNativeBox> _asyncNatives = new List<AsyncNativeBox>();
+        private AsyncRun? _currentRun;  // the CallAsync / LoadAsync in progress
         private PrintFn? _printThunk;
         private Action<string>? _print;
         private KeyFn? _keyThunk;
@@ -209,6 +228,53 @@ namespace E7
             public Func<object?[], object?> Fn = null!;
             public char ReturnCode;
             public readonly List<IntPtr> RetBuffers = new List<IntPtr>();
+        }
+
+        private sealed class AsyncNativeBox
+        {
+            public AsyncNativeFn Thunk = null!;
+            public Func<object?[], CancellationToken, Task<object?>> Fn = null!;
+            public string Name = "";
+            public char ReturnCode;
+        }
+
+        // the outcome of a host operation, handed to the VM's context
+        private sealed class Completion
+        {
+            public AsyncNativeBox Box = null!;
+            public long Ticket;
+            public Task<object?> Task = null!;
+        }
+
+        // one CallAsync / LoadAsync: the completions of its host operations, in the order they complete
+        private sealed class AsyncRun : IDisposable
+        {
+            private readonly ConcurrentQueue<Completion> _queue = new ConcurrentQueue<Completion>();
+            private readonly SemaphoreSlim _ready = new SemaphoreSlim(0);
+            public readonly CancellationTokenSource Cancel;
+            public IntPtr Module;  // LoadAsync
+
+            public AsyncRun(CancellationToken token) { Cancel = CancellationTokenSource.CreateLinkedTokenSource(token); }
+
+            public void Post(Completion c)
+            {
+                _queue.Enqueue(c);
+                try { _ready.Release(); } catch (ObjectDisposedException) { }  // the call is over
+            }
+
+            public async Task<Completion> NextAsync()
+            {
+                await _ready.WaitAsync(Cancel.Token);  // continues on the caller's context (the VM's thread)
+                _queue.TryDequeue(out var c);
+                return c!;
+            }
+
+            public void Dispose()
+            {
+                try { Cancel.Cancel(); } catch (ObjectDisposedException) { }  // host operations still running
+                Cancel.Dispose();
+                _ready.Dispose();
+            }
         }
 
         /// <summary>Creates a VM. With trusted keys, only modules signed by one of them can be loaded.</summary>
@@ -279,8 +345,11 @@ namespace E7
         {
             if (_vm != IntPtr.Zero)
             {
+                var run = _currentRun;
+                _currentRun = null;
                 e7_vm_free(_vm);
                 _vm = IntPtr.Zero;
+                try { run?.Cancel.Cancel(); } catch (ObjectDisposedException) { }  // its CallAsync throws ObjectDisposedException
             }
             ClearKey();
             foreach (var n in _natives) FreeAll(n.RetBuffers);
@@ -301,12 +370,26 @@ namespace E7
             if (status != 0) throw new E7Exception((E7Status)status, PtrToUtf8(e7_last_error(_vm), -1));
         }
 
+        // A synchronous call that returned E7_PENDING: nothing would settle its tickets, so it is abandoned.
+        private void CheckSync(int status, string what)
+        {
+            if (status == (int)E7Status.Pending)
+            {
+                e7_abort_suspended(_vm);
+                throw new E7Exception(E7Status.Pending,
+                    $"{what} waits for an async host function, so it was abandoned: run it with CallAsync / LoadAsync");
+            }
+            Check(status);
+        }
+
         // ------------------------------------------------------------------ loading and calling
-        /// <summary>Verifies (signature if required, structure, types), links natives and runs the module's top-level code.</summary>
+        /// <summary>Verifies (signature if required, structure, types), links natives and runs the module's top-level code.
+        /// Top-level code that awaits an async host function throws E7Exception (Pending; the initializer is abandoned):
+        /// load such a module with <see cref="LoadAsync"/>.</summary>
         public E7Module Load(byte[] bytecode)
         {
             if (bytecode == null) throw new ArgumentNullException(nameof(bytecode));
-            Check(e7_load(Handle, bytecode, (UIntPtr)(uint)bytecode.Length, out var m));
+            CheckSync(e7_load(Handle, bytecode, (UIntPtr)(uint)bytecode.Length, out var m), "the module's top-level code");
             return new E7Module(m);
         }
 
@@ -314,13 +397,15 @@ namespace E7
         public E7Module LoadSource(string source, string fileName = "main.ts")
         {
             var src = Encoding.UTF8.GetBytes(source);
-            Check(e7_load_source(Handle, src, (UIntPtr)(uint)src.Length, Z(fileName), out var m));
+            CheckSync(e7_load_source(Handle, src, (UIntPtr)(uint)src.Length, Z(fileName), out var m), "the module's top-level code");
             return new E7Module(m);
         }
 
         public bool HasFunction(E7Module module, string function) => e7_has_function(module.Ptr, Z(function)) != 0;
 
-        /// <summary>Calls an exported function. Throws <see cref="E7Exception"/> on errors (IsSuspended when the budget suspends).</summary>
+        /// <summary>Calls an exported function. Throws <see cref="E7Exception"/> on errors (IsSuspended when the budget suspends;
+        /// IsPending when the call waits for an async host function: it is abandoned, use <see cref="CallAsync(E7Module, string, object?[])"/>).
+        /// An async export returns the promise's value when no host operation is left open.</summary>
         public object? Call(E7Module module, string function, params object?[] args)
         {
             if (module == null) throw new ArgumentNullException(nameof(module));
@@ -330,7 +415,7 @@ namespace E7
             {
                 var vals = new Value[Math.Max(args.Length, 1)];
                 for (int i = 0; i < args.Length; i++) vals[i] = ToNative(args[i], buffers);
-                Check(e7_call(Handle, module.Ptr, Z(function), vals, (UIntPtr)(uint)args.Length, out var ret));
+                CheckSync(e7_call(Handle, module.Ptr, Z(function), vals, (UIntPtr)(uint)args.Length, out var ret), $"'{function}'");
                 return FromNative(ret);
             }
             finally
@@ -341,11 +426,217 @@ namespace E7
 
         public object? Resume()
         {
-            Check(e7_resume(Handle, out var ret));
+            CheckSync(e7_resume(Handle, out var ret), "the call");
             return FromNative(ret);
         }
 
-        public void AbortSuspended() => e7_abort_suspended(Handle);
+        /// <summary>Abandons a suspended call, or the CallAsync / LoadAsync in progress (it throws OperationCanceledException).</summary>
+        public void AbortSuspended()
+        {
+            var vm = Handle;
+            var run = _currentRun;
+            _currentRun = null;
+            e7_abort_suspended(vm);
+            run?.Cancel.Cancel();
+        }
+
+        // ------------------------------------------------------------------ async host functions (0.3)
+        /// <summary>Number of async host operations the VM waits for (e7_open_tickets).</summary>
+        public long OpenTickets => (long)(ulong)e7_open_tickets(Handle);
+
+        /// <summary>
+        /// Registers an async host function before <see cref="Load"/>. The script declares it returning a promise, e.g.
+        /// <c>declare function fetchKey(id: string): Promise&lt;Uint8Array&gt;;</c> with signature "s&gt;y" (the return code is
+        /// the promise's value type). <paramref name="fn"/> runs on the VM's thread when the script calls the function;
+        /// its task may complete on any thread. A task that is already complete settles the promise at once (then even
+        /// <see cref="Call"/> works); otherwise its completion goes to the <see cref="CallAsync(E7Module, string, object?[])"/>
+        /// in progress, which settles the promises on the VM's context in the order the operations complete. A faulted
+        /// task rejects the promise with an Error carrying the exception's message.
+        /// </summary>
+        public void RegisterAsyncNative(string name, string signature, Func<object?[], Task<object?>> fn)
+        {
+            if (fn == null) throw new ArgumentNullException(nameof(fn));
+            RegisterAsyncNative(name, signature, (args, _) => fn(args));
+        }
+
+        /// <summary><see cref="RegisterAsyncNative(string, string, Func{object?[], Task{object?}})"/> with a token that is
+        /// cancelled when the call that started the operation finishes or is abandoned.</summary>
+        public void RegisterAsyncNative(string name, string signature, Func<object?[], CancellationToken, Task<object?>> fn)
+        {
+            if (fn == null) throw new ArgumentNullException(nameof(fn));
+            int gt = signature.IndexOf('>');
+            if (gt < 0 || gt + 1 >= signature.Length) throw new ArgumentException("signature must look like \"s>y\"", nameof(signature));
+            var box = new AsyncNativeBox { Fn = fn, Name = name, ReturnCode = signature[gt + 1] };
+            box.Thunk = (vm, args, nargs, ticket, user) =>
+            {
+                Task<object?> task;
+                var run = _currentRun;
+                try
+                {
+                    int n = (int)(ulong)nargs;
+                    var vals = new object?[n];
+                    int size = Marshal.SizeOf<Value>();
+                    for (int i = 0; i < n; i++) vals[i] = FromNative(Marshal.PtrToStructure<Value>(args + i * size));
+                    task = box.Fn(vals, run?.Cancel.Token ?? CancellationToken.None)
+                           ?? throw new InvalidOperationException($"{name} returned null instead of a Task");
+                }
+                catch (Exception e)
+                {
+                    e7_native_error(vm, Z(e.Message));
+                    return (int)E7Status.Runtime;
+                }
+                var c = new Completion { Box = box, Ticket = ticket, Task = task };
+                if (task.IsCompleted) Settle(c);  // settled before the script goes on
+                else if (run != null) task.ContinueWith(_ => run.Post(c), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                // else: a synchronous Call, which abandons the call when it returns E7_PENDING
+                return 0;
+            };
+            _asyncNatives.Add(box);  // keeps the delegate alive as long as the VM
+            Check(e7_register_async_native(Handle, Z(name), Z(signature), box.Thunk, IntPtr.Zero));
+        }
+
+        /// <summary>
+        /// Calls an exported function that may wait for async host functions (for an async export, the result is the
+        /// promise's value). The VM runs on the caller's context: the call starts synchronously, and each completion is
+        /// settled where the awaits continue (the caller's SynchronizationContext, e.g. the UI thread; otherwise one
+        /// thread-pool thread at a time). Use the VM from that context only while the call is in progress; other calls
+        /// fail with E7Exception (State) meanwhile.
+        /// </summary>
+        public Task<object?> CallAsync(E7Module module, string function, params object?[] args) =>
+            CallAsync(module, function, args, CancellationToken.None);
+
+        /// <summary><see cref="CallAsync(E7Module, string, object?[])"/>; cancelling the token abandons the call
+        /// (OperationCanceledException).</summary>
+        public async Task<object?> CallAsync(E7Module module, string function, object?[] args, CancellationToken cancellationToken)
+        {
+            if (module == null) throw new ArgumentNullException(nameof(module));
+            args ??= new object?[] { null };
+            var run = Begin(cancellationToken);
+            int st;
+            object? result = null;
+            var buffers = new List<IntPtr>();
+            try
+            {
+                var vals = new Value[Math.Max(args.Length, 1)];
+                for (int i = 0; i < args.Length; i++) vals[i] = ToNative(args[i], buffers);
+                st = e7_call(_vm, module.Ptr, Z(function), vals, (UIntPtr)(uint)args.Length, out var ret);
+                if (st == 0) result = FromNative(ret);
+            }
+            catch
+            {
+                End(run);
+                throw;
+            }
+            finally
+            {
+                FreeAll(buffers);
+            }
+            return await Drive(run, st, result);
+        }
+
+        /// <summary><see cref="Load"/> for a module whose top-level code awaits async host functions (see
+        /// <see cref="CallAsync(E7Module, string, object?[])"/>).</summary>
+        public async Task<E7Module> LoadAsync(byte[] bytecode, CancellationToken cancellationToken = default)
+        {
+            if (bytecode == null) throw new ArgumentNullException(nameof(bytecode));
+            var run = Begin(cancellationToken);
+            int st = e7_load(_vm, bytecode, (UIntPtr)(uint)bytecode.Length, out var m);
+            run.Module = m;
+            await Drive(run, st, null);
+            return new E7Module(run.Module);
+        }
+
+        private AsyncRun Begin(CancellationToken token)
+        {
+            var vm = Handle;
+            if (_currentRun != null)
+                throw new E7Exception(E7Status.State, "VM waits for host operations of another call; finish or cancel it first");
+            token.ThrowIfCancellationRequested();
+            var run = new AsyncRun(token);
+            _currentRun = run;
+            return run;
+        }
+
+        private void End(AsyncRun run)
+        {
+            if (_currentRun == run) _currentRun = null;
+            run.Dispose();
+        }
+
+        // E7_PENDING: settle completions in the order they arrive and resume, until the call finishes
+        private async Task<object?> Drive(AsyncRun run, int st, object? result)
+        {
+            try
+            {
+                while (st == (int)E7Status.Pending)
+                {
+                    Completion c;
+                    try
+                    {
+                        c = await run.NextAsync();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        if (_vm == IntPtr.Zero) throw new ObjectDisposedException(nameof(E7VM));
+                        if (_currentRun == run)
+                        {
+                            _currentRun = null;
+                            e7_abort_suspended(_vm);
+                        }
+                        throw;
+                    }
+                    if (_vm == IntPtr.Zero) throw new ObjectDisposedException(nameof(E7VM));
+                    if (!Settle(c)) continue;  // not open any more
+                    st = e7_resume(_vm, out var ret);
+                    if (st == 0) result = FromNative(ret);
+                }
+                if (st == (int)E7Status.Suspended)
+                {  // an async call does not stop for the budget: abandon it
+                    e7_abort_suspended(_vm);
+                    throw new E7Exception(E7Status.Suspended, "instruction budget exhausted (the async call was abandoned)");
+                }
+                Check(st);
+                return result;
+            }
+            finally
+            {
+                End(run);
+            }
+        }
+
+        // Settles a ticket on the VM's thread; false if it is not open. A value of the wrong type rejects the promise.
+        private bool Settle(Completion c)
+        {
+            var t = c.Task;
+            var box = c.Box;
+            int st;
+            if (t.Status == TaskStatus.RanToCompletion)
+            {
+                var buffers = new List<IntPtr>();
+                try
+                {
+                    var v = box.ReturnCode == 'v' ? new Value { Type = ValueType.Void } : ToNative(Coerce(t.Result, box.ReturnCode), buffers);
+                    st = e7_settle(_vm, c.Ticket, ref v);
+                    if (st == (int)E7Status.Args)
+                        st = e7_settle_error(_vm, c.Ticket, Z($"{box.Name}: {PtrToUtf8(e7_last_error(_vm), -1)}"));
+                }
+                catch (Exception e)  // Coerce / ToNative: a value of the wrong type
+                {
+                    st = e7_settle_error(_vm, c.Ticket, Z($"{box.Name}: {e.Message}"));
+                }
+                finally
+                {
+                    FreeAll(buffers);
+                }
+            }
+            else
+            {
+                var agg = t.Exception;
+                Exception? e = agg == null ? null : agg.InnerExceptions.Count == 1 ? agg.InnerExceptions[0] : agg;
+                st = e7_settle_error(_vm, c.Ticket, Z(t.IsCanceled ? $"{box.Name}: cancelled" : e?.Message ?? "failed"));
+            }
+            return st == 0;
+        }
 
         /// <summary>Instruction budget for subsequent execution (&lt;= 0: unlimited).</summary>
         public void SetBudget(long ticks) => e7_set_budget(Handle, ticks);
