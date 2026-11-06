@@ -65,6 +65,7 @@ inline const NativeSince* nativeSinceTable(size_t& n) {
   static const NativeSince kTable[] = {
       {"Object.has", makeVersion(0, 3, 0)},
       {"Date.set", makeVersion(0, 3, 0)},
+      {"JSON.parseRec", makeVersion(0, 3, 0)}, {"JSON.tryParseRec", makeVersion(0, 3, 0)},
       {"Error.newCause", makeVersion(0, 3, 0)}, {"Error.newAggregate", makeVersion(0, 3, 0)},
       {"Error.cause", makeVersion(0, 3, 0)}, {"Error.errors", makeVersion(0, 3, 0)},
       {"Array.toReversed", makeVersion(0, 3, 0)}, {"Array.toSorted", makeVersion(0, 3, 0)},

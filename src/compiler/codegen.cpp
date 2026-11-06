@@ -455,7 +455,8 @@ struct Gen {
   static std::string kindSuffixOf(Type* t) { return std::string(1, kindChar(K(t))); }
   std::string jsonDescriptor(Type* t);
   std::string jsonDescriptorOf(Type* t);
-  std::vector<Type*> jsonStack_;  // object types being described (a recursive type is not supported yet)
+  std::vector<Type*> jsonStack_;  // object types being described (a recursive type refers back: "@<depth>")
+  bool jsonRecursive_ = false;    // the descriptor has a back-reference (natives of e7vm 0.3)
   Loc jsonLoc_;  // the JSON.parse / tryParse expression whose descriptor is being built (errors)
   void loadInt(uint16_t dst, int64_t v) {
     if (v >= INT32_MIN && v <= INT32_MAX) emitBx(OP_LOADI, dst, (uint32_t)(int32_t)v);
@@ -3080,9 +3081,10 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
         uint16_t text = gen(call->list[0]);
         uint16_t desc = temp(K_R);
         jsonLoc_ = e->loc;
+        jsonRecursive_ = false;
         loadStr(desc, utf8ToUtf16(jsonDescriptor(e->type)));
         uint16_t boxed = temp(K_R);
-        callNative("JSON.parse", {text, desc}, boxed, 'R');
+        callNative(jsonRecursive_ ? "JSON.parseRec" : "JSON.parse", {text, desc}, boxed, 'R');
         if (kindOf(e->type) != K_R) emit(kindOf(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, d, boxed);
         else mov(d, boxed, K_R);
         release(m0);
@@ -3094,9 +3096,10 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
         uint16_t text = gen(call->list[0]);
         uint16_t desc = temp(K_R);
         jsonLoc_ = e->loc;
+        jsonRecursive_ = false;
         loadStr(desc, utf8ToUtf16(jsonDescriptor(T.optional(e->type->elem, false, e->type->hasUndef))));
         uint16_t res = temp(K_R);
-        callNative("JSON.tryParse", {text, desc}, res, 'R');
+        callNative(jsonRecursive_ ? "JSON.tryParseRec" : "JSON.tryParse", {text, desc}, res, 'R');
         mov(d, res, K_R);
         release(m0);
         return;
@@ -5042,11 +5045,11 @@ void Gen::genIndex(Expr* e, uint16_t d) {
 //   {<classIdx>:<n>:<name>=X;...}  record/class with fields   Mk,v  Map<string, X>
 std::string Gen::jsonDescriptor(Type* t) {
   if (t->t == TT::Object) {
-    for (Type* x : jsonStack_)
-      if (x == t) {
-        err(jsonLoc_, "JSON.parse into the recursive type '" + t->shape->name +
-                          "' is not supported yet (planned for e7vm 0.3); parse into a non-recursive type");
-        return "s";
+    // a recursive type (D6): a back-reference to the enclosing object descriptor of this type
+    for (size_t k = jsonStack_.size(); k-- > 0;)
+      if (jsonStack_[k] == t) {
+        jsonRecursive_ = true;
+        return "@" + std::to_string(jsonStack_.size() - k);
       }
     jsonStack_.push_back(t);
     std::string d = jsonDescriptorOf(t);

@@ -29,7 +29,6 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | `setTimeout`, `fetch`, `fs` | no timers or I/O: an async host function (`declare function f(): Promise<T>`, settled by the host) or data passed in (`async`/`await`, `Promise` and generators work as in Node.js) |
 | `for (k in obj)`, `delete`, `in` | `Object.keys(obj)`, or use a `Map` |
 | `class A { get x() }` implementing `interface I { x: number }` | declare the accessor in the interface: `get x(): number` (interfaces read properties as fields) |
-| `JSON.parse(text) as Tree` with a recursive `Tree` | parse into a non-recursive type and build the tree (recursive interfaces themselves are fine) |
 | `var`, `==` | `let`/`const`, `===` (`x == null` is allowed: null or undefined) |
 | `JSON.parse(text)` | `JSON.parse(text) as T` (validated against `T`; a shape mismatch ends the call and cannot be caught, a syntax error is a catchable `SyntaxError`); for untrusted input `tryParse(text) as T \| null` from `e7:json` (`null` on bad input, `lastError()` says why) |
 | `arr.map(obj.method)` | `arr.map(x => obj.method(x))` (methods are not values) |

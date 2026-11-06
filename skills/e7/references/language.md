@@ -366,11 +366,12 @@ const list: List<number> = { head: 1, tail: { head: 2, tail: null } };
 console.log(size(root), list.tail?.head);
 ```
 
-`JSON.parse(text) as T` into a recursive type is not supported yet (planned for e7vm 0.3):
+`JSON.parse(text) as T` into a recursive type works too (e7vm 0.3):
 
-```ts e7-reject
+```ts
 interface TreeNode { label: string; children: TreeNode[] }
-const t = JSON.parse('{"label":"x","children":[]}') as TreeNode;
+const t = JSON.parse('{"label":"x","children":[{"label":"y","children":[]}]}') as TreeNode;
+console.log(t.children[0].label);
 ```
 
 ### Destructuring assignments

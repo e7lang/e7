@@ -395,6 +395,9 @@ struct Builder {
   VM& vm;
   ModuleRT* mod;
   const std::string& d;
+  // the object descriptors being built, innermost last: "@<n>" (a recursive type, D6) refers to the n-th
+  std::vector<size_t> recs = {};
+  size_t openObjs = 0;  // validate(): object descriptors open around the current position
   [[noreturn]] void fail(const std::string& path, const char* what) {
     throw JsonFail{false, std::string(what) + " at " + (path.empty() ? std::string("$") : path)};
   }
@@ -427,7 +430,21 @@ struct Builder {
         if (p + 1 >= d.size() || d[p + 1] == '?' || d[p + 1] == '~') bad();
         return validate(p + 1, depth + 1);
       case '[': case 'M': return validate(p + 1, depth + 1);
+      case '@': {
+        // a back-reference to the n-th enclosing object descriptor (a recursive type)
+        size_t q = p + 1;
+        while (q < d.size() && d[q] >= '0' && d[q] <= '9' && q - p < 6) q++;
+        size_t n = (size_t)atoi(d.c_str() + p + 1);
+        if (q == p + 1 || n == 0 || n > openObjs) bad();
+        return q;
+      }
       case '{': case 't': {
+        struct Open {
+          size_t& n;
+          bool on;
+          ~Open() { if (on) n--; }
+        } open{openObjs, d[p] == '{'};
+        if (open.on) openObjs++;
         size_t q = number(p + 1, ':');
         size_t cnt = (size_t)atoi(d.c_str() + q);
         q = number(q, ':');
@@ -458,6 +475,12 @@ struct Builder {
       case 'n': case 'b': case 's': return p + 1;
       case 'i': return p + 2;
       case '?': case '~': case '[': case 'M': return skip(p + 1);
+      case '@': {
+        size_t q = p + 1;
+        while (q < d.size() && d[q] >= '0' && d[q] <= '9') q++;
+        if (q == p + 1) vm.error("bad JSON descriptor");
+        return q;
+      }
       case '{': {
         size_t q = d.find(':', p);
         q = d.find(':', q + 1);
@@ -510,6 +533,12 @@ struct Builder {
         return boxValue(vm, inner, vtOfDesc(p + 1));
       }
       default: break;
+    }
+    if (c == '@') {
+      // the enclosing object descriptor n levels out
+      size_t n = (size_t)atoi(d.c_str() + p + 1);
+      if (n == 0 || n > recs.size()) vm.error("bad JSON descriptor back-reference");
+      return build(v, recs[recs.size() - n], path);
     }
     if (!v) fail(path, "missing property");
     switch (c) {
@@ -573,6 +602,11 @@ struct Builder {
         ClassRT* c = &mod->classes[cls];
         if (c->nfields != cnt) vm.error("bad JSON descriptor class shape");
         InstObj* in = vm.newInstance(c);
+        recs.push_back(p);
+        struct Pop {
+          std::vector<size_t>& r;
+          ~Pop() { r.pop_back(); }
+        } pop{recs};
         size_t q = c2 + 1;
         for (size_t k = 0; k < cnt; k++) {
           std::string name;
@@ -673,6 +707,9 @@ void registerJsonNatives(VM& vm) {
   vm.registerNative("JSON.stringifyIndentStr", "RR>R", j_stringifyIndentStr);
   vm.registerNative("JSON.parse", "RR>R", j_parse);
   vm.registerNative("JSON.tryParse", "RR>R", j_tryParse);
+  // the same with descriptors of recursive types ("@<n>" back-references, e7vm 0.3)
+  vm.registerNative("JSON.parseRec", "RR>R", j_parse);
+  vm.registerNative("JSON.tryParseRec", "RR>R", j_tryParse);
   vm.registerNative("JSON.lastError", ">R", j_lastError);
 }
 
