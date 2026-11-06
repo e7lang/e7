@@ -1106,6 +1106,21 @@ int VM::runFrames() {
           st = execute(0);
         } catch (E7Error& e) {
           if (failCallbackJob(e)) continue;  // a then-callback threw: its promise is rejected
+          if (curJob_ == JOB_ENTRY && !e.jsName.empty() && !microtasks_.empty() && !(dbg_ && dbg_->errorPending())) {
+            // an uncaught error of the call itself: run what it queued first, as JavaScript does
+            entryError_.reset(new E7Error(e));
+            entryError_->value = nullptr;
+            dropFrames(0);
+            nativeDepth_ = 0;
+            gcBlockers_ = 0;
+            gcInhibit_ = 0;
+            tempRoots_.clear();
+            curNative_ = nullptr;
+            callbackNatives_.clear();
+            curJob_ = JOB_NONE;
+            entryFn_ = nullptr;
+            continue;
+          }
           throw;
         }
         if (st == ERR_SUSPENDED || st == ERR_PAUSED) {
@@ -1125,7 +1140,7 @@ int VM::runFrames() {
       }
       if (microtasks_.empty()) {
         // the next turn: a ticket the VM settles itself (e7:test's later())
-        if (settleNextAutoTicket()) continue;
+        if (!entryError_ && settleNextAutoTicket()) continue;  // an uncaught error ends the program (no later turns)
         break;
       }
       // a job is charged like a call
@@ -1203,6 +1218,7 @@ void VM::resetExecution() {
   entryKind_ = 'V';
   pending_ = false;
   pendingThrow_ = nullptr;
+  entryError_.reset();
   resultKind_ = 'V';  // an abandoned call has no result (an async entry frame may have left its promise)
   result_.u = 0;
   gcInhibit_ = 0;

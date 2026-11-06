@@ -423,6 +423,8 @@ class VM {
   char entryKind_ = 'V';
   bool pending_ = false;
   Obj* pendingThrow_ = nullptr;         // raised at the AWAIT when a resumed async function continues
+  // an uncaught error of the entry call: the queued jobs still run (as in JavaScript), then it is reported
+  std::unique_ptr<E7Error> entryError_;
   int runNormal();  // the interpreter (interp_loop.inc)
   int runDebug();   // the same loop with debugger checks, used only while a debugger is attached
   Slot invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32_t argc);

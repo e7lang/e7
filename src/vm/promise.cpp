@@ -378,6 +378,13 @@ bool VM::failCallbackJob(E7Error& e) {
 // The call's frames have returned and the queue is empty: its result. An async entry function's
 // promise gives the value (fulfilled), the error (rejected), or ERR_PENDING while host tickets are open.
 int VM::finishTurn() {
+  if (entryError_) {
+    // the call's own uncaught error (its queued jobs have run)
+    E7Error e = *entryError_;
+    entryError_.reset();
+    unhandled_.clear();
+    throw e;
+  }
   // unhandled rejections end the call, as they end the process in Node.js
   for (PromiseObj* p : unhandled_) {
     if (p->handled || p->state != PS_REJECTED) continue;
