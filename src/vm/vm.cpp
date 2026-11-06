@@ -567,10 +567,12 @@ BytesObj* VM::newBytesFrom(const uint8_t* p, size_t len) {
 }
 
 InstObj* VM::newInstance(ClassRT* cls) {
-  size_t sz = sizeof(InstObj) + (size_t)cls->nfields * sizeof(Slot);
+  size_t words = cls->presence ? presenceWords(cls->nfields) : 0;
+  size_t sz = sizeof(InstObj) + (size_t)cls->nfields * sizeof(Slot) + words * 8;
   auto* o = static_cast<InstObj*>(allocRaw(OT::Instance, sz));
   o->cls = cls;
   memset(o->fields(), 0, (size_t)cls->nfields * sizeof(Slot));
+  if (words) memset(o->mask(), 0xFF, words * 8);  // every property present until FIELD_ABSENT
   return o;
 }
 CellObj* VM::newCell(uint8_t vt) {
@@ -949,6 +951,7 @@ ModuleRT* VM::loadModule(Module&& mod) {
     c.name = d.name;
     c.isRecord = d.isRecord != 0;
     c.isTuple = d.isRecord == 2;
+    c.presence = (d.cflags & kClassFlagPresence) != 0;
     c.parent = d.parent >= 0 ? &M->classes[d.parent] : nullptr;
     c.nfields = (uint32_t)d.fields.size();
     for (size_t k = 0; k < d.fields.size(); k++) {

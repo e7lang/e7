@@ -166,6 +166,7 @@ CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& rea
       }
     }
   }
+  P.presenceMasks = !opts.target || opts.target >= makeVersion(0, 3, 0);
   Checker C(P, [&](const std::string& spec, const std::string& from) -> SourceFile* {
     std::string p = L.resolvePath(spec, from, nullptr);
     auto it = L.byPath.find(p);

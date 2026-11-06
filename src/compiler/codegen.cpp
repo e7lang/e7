@@ -746,6 +746,7 @@ bool Gen::run(const std::string& name) {
     cd.name = c->rtName.empty() ? c->name : c->rtName;  // Box<number> is "Box" at run time
     cd.parent = c->parent ? c->parent->classIdx : -1;
     cd.isRecord = c->isTuple ? 2 : c->isRecord ? 1 : 0;
+    cd.cflags = c->presence && cd.isRecord == 1 ? kClassFlagPresence : 0;
     for (auto& f : c->fields) cd.fields.push_back(FieldDesc{f.name, vtOf(f.type)});
     for (auto& m : c->vtable) {
       cd.vtable.push_back((uint32_t)m.fn->funcIdx);
@@ -3993,11 +3994,21 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
     // the field values (in the order of `c`), then the object: a `c`, or a record with the same fields
     // in the order of the run-time class of a spread source (see Checker::spreadOrders)
     std::vector<uint16_t> fv(c->fields.size(), kNoReg);
+    // D7: whether a field that may be absent is present (kNoReg: always present / always absent)
+    std::vector<uint16_t> has(c->fields.size(), kNoReg);
+    auto mayBeAbsent = [](Type* t) { return (t->t == TT::Optional && t->hasUndef) || t->t == TT::Undefined; };
     for (size_t fi = 0; fi < c->fields.size(); fi++) {
       Type* ft = c->fields[fi].type;
       if (e->fieldSrc[fi] < 0 && K(ft) != K_R) continue;  // absent: only reference fields hold undefined
       fv[fi] = temp(K(ft));
+      int si = e->fieldSrc[fi];
+      if (si >= 0 && e->props[si].spread && mayBeAbsent(ft)) has[fi] = temp(K_I);
     }
+    auto propHas = [&](int si, const std::string& name, uint16_t out) {
+      uint16_t nm = temp(K_R);
+      loadStr(nm, utf8ToUtf16(name));
+      callNative("Object.has", {vals[si], nm}, out, 'I');
+    };
     for (size_t fi = 0; fi < c->fields.size(); fi++) {
       if (fv[fi] == kNoReg) continue;
       Type* ft = c->fields[fi].type;
@@ -4012,6 +4023,10 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
         Type* sft;
         uint16_t raw = readSpread(si, c->fields[fi].name, sft);
         boxIfNeeded(v, raw, sft, ft);
+        if (has[fi] != kNoReg) {
+          if (mayBeAbsent(sft)) propHas(si, c->fields[fi].name, has[fi]);
+          else loadInt(has[fi], 1);
+        }
       }
       release(m1);
       // later optional spreads override only when the property is present
@@ -4020,9 +4035,16 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
         Type* sft;
         uint16_t raw = readSpread(ci, c->fields[fi].name, sft);
         uint16_t t = temp(K_I);
-        emit(OP_ISUNDEF, t, raw);
         Label* skip = newLabel();
-        jump(OP_JT, t, skip);
+        if (has[fi] != kNoReg && mayBeAbsent(sft)) {
+          propHas(ci, c->fields[fi].name, t);
+          jump(OP_JF, t, skip);
+          loadInt(has[fi], 1);
+        } else {
+          emit(OP_ISUNDEF, t, raw);
+          jump(OP_JT, t, skip);
+          if (has[fi] != kNoReg) loadInt(has[fi], 1);
+        }
         unboxNarrowed(v, raw, sft, ft);
         place(skip);
         release(m1);
@@ -4035,6 +4057,19 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
         int ti = rc == c ? (int)fi : rc->fieldIdx[c->fields[fi].name];
         emit(op3(K(c->fields[fi].type), OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)ti, fv[fi]);
       }
+      // properties the literal leaves out are not own properties (D7)
+      if (rc->presence && !rc->isTuple)
+        for (size_t fi = 0; fi < c->fields.size(); fi++) {
+          int ti = rc == c ? (int)fi : rc->fieldIdx[c->fields[fi].name];
+          if (e->fieldSrc[fi] < 0) {
+            emit(OP_FIELD_ABSENT, obj, (uint16_t)ti);
+          } else if (has[fi] != kNoReg) {
+            Label* keep = newLabel();
+            jump(OP_JT, has[fi], keep);
+            emit(OP_FIELD_ABSENT, obj, (uint16_t)ti);
+            place(keep);
+          }
+        }
     };
     if (e->spreadAltSrc >= 0) {
       Label* done = newLabel();
@@ -4092,6 +4127,8 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
     uint16_t u = temp(K_R);
     emit(OP_LOADUNDEF, u);
     if (K(c->fields[i].type) == K_R) emit(OP_SETF_R, obj, (uint16_t)i, u);
+    // a property the literal leaves out is not an own property (D7)
+    if (c->presence && !c->isTuple) emit(OP_FIELD_ABSENT, obj, (uint16_t)i);
     release(m0);
   }
   mov(d, obj, K_R);

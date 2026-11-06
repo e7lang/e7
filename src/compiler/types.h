@@ -170,6 +170,7 @@ struct ClassSym : Sym {
   bool isRecord = false;
   bool isTuple = false;
   bool isAbstract = false;
+  bool presence = false;  // record whose fields may be absent or hold undefined: a presence mask (D7)
   // generics: 1 = holder of the static members of a generic class (one per template),
   // 2 = an instance (Box<number>: the instance members, with the type parameters bound)
   int genericRole = 0;

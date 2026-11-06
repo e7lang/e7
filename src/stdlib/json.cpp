@@ -590,6 +590,7 @@ struct Builder {
           uint8_t want = (d[q] == '?' || d[q] == '~') ? (uint8_t)VT_REF : vtOfDesc(q);
           if (c->fieldVT[it->second] != want) vm.error("bad JSON descriptor field type");
           in->fields()[it->second] = build(fv, q, path + "." + name);
+          if (!fv && c->presence) setFieldPresent(in, it->second, false);  // a missing optional property (D7)
           q = skip(q);
           q++;  // ';'
         }

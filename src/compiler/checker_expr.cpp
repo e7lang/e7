@@ -243,7 +243,11 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
       if (c->fields[i].name != fields[i].first || vtOf(c->fields[i].type) != vtOf(fields[i].second)) same = false;
     for (size_t i = 0; i < nm && same; i++)
       if (c->vtable[i].name != (*methods)[i].first || c->vtable[i].fn->type != (*methods)[i].second) same = false;
-    if (same) return c->type;
+    if (same) {
+      if (!tuple && P.presenceMasks)
+        for (auto& f : fields) c->presence = c->presence || (f.second->t == TT::Optional && f.second->hasUndef) || f.second->t == TT::Undefined;
+      return c->type;
+    }
   }
   ClassSym* c = P.make<ClassSym>();
   c->name = "{";
@@ -255,6 +259,7 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
   for (auto& f : fields) {
     c->fieldIdx[f.first] = (int)c->fields.size();
     c->fields.push_back({f.first, f.second, nullptr, false, c, Loc()});
+    if (!tuple && P.presenceMasks) c->presence = c->presence || (f.second->t == TT::Optional && f.second->hasUndef) || f.second->t == TT::Undefined;
   }
   c->type = T.classType(c);
   // methods of an object literal (method shorthand, or function properties implementing an

@@ -62,8 +62,10 @@ inline uint32_t opSince(uint16_t op) {
 struct NativeSince { const char* name; uint32_t since; };
 // Natives added after the baseline, e.g. { "json.somethingNew", makeVersion(0, 3, 0) }.
 inline const NativeSince* nativeSinceTable(size_t& n) {
-  static const NativeSince kTable[] = {{"", 0}};
-  n = 0;
+  static const NativeSince kTable[] = {
+      {"Object.has", makeVersion(0, 3, 0)},
+  };
+  n = sizeof kTable / sizeof kTable[0];
   return kTable;
 }
 
@@ -95,6 +97,15 @@ inline uint32_t moduleRequires(const Module& m, std::string* why = nullptr) {
         req = kPrivateFieldsSince;
         if (why) *why = "#private class fields";
       }
+  }
+  // format 3 (0.3): coroutines, records with a presence mask, regular expressions
+  constexpr uint32_t v030 = makeVersion(0, 3, 0);
+  if (req < v030) {
+    for (const ClassDesc& c : m.classes)
+      if (c.cflags && req < v030) { req = v030; if (why) *why = "objects with optional properties (presence mask)"; }
+    for (const FuncDesc& f : m.funcs)
+      if (f.fflags && req < v030) { req = v030; if (why) *why = fflagsKind(f.fflags) == FK_GENERATOR ? "generators" : "async functions"; }
+    if (!m.regexps.empty() && req < v030) { req = v030; if (why) *why = "regular expressions"; }
   }
   for (const NativeImport& n : m.natives) {
     uint32_t s = nativeSince(n.name);

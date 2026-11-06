@@ -456,9 +456,12 @@ dispatch:
   CASE(GETF_I) { Obj* o = R[B].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, C, K_I); R[A] = in->fields()[C]; DISPATCH(); }
   CASE(GETF_F) { Obj* o = R[B].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, C, K_F); R[A] = in->fields()[C]; DISPATCH(); }
   CASE(GETF_R) { Obj* o = R[B].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, C, K_R); R[A] = in->fields()[C]; DISPATCH(); }
-  CASE(SETF_I) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_I); in->fields()[B] = R[C]; DISPATCH(); }
-  CASE(SETF_F) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_F); in->fields()[B] = R[C]; DISPATCH(); }
-  CASE(SETF_R) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_R); in->fields()[B] = R[C]; DISPATCH(); }
+  // a write makes the property present again (records with a presence mask, D7)
+#define MARK_PRESENT(in, idx) \
+  if (E7_UNLIKELY((in)->cls->presence)) setFieldPresent(in, idx, true);
+  CASE(SETF_I) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_I); in->fields()[B] = R[C]; MARK_PRESENT(in, B); DISPATCH(); }
+  CASE(SETF_F) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_F); in->fields()[B] = R[C]; MARK_PRESENT(in, B); DISPATCH(); }
+  CASE(SETF_R) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_R); in->fields()[B] = R[C]; MARK_PRESENT(in, B); DISPATCH(); }
 
 #define IC_FIELD(in, slot, K, outIdx)                                                   \
   {                                                                                     \
@@ -493,6 +496,7 @@ dispatch:
     uint32_t idx;
     IC_FIELD(in, B, k, idx);
     in->fields()[idx] = R[C];
+    MARK_PRESENT(in, idx);
     DISPATCH();
   }
   CASE(INSTOF) {
@@ -782,7 +786,16 @@ dispatch:
     if (mode == 1) raiseThrown(thrown);  // raised at the YIELD (its handlers apply)
     DISPATCH();
   }
-  CASE(ASYNC_START) CASE(AWAIT) CASE(FIELD_ABSENT) THROW("instruction not implemented yet");
+  // D7: field B of the record in A is not an own property (an object literal leaves it out)
+  CASE(FIELD_ABSENT) {
+    Obj* o = R[A].r;
+    INST_CHECK(o);
+    auto* in = static_cast<InstObj*>(o);
+    if (E7_UNLIKELY(!in->cls->presence || B >= in->cls->nfields)) THROW("invalid field access");
+    setFieldPresent(in, B, false);
+    DISPATCH();
+  }
+  CASE(ASYNC_START) CASE(AWAIT) THROW("instruction not implemented yet");
 
 #if !E7_COMPUTED_GOTO
   default:

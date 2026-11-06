@@ -58,6 +58,10 @@ struct FuncRT;
 struct InstObj : Obj {
   ClassRT* cls;
   Slot* fields() { return reinterpret_cast<Slot*>(this + 1); }
+  const Slot* fields() const { return reinterpret_cast<const Slot*>(this + 1); }
+  // records with a presence mask (D7): one bit per field after the fields (set: an own property)
+  inline uint64_t* mask();
+  inline const uint64_t* mask() const;
 };
 
 struct CellObj : Obj {
@@ -127,6 +131,7 @@ struct ClassRT {
   ClassRT* parent = nullptr;
   bool isRecord = false;
   bool isTuple = false;
+  bool presence = false;  // instances carry a presence mask (D7, format-3 class flag)
   uint32_t nfields = 0;
   std::vector<uint8_t> fieldVT;
   std::vector<std::string> fieldNames;
@@ -136,5 +141,24 @@ struct ClassRT {
   std::unordered_map<std::string, uint32_t> fieldIndex;
   std::unordered_map<std::string, uint32_t> methodIndex;
 };
+
+inline uint64_t* InstObj::mask() { return reinterpret_cast<uint64_t*>(fields() + cls->nfields); }
+inline const uint64_t* InstObj::mask() const { return reinterpret_cast<const uint64_t*>(fields() + cls->nfields); }
+inline size_t presenceWords(uint32_t nfields) { return (nfields + 63) / 64; }
+
+// Whether field i of an instance is an own property: class fields always are; a record field is unless
+// its presence bit is clear (records with a mask) or, in records without one (0.2 modules), it holds
+// undefined (a missing optional property)
+inline bool fieldPresent(const InstObj* in, uint32_t i, const Obj* undef) {
+  const ClassRT* c = in->cls;
+  if (!c->isRecord) return true;
+  if (c->presence) return (in->mask()[i / 64] >> (i % 64)) & 1;
+  return !(c->fieldVT[i] == VT_REF && in->fields()[i].r == undef);
+}
+inline void setFieldPresent(InstObj* in, uint32_t i, bool on) {
+  uint64_t bit = 1ull << (i % 64);
+  if (on) in->mask()[i / 64] |= bit;
+  else in->mask()[i / 64] &= ~bit;
+}
 
 }  // namespace e7

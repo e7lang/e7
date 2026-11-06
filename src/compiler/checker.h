@@ -8,6 +8,8 @@
 namespace e7 {
 
 struct Program {
+  // D7: records whose properties may be absent carry a presence mask (format 3); off for --target 0.2
+  bool presenceMasks = true;
   Arena arena;
   Types types;
   std::vector<std::unique_ptr<SourceFile>> files;  // dependency order, entry last

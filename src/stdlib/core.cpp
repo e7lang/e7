@@ -433,7 +433,7 @@ struct Inspector {
         for (uint32_t i = 0; i < c->nfields; i++) {
           // a record field holding undefined is a missing optional property (JSON.stringify and spread
           // treat it the same way); class fields are always own properties in JavaScript
-          if (c->isRecord && c->fieldVT[i] == VT_REF && fv[i].r == vm.undef()) continue;
+          if (!fieldPresent(static_cast<InstObj*>(o), i, vm.undef())) continue;
           if (privateField(c, i)) continue;  // #private fields are not shown (as in Node.js)
           fields.push_back(i);
           if (!c->fieldNames[i].empty() && c->fieldNames[i][0] >= '0' && c->fieldNames[i][0] <= '9') numericKeys = true;
@@ -1000,11 +1000,24 @@ E7_NATIVE(n_objectKeys) {
   for (uint32_t i : jsFieldOrder(in->cls)) {
     // a record (object literal) property holding undefined is a missing optional property; the fields
     // of a class instance are always own properties (also when undefined), as in JavaScript
-    if (in->cls->isRecord && in->cls->fieldVT[i] == VT_REF && in->fields()[i].r == vm.undef()) continue;
+    if (!fieldPresent(in, i, vm.undef())) continue;
     if (privateField(in->cls, i)) continue;
     vm.arrayPush(arr, slotR(vm.newStringUtf8(in->cls->fieldNames[i])));
   }
   r->r = arr;
+}
+
+// Object.has(obj, name): whether the object has an own property of that name (fields of class
+// instances always; record fields unless absent, D7). Used by object spread.
+E7_NATIVE(n_objectHas) {
+  (void)n;
+  (void)ud;
+  Obj* o = a[0].r;
+  r->i = 0;
+  if (!o || o->type != OT::Instance) return;
+  auto* in = static_cast<InstObj*>(o);
+  auto it = in->cls->fieldIndex.find(strUtf8(asStr(vm, a[1])));
+  if (it != in->cls->fieldIndex.end()) r->i = fieldPresent(in, it->second, vm.undef());
 }
 
 E7_NATIVE(n_textEncode) {
@@ -1119,6 +1132,7 @@ void registerCoreNatives(VM& vm) {
   vm.registerNative("Int.toStringRadix", "IFF>R", n_intToStringRadix);
   vm.registerNative("Date.now", ">F", n_dateNow);
   vm.registerNative("Object.keys", "R>R", n_objectKeys);
+  vm.registerNative("Object.has", "RR>I", n_objectHas);
   vm.registerNative("Text.encode", "R>R", n_textEncode);
   vm.registerNative("Text.decode", "R>R", n_textDecode);
 }
