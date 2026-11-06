@@ -27,7 +27,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **141 supported**, **14 partial**, **95 unsupported** (264 sample programs).
+250 features: **143 supported**, **15 partial**, **92 unsupported** (265 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -37,7 +37,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Object Types](#object-types) | 12 | 0 | 6 |
 | [Generics](#generics) | 9 | 1 | 5 |
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
-| [Classes](#classes) | 18 | 0 | 13 |
+| [Classes](#classes) | 19 | 1 | 11 |
 | [Modules](#modules) | 9 | 0 | 4 |
 | [Enums](#enums) | 4 | 1 | 4 |
 | [Utility Types](#utility-types) | 0 | 0 | 13 |
@@ -51,11 +51,11 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Namespaces](#namespaces) | 0 | 0 | 2 |
 | [Type Compatibility and Inference](#type-compatibility-and-inference) | 5 | 1 | 0 |
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
-| [JavaScript: Syntax](#javascript-syntax) | 22 | 1 | 8 |
+| [JavaScript: Syntax](#javascript-syntax) | 23 | 1 | 7 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 11 | 5 | 10 |
-| **Total** | **141** | **14** | **95** |
+| **Total** | **143** | **15** | **92** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 47.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 42, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 44.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -197,6 +197,7 @@ Within each category, supported features come first, then partial and unsupporte
 | `public`, `protected`, `private` modifiers | supported | Accepted and checked by tsc; E7 does not enforce them (`#private` is enforced) | [member-visibility.ts](../tests/ts-features/classes/member-visibility.ts) |
 | Methods | supported |  | [methods.ts](../tests/ts-features/classes/methods.ts) |
 | The `override` modifier | supported |  | [override-modifier.ts](../tests/ts-features/classes/override-modifier.ts) |
+| Overriding with a compatible signature (covariant return type, fewer parameters) | supported | Parameters and return types with the overridden method's representation (a class instead of its base class, fewer parameters) | [override-signatures.ts](../tests/ts-features/classes/override-signatures.ts) |
 | Parameter properties (`constructor(public x: number)`) | supported |  | [parameter-properties.ts](../tests/ts-features/classes/parameter-properties.ts) |
 | ECMAScript `#private` members | supported | Private fields, methods and accessors (instance and static); not listed by `Object.keys`, `JSON.stringify` or `console.log` | [private-members.ts](../tests/ts-features/classes/private-members.ts) |
 | `readonly` fields | supported | Assignable only in the class's own constructor, as in tsc | [readonly-fields.ts](../tests/ts-features/classes/readonly-fields.ts) |
@@ -205,17 +206,16 @@ Within each category, supported features come first, then partial and unsupporte
 | Static fields and methods (inherited by subclasses) | supported |  | [static-members.ts](../tests/ts-features/classes/static-members.ts) |
 | `this`-based type guards (`this is T`) | supported |  | [this-based-guards.ts](../tests/ts-features/classes/this-based-guards.ts) |
 | Overriding `toString()` | supported | Called by `String(x)`, template literals and `+` | [to-string.ts](../tests/ts-features/classes/to-string.ts) |
+| `declare` fields | **partial** | **Works:** a field declared for the type checker and set elsewhere (by the constructor), also redeclaring an inherited field with its type. **Not supported:** redeclaring an inherited field with a narrower type (`number` of a `number \| string` field) would change its representation (*types known at compile time*). **Instead:** keep the inherited field's type, or a separate field | [declare-fields.ok.ts](../tests/ts-features/classes/declare-fields.ok.ts), [declare-fields.no.ts](../tests/ts-features/classes/declare-fields.no.ts) |
 | Implementing an interface property with an accessor | **unsupported** | **Why:** interface properties are read as fields, so the class must have a field (*types known at compile time*). **Instead:** declare the accessor in the interface: `interface HasArea { get area(): number }` | [accessor-implements-property.ts](../tests/ts-features/classes/accessor-implements-property.ts) |
 | Auto-accessors (`accessor x = 1`) | **unsupported** | **Why:** *not implemented yet*. **Instead:** a field, or a private field with `get` / `set` accessors | [auto-accessors.ts](../tests/ts-features/classes/auto-accessors.ts) |
 | Class expressions | **unsupported** | **Why:** classes are declared at the top level of a scope (*not implemented yet*). **Instead:** a class declaration | [class-expressions.ts](../tests/ts-features/classes/class-expressions.ts) |
 | Classes as first-class values (`typeof C`, prototypes) | **unsupported** | **Why:** a class is a compile-time layout, not a run-time object with a prototype (*verifiable bytecode*). **Instead:** factory functions `() => new C()` | [classes-as-values.ts](../tests/ts-features/classes/classes-as-values.ts) |
 | Constructor overloads | **unsupported** | **Why:** the implementation signature needs a union type (*types known at compile time*). **Instead:** optional parameters, or static factory methods | [constructor-overloads.ts](../tests/ts-features/classes/constructor-overloads.ts) |
-| `declare` fields | **unsupported** | **Why:** *not implemented yet*. **Instead:** an ordinary field | [declare-fields.ts](../tests/ts-features/classes/declare-fields.ts) |
 | Extending built-in classes (`Error`, `Map`, `Array`) | **unsupported** | **Why:** built-in types are not classes in E7 (*not implemented yet*). **Instead:** throw `new Error(...)` (or `TypeError`, `RangeError`, ...) with a descriptive message; wrap a `Map` in a class field | [extending-builtins.ts](../tests/ts-features/classes/extending-builtins.ts) |
 | Index signatures in classes | **unsupported** | **Why:** class layouts are fixed (*types known at compile time*). **Instead:** a `Map<string, T>` field | [index-signatures.ts](../tests/ts-features/classes/index-signatures.ts) |
 | Methods as values (unbound methods) | **unsupported** | **Why:** an unbound method loses `this` in JavaScript; E7 rejects it rather than behave differently (*JavaScript-identical behaviour*). **Instead:** an arrow function `x => obj.method(x)`, or an arrow function field | [methods-as-values.ts](../tests/ts-features/classes/methods-as-values.ts) |
 | `new.target` | **unsupported** | **Why:** *not implemented yet*. **Instead:** an explicit constructor parameter | [new-target.ts](../tests/ts-features/classes/new-target.ts) |
-| Overriding with a compatible signature (covariant return type, fewer parameters) | **unsupported** | **Why:** an override must have the same signature as the overridden method (*not implemented yet*). **Instead:** keep the base signature (and downcast with `as` at the call site where needed) | [override-signatures.ts](../tests/ts-features/classes/override-signatures.ts) |
 | Ergonomic brand checks (`#x in obj`) | **unsupported** | **Why:** private fields always exist on instances of their class (*types known at compile time*). **Instead:** `instanceof` | [private-in.ts](../tests/ts-features/classes/private-in.ts) |
 | Polymorphic `this` types | **unsupported** | **Why:** *not implemented yet*. **Instead:** return the class type (and override in subclasses where needed) | [this-types.ts](../tests/ts-features/classes/this-types.ts) |
 
@@ -375,6 +375,7 @@ Within each category, supported features come first, then partial and unsupporte
 | Optional chaining (`a?.b`, `a?.[i]`, `f?.()`) | supported |  | [optional-chaining.ts](../tests/ts-features/js-syntax/optional-chaining.ts) |
 | String literals and escapes (`\n`, `\x41`, `\u{1F600}`) | supported |  | [string-escapes.ts](../tests/ts-features/js-syntax/string-escapes.ts) |
 | `switch` with fall-through | supported |  | [switch.ts](../tests/ts-features/js-syntax/switch.ts) |
+| Tagged templates and `String.raw` | supported | The tag gets the parts as a `readonly string[]` (TypeScript's `TemplateStringsArray`; its `raw` property is not available) and the values | [tagged-templates.ts](../tests/ts-features/js-syntax/tagged-templates.ts) |
 | Template literals (multi-line, nested) | supported |  | [template-literals.ts](../tests/ts-features/js-syntax/template-literals.ts) |
 | `try` / `catch` / `finally`, optional catch binding | supported | Catches the errors Node.js also throws; E7's own checks (out-of-bounds reads, failed `as`) are not catchable | [try-catch-finally.ts](../tests/ts-features/js-syntax/try-catch-finally.ts) |
 | The `void` operator | supported | The value is `undefined`; as for `undefined` itself, a variable holding it needs a type annotation | [void-operator.ts](../tests/ts-features/js-syntax/void-operator.ts) |
@@ -384,7 +385,6 @@ Within each category, supported features come first, then partial and unsupporte
 | `for...in` | **unsupported** | **Why:** it enumerates property names as untyped strings, including inherited ones (*types known at compile time*). **Instead:** `for (const k of Object.keys(obj))` or a `Map` | [for-in.ts](../tests/ts-features/js-syntax/for-in.ts) |
 | Hashbang line (`#!/usr/bin/env node`) | **unsupported** | **Why:** *not implemented yet*. **Instead:** run the file with `e7 file.ts` | [hashbang.ts](../tests/ts-features/js-syntax/hashbang.ts) |
 | Regular expression literals | **unsupported** | **Why:** *not implemented yet*. **Instead:** string methods (`indexOf`, `includes`, `startsWith`, `split`, `replaceAll`) and character code tests | [regex-literals.ts](../tests/ts-features/js-syntax/regex-literals.ts) |
-| Tagged templates and `String.raw` | **unsupported** | **Why:** *not implemented yet*. **Instead:** a function taking the parts as arguments | [tagged-templates.ts](../tests/ts-features/js-syntax/tagged-templates.ts) |
 | Throwing values other than `Error` objects | **unsupported** | **Why:** a caught value must have a known type (*types known at compile time*). **Instead:** `throw new Error(message)` (or `TypeError`, `RangeError`, ...) | [throw-non-errors.ts](../tests/ts-features/js-syntax/throw-non-errors.ts) |
 | Non-ASCII identifiers | **unsupported** | **Why:** identifiers are ASCII (string contents may be any Unicode) (*not implemented yet*). **Instead:** ASCII names | [unicode-identifiers.ts](../tests/ts-features/js-syntax/unicode-identifiers.ts) |
 

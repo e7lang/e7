@@ -155,6 +155,27 @@ void Checker::checkArgs(Expr* call, Type* ft, std::vector<Expr*>& args, size_t s
 
 // ------------------------------------------------------------------ calls
 Type* Checker::checkCall(Expr* e, Type* expected) {
+  if (e->tagged) {
+    e->tagged = false;
+    Expr* tpl = e->list[0];
+    Expr* tag = strip(e->a);
+    // String.raw`...`: the raw text of the parts with the values in between (a template)
+    if (tag->k == EK::Member && tag->raw == "raw" && strip(tag->a)->k == EK::Ident && strip(tag->a)->raw == "String" &&
+        (!lookup("String") || lookup("String")->k == SymK::Namespace)) {
+      Expr saved = *tpl;
+      *e = saved;
+      e->quasis = e->rawQuasis;
+      return check(e, expected);
+    }
+    // tag(strings, ...values): the parts as a readonly string[] (TypeScript's TemplateStringsArray)
+    Expr* strs = P.arena.expr(EK::Array, tpl->loc);
+    for (auto& q : tpl->quasis) {
+      Expr* sx = P.arena.expr(EK::Str, tpl->loc);
+      sx->str = q;
+      strs->list.push_back(sx);
+    }
+    e->list[0] = strs;
+  }
   Expr* c = strip(e->a);
   if (!e->typeArgs.empty() && !(c->k == EK::Member)) {
     // generic call type arguments are only meaningful for a few builtins

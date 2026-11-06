@@ -109,6 +109,8 @@ struct Expr {
   bool bval = false;
   // template
   std::vector<std::u16string> quasis;
+  std::vector<std::u16string> rawQuasis;  // Template: the raw text of the parts (String.raw / tagged templates)
+  bool tagged = false;                    // Call: a tagged template (list[0] is the template)
   // children
   Expr* a = nullptr;  // unary operand, binary lhs, callee, object, cond test
   Expr* b = nullptr;  // binary rhs, index, cond consequent
@@ -180,6 +182,7 @@ struct ClassMember {
   bool isAbstract = false;
   int accessor = 0;  // Method: 1 = getter, 2 = setter
   bool isGenerator = false, isAsync = false;  // Method: *name() / async name()
+  bool isDeclare = false;                     // Field: `declare x: T` (no initializer)
   std::vector<TypeParam> typeParams;  // generic method
   TypeNode* type = nullptr;
   Expr* init = nullptr;

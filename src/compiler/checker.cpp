@@ -1044,6 +1044,7 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "TextEncoder") { noArgs(); return T.textEncoder(); }
   if (name == "TextDecoder") { noArgs(); return T.textDecoder(); }
   if (name == "Error" || name == "AggregateError") { noArgs(); return T.error(); }
+  if (name == "TemplateStringsArray") { noArgs(); return T.array(T.string(), true); }
   if (name == "Date") { noArgs(); return T.date(); }
   if (name == "Record" || name == "Partial" || name == "Required" || name == "Pick" || name == "Omit" || name == "Readonly")
     return errT(l, "utility type '" + name + "' is not supported; use Map<K, V> or an interface");
@@ -1562,6 +1563,14 @@ void Checker::resolveClass(ClassSym* c) {
       err(m.loc, "field '" + m.name + "' needs a type annotation or initializer");
       t = T.unknown();
     }
+    if (m.isDeclare && c->fieldIdx.count(m.name) && c->fields[c->fieldIdx[m.name]].owner != c) {
+      // `declare x: T` of an inherited field: a declaration for the type checker, the same field
+      Type* inherited = c->fields[c->fieldIdx[m.name]].type;
+      if (t != inherited)
+        err(m.loc, "a 'declare' field must have the type of the inherited field ('" + typeName(inherited) + "') in e7 (the field's representation is fixed)");
+      continue;
+    }
+    if (m.isDeclare && m.init) err(m.loc, "a 'declare' field cannot have an initializer");
     addField(m.name, t, m.init, m.optional, m.loc, m.readonly, uo);
   }
   if (!c->defScope) scope = savedScope;
@@ -1579,9 +1588,31 @@ void Checker::resolveClass(ClassSym* c) {
       if (base == ov) continue;
       resolveSig(base);
       resolveSig(ov);
-      if (base->type && ov->type && base->type != ov->type && ov->type->ret && base->type->ret)
-        err(ov->loc, "method '" + ov->name + "' must have the same signature as the overridden method (" +
-                         typeName(base->type) + ")");
+      if (base->type && ov->type && base->type != ov->type && ov->type->ret && base->type->ret) {
+        // a compatible override (as TypeScript allows): fewer parameters (the others are passed and
+        // ignored) with the same representations, and a return type assignable to the overridden one's
+        Type* bt = base->type;
+        Type* ot = ov->type;
+        if (ot->ret->t == TT::Class) resolveClass(ot->ret->cls);  // its parents decide the assignability
+        bool ok = !base->hasDefaults && !ov->hasDefaults && !ot->restParam && !bt->restParam &&
+                  ot->params.size() <= bt->params.size() + 0 && kindOf(ot->ret) == kindOf(bt->ret) &&
+                  isBoxedOptional(ot->ret) == isBoxedOptional(bt->ret) && assignable(ot->ret, bt->ret);
+        for (size_t i = 0; ok && i < ot->params.size(); i++) {
+          Type* a = ot->params[i];
+          Type* b = bt->params[i];
+          ok = kindOf(a) == kindOf(b) && isBoxedOptional(a) == isBoxedOptional(b) && (assignable(b, a) || assignable(a, b)) &&
+               ot->optParams[i] == bt->optParams[i];
+        }
+        if (!ok) {
+          err(ov->loc, "method '" + ov->name + "' must have a signature compatible with the overridden method (" +
+                           typeName(base->type) + ")");
+        } else {
+          ov->padParams.assign(bt->params.begin() + (std::ptrdiff_t)ot->params.size(), bt->params.end());
+          ov->padParams.insert(ov->padParams.end(), base->padParams.begin(), base->padParams.end());
+        }
+      } else if (base->type == ov->type) {
+        ov->padParams = base->padParams;
+      }
     }
   }
   // a getter and its setter have the same type

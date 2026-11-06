@@ -292,16 +292,33 @@ class Lexer {
     }
   }
 
+  // the raw text of a template part (String.raw, tagged templates): CR LF and CR read as LF
+  void templateRaw(Tok& t, size_t from, size_t to) {
+    std::string r;
+    for (size_t k = from; k < to; k++) {
+      if (s[k] == '\r') {
+        r += '\n';
+        if (k + 1 < to && s[k + 1] == '\n') k++;
+      } else {
+        r += s[k];
+      }
+    }
+    t.text = r;
+  }
+
   void lexTemplate(Tok& t, bool start) {
+    size_t rawStart = p;
     while (true) {
       if (p >= s.size()) fail("unterminated template literal");
       char c = s[p];
       if (c == '`') {
+        templateRaw(t, rawStart, p);
         p++; col++;
         t.k = start ? TK::TmplFull : TK::TmplTail;
         return;
       }
       if (c == '$' && p + 1 < s.size() && s[p + 1] == '{') {
+        templateRaw(t, rawStart, p);
         p += 2; col += 2;
         t.k = start ? TK::TmplHead : TK::TmplMid;
         return;
@@ -1224,7 +1241,8 @@ class Parser {
           if (isKw("static")) m.isStatic = true;
           if (isKw("readonly")) m.readonly = true;
           if (isKw("abstract")) m.isAbstract = true;
-          if (isKw("declare")) fail("'declare' fields are not supported");
+          // `declare x: T`: a field declared for the type checker (set elsewhere, e.g. by the constructor)
+          if (isKw("declare")) m.isDeclare = true;
           i++;
           any = true;
         } else if ((isKw("public") || isKw("private") || isKw("protected") || isKw("readonly") || isKw("static") || isKw("override")) &&
@@ -1983,7 +2001,14 @@ class Parser {
         nn->a = e;
         e = nn;
       } else if (cur().k == TK::TmplFull || cur().k == TK::TmplHead) {
-        fail("tagged templates are not supported");
+        // a tagged template: tag`a${x}b` is tag(["a", "b"], x) (the parts' raw text is kept for String.raw)
+        Expr* call = A.expr(EK::Call, ml);
+        call->a = e;
+        call->tagged = true;
+        Expr* tpl = parseTemplate();
+        call->list.push_back(tpl);
+        for (Expr* x : tpl->list) call->list.push_back(x);
+        e = call;
       } else {
         break;
       }
@@ -1994,18 +2019,23 @@ class Parser {
   Expr* parseTemplate() {
     Loc l = loc();
     Expr* e = A.expr(EK::Template, l);
+    auto part = [&]() {
+      e->quasis.push_back(t[i].str);
+      e->rawQuasis.push_back(utf8ToUtf16(t[i].text));
+      i++;
+    };
     if (cur().k == TK::TmplFull) {
-      e->quasis.push_back(t[i++].str);
+      part();
       return e;
     }
-    e->quasis.push_back(t[i++].str);  // head
+    part();  // head
     while (true) {
       int saved = noIn;
       noIn = 0;
       e->list.push_back(parseExpr());
       noIn = saved;
-      if (cur().k == TK::TmplMid) { e->quasis.push_back(t[i++].str); continue; }
-      if (cur().k == TK::TmplTail) { e->quasis.push_back(t[i++].str); break; }
+      if (cur().k == TK::TmplMid) { part(); continue; }
+      if (cur().k == TK::TmplTail) { part(); break; }
       fail("expected '}' in template literal");
     }
     return e;

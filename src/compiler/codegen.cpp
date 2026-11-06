@@ -557,6 +557,14 @@ struct Gen {
   // run to its end is closed (return())
   uint16_t iterToArray(uint16_t coll, Type* t, int maxN, Type* elemT);
   void genGenMethod(Expr* e, uint16_t dst);
+  // the hidden parameters of an override with fewer parameters: zero values
+  void padArgs(FuncSym* f, std::vector<uint16_t>& args) {
+    for (Type* p : f->padParams) {
+      uint16_t r = temp(K(p));
+      loadZero(r, K(p));
+      args.push_back(r);
+    }
+  }
   // promises (0.3)
   void genAwait(Expr* e, uint16_t dst);
   void genPromiseCall(Expr* e, uint16_t dst);
@@ -811,6 +819,7 @@ static std::string sigOf(FuncSym* f) {
   std::string s;
   if (f->isMethod || f->isCtor) s += 'R';
   for (Type* p : f->type->params) s += kindChar(Gen::K(p));
+  for (Type* p : f->padParams) s += kindChar(Gen::K(p));
   if (f->hasDefaults) s += 'I';
   s += '>';
   Kind rk = kindOf(f->type->ret);
@@ -884,6 +893,10 @@ void Gen::prologue(FuncSym* f) {
       varReg[f->paramSyms[i]] = r;
       dbgOpen(f->paramSyms[i], r, false, true);
     }
+    r++;
+  }
+  for (Type* p : f->padParams) {  // an override's hidden parameters (see FuncSym::padParams)
+    newReg(K(p));
     r++;
   }
   if (f->hasDefaults) {
@@ -3788,6 +3801,7 @@ void Gen::genCall(Expr* e, uint16_t dst) {
       size_t n;
       std::vector<uint16_t> args = genArgs(e->list, f->type, e->bval, &n);
       args.insert(args.begin(), self);
+      padArgs(f, args);
       if (f->hasDefaults) {
         uint16_t ac = temp(K_I);
         loadInt(ac, (int64_t)n);
@@ -3802,6 +3816,7 @@ void Gen::genCall(Expr* e, uint16_t dst) {
       uint16_t obj = gen(callee->a);
       size_t n;
       std::vector<uint16_t> args = genArgs(e->list, f->type, e->bval, &n);
+      padArgs(f, args);
       if (f->hasDefaults) {
         uint16_t ac = temp(K_I);
         loadInt(ac, (int64_t)n);

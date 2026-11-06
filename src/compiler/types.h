@@ -115,6 +115,9 @@ struct FuncSym : Sym {
   int predParam = -1;
   Type* predType = nullptr;
   bool asserts = false;
+  // an override with fewer parameters than the method it overrides: the overridden method's other
+  // parameters, as hidden parameters (unused), so that both have one signature in the vtable
+  std::vector<Type*> padParams;
   std::vector<Param>* params = nullptr;
   TypeNode* retNode = nullptr;
   Stmt* body = nullptr;
