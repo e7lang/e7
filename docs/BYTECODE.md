@@ -1,4 +1,4 @@
-# e7vm bytecode (.e7b format 2)
+# e7vm bytecode (.e7b format 2; format 3 planned)
 
 ## 1. File format
 
@@ -310,3 +310,65 @@ string/byte types) are checked by the interpreter at runtime. So even maliciousl
 - Promise: within a minor release line (0.2.x), every VM runs every module compiled by any 0.2.x compiler, with
   the same results. `tests/compat/<version>/` keeps modules compiled by released compilers; CI checks that the 0.1
   ones are rejected with `E7_ERR_VERSION` and that the 0.2.x ones load and print the recorded output.
+
+## 6. Format 3 (planned for 0.3)
+
+Status: **specified, not implemented** ([DESIGN-0.3.md](DESIGN-0.3.md), D1-D4 and D7). Format 3 is format 2 with the
+additions below; everything not mentioned is unchanged. The compiler writes format 2 when a module uses none of
+them, and a 0.3 VM reads both formats.
+
+### 6.1 File format changes
+
+```
+version u32 = 3
+strs    ... (unchanged)
+regexps u32 n, n x (str source, str flags)       new, after strs: regular expression literals (D4)
+classes u32 n, n x (str name, i32 parent, u8 kind, u8 cflags, ...)      cflags new
+funcs   u32 n, n x (str name, u32 sig, u16 nparams, u8 fflags, ...)    fflags new
+```
+
+- **regexps**: the source (UTF-8) and flags (a subset of `dgimsuy`, each at most once) of each regular expression
+  literal. The VM compiles every entry when the module is loaded; a pattern that does not compile fails the load
+  (`E7_ERR_LOAD`).
+- **cflags**, bit 0: the instances carry a presence mask (D7), allowed for records only (`kind` 1). Other bits are 0.
+- **fflags**: bits 0-1 the function kind (0 plain, 1 generator, 2 `async`, 3 `async` generator); bits 2-3 the
+  kind of the yielded value and bits 4-5 the kind of the value `next(v)` sends (0 `I`, 1 `F`, 2 `R`, 3 none), both 3
+  for plain and `async` functions. Bits 6-7 are 0.
+
+### 6.2 New instructions (`since 0.3.0`)
+
+| Instruction | Format | Semantics |
+|---|---|---|
+| `GEN_START` | `___` | First instruction of a generator: create its coroutine, save the frame, return the coroutine to the caller |
+| `ASYNC_START` | `___` | First instruction of an `async` function: create its promise and coroutine; the body continues |
+| `YIELD` | `***` | `A` yielded value (yield kind), `B` received value (next kind, or `0xFFFF` for none), `C` mode (`I`): save the frame and return `A` to the resumer with `done = false`; on resumption `B` receives the sent value and `C` the mode (0 `next`, 2 `return`; `throw` raises at this instruction) |
+| `RESUME_I` / `RESUME_F` / `RESUME_R` | `***` | `A` coroutine (`R`), `B` destination of the value (kind of the variant), `C` destination of the done flag (`I`); one following word: bits 0-15 the register with the sent value (`0xFFFF`: none), bits 16-17 the mode (0 `next`, 1 `throw`, 2 `return`) |
+| `AWAIT` | `***` | `A` destination (any kind, or `0xFFFF`), `B` promise (`R`): suspend the coroutine until the promise settles; then `A` receives the value, or the rejection is raised at this instruction |
+| `FIELD_ABSENT` | `Re_` | Clear the presence bit of field `B` of the record in `A` (D7) |
+
+`RET_*` from a generator or `async` frame finishes the coroutine (generator: `done = true` with the value; `async`:
+resolves the promise). An error that leaves an `async` frame rejects its promise instead of propagating to the
+caller.
+
+Promise, iterator and regular expression operations (`then`, `Promise.all`, `next` building a result object,
+`exec`, `replace`, ...) are native functions with `since 0.3.0`; they need no new verification rules.
+
+### 6.3 Verification (additions)
+
+1. `GEN_START` is the first instruction of every generator function and appears nowhere else; the same for
+   `ASYNC_START` in `async` functions. A generator's or `async` function's signature returns `R`.
+2. `YIELD` appears only in generator functions (plain and `async`), `AWAIT` only in `async` functions; `YIELD`'s `A`
+   and `B` registers have the kinds in `fflags`, `C` is `I`.
+3. `RESUME_*`: `A` is `R`, `B` has the variant's kind, `C` is `I`, the sent-value register exists; the coroutine's
+   kinds are compared with the variant and the sent value **at run time** (the register is untyped `R`), and a
+   mismatch, a resumption of a running coroutine or a non-coroutine object is a runtime error, as for the signature
+   check of `CALLV`.
+4. `FIELD_ABSENT`: `A` is `R`; the class and the presence flag are checked at run time.
+5. Handler tables, jump targets and register kinds are checked as in format 2; a resumption continues at the
+   instruction after `YIELD` / `AWAIT` with the same register kinds, so no new data-flow rules are needed.
+
+### 6.4 Compatibility
+
+- A format-3 module has `requires` 0.3.0 or later; a 0.2.x VM rejects it with `E7_ERR_VERSION` before reading the body.
+- The 0.3 promise extends section 5's: every 0.3.x VM runs every module compiled by a 0.2.x or 0.3.x compiler.
+  `tests/compat/0.2.6/` keeps 0.2.6 modules for the backward check.

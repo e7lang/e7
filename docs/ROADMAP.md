@@ -148,7 +148,7 @@ Candidates must satisfy the rules of SPEC section 0.1; features that need run-ti
   checks them too), and `Object.keys` / spread / `console.log` show a property set to `undefined` (F; as Node.js does).
 - The C API only grows (the `struct_size` scheme): existing hosts recompile without changes.
 
-### Design decisions first (DESIGN.md and BYTECODE.md, before code)
+### Design decisions first (written: [DESIGN-0.3.md](DESIGN-0.3.md), format 3 in [BYTECODE.md](BYTECODE.md) section 6)
 
 - **D1. Coroutines.** A generator or `async` activation owns its frames and registers in a heap object; `yield` /
   `await` move them off the VM stack, resuming moves them back. Budget suspension keeps working inside them. A native
@@ -162,8 +162,8 @@ Candidates must satisfy the rules of SPEC section 0.1; features that need run-ti
   `Promise<T>`, `then` / `catch` / `finally`, `new Promise((resolve, reject) => ...)`, `Promise.all` / `allSettled` /
   `race` / `any` over one element type, top-level `await` in the entry module, async iteration (`for await`).
   Not in scope: timers (`setTimeout`); a host that needs one provides it as an async host function.
-- **D3. Format 3.** New opcodes for coroutines and an `absent` value for objects of interface / object types (F);
-  the regular expression program is a constant kind. Written down in BYTECODE.md with `since 0.3.0` in since.h.
+- **D3. Format 3.** New opcodes for coroutines, function and class flags, a regular expression table; written
+  only for modules that use them (format 2 otherwise), with `since 0.3.0` in since.h.
 - **D4. Regular expressions.** An own backtracking engine with ECMAScript semantics (flags `dgimsuy`; the `v` flag
   later), compiled at compile time for literals (a syntax error in a literal is a compile error) and at run time for
   `new RegExp(source)`. Every step is charged to the instruction budget and backtracking memory to the memory limit,
@@ -176,6 +176,9 @@ Candidates must satisfy the rules of SPEC section 0.1; features that need run-ti
   allows. Unions of object types (discriminated unions) stay out.
 - **D6. Recursive interfaces and type aliases** (`interface Tree { children: Tree[] }`): named object types are
   resolved lazily so they can refer to themselves.
+
+- **D7. Properties that hold `undefined`** (item F): a presence mask in records whose type has optional or
+  `undefined`-typed properties; reads stay a single load.
 
 ### A. Generators and iterators (VM: D1)
 `function*`, `yield`, `yield*`, generator methods; `Generator<T>` / `Iterator<T>` / `IterableIterator<T>`; classes
@@ -209,7 +212,7 @@ The ES2023 copying methods (`toSorted`, `toReversed`, `toSpliced`, `with`); `Dat
 `BigInt64Array`); `structuredClone` of statically typed values.
 
 ### F. Properties that hold `undefined`
-Objects of interface / object types tell a missing property from one holding `undefined` (D3's `absent` value), so
+Objects of interface / object types tell a missing property from one holding `undefined` (D7's presence mask), so
 `Object.keys` / `entries` / `values`, spread and `console.log` match Node.js for `x: T | undefined` and
 `x?: T | undefined`. This removes the `undefined` row from SPEC section 9.
 
@@ -232,7 +235,7 @@ Objects of interface / object types tell a missing property from one holding `un
 - SPEC, TYPESCRIPT.md, the language tour, the playground and the AI skill updated with each feature.
 
 ### Order
-1. D1-D6 written down; format 3 in BYTECODE.md.
+1. D1-D7 written down (done: DESIGN-0.3.md); format 3 in BYTECODE.md section 6 (done).
 2. D (compiler only), released early as 0.2.x patches where it changes nothing for existing programs.
 3. A, then B (they share D1).
 4. C, independent of A and B, can run in parallel.

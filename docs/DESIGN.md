@@ -300,6 +300,8 @@ Once verification passes, execution **needs no type checks at all**, and memory 
 4. Points where a native function calls back into the script are marked as "non-suspendable boundaries", with the rules fixed in advance.
 5. The instruction set reserves opcode numbers for `YIELD` / `RESUME` / `AWAIT`.
 
+The 0.3 design of coroutines, `async` / `await` and regular expressions is in [DESIGN-0.3.md](DESIGN-0.3.md).
+
 ### 5.5 `.e7b` file format
 ```
 Header : magic "E7B\0" | format version | minimum VM version | flags | little-endian
