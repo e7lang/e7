@@ -851,6 +851,92 @@ void Checker::resolveInterface(InterfaceSym* is) {
   is->state = 2;
 }
 
+static int32_t toInt32(double d) {
+  if (!std::isfinite(d)) return 0;
+  double t = std::trunc(d);
+  double m = std::fmod(t, 4294967296.0);
+  if (m < 0) m += 4294967296.0;
+  return (int32_t)(uint32_t)m;
+}
+
+bool Checker::enumConst(Expr* x, EnumSym* cur, double& num, std::u16string& str, bool& isStr) {
+  isStr = false;
+  switch (x->k) {
+    case EK::Num: num = x->num; return true;
+    case EK::Str: str = x->str; isStr = true; return true;
+    case EK::Paren: return enumConst(x->a, cur, num, str, isStr);
+    case EK::Template:
+      if (!x->list.empty() || x->quasis.size() != 1) return false;
+      str = x->quasis[0];
+      isStr = true;
+      return true;
+    case EK::Ident: {
+      for (auto& m : cur->members)
+        if (m.name == x->raw) {
+          isStr = cur->isString || !m.str.empty();
+          if (isStr) str = m.str; else num = m.num;
+          return true;
+        }
+      return false;
+    }
+    case EK::Member: {
+      Expr* b = x->a;
+      while (b->k == EK::Paren) b = b->a;
+      if (b->k != EK::Ident) return false;
+      Sym* s = lookup(b->raw);
+      if (!s || s->k != SymK::Enum) return false;
+      EnumSym* other = static_cast<EnumSym*>(s);
+      if (other != cur) resolveEnum(other);
+      for (auto& m : other->members)
+        if (m.name == x->raw) {
+          isStr = !m.str.empty() || other->isString;
+          if (isStr) str = m.str; else num = m.num;
+          return true;
+        }
+      return false;
+    }
+    case EK::Unary: {
+      double a;
+      std::u16string sa;
+      bool as;
+      if (!enumConst(x->a, cur, a, sa, as) || as) return false;
+      if (x->raw == "-") num = -a;
+      else if (x->raw == "+") num = a;
+      else if (x->raw == "~") num = (double)~toInt32(a);
+      else return false;
+      return true;
+    }
+    case EK::Binary: {
+      double a = 0, b = 0;
+      std::u16string sa, sb;
+      bool as = false, bs = false;
+      if (!enumConst(x->a, cur, a, sa, as) || !enumConst(x->b, cur, b, sb, bs)) return false;
+      const std::string& op = x->raw;
+      if (as || bs) {
+        if (op != "+" || !as || !bs) return false;  // string members: only concatenation of strings
+        str = sa + sb;
+        isStr = true;
+        return true;
+      }
+      if (op == "+") num = a + b;
+      else if (op == "-") num = a - b;
+      else if (op == "*") num = a * b;
+      else if (op == "/") num = a / b;
+      else if (op == "%") num = std::fmod(a, b);
+      else if (op == "**") num = std::pow(a, b);
+      else if (op == "|") num = (double)(toInt32(a) | toInt32(b));
+      else if (op == "&") num = (double)(toInt32(a) & toInt32(b));
+      else if (op == "^") num = (double)(toInt32(a) ^ toInt32(b));
+      else if (op == "<<") num = (double)(int32_t)((uint32_t)toInt32(a) << (toInt32(b) & 31));
+      else if (op == ">>") num = (double)(toInt32(a) >> (toInt32(b) & 31));
+      else if (op == ">>>") num = (double)((uint32_t)toInt32(a) >> (toInt32(b) & 31));
+      else return false;
+      return true;
+    }
+    default: return false;
+  }
+}
+
 void Checker::resolveEnum(EnumSym* e) {
   if (e->state) return;
   e->state = 1;
@@ -860,18 +946,21 @@ void Checker::resolveEnum(EnumSym* e) {
     EnumSym::Member mem;
     mem.name = m.name;
     if (m.init) {
-      Expr* x = m.init;
-      bool neg = false;
-      if (x->k == EK::Unary && x->raw == "-" && x->a->k == EK::Num) { neg = true; x = x->a; }
-      if (x->k == EK::Num) {
-        mem.num = neg ? -x->num : x->num;
-        next = mem.num + 1;
-        anyNum = true;
-      } else if (x->k == EK::Str) {
-        mem.str = x->str;
+      // a constant expression (as in tsc): literals, earlier members (bare or E.X), members of other enums,
+      // parentheses, unary + - ~, binary arithmetic and bitwise operators, string concatenation
+      double num = 0;
+      std::u16string str;
+      bool isStr = false;
+      if (!enumConst(m.init, e, num, str, isStr)) {
+        err(m.init->loc, "enum member initializers must be constant expressions (literals, other members, and "
+                         "arithmetic, bitwise or + operators on them); computed members are not supported");
+      } else if (isStr) {
+        mem.str = str;
         anyStr = true;
       } else {
-        err(m.init->loc, "enum member initializers must be number or string literals");
+        mem.num = num;
+        next = mem.num + 1;
+        anyNum = true;
       }
     } else {
       if (anyStr) err(e->decl->loc, "enum member '" + m.name + "' must have an initializer");

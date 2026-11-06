@@ -218,6 +218,7 @@ class Checker {
   std::string memberWriteError(Expr* target);  // "" when the member may be written here
   Type* declaredMemberType(Expr* target);
   bool typeRefersTo(TypeNode* n, const std::string& name);
+  bool enumConst(Expr* x, EnumSym* cur, double& num, std::u16string& str, bool& isStr);
   bool structurallyAssignableImpl(Type* src, Type* dst);
   std::set<std::pair<Type*, Type*>> assumedAssignable_;  // recursive structural checks in progress
   std::string exactOptionalError(const std::string& name, Type* declared, Type* value);

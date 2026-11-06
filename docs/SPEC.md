@@ -65,7 +65,7 @@ three references that can each be checked mechanically:
 | `[A, B, ...]` | Tuple (fixed length, each element independently typed) | Fixed-length record |
 | `{ a: T; b?: U }`, `interface`, `type` alias | Structural object type (fields accessed by name, with inline caches) | Record/class instance |
 | `class C` | Nominal type, field layout fixed at compile time, virtual method dispatch | Instance |
-| `enum` | Numeric or string enum (compile-time constants) | number / string |
+| `enum` | Numeric or string enum (compile-time constants: literals or constant expressions of other members, `+ - * / % ** \| & ^ << >> >>> ~` and string `+`) | number / string |
 | `(a: A) => R` | Function type (closure) | Closure object |
 | `T \| null`, `T \| undefined`, `T \| null \| undefined`, optional `x?: T` | Nullable types | Reference; primitive types are boxed automatically |
 | `Map<K, V>`, `Set<T>` | Insertion-ordered, keys compared with SameValueZero | Heap object |

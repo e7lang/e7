@@ -27,7 +27,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **123 supported**, **18 partial**, **109 unsupported** (268 sample programs).
+250 features: **123 supported**, **19 partial**, **108 unsupported** (269 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -39,7 +39,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
 | [Classes](#classes) | 16 | 1 | 14 |
 | [Modules](#modules) | 4 | 1 | 8 |
-| [Enums](#enums) | 4 | 0 | 5 |
+| [Enums](#enums) | 4 | 1 | 4 |
 | [Utility Types](#utility-types) | 0 | 0 | 13 |
 | [Decorators](#decorators) | 0 | 0 | 3 |
 | [Declaration Merging](#declaration-merging) | 0 | 0 | 4 |
@@ -53,7 +53,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 21 | 1 | 9 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 9 | 6 | 11 |
-| **Total** | **123** | **18** | **109** |
+| **Total** | **123** | **19** | **108** |
 
 Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 67.
 
@@ -245,8 +245,8 @@ Within each category, supported features come first, then partial and unsupporte
 | Enum values as `number` / `string` | supported |  | [enum-to-number.ts](../tests/ts-features/enums/enum-to-number.ts) |
 | Numeric enums (auto-increment and explicit values) | supported |  | [numeric-enums.ts](../tests/ts-features/enums/numeric-enums.ts) |
 | String enums | supported |  | [string-enums.ts](../tests/ts-features/enums/string-enums.ts) |
+| Computed and constant-expression enum members | **partial** | **Works:** constant expressions: literals, other members, `+ - * / % ** \| & ^ << >> >>> ~`, string concatenation. **Not supported:** enum members are compile-time constants in E7; a computed member would be evaluated at run time (*not implemented yet*). **Instead:** a constant expression, or a `const` variable next to the enum | [computed-members.ok.ts](../tests/ts-features/enums/computed-members.ok.ts), [computed-members.no.ts](../tests/ts-features/enums/computed-members.no.ts) |
 | Ambient enums (`declare enum`) | **unsupported** | **Why:** only functions can be provided by the host (*verifiable bytecode*). **Instead:** an ordinary `enum` | [ambient-enums.ts](../tests/ts-features/enums/ambient-enums.ts) |
-| Computed and constant-expression enum members | **unsupported** | **Why:** initializers must be number or string literals (*not implemented yet*). **Instead:** write the value as a literal (`Write = 2`), or use `const` variables | [computed-members.ts](../tests/ts-features/enums/computed-members.ts) |
 | Enum members as types (`E.A`) | **unsupported** | **Why:** literal types are not represented (*not implemented yet*). **Instead:** the enum type, with a run-time check | [enum-member-types.ts](../tests/ts-features/enums/enum-member-types.ts) |
 | Heterogeneous enums (numbers and strings mixed) | **unsupported** | **Why:** an enum is either `number` or `string` (*types known at compile time*). **Instead:** two enums, or string values only | [heterogeneous-enums.ts](../tests/ts-features/enums/heterogeneous-enums.ts) |
 | Reverse mappings and enums as run-time objects (`E[value]`, `Object.keys(E)`) | **unsupported** | **Why:** enum members are compile-time constants, there is no enum object (*types known at compile time*). **Instead:** a `switch` or a `Map<E, string>` from values to names | [reverse-mappings.ts](../tests/ts-features/enums/reverse-mappings.ts) |
