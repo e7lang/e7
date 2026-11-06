@@ -3,7 +3,7 @@
 import createE7 from "./wasm/e7wasm.js";
 
 /** Version of this npm package. */
-export const version = "0.2.7";
+export const version = "0.3.0";
 
 const STATUS = [
   "ok", "suspended", "runtime_error", "budget_exceeded", "out_of_memory", "stack_overflow", "load_error",
@@ -150,7 +150,7 @@ function hexToBytes(h) {
   return out;
 }
 
-// "0.2" | "0.2.7" | "v0.2" | 0x000200 -> version text for e7w_compile_target (validated in C)
+// "0.2" | "0.3.0" | "v0.2" | 0x000200 -> version text for e7w_compile_target (validated in C)
 function targetString(t) {
   if (typeof t === "number") {
     if (!Number.isInteger(t) || t < 0 || t > 0xffffff) throw new E7Error(`invalid target version ${t}`);

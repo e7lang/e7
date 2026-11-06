@@ -31,8 +31,8 @@ extern "C" {
 #endif
 
 #define E7_VERSION_MAJOR 0
-#define E7_VERSION_MINOR 2
-#define E7_VERSION_PATCH 7
+#define E7_VERSION_MINOR 3
+#define E7_VERSION_PATCH 0
 
 typedef struct e7_vm e7_vm;
 typedef struct e7_module e7_module;
@@ -101,7 +101,7 @@ E7_API void e7_config_init(e7_config* cfg);
 /* cfg may be NULL (defaults). Returns NULL on allocation failure or an invalid cfg->struct_size. */
 E7_API e7_vm* e7_vm_new(const e7_config* cfg);
 E7_API void e7_vm_free(e7_vm* vm);
-E7_API const char* e7_version(void);            /* e.g. "0.2.7" */
+E7_API const char* e7_version(void);            /* e.g. "0.3.0" */
 E7_API uint32_t e7_version_number(void);        /* major << 16 | minor << 8 | patch */
 
 /* ---- modules ---- */
