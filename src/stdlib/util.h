@@ -109,7 +109,7 @@ std::vector<uint32_t> jsFieldOrder(const ClassRT* c);  // JavaScript property or
 }  // namespace e7
 
 namespace e7 {
-// ---- typed arrays (0.3): a byte view whose Obj::flags bits 0-3 give the element kind (0: Uint8Array)
+// ---- typed arrays: a byte view whose Obj::flags bits 0-3 give the element kind (0: Uint8Array)
 enum TAKind : uint8_t { TA_U8, TA_I8, TA_U8C, TA_I16, TA_U16, TA_I32, TA_U32, TA_F32, TA_F64, TA_BI64, TA_BU64, TA__COUNT };
 inline uint32_t taSize(uint8_t k) {
   static const uint8_t s[TA__COUNT] = {1, 1, 1, 2, 2, 4, 4, 4, 8, 8, 8};

@@ -733,28 +733,6 @@ static e7::Module compileModule(const char* src, bool debug) {
   return co.module;
 }
 
-// the line-table reader of VMs before debug information (copied from e7 1.0.1): returns the line
-static uint32_t oldLineFor(const std::vector<uint32_t>& L, size_t pc, std::string& file, const e7::Module& m) {
-  uint32_t line = 0;
-  size_t i = 0;
-  for (; i + 1 < L.size(); i += 2) {
-    if (L[i] == e7::kLineExtMarker) break;
-    if ((size_t)L[i] > pc) {
-      while (i + 1 < L.size() && L[i] != e7::kLineExtMarker) i += 2;
-      break;
-    }
-    line = L[i + 1];
-  }
-  if (i + 1 < L.size() && L[i] == e7::kLineExtMarker && L[i + 1] == e7::kLineExtFiles) {
-    for (size_t j = i + 2; j + 3 < L.size(); j += 4) {
-      if (L[j] != e7::kLineExtMarker || L[j + 2] != e7::kLineExtMarker) break;
-      if ((size_t)L[j + 1] > pc) break;
-      if (L[j + 3] < m.strs.size()) file = e7::utf16ToUtf8(m.strs[L[j + 3]]);
-    }
-  }
-  return line;
-}
-
 static uint32_t rd32(const std::vector<uint8_t>& b, size_t at) {
   return (uint32_t)b[at] | ((uint32_t)b[at + 1] << 8) | ((uint32_t)b[at + 2] << 16) | ((uint32_t)b[at + 3] << 24);
 }
@@ -781,22 +759,6 @@ static void testFormat() {
     CHECK(back.funcs[i].lines == rel.funcs[i].lines);  // the extension is stripped from the table
     CHECK(back.funcs[i].debug.stmts.size() == dbg.funcs[i].debug.stmts.size());
     CHECK(back.funcs[i].debug.locals.size() == dbg.funcs[i].debug.locals.size());
-  }
-  // a reader from before debug information (it stops at the first group that is not a file segment)
-  // maps every pc to the same line and file whether or not the debug extension follows the table
-  for (auto& f : dbg.funcs) {
-    std::vector<uint32_t> ext = f.lines;
-    ext.push_back(e7::kLineExtMarker);
-    ext.push_back(e7::kLineExtDebug);
-    ext.push_back(3);
-    ext.push_back(0x12345678);
-    ext.push_back(e7::kLineExtMarker);
-    ext.push_back(e7::kLineExtMarker);
-    for (size_t pc = 0; pc < f.code.size(); pc++) {
-      std::string fa = "main.ts", fb = "main.ts";
-      CHECK(oldLineFor(f.lines, pc, fa, dbg) == oldLineFor(ext, pc, fb, dbg));
-      CHECK(fa == fb);
-    }
   }
   e7_vm* vm = newVm();
   e7_module* mod = nullptr;

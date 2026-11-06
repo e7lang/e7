@@ -1,4 +1,4 @@
-// Soak test (docs/ROADMAP.md 0.2.5, P0.4): one VM, many calls of a mix of exported functions
+// Soak test: one VM, many calls of a mix of exported functions
 // (strings, arrays, maps, closures, classes, try/catch, crypto, JSON, BigInt, a host native; half of
 // them with string / bytes arguments converted by the C API, some in suspended slices). After a
 // warm-up, the heap after a full collection must stay flat: every sample equals the first one within

@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // yield* edge cases: an inner generator that yields from its finally block when returned, a throw the
 // inner generator does not catch, a return value that is a rejected promise, queued requests
 async function* stubborn(): AsyncGenerator<string> {

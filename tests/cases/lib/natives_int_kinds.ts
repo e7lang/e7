@@ -1,5 +1,5 @@
 // Maps, sets and arrays with integer-typed keys / values / elements use their own natives (one per
-// element kind); no other test called them (0.2.5 coverage report).
+// element kind); no other test called them (coverage report).
 const mi = new Map<i32, string>();
 mi.set(i32(1), "one");
 mi.set(i32(-2), "minus two");

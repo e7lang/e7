@@ -204,7 +204,7 @@ void VM::raiseThrown(Obj* error) {
   StrObj *n, *m;
   if (!errorParts(error, &n, &m)) raise(ERR_RUNTIME, "throw: not an Error object", false);
   std::string name = strUtf8(n), text = strUtf8(m);
-  // uncaught: "message" for Error (as before 0.2), "TypeError: message" for the others
+  // uncaught: "message" for Error, "TypeError: message" for the others
   std::string msg = name == "Error" ? text : name + ": " + text;
   E7Error e(ERR_RUNTIME, msg);
   e.jsName = name.empty() ? "Error" : name;
@@ -282,7 +282,7 @@ int VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
     if (!h) {
       CoroObj* co = frames_[k].coro;
       if (co && isAsyncGen(co)) {
-        // the error leaves an async generator (0.3.1): it is completed, the promise of its current
+        // the error leaves an async generator: it is completed, the promise of its current
         // request is rejected and the requests queued after it are answered; its caller continues
         budget_ -= (int64_t)(frames_.size() - k);
         nativeDepth_ = st.nativeDepth;

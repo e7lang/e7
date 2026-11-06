@@ -73,7 +73,7 @@ Linux（x64、arm64）、macOS（通用二进制）、Windows（x64）。压缩�
 什么都不想装：[Playground](https://e7lang.github.io/playground) 直接在浏览器里运行编译器和虚拟机（WebAssembly）。
 **Node.js / 浏览器：** [packages/e7](packages/e7) 是同一套编译器和虚拟机的 WebAssembly 版本，提供 JavaScript API
 （`compile`、`check`、`run`、`disassemble`）和 `e7-js` 命令行。它不发布到 npm 仓库（E7 面向原生 App），需要时从 GitHub
-Release 下载 [`e7lang-e7-0.3.1.tgz`](https://github.com/e7lang/e7/releases/download/v0.3.1/e7lang-e7-0.3.1.tgz)，再运行 `npm install ./e7lang-e7-0.3.1.tgz`。
+Release 下载 [`e7lang-e7-0.1.0.tgz`](https://github.com/e7lang/e7/releases/download/v0.1.0/e7lang-e7-0.1.0.tgz)，再运行 `npm install ./e7lang-e7-0.1.0.tgz`。
 
 **从源码构建：** 需要 CMake ≥ 3.16 和支持 C++17 的编译器（GCC、Clang、MSVC），Ninja 可选。
 
@@ -173,7 +173,7 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 Swift 项目可直接通过 Swift Package Manager 引入：
 
 ```swift
-// Package.swift：.package(url: "https://github.com/e7lang/e7.git", from: "0.3.1")
+// Package.swift：.package(url: "https://github.com/e7lang/e7.git", from: "0.1.0")
 //                .product(name: "E7VM", package: "e7")
 import E7VM
 
@@ -187,7 +187,7 @@ Android 直接从 Maven 引入 AAR：
 
 ```kotlin
 dependencies {
-    implementation("org.e7vm:e7vm-android:0.3.1")   // 桌面 JVM 用 org.e7vm:e7vm:0.3.1
+    implementation("org.e7vm:e7vm-android:0.1.0")   // 桌面 JVM 用 org.e7vm:e7vm:0.1.0
 }
 ```
 
@@ -325,7 +325,7 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
 | Android | Maven `org.e7vm:e7vm-android`（AAR），或 `cd platform/android && ./gradlew :library:assembleRelease`，或 `ANDROID_NDK_HOME=... platform/android/build_android.sh` | Java/Kotlin：`platform/java/org/e7vm` |
 | JVM（桌面） | Maven `org.e7vm:e7vm`（jar 内含 Linux、macOS、Windows 的 JNI 库） | Java/Kotlin：`platform/java/org/e7vm` |
-| iOS / macOS（Swift） | Swift Package Manager：`.package(url: "https://github.com/e7lang/e7.git", from: "0.3.1")`，或 `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`.product(name: "E7VM", package: "e7")`（`platform/ios/E7VM/E7VM.swift`） |
+| iOS / macOS（Swift） | Swift Package Manager：`.package(url: "https://github.com/e7lang/e7.git", from: "0.1.0")`，或 `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`.product(name: "E7VM", package: "e7")`（`platform/ios/E7VM/E7VM.swift`） |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]`（VS 2022） | C/C++、C#：`platform/windows/E7VM.cs` |
 | .NET（Windows / Linux / macOS） | `dotnet add package E7VM` | C#：NuGet 包 [`E7VM`](https://www.nuget.org/packages/E7VM) |
 | WebAssembly（Node.js、浏览器） | `emcmake cmake -S . -B build-wasm && cmake --build build-wasm` → `e7wasm.js` + `e7wasm.wasm` | JavaScript：npm `@e7lang/e7`（[packages/e7](packages/e7)） |

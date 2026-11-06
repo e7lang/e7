@@ -25,11 +25,6 @@ export interface CompileOptions {
   readFile?: (path: string) => string | undefined;
   /** Add debug information (statement boundaries, local variable names, columns) to the bytecode. */
   debug?: boolean;
-  /**
-   * Oldest e7vm that must run the module, e.g. "0.2" (or a number major << 16 | minor << 8 | patch).
-   * Features newer than the target are compile errors. Default: this VM's version. Throws E7Error if malformed.
-   */
-  target?: string | number;
 }
 
 export interface CompileResult {
@@ -95,9 +90,9 @@ export interface ModuleInfo {
   /** "ok", "version_error" (format or required e7vm too new) or "load_error" (not a module / corrupted). */
   status: Status;
   code: number;
-  /** Bytecode format version (2 for e7vm 0.2). */
+  /** Bytecode format identifier (this VM reads format 3). */
   format: number;
-  /** Oldest e7vm that can run the module, e.g. "0.2.0" (null for format 1). */
+  /** Oldest e7vm that can run the module, e.g. "0.1.0" (null when the format is not one this VM reads). */
   requiresVersion: string | null;
   /** The same as major << 16 | minor << 8 | patch. */
   requiresVersionNumber: number;

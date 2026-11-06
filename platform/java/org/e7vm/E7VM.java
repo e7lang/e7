@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * byte[] (Uint8Array), KeyHandle. Results: Double, Long, Boolean, String, byte[] or null (void).
  * A VM is not thread-safe; use one VM per thread.
  *
- * <p>Async host functions (0.3): a script's {@code declare function fetchKey(id: string): Promise<Uint8Array>;}
+ * <p>Async host functions: a script's {@code declare function fetchKey(id: string): Promise<Uint8Array>;}
  * is registered with {@link #registerAsyncNative}; the host returns a {@link CompletionStage} completed on any
  * thread. A call that waits for such operations runs with {@link #callAsync} (non-blocking: the VM runs on an
  * executor, the "VM thread") or {@link #callAwait} (blocking: the calling thread is the VM thread):
@@ -136,7 +136,7 @@ public final class E7VM implements AutoCloseable {
     /** True if this VM supports the module's format and required version. */
     public boolean canRun() { return status == 0; }
 
-    /** requiresVersion as text, e.g. "0.2.0". */
+    /** requiresVersion as text, e.g. "0.1.0". */
     public String requiresVersionString() { return versionString(requiresVersion); }
   }
 
@@ -243,7 +243,7 @@ public final class E7VM implements AutoCloseable {
         + "run it with callAsync / callAwait (loadAsync / loadAwait)");
   }
 
-  // ------------------------------------------------------------------ async host functions (0.3)
+  // ------------------------------------------------------------------ async host functions
 
   /**
    * Registers an async host function (Android: API 24+, for {@link CompletionStage}) before load(): the script declares it returning a Promise, e.g.
@@ -537,7 +537,7 @@ public final class E7VM implements AutoCloseable {
 
   public static byte[] publicKey(byte[] seed) { return nativePublicKey(seed); }
 
-  /** Library version, e.g. "0.2.0". */
+  /** Library version, e.g. "0.1.0". */
   public static String version() { return versionString(versionNumber()); }
 
   /** Library version as major &lt;&lt; 16 | minor &lt;&lt; 8 | patch (compare with {@link ModuleInfo#requiresVersion}). */

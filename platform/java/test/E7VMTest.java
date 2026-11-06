@@ -78,13 +78,13 @@ public class E7VMTest {
         check(e.status == E7Exception.ARGS, "args status");
       }
     }
-    // 0.2 API: version number, inspect, GC statistics and growth setting, detached signatures
+    // version number, inspect, GC statistics and growth setting, detached signatures
     int vn = E7VM.versionNumber();
     check(E7VM.version().equals((vn >> 16) + "." + ((vn >> 8) & 255) + "." + (vn & 255)) && vn >= 0x000200, "versionNumber");
     E7VM.ModuleInfo info = E7VM.inspect(signed);
-    check(info.canRun() && info.format == 2 && info.requiresVersion == 0x000200 && info.isSigned && !info.hasDebugInfo,
+    check(info.canRun() && info.format == 3 && info.requiresVersion == 0x000100 && info.isSigned && !info.hasDebugInfo,
         "inspect signed module");
-    check("0.2.0".equals(info.requiresVersionString()) && info.keyId.length == 8 && (info.keyId[0] | info.keyId[7]) != 0, "inspect key id");
+    check("0.1.0".equals(info.requiresVersionString()) && info.keyId.length == 8 && (info.keyId[0] | info.keyId[7]) != 0, "inspect key id");
     check(!E7VM.inspect(code).isSigned, "inspect unsigned module");
     check(E7VM.inspect(new byte[] {1, 2, 3}).status == E7Exception.LOAD, "inspect garbage");
     try (E7VM vm = new E7VM(new E7VM.Config().gcGrowthPercent(150))) {

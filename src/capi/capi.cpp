@@ -94,7 +94,7 @@ static bool copySized(const T* in, T& out) {
 
 extern "C" {
 
-const char* e7_version(void) { return "0.3.1"; }
+const char* e7_version(void) { return "0.1.0"; }
 uint32_t e7_version_number(void) { return kVmVersion; }
 
 void e7_config_init(e7_config* cfg) {
@@ -162,15 +162,13 @@ static e7_status loadBytes(e7_vm* v, const uint8_t* data, size_t len, e7_module*
   if (sig == 0 && v->requireSignature) return fail(v, E7_ERR_SIGNATURE, "module is not signed");
   ModuleHeader hdr;
   if (!readModuleHeader(data, payload, hdr)) return fail(v, E7_ERR_LOAD, "not an e7b file");
-  if (hdr.format < kMinFormatVersion || hdr.format > kFormatVersion)
+  if (hdr.format != kFormatVersion)
     return fail(v, E7_ERR_VERSION, "e7b format " + std::to_string(hdr.format) + " is not supported by e7vm " +
-                                       versionString(kVmVersion) + " (it reads formats " +
-                                       std::to_string(kMinFormatVersion) + " to " + std::to_string(kFormatVersion) +
-                                       "); recompile the module");
+                                       versionString(kVmVersion) + " (it reads format " +
+                                       std::to_string(kFormatVersion) + "); recompile the module");
   if (hdr.minVm > kVmVersion)
     return fail(v, E7_ERR_VERSION, "the module requires e7vm " + versionString(hdr.minVm) + "; this is e7vm " +
-                                       versionString(kVmVersion) + " (compile with e7c --target " +
-                                       versionString(kVmVersion) + ")");
+                                       versionString(kVmVersion));
   Module m;
   std::string err;
   if (!deserializeModule(data, payload, m, err)) return fail(v, E7_ERR_LOAD, err);
@@ -236,7 +234,6 @@ e7_status e7_compile_ex(const char* source, size_t len, const char* file_name, c
   try {
     CompileOptions co_;
     co_.debugInfo = opts && (opts->flags & E7_COMPILE_DEBUG);
-    co_.target = opts ? opts->target_version : 0;
     std::string name = file_name ? file_name : "main.ts";
     std::string src(source ? source : "", len);
     CompileOutput co;
@@ -738,7 +735,7 @@ e7_status e7_inspect(const uint8_t* data, size_t len, e7_module_info* info) {
     r.format = hdr.format;
     r.requires_version = hdr.minVm;
     r.has_debug_info = (hdr.flags & kModuleFlagDebug) ? 1 : 0;
-    if (hdr.format < kMinFormatVersion || hdr.format > kFormatVersion || hdr.minVm > kVmVersion) {
+    if (hdr.format != kFormatVersion || hdr.minVm > kVmVersion) {
       st = E7_ERR_VERSION;
     } else {
       Module m;

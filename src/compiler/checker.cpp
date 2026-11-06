@@ -1121,7 +1121,7 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
     return T.generator(y, r, n, gk);
   }
   if (name == "AsyncGenerator" || name == "AsyncIterator" || name == "AsyncIterableIterator" || name == "AsyncIterable") {
-    // all are async generators at run time (0.3.1)
+    // all are async generators at run time
     uint8_t gk = name == "AsyncGenerator" ? 0 : name == "AsyncIterator" ? 1 : name == "AsyncIterableIterator" ? 2 : 3;
     if (args.empty() || args.size() > 3) {
       err(l, "type '" + name + "' requires 1 to 3 type argument(s)");

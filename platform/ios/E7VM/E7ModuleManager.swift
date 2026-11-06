@@ -507,7 +507,7 @@ public final class E7ModuleManager {
     return m
   }
 
-  // "0.2", "0.2.1", "v0.2" -> major << 16 | minor << 8 | patch
+  // "1.2", "1.2.3", "v1.2" -> major << 16 | minor << 8 | patch
   static func parseVersion(_ s: String) -> UInt32? {
     let t = s.hasPrefix("v") ? String(s.dropFirst()) : s
     let parts = t.split(separator: ".", omittingEmptySubsequences: false)

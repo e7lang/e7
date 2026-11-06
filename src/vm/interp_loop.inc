@@ -308,7 +308,7 @@ dispatch:
     DISPATCH();                                                              \
   } while (0)
 
-// returning from an async generator's frame (0.3.1): it is completed, its first request gets
+// returning from an async generator's frame: it is completed, its first request gets
 // { value, done: true } and the requests queued after it are answered (AsyncGeneratorDrainQueue)
 #define AGEN_RET(rv, kc)                                                     \
   do {                                                                       \
@@ -752,7 +752,7 @@ dispatch:
   // `debugger;`: the debug interpreter has already stopped here (DF_DEBUGGER) when appropriate
   CASE(DEBUGGER) DISPATCH();
 
-  // ---- coroutines (DESIGN-0.3.md D1)
+  // ---- coroutines (DESIGN.md D1)
   // first instruction of a generator: save the frame (arguments in place) into a new coroutine and
   // return it without running the body
   CASE(GEN_START) {
@@ -771,7 +771,7 @@ dispatch:
     CoroObj* co = fr->coro;
     if (E7_UNLIKELY(!co)) THROW("yield outside a running generator");
     if (E7_UNLIKELY(fflagsKind(co->fflags) == FK_ASYNC_GENERATOR)) {
-      // AsyncGeneratorYield (0.3.1; the value is already awaited): the first request gets
+      // AsyncGeneratorYield (the value is already awaited): the first request gets
       // { value, done: false }; a request queued after it is answered here at once, else the
       // generator suspends
       fr->ip = ip;
@@ -833,7 +833,7 @@ dispatch:
     uint8_t ff = co->fflags;
     uint16_t vdst = B, ddst = C;
     if (E7_UNLIKELY((ex & kResumeAsync) != 0)) {
-      // a request to an async generator (0.3.1): B receives its promise; the body runs now only when
+      // a request to an async generator: B receives its promise; the body runs now only when
       // it waits at its start or at a yield (AsyncGeneratorResume)
       if (E7_UNLIKELY(!isAsyncGen(co))) THROW("generator type mismatch");
       fr->ip = ip;
@@ -943,7 +943,7 @@ dispatch:
   CASE(AWAIT) {
     CoroObj* co = fr->coro;
     // an async function (its promise goes to the caller at the first await) or an async generator
-    // (0.3.1: its caller has the request's promise already)
+    // (its caller has the request's promise already)
     if (E7_UNLIKELY(!co || !((fflagsKind(co->fflags) == FK_ASYNC && co->promise) || fflagsKind(co->fflags) == FK_ASYNC_GENERATOR)))
       THROW("await outside a running async function");
     Obj* po = R[B].r;

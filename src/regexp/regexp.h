@@ -1,4 +1,4 @@
-// ECMAScript regular expressions for e7vm (docs/DESIGN-0.3.md, D4).
+// ECMAScript regular expressions for e7vm (docs/DESIGN.md, D4).
 //
 // A pattern is parsed and compiled to a small program, which a backtracking matcher with an explicit
 // stack runs on UTF-16 input: no C++ recursion depends on the input or (beyond a fixed nesting limit

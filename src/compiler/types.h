@@ -15,11 +15,11 @@ enum class TT : uint8_t {
   Array, Bytes, ArrayBuffer, DataView, Map, Set, Func, Class, Object, Tuple, Optional, Enum,
   Handle, TextEncoder, TextDecoder, Error, Date, Unknown,
   Caught,  // a catch variable: 'unknown' in TypeScript; narrow with instanceof Error
-  Generator,  // 0.3: Generator<T, TReturn, TNext> / Iterator<T> / IterableIterator<T> (elem, ret, val; gk)
-  Promise,    // 0.3: Promise<T> (elem)
-  TypedArray, // 0.3: Int8Array ... Float64Array, BigInt64Array, BigUint64Array (vt: the element kind, TAKind)
-  RegExp,     // 0.3: RegExp (reCaps / reNames: the groups of a literal; reCaps -1 for a pattern unknown until run time)
-  // 0.3.1: AsyncGenerator<T, TReturn, TNext> / AsyncIterator<T> / AsyncIterableIterator<T> / AsyncIterable<T>
+  Generator,  // Generator<T, TReturn, TNext> / Iterator<T> / IterableIterator<T> (elem, ret, val; gk)
+  Promise,    // Promise<T> (elem)
+  TypedArray, // Int8Array ... Float64Array, BigInt64Array, BigUint64Array (vt: the element kind, TAKind)
+  RegExp,     // RegExp (reCaps / reNames: the groups of a literal; reCaps -1 for a pattern unknown until run time)
+  // AsyncGenerator<T, TReturn, TNext> / AsyncIterator<T> / AsyncIterableIterator<T> / AsyncIterable<T>
   // (elem, ret, val and gk as for Generator: all are async generators at run time)
   AsyncGenerator
 };
@@ -124,7 +124,7 @@ struct VarSym : Sym {
 struct FuncSym : Sym {
   FuncSym() : Sym(SymK::Func) {}
   Type* type = nullptr;  // Func type
-  // 0.3: generator (function*: type->ret is a Generator type) and async function (type->ret is a
+  // generator (function*: type->ret is a Generator type) and async function (type->ret is a
   // Promise type); yieldTypes collects the yielded types when the return type is inferred
   bool isGenerator = false, isAsync = false;
   std::vector<Type*> yieldTypes;

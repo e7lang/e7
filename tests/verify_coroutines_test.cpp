@@ -1,4 +1,4 @@
-// Format-3 coroutines and records (0.3): the verifier must reject every malformed use of the new
+// Coroutines and records with a presence mask: the verifier must reject every malformed use of the
 // instructions and flags (GEN_START / ASYNC_START / YIELD / RESUME_* / AWAIT / FIELD_ABSENT, fflags,
 // cflags), and the run-time checks must stop wrong dynamic uses without memory unsafety.
 #include <cstdio>
@@ -75,7 +75,6 @@ int main() {
   CHECK(run(co.module, &err, &v) == E7_OK);
   // yields 0+1+2, returns t = 1+1+... (the three values sent after the first next), 10 from twice, 1 key
   CHECK(v == 3 + 3 * 10 + 10 + 100);  // yields 0+1+2, returns the three values sent (1+1+1), twice(5), one key
-  CHECK(co.module.format == 2 || e7::neededFormat(co.module) == 3);
   size_t gi = funcNamed(co.module, "gen"), ai = funcNamed(co.module, "twice"), mi = funcNamed(co.module, "main");
   CHECK(gi != SIZE_MAX && ai != SIZE_MAX && mi != SIZE_MAX);
   if (failures) return 1;
@@ -169,7 +168,7 @@ int main() {
     f.code[pc] = (f.code[pc] & ~(0xFFFFull << 32)) | ((uint64_t)refReg << 32);
   }, "generator type mismatch");
 
-  // ---- async generators (0.3.1): function kind 3, requests to them (RESUME_R with kResumeAsync)
+  // ---- async generators: function kind 3, requests to them (RESUME_R with kResumeAsync)
   {
     static const char* kAsyncSrc =
         "function* syncGen(): Generator<number> { yield 1; }\n"
@@ -200,7 +199,7 @@ int main() {
     std::string aerr;
     CHECK(run(ac.module, &aerr, &av) == E7_OK);
     CHECK(av == 3 + 110 + 100 + 1000);  // 0+1+2, return 5+6, the sync generator's 1, one string of length 1
-    CHECK(ac.module.minVm == ((0u << 16) | (3u << 8) | 1u));
+    CHECK(ac.module.minVm == 0x000100);  // 0.1.0: everything is baseline
     size_t agi = funcNamed(ac.module, "agen"), ami = funcNamed(ac.module, "main"), asi = funcNamed(ac.module, "syncGen");
     CHECK(agi != SIZE_MAX && ami != SIZE_MAX && asi != SIZE_MAX);
     CHECK(e7::fflagsKind(ac.module.funcs[agi].fflags) == e7::FK_ASYNC_GENERATOR);

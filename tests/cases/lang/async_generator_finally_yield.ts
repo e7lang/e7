@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // a yield in a finally block turns return(v) back into a yield; the requests queued behind it wait
 async function* g(): AsyncGenerator<string, string> {
   try {

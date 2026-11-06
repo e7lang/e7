@@ -1,4 +1,4 @@
-// Error values outside try/catch: conversions match Node.js (try/catch security review, 0.2.1)
+// Error values outside try/catch: conversions match Node.js (try/catch security review)
 const e = new TypeError("t");
 const r = new RangeError("bad");
 console.log(JSON.stringify(e), JSON.stringify({ err: r, n: 1 }), JSON.stringify([e]));

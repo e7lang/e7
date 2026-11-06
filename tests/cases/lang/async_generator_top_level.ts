@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // top-level for await over an async generator; an exported async function that consumes one
 async function* lines(text: string): AsyncGenerator<string> {
   for (const line of text.split("\n")) {

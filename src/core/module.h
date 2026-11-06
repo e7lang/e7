@@ -5,10 +5,9 @@
 
 namespace e7 {
 
-// Newest e7b format this code reads and writes. Format 3 (0.3) adds function and class flags and the
-// regular expression table; a module that uses none of them is written as format 2, which 0.2.x VMs read.
+// The e7b format identifier this code reads and writes (the header's format field). The loader accepts
+// exactly this value; see docs/BYTECODE.md.
 constexpr uint32_t kFormatVersion = 3;
-constexpr uint32_t kMinFormatVersion = 2;
 
 struct FieldDesc {
   std::string name;
@@ -19,7 +18,7 @@ struct ClassDesc {
   std::string name;
   int32_t parent = -1;     // index of parent class or -1
   uint8_t isRecord = 0;    // anonymous object-literal shape
-  uint8_t cflags = 0;      // format 3: kClassFlag*
+  uint8_t cflags = 0;      // kClassFlag*
   std::vector<FieldDesc> fields;      // full layout incl. inherited fields
   std::vector<uint32_t> vtable;       // function indices (incl. inherited)
   std::vector<std::string> methodNames;  // parallel to vtable
@@ -55,7 +54,7 @@ struct HandlerDesc {
 
 // ClassDesc::cflags: the instances carry a presence mask (D7, records only)
 constexpr uint8_t kClassFlagPresence = 1;
-// ClassDesc::cflags (0.3.1): a record (object literal) with getters / setters. Field x of the record is an
+// ClassDesc::cflags: a record (object literal) with getters / setters. Field x of the record is an
 // accessor property when the vtable has a method "get x" or "set x"; the field holds the accessor pair, a
 // tuple [getter closure or null, setter closure or null, slot of the property's value type] (BYTECODE.md 6.5)
 constexpr uint8_t kClassFlagAccessors = 2;
@@ -64,7 +63,7 @@ struct FuncDesc {
   std::string name;
   uint32_t sig = 0;                 // index into Module::sigs
   uint16_t nparams = 0;
-  uint8_t fflags = 0;               // format 3: function kind and coroutine value kinds (opcodes.h)
+  uint8_t fflags = 0;               // function kind and coroutine value kinds (opcodes.h)
   std::vector<uint8_t> regKinds;    // Kind per register; first nparams are params
   std::vector<uint8_t> upvalKinds;  // Kind of each captured cell's content
   std::vector<uint32_t> icNames;    // string-constant index per inline-cache slot
@@ -75,18 +74,18 @@ struct FuncDesc {
   FuncDebug debug;
 };
 
-// Line-table extension (backward compatible: readers that stop at the first pc greater than the
-// current one never look at it). After the (pc, line) pairs a function may carry
+// Line-table extension (lookups that stop at the first pc greater than the current one never look at
+// it). After the (pc, line) pairs a function may carry
 //   (kLineExtMarker, kLineExtFiles) followed by (kLineExtMarker, pc), (kLineExtMarker, strIndex)...
 // meaning: code from `pc` on comes from the source file named by string constant `strIndex`
 // (relative to the entry file). Without segments, all code is from the module's entry file.
 constexpr uint32_t kLineExtMarker = 0xFFFFFFFFu;
 constexpr uint32_t kLineExtFiles = 0x53454C46u;  // "FLES"
 // Debug-information extension (after the file segments, if any): (kLineExtMarker, kLineExtDebug),
-// a word count n (< 2^31), then n payload words (see docs/BYTECODE.md). Older readers ignore it
-// (their file-segment scan stops at the first group that is not (marker, pc, marker, index)).
+// a word count n (< 2^31), then n payload words (see docs/BYTECODE.md). The file-segment scan stops at
+// the first group that is not (marker, pc, marker, index).
 constexpr uint32_t kLineExtDebug = 0x31474244u;  // "DBG1"
-// Module header flag: the module carries debug information (informational; old readers ignore flags).
+// Module header flag: the module carries debug information (informational; unknown flags are ignored).
 constexpr uint32_t kModuleFlagDebug = 1;
 
 struct NativeImport {
@@ -114,14 +113,13 @@ struct RegExpDesc {
 };
 
 struct Module {
-  uint32_t format = 2;  // e7b format written / read (2 or 3)
   std::string name;
   std::vector<int64_t> ints;
   std::vector<double> nums;
   std::vector<std::u16string> strs;
   std::vector<std::string> sigs;  // e.g. "FR>I" : param kinds '>' return kind (V = void)
   std::vector<NativeImport> natives;
-  std::vector<RegExpDesc> regexps;  // format 3
+  std::vector<RegExpDesc> regexps;
   std::vector<ClassDesc> classes;
   std::vector<FuncDesc> funcs;
   std::vector<GlobalDesc> globals;
@@ -143,9 +141,6 @@ bool readModuleHeader(const uint8_t* data, size_t len, ModuleHeader& out);
 // Signature string helpers
 inline std::string sigParams(const std::string& sig) { return sig.substr(0, sig.find('>')); }
 inline char sigRet(const std::string& sig) { return sig.empty() ? 'V' : sig.back(); }
-
-// The format a module needs: 3 if it uses a format-3 feature, else 2.
-uint32_t neededFormat(const Module& m);
 
 // Serialization (core/serialize.cpp)
 std::vector<uint8_t> serializeModule(const Module& m);

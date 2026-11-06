@@ -224,7 +224,7 @@ public class E7VMApiTest {
     E7VM.ModuleInfo info = E7VM.inspect(E7VM.sign(code, seed()));
     assertTrue(info.canRun());
     assertEquals(2, info.format);
-    assertEquals("0.2.0", info.requiresVersionString());
+    assertEquals("0.1.0", info.requiresVersionString());
     assertTrue(info.isSigned);
     assertEquals(8, info.keyId.length);
     assertFalse(info.hasDebugInfo);

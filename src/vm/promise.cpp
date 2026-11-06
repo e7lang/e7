@@ -1,4 +1,4 @@
-// Promises and the microtask queue (DESIGN-0.3.md D2).
+// Promises and the microtask queue (DESIGN.md D2).
 //
 // The VM implements the jobs of the ECMAScript specification (PromiseReactionJob,
 // PromiseResolveThenableJob) and processes them in the specification's order, so the order in which
@@ -244,7 +244,7 @@ void VM::settleReaction(const Reaction& r, bool rejected, Slot v, uint8_t vt) {
   }
 }
 
-// ---------------------------------------------------------------- async generators (0.3.1)
+// ---------------------------------------------------------------- async generators
 // The request queue of the specification (AsyncGeneratorEnqueue, CompleteStep, DrainQueue, AwaitReturn).
 // The body runs in the interpreter (RESUME, YIELD, AWAIT and RET_* of an async generator's frame).
 
@@ -568,7 +568,7 @@ int VM::finishTurn() {
   return ERR_OK;
 }
 
-// ---------------------------------------------------------------- natives (since 0.3.0)
+// ---------------------------------------------------------------- natives
 static PromiseObj* Pr(VM& vm, Slot s) {
   if (E7_UNLIKELY(!s.r || s.r->type != OT::Promise)) vm.error(s.r ? "expected a promise" : "cannot read properties of null or undefined (Promise)");
   return static_cast<PromiseObj*>(s.r);

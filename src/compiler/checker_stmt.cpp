@@ -152,7 +152,7 @@ bool Checker::assignable(Type* src, Type* dst) {
       return src->t == TT::Generator && (dst->gk != 0 || src->gk == 0) && src->elem == dst->elem &&
              (dst->ret->t == TT::Void || src->ret == dst->ret) && (dst->val->t == TT::Void || src->val == dst->val);
     case TT::AsyncGenerator:
-      // the same for async generators (0.3.1): AsyncGenerator -> AsyncIterator / AsyncIterableIterator / AsyncIterable
+      // the same for async generators: AsyncGenerator -> AsyncIterator / AsyncIterableIterator / AsyncIterable
       return src->t == TT::AsyncGenerator && (dst->gk != 0 || src->gk == 0) && src->elem == dst->elem &&
              (dst->ret->t == TT::Void || src->ret == dst->ret) && (dst->val->t == TT::Void || src->val == dst->val);
     case TT::Number:
@@ -1183,7 +1183,7 @@ void Checker::checkStmt(Stmt* s) {
         Type* it = check(s->expr, nullptr);
         Type* ag = it->t == TT::AsyncGenerator ? it : asyncIteratorMethodType(it, s->expr->loc);
         if (ag && s->isAwait) {
-          // for await over an async iterable (0.3.1): its values are not awaited again
+          // for await over an async iterable: its values are not awaited again
           et = ag->elem;
           asyncIter = true;
         } else if (ag && it->t == TT::AsyncGenerator) {

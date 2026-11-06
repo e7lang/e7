@@ -151,7 +151,7 @@ def main():
         check("--verify-file: untrusted key rejected", rc == 1 and "NOT valid" in err, out + err)
         with open(p("app.ts"), "w") as f:
             f.write("export function selfTest(): boolean { return true; }\nexport function answer(): number { return 42; }\n")
-        rc, out, err = run([e7c, p("app.ts"), "--target", "0.2", "--sign", p("release.seed"), "-o", p("app.e7b")])
+        rc, out, err = run([e7c, p("app.ts"), "--sign", p("release.seed"), "-o", p("app.e7b")])
         check("compile + sign module", rc == 0, out + err)
         rc, out, err = run([sys.executable, manifest_py, "--module", p("app.e7b"), "--version", "2026.11.1", "--url",
                             "app-2026.11.1.e7b", "--rollout", "10", "--serial", "7", "--sign", p("release.seed"),
@@ -162,7 +162,7 @@ def main():
         except Exception as e:  # noqa: BLE001
             m = {"error": str(e)}
         want = {"version": "2026.11.1", "url": "app-2026.11.1.e7b", "rolloutPercent": 10, "killSwitch": False,
-                "minVm": "0.2.0", "serial": 7, "sha256": hashlib.sha256(open(p("app.e7b"), "rb").read()).hexdigest()}
+                "minVm": "0.1.0", "serial": 7, "sha256": hashlib.sha256(open(p("app.e7b"), "rb").read()).hexdigest()}
         check("manifest.py: fields", m == want, json.dumps(m))
         rc, out, err = run([e7c, "--verify-file", p("manifest.json"), "--trust", p("other.pub"), "--trust", p("release.pub")])
         check("--verify-file: manifest signature (second trusted key)", rc == 0 and "signature ok" in out, out + err)
@@ -181,7 +181,7 @@ def main():
         rc, out, err = run([sys.executable, manifest_py, "--module", p("unsigned.e7b"), "--version", "1", "--url", "u.e7b",
                             "-o", p("m2.json")])
         check("manifest.py: unsigned module refused", rc != 0 and "not signed" in err, out + err)
-        # e7c --disasm (src/core/disasm.cpp; no other test reached it, 0.2.5 coverage report)
+        # e7c --disasm (src/core/disasm.cpp; no other test reaches it)
         with open(p("dis.ts"), "w") as f:
             f.write("class P { constructor(public x: number) {} get(): number { return this.x; } }\n"
                     "const m = new Map<string, number>([[\"a\", 1]]);\n"
@@ -195,39 +195,19 @@ def main():
               all(x in out for x in ("native #", "global #", "class #0 P", "func #0 <init>", "CALLN", "CLOSURE")), out)
         check("--disasm: no output file without -o", not os.path.exists(p("dis.e7b")), "")
 
-    # ---- 0.2.x compatibility of the TypeScript features added in 0.2.5: the compiler-only ones
-    # still run on 0.2.0 VMs; #private fields need a 0.2.5 VM (it hides them from Object.keys,
-    # JSON.stringify and console.log)
+    # ---- e7c --info: the bytecode format and the `requires` header field; there is no --target
     with tempfile.TemporaryDirectory() as tmp:
         def p(name):
             return os.path.join(tmp, name)
-        with open(p("compat.ts"), "w") as f:
-            f.write(
-                "abstract class Shape { abstract area(): number; get double(): number { return this.area() * 2; } }\n"
-                "class Sq extends Shape { static count = 0; static { Sq.count = 1; } constructor(private s: number = 1) { super(); }\n"
-                "  area(): number { return this.s * this.s; } }\n"
-                "const o = { n: 2, twice(x: number): number { return x * this.n; } };\n"
-                "function f(): string { try { return [[1], [2]].flat().flatMap((x) => [x, x]).join(); } finally { o.n++; } }\n"
-                "const [h = 0, ...t] = [1, 2, 3];\n"
-                "const add = (a: number, b = 1): number => a + b;\n"
-                "const pair: [number, number] = [h, t.length];\n"
-                "export function run(): string {\n"
-                "  return f() + Object.entries({ a: 1 }).join() + 'a-b'.replaceAll('-', (m) => m + m) + o.twice(add(...pair)) +\n"
-                "    new Sq(3).double + Object.values(Object.assign({}, { x: 1 })).join() + Sq.count;\n"
-                "}\n")
         with open(p("private.ts"), "w") as f:
             f.write("class Counter { #n = 0; inc(): number { return ++this.#n; } }\n"
                     "export function run(): number { return new Counter().inc(); }\n")
-        rc, out, err = run([e7c, p("compat.ts"), "--target", "0.2.0", "-o", p("compat.e7b")])
-        check("0.2.5 compiler-only features: --target 0.2.0", rc == 0, out + err)
-        rc, out, err = run([e7c, "--info", p("compat.e7b")])
-        check("0.2.5 compiler-only features: requires 0.2.0", rc == 0 and "requires: e7vm 0.2.0" in out, out + err)
-        rc, out, err = run([e7c, p("private.ts"), "--target", "0.2.1", "-o", p("private.e7b")])
-        check("#private fields: --target 0.2.1 rejected",
-              rc != 0 and "#private class fields" in err and "needs e7vm 0.2.5" in err, out + err)
         rc, out, err = run([e7c, p("private.ts"), "-o", p("private.e7b")])
         rc2, out2, err2 = run([e7c, "--info", p("private.e7b")])
-        check("#private fields: requires 0.2.5", rc == 0 and "requires: e7vm 0.2.5" in out2, out + err + out2 + err2)
+        check("--info: format and requires", rc == 0 and rc2 == 0 and "format:   3\n" in out2 and
+              "requires: e7vm 0.1.0" in out2, out + err + out2 + err2)
+        rc, out, err = run([e7c, p("private.ts"), "--target", "0.1", "-o", p("t.e7b")])
+        check("--target is not an option", rc == 2 and "usage" in err, out + err)
 
     print("\n%d failed" % len(failures))
     return 1 if failures else 0

@@ -1,4 +1,4 @@
-// Allocation-failure injection (docs/ROADMAP.md 0.2.5, P0.2): for every program given, the N-th heap
+// Allocation-failure injection: for every program given, the N-th heap
 // allocation / external-memory charge / temporary-memory check of a fresh VM fails, for N = 1, 2, 3,
 // ... until the program completes without reaching the N-th allocation. For every N:
 //   * no crash (and no ASan / UBSan report in the sanitizer jobs),

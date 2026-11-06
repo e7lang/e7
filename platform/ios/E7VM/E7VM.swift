@@ -8,7 +8,7 @@
 //   vm.keyProvider = { id in Keychain.loadKey(id) }
 //   let sig = try vm.call(module, "sign", .string(payload), .handle(KeyHandle(1)))
 //
-// Async host functions (0.3): `declare function fetchKey(id: string): Promise<Uint8Array>;` in the script,
+// Async host functions: `declare function fetchKey(id: string): Promise<Uint8Array>;` in the script,
 //   try vm.registerAsyncNative("fetchKey", signature: "s>y") { args in .bytes(try await keys.fetch(args[0])) }
 //   let r = try await vm.callAsync(module, "sign", .string("k1"), .bytes(payload))
 import CE7VM
@@ -44,7 +44,7 @@ public struct E7ModuleInfo: Equatable {
   public let keyId: Data
   public let hasDebugInfo: Bool
   public var canRun: Bool { status == Int32(E7_OK.rawValue) }
-  /// `requiresVersion` as text, e.g. "0.3.1".
+  /// `requiresVersion` as text, e.g. "0.1.0".
   public var requiresVersionString: String { E7VM.versionString(requiresVersion) }
 }
 
@@ -164,7 +164,7 @@ public final class E7VM {
     clearKeyBuffer()
   }
 
-  /// Library version, e.g. "0.3.1".
+  /// Library version, e.g. "0.1.0".
   public static var version: String { String(cString: e7_version()) }
 
   /// Library version as major << 16 | minor << 8 | patch (compare with `E7ModuleInfo.requiresVersion`).
@@ -291,7 +291,7 @@ public final class E7VM {
     try check(st)
   }
 
-  // MARK: - async host functions (0.3)
+  // MARK: - async host functions
 
   /// Registers an async host function before `load()`. The script declares it returning a promise, e.g.
   /// `declare function fetchKey(id: string): Promise<Uint8Array>;` with signature "s>y" (the return code is the

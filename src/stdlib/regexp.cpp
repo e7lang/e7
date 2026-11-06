@@ -1,4 +1,4 @@
-// Regular expressions (0.3, DESIGN-0.3.md D4): RegExp objects and the String methods that take one
+// Regular expressions (DESIGN.md D4): RegExp objects and the String methods that take one
 // (match, matchAll, replace, replaceAll, split, search), following the ES2024 algorithms
 // (RegExpBuiltinExec, @@replace, @@split, ...). The matcher is src/regexp; its steps are charged to the
 // instruction budget and its backtracking stacks to the memory limit, so a catastrophic pattern ends

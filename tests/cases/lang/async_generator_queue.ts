@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // several next() calls without awaiting are queued and settled in order, interleaved with other jobs
 async function* counter(label: string): AsyncGenerator<string, string, number> {
   console.log(label, "start");

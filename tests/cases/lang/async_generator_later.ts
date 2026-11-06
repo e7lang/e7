@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // async generators driven by promises settled in later turns (e7:test later / laterReject: host tickets)
 import { later, laterReject } from "e7:test";
 

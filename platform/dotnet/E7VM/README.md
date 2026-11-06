@@ -24,7 +24,7 @@ vm.SetBudget(10_000_000);                           // instruction budget per ca
 Console.WriteLine((string?)vm.Call(module, "greet", "e7"));
 ```
 
-Async host functions (E7 0.3): a script that declares
+Async host functions: a script that declares
 `declare function fetchKey(id: string): Promise<Uint8Array>;` awaits a `Task` of the host, and `CallAsync`
 returns an async export's value:
 

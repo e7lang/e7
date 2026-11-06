@@ -1,4 +1,4 @@
-// Equivalence runs (docs/ROADMAP.md 0.2.5, P0.3): every program runs once normally and once in each
+// Equivalence runs: every program runs once normally and once in each
 // requested mode; status, printed output and error message (with its stack trace) must be identical.
 //   slice  budget slice of 1 with suspension enabled: the VM suspends at every budget check (back edge,
 //          call, catch) and is resumed, in the module initializer and in an exported main(). Inside

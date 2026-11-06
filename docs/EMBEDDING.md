@@ -39,7 +39,7 @@ Swift and C#) implements the client side.
 | `e7_config_init` / `e7_vm_new` / `e7_vm_free` | Create/destroy a VM. Config: `memory_limit`, `stack_slots`, `max_frames`, `suspend_on_budget`, `require_signature`, `trusted_keys`, `gc_growth_percent`. Always fill the struct with `e7_config_init` first: it sets `struct_size`, which lets newer libraries add fields |
 | `e7_load(vm, data, len, &module)` | Verify signature → parse → verify → link native functions → run module top-level code (`E7_ERR_VERSION` for a module of another bytecode format or one that needs a newer e7vm) |
 | `e7_inspect(data, len, &info)` | Read a module's format, required e7vm version (`requires_version`) and signature key id without loading it |
-| `e7_version` / `e7_version_number` | Library version (`"0.3.1"` / `0x000301`) |
+| `e7_version` / `e7_version_number` | Library version (`"0.1.0"` / `0x000100`) |
 | `e7_gc_stats_get(vm, &stats)` | Garbage collections, total and longest pause, heap size and peak |
 | `e7_compile` / `e7_load_source` | Compile source (errors are formatted as `file:line:col: error: ...`) |
 | `e7_compile_ex(src, len, name, &opts, ...)` | Compile with options (`e7_compile_options_init` first): `E7_COMPILE_DEBUG` (debug information), a `read_file` callback for imports, `target_version` (oldest e7vm that must run the module) |
@@ -328,8 +328,8 @@ The binding is published as two Maven artifacts (group `org.e7vm`):
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("org.e7vm:e7vm-android:0.3.1")   // Android
-    // implementation("org.e7vm:e7vm:0.3.1")         // desktop / server JVM
+    implementation("org.e7vm:e7vm-android:0.1.0")   // Android
+    // implementation("org.e7vm:e7vm:0.1.0")         // desktop / server JVM
 }
 ```
 
@@ -353,7 +353,7 @@ dependencyResolutionManagement {
 ```
 
 The `.aar` and `.jar` are also attached to each [GitHub release](https://github.com/e7lang/e7/releases);
-a downloaded AAR can be used with `implementation(files("libs/e7vm-android-0.3.1.aar"))`.
+a downloaded AAR can be used with `implementation(files("libs/e7vm-android-0.1.0.aar"))`.
 
 On the desktop JVM, `org.e7vm.NativeLoader` loads the library in this order: the path in the system
 property `e7vm.library`, then `System.loadLibrary("e7vm_jni")` (`java.library.path`), then the copy bundled
@@ -411,7 +411,7 @@ crypto libraries from source; no prebuilt binary is involved. In Xcode use *File
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/e7lang/e7.git", from: "0.3.1"),
+  .package(url: "https://github.com/e7lang/e7.git", from: "0.1.0"),
 ],
 targets: [
   .target(name: "App", dependencies: [.product(name: "E7VM", package: "e7")]),
@@ -455,7 +455,7 @@ e7vm uses no JIT and allocates no executable memory, which meets the App Store r
   and macOS 11+ (universal), which .NET loads automatically from `runtimes/<rid>/native/`:
 
   ```bash
-  dotnet add package E7VM --version 0.3.1
+  dotnet add package E7VM --version 0.1.0
   ```
 
   The package targets `netstandard2.0` and `net8.0` (managed assembly `E7.dll`, namespace `E7`). It is also attached to each GitHub release and published to
@@ -482,7 +482,7 @@ delivery ([DEPLOYMENT.md](DEPLOYMENT.md#4-client-integration)).
 
 The JavaScript package [`@e7lang/e7`](../packages/e7) is the compiler and VM built with Emscripten
 (`tools/e7wasm.cpp`). It is not published to the npm registry: install `e7lang-e7-<version>.tgz` from a GitHub
-release (`npm install ./e7lang-e7-0.3.1.tgz`). Every `run` uses a fresh VM with an instruction budget and a memory limit; host
+release (`npm install ./e7lang-e7-0.1.0.tgz`). Every `run` uses a fresh VM with an instruction budget and a memory limit; host
 functions and `KeyHandle` are not available from JavaScript (use the native API for those). Async exports and
 top-level `await` complete within `run` ([§2.6](#26-async-host-functions)).
 

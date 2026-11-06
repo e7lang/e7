@@ -83,7 +83,7 @@ struct ModuleRT {
   std::vector<Slot> globals;
   std::vector<NativeBinding> natives;
   std::vector<uint32_t> sigMap;
-  std::vector<std::shared_ptr<const re::Program>> regexps;  // compiled Module::regexps (format 3)
+  std::vector<std::shared_ptr<const re::Program>> regexps;  // compiled Module::regexps
   uint64_t regexpBytes = 0;  // their size, counted in the VM's heap while the module is loaded
   bool initialized = false;
 };
@@ -259,7 +259,7 @@ class VM {
   HandleObj* newHandle(int64_t id);
   CoroObj* newCoro(FuncRT* fn, CloObj* closure);
   PromiseObj* newPromise(uint8_t vt);
-  // ---- regular expressions (stdlib/regexp.cpp, DESIGN-0.3.md D4)
+  // ---- regular expressions (stdlib/regexp.cpp, DESIGN.md D4)
   // fresh: a program compiled at run time that no object holds yet (its progBytes are counted now);
   // otherwise a copy sharing the program (and the count) of another RegExp, or a module literal (0 bytes)
   RegExpObj* newRegExp(std::shared_ptr<const re::Program> prog, StrObj* source, uint64_t progBytes, bool fresh);
@@ -273,7 +273,7 @@ class VM {
   // (nullProto false: the same record as a plain object, for structuredClone)
   ClassRT* groupsClass(const std::vector<std::string>& names, bool nullProto = true);
 
-  // ---- promises and the microtask queue (promise.cpp, DESIGN-0.3.md D2)
+  // ---- promises and the microtask queue (promise.cpp, DESIGN.md D2)
   // Resolves p with v (of p's value type); a promise value (a thenable) is adopted through a job.
   void resolvePromise(PromiseObj* p, Slot v);
   void adoptPromise(PromiseObj* p, PromiseObj* thenable);  // resolve p with a promise (ResolveThenableJob)
@@ -281,7 +281,7 @@ class VM {
   void rejectPromise(PromiseObj* p, Obj* reason);
   // PerformPromiseThen: adds the reaction, or queues its job when p is already settled
   void promiseThen(PromiseObj* p, const Reaction& r);
-  // ---- async generators (promise.cpp, 0.3.1): the request queue of the specification
+  // ---- async generators (promise.cpp): the request queue of the specification
   // next(v) / throw(e) / return(v) (mode 0 / 1 / 2) on the async generator co: queues the request
   // (AsyncGeneratorEnqueue) and returns its promise; *resume is set when the body must continue now
   // (AsyncGeneratorResume: the interpreter pushes its frame with the request's completion)

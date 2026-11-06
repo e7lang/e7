@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // async function*: declarations, expressions, methods, inferred types, the IteratorResult records
 async function* range(from: number, to: number): AsyncGenerator<number> {
   for (let i = from; i < to; i++) yield i;

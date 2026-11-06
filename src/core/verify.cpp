@@ -108,7 +108,7 @@ bool verifyModule(const Module& m, std::string& err) {
     for (uint32_t s : f.icNames)
       if (s >= m.strs.size()) return F("function %zu: bad inline cache name", fi);
     if (f.lines.size() % 2) return F("function %zu: bad line table", fi);
-    // coroutines (format 3): generators yield a value of a fixed kind and return nothing or that
+    // coroutines: generators yield a value of a fixed kind and return nothing or that
     // kind; async functions neither yield nor receive; both return a reference (the coroutine or
     // the promise) to their caller
     uint8_t fk = fflagsKind(f.fflags);
@@ -308,7 +308,7 @@ bool verifyModule(const Module& m, std::string& err) {
             uint32_t mode = (uint32_t)(ex >> 16) & 3, sk = (uint32_t)(ex >> 18) & 3;
             if (mode == 3) return F("function %zu pc %zu: bad resume metadata", fi, pc);
             if (ex & kResumeAsync) {
-              // a request to an async generator (0.3.1): B gets its promise; the IteratorResult record
+              // a request to an async generator: B gets its promise; the IteratorResult record
               // class ({ value, done: boolean }) and the value type of T (the generator's kinds are
               // checked at run time)
               if (op != OP_RESUME_R || (ex >> 45) != 0 || resumeElemVT(ex) >= VT__COUNT)

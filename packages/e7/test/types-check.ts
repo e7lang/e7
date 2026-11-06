@@ -18,7 +18,7 @@ async function main(): Promise<void> {
   const ex: ExportInfo[] = await listExports(new Uint8Array());
   const info: ModuleInfo = await inspect(bytes ?? new Uint8Array());
   const req: string | null = e7.inspect(new Uint8Array()).requiresVersion;
-  const t: CompileResult = await compile("", { target: "0.2", debug: true });
+  const t: CompileResult = await compile("", { debug: true });
   void [info.keyId, info.status, req, t];
   const v: string = version + e7.version + formatDiagnostics(d) + (await compile("")).ok;
   const e = new E7Error();

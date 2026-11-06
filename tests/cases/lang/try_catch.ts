@@ -1,4 +1,4 @@
-// try/catch (0.2): output is compared with Node.js
+// try/catch: output is compared with Node.js
 function risky(n: number): number {
   if (n > 2) throw new RangeError("too big: " + n);
   return n * 10;

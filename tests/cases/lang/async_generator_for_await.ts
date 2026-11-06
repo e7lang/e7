@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // for await over async generators and async iterable classes: break, continue, return and throw in the
 // body call (and await) the iterator's return(), so its finally blocks run, in Node's order
 async function* source(name: string, n: number): AsyncGenerator<number> {

@@ -661,7 +661,7 @@ namespace E7
             return m;
         }
 
-        // "0.2", "0.2.1", "v0.2" -> major << 16 | minor << 8 | patch
+        // "1.2", "1.2.3", "v1.2" -> major << 16 | minor << 8 | patch
         internal static uint? ParseVersion(string s)
         {
             var t = s.StartsWith("v", StringComparison.Ordinal) ? s.Substring(1) : s;

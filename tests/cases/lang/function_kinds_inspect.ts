@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // console.log names the kind of generator and async functions as Node.js does
 function* g(): Generator<number, void, unknown> { yield 1; }
 async function a(): Promise<number> { return 1; }

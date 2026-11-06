@@ -76,17 +76,6 @@ target_link_libraries(malicious_test PRIVATE e7vm_static)
 file(GLOB E7_MALICIOUS ${CMAKE_CURRENT_SOURCE_DIR}/malicious/*.e7b)
 add_test(NAME malicious_test COMMAND malicious_test ${E7_MALICIOUS})
 
-# bytecode compatibility corpus (docs/BYTECODE.md): 0.1 modules are rejected with E7_ERR_VERSION,
-# modules from every 0.2.x release keep loading and printing the same output
-add_executable(compat_test compat_test.cpp)
-target_link_libraries(compat_test PRIVATE e7vm_static)
-file(GLOB E7_COMPAT_REJECT ${CMAKE_CURRENT_SOURCE_DIR}/compat/0.1.*/*.e7b)
-file(GLOB E7_COMPAT_RUN ${CMAKE_CURRENT_SOURCE_DIR}/compat/0.2.*/*.e7b)
-add_test(NAME compat_reject COMMAND compat_test reject ${E7_COMPAT_REJECT})
-if(E7_COMPAT_RUN)
-  add_test(NAME compat_run COMMAND compat_test run ${E7_COMPAT_RUN})
-endif()
-
 # debugger: C debug API, debug information in bytecode, verifier checks of debug sections
 if(E7_WITH_COMPILER)
   find_package(Threads REQUIRED)
@@ -108,7 +97,7 @@ if(E7_WITH_COMPILER)
   add_test(NAME verify_handlers_test COMMAND verify_handlers_test)
 endif()
 
-# getters and setters in object literals (0.3.1): the accessors class flag and accessor pairs
+# getters and setters in object literals: the accessors class flag and accessor pairs
 if(E7_WITH_COMPILER)
   add_executable(verify_accessors_test verify_accessors_test.cpp)
   target_link_libraries(verify_accessors_test PRIVATE e7vm_static)
@@ -141,7 +130,7 @@ if(E7_WITH_COMPILER)
            ${CMAKE_CURRENT_SOURCE_DIR}/cases/lib)
 endif()
 
-# ---------------------------------------------------------------- stability (docs/ROADMAP.md 0.2.5, P0)
+# ---------------------------------------------------------------- stability (CONTRIBUTING.md, "Testing")
 # CONTRIBUTING.md, "Stability checks". Under E7_GC_STRESS (a collection at every safepoint and every
 # allocation) tests/cases/lib/gc_stress.ts is left out: 374,000 allocations with ~12,000 live objects
 # would take hours, and every other program exercises the collector under stress.

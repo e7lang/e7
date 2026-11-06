@@ -8,8 +8,6 @@
 namespace e7 {
 
 struct Program {
-  // D7: records whose properties may be absent carry a presence mask (format 3); off for --target 0.2
-  bool presenceMasks = true;
   Arena arena;
   Types types;
   std::vector<std::unique_ptr<SourceFile>> files;  // dependency order, entry last
@@ -175,7 +173,7 @@ class Checker {
   Type* regexpGroupsType(Type* re);  // the groups object of a literal with named groups
   Type* promiseCallbackRet(Expr* cb, Type* ret, Loc l);
   Type* iteratorMethodType(Type* t, Loc l);
-  Type* asyncIteratorMethodType(Type* t, Loc l);  // 0.3.1: [Symbol.asyncIterator]()
+  Type* asyncIteratorMethodType(Type* t, Loc l);  // [Symbol.asyncIterator]()
   Type* constLit(Expr* e);
   Type* inferVarType(Expr* init, Type* t, bool isConst);
   bool exitsClause(SwitchCase& c);
