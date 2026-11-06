@@ -10,6 +10,20 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+### Added
+- Async generators: `async function*` declarations and expressions, async generator methods (also
+  `async *[Symbol.asyncIterator]()` and in object literals), `AsyncGenerator<T, TReturn, TNext>` /
+  `AsyncIterator<T>` / `AsyncIterableIterator<T>` / `AsyncIterable<T>`. `yield v` and `return v` await `v`; `yield*`
+  forwards to an async generator or an async iterable class; `next` / `return` / `throw` return
+  `Promise<IteratorResult<T, TReturn>>` and are queued and answered in the order of the specification (requests made
+  while the generator runs or awaits wait their turn). `for await` over async generators and classes with
+  `[Symbol.asyncIterator]()`: leaving the loop early (`break`, `return`, a `throw`) awaits the iterator's
+  `return()`. Callbacks run in the order of Node.js; a generator prints as `Object [AsyncGenerator] {}`.
+  `yield*` of a sync iterable in an async generator is a compile error (docs/SPEC.md, section 5.2).
+  Bytecode: function kind 3 in fflags and an "async request" bit in the extra word of `RESUME_R`
+  (docs/BYTECODE.md, section 6.2); a module that uses them requires e7vm 0.3.1 (a 0.3.0 VM rejects it with
+  `E7_ERR_VERSION`, `e7c --target 0.3` refuses it). Modules without async generators compile as before.
+
 ## [0.3.0] - 2026-11-06
 
 The language complete for its domain (docs/ROADMAP.md, section 0.3; design decisions in docs/DESIGN-0.3.md).
