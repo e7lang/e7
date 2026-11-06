@@ -1,8 +1,9 @@
 // @feature: The `void` operator
 // @category: JavaScript: Syntax
-// @status: unsupported
-// @why: not implemented yet
-// @instead: `undefined`
-// @error: the 'void' operator is not supported
-const u = void 0;
-console.log(u);
+// @status: supported
+// @note: the value is `undefined`; as for `undefined` itself, a variable holding it needs a type annotation
+let calls = 0;
+function touch(): number { return ++calls; }
+const u: number | undefined = void 0;
+const w: number | undefined = void touch();
+console.log(u, w, calls);

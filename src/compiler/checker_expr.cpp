@@ -461,6 +461,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
   for (auto& p : e->props) {
     anySpread |= p.spread;
     anyMethod |= p.method;
+    if (p.coverInit) return errT(p.loc, "'=' is only allowed in a destructuring assignment ({ " + p.key + " = ... } = obj); use ':' in an object literal");
   }
   if (anySpread && anyMethod) {
     for (auto& p : e->props)
@@ -695,6 +696,10 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
 // ------------------------------------------------------------------ operators
 Type* Checker::checkUnary(Expr* e, Type* expected) {
   const std::string& op = e->raw;
+  if (op == "void") {
+    check(e->a, nullptr);  // evaluated for its effects; the value is undefined
+    return T.undef();
+  }
   if (op == "!") {
     checkCond(e->a);
     return T.boolean();
@@ -905,6 +910,10 @@ static bool isNumberish(Type* t) { return t->t == TT::Number || (t->t == TT::Enu
 
 Type* Checker::checkBinary(Expr* e, Type* expected) {
   const std::string& op = e->raw;
+  if (op == ",") {
+    check(e->a, nullptr);  // evaluated for its effects
+    return check(e->b, expected);
+  }
   if (op == "instanceof") {
     Type* lt = check(e->a, nullptr);
     Expr* r = strip(e->b);
@@ -1073,6 +1082,8 @@ Type* Checker::checkLogical(Expr* e, Type* expected) {
 Type* Checker::checkAssign(Expr* e) {
   const std::string& op = e->raw;
   Expr* target = strip(e->a);
+  if (target->k == EK::Object)
+    return errT(e->loc, "an object destructuring assignment must be a statement of its own: ({ a, b } = obj);");
   if (target->k == EK::Array) {
     if (op != "=") return errT(e->loc, "invalid destructuring assignment");
     std::vector<Type*> tts;
@@ -1153,8 +1164,18 @@ Type* Checker::checkAssign(Expr* e) {
     if (lt->t == TT::Optional && rt->t != TT::Optional && !isNullish(rt) && rt->t != TT::Unknown) setNarrow(key, rt == lt->elem ? lt->elem : baseOf(lt));
     return lt;
   }
-  if (op == "??=" || op == "||=" || op == "&&=") {
-    if (op != "??=") return errT(e->loc, "'" + op + "' is not supported");
+  if (op == "||=" || op == "&&=") {
+    // a ||= b: assigns when a is falsy; a &&= b: when a is truthy (the target keeps its type)
+    if (lt->t == TT::Void) return errT(e->loc, "'" + op + "' requires a value");
+    Type* rt = check(e->b, lt);
+    coerce(e->b, lt);
+    invalidatePath(key);
+    // x ||= v with a non-null v: x is non-null afterwards (a truthy old value, or v)
+    if (op == "||=" && lt->t == TT::Optional && rt->t != TT::Optional && !isNullish(rt) && rt->t != TT::Unknown)
+      setNarrow(key, lt->elem);
+    return lt;
+  }
+  if (op == "??=") {
     if (lt->t != TT::Optional) return errT(e->loc, "'??=' requires a nullable target");
     Type* rt = check(e->b, lt->elem);
     coerce(e->b, lt);

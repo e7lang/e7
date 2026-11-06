@@ -2230,6 +2230,13 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
       return;
     }
     case EK::Unary: {
+      if (e->raw == "void") {
+        size_t m1 = mark();
+        genInto(e->a, kNoReg);
+        release(m1);
+        if (dst != kNoReg) emit(OP_LOADUNDEF, dst);
+        return;
+      }
       size_t m0 = mark();
       if (e->intrinsic == IN_CONST_NUM) {
         if (dst != kNoReg) loadInt(dst, e->ival);
@@ -2320,6 +2327,13 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
       return;
     }
     case EK::Binary: {
+      if (e->raw == ",") {
+        size_t m1 = mark();
+        genInto(e->a, kNoReg);
+        release(m1);
+        genInto(e->b, dst);
+        return;
+      }
       size_t m0 = mark();
       uint16_t d = dst == kNoReg ? temp(K(e->type)) : dst;
       genBinary(e, d);
@@ -2720,6 +2734,23 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
       v = vt;
     }
     if (dst != kNoReg) mov(dst, v, K(lt));
+    release(m0);
+    return;
+  }
+  if (op == "||=" || op == "&&=") {
+    // a ||= b / a &&= b: assign only when a is falsy / truthy; the value is the target's afterwards
+    Kind k = K(lt);
+    Label* end = newLabel();
+    uint16_t cur = temp(k);
+    genInto(e->a, cur);
+    uint16_t t = temp(K_I);
+    truthyOf(t, cur, lt);
+    jump(op == "||=" ? OP_JT : OP_JF, t, end);
+    uint16_t v = gen(e->b);
+    storeTo(e->a, v);
+    mov(cur, v, k);
+    place(end);
+    if (dst != kNoReg) mov(dst, cur, k);
     release(m0);
     return;
   }

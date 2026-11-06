@@ -27,7 +27,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **118 supported**, **20 partial**, **112 unsupported** (270 sample programs).
+250 features: **123 supported**, **18 partial**, **109 unsupported** (268 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -51,11 +51,11 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Namespaces](#namespaces) | 0 | 0 | 2 |
 | [Type Compatibility and Inference](#type-compatibility-and-inference) | 5 | 1 | 0 |
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
-| [JavaScript: Syntax](#javascript-syntax) | 16 | 3 | 12 |
+| [JavaScript: Syntax](#javascript-syntax) | 21 | 1 | 9 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 9 | 6 | 11 |
-| **Total** | **118** | **20** | **112** |
+| **Total** | **123** | **18** | **109** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 72.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 67.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -358,12 +358,16 @@ Within each category, supported features come first, then partial and unsupporte
 |---|---|---|---|
 | Array destructuring (defaults, holes, rest, nested) | supported |  | [array-destructuring.ts](../tests/ts-features/js-syntax/array-destructuring.ts) |
 | Array spread | supported |  | [array-spread.ts](../tests/ts-features/js-syntax/array-spread.ts) |
+| The comma operator | supported |  | [comma-operator.ts](../tests/ts-features/js-syntax/comma-operator.ts) |
 | `if`, `while`, `do...while`, `for` loops | supported |  | [control-flow.ts](../tests/ts-features/js-syntax/control-flow.ts) |
 | `debugger` statement | supported | Stops when a debugger is attached | [debugger-statement.ts](../tests/ts-features/js-syntax/debugger-statement.ts) |
+| Destructuring assignment to existing variables | supported | A pattern with defaults, nesting or rest must be a statement of its own (`[a = 1, ...rest] = xs;`) | [destructuring-assignment.ts](../tests/ts-features/js-syntax/destructuring-assignment.ts) |
 | Destructuring in `for...of` | supported |  | [for-of-destructuring.ts](../tests/ts-features/js-syntax/for-of-destructuring.ts) |
 | Labeled statements (`break` / `continue` with labels, labeled blocks) | supported |  | [labeled-statements.ts](../tests/ts-features/js-syntax/labeled-statements.ts) |
+| Logical assignment operators (`??=`, `\|\|=`, `&&=`) | supported |  | [logical-assignment.ts](../tests/ts-features/js-syntax/logical-assignment.ts) |
 | Nullish coalescing `??` and `??=` | supported |  | [nullish-coalescing.ts](../tests/ts-features/js-syntax/nullish-coalescing.ts) |
 | Numeric literals (hex, octal, binary, exponent, separators) | supported |  | [numeric-literals.ts](../tests/ts-features/js-syntax/numeric-literals.ts) |
+| Object destructuring assignment (`({ a, b } = obj)`) | supported | As a statement of its own, with defaults, nesting, rest and property targets | [object-destructuring-assignment.ts](../tests/ts-features/js-syntax/object-destructuring-assignment.ts) |
 | Object destructuring (renaming, defaults, rest, nested) | supported |  | [object-destructuring.ts](../tests/ts-features/js-syntax/object-destructuring.ts) |
 | Object spread | supported |  | [object-spread.ts](../tests/ts-features/js-syntax/object-spread.ts) |
 | Arithmetic, comparison, bitwise, exponent and conditional operators | supported |  | [operators.ts](../tests/ts-features/js-syntax/operators.ts) |
@@ -372,21 +376,17 @@ Within each category, supported features come first, then partial and unsupporte
 | `switch` with fall-through | supported |  | [switch.ts](../tests/ts-features/js-syntax/switch.ts) |
 | Template literals (multi-line, nested) | supported |  | [template-literals.ts](../tests/ts-features/js-syntax/template-literals.ts) |
 | `try` / `catch` / `finally`, optional catch binding | supported | Catches the errors Node.js also throws; E7's own checks (out-of-bounds reads, failed `as`) are not catchable | [try-catch-finally.ts](../tests/ts-features/js-syntax/try-catch-finally.ts) |
-| Destructuring assignment to existing variables | **partial** | **Works:** plain array patterns (`[a, b] = [b, a]`). **Not supported:** defaults and rest elements in assignment patterns (*not implemented yet*). **Instead:** a declaration: `const [first, ...rest] = xs` | [destructuring-assignment.ok.ts](../tests/ts-features/js-syntax/destructuring-assignment.ok.ts), [destructuring-assignment.no.ts](../tests/ts-features/js-syntax/destructuring-assignment.no.ts) |
-| Logical assignment operators (`??=`, `\|\|=`, `&&=`) | **partial** | **Works:** `??=`. **Not supported:** `\|\|=` and `&&=` (*not implemented yet*). **Instead:** `x = x \|\| y` / `if (x) x = y` | [logical-assignment.ok.ts](../tests/ts-features/js-syntax/logical-assignment.ok.ts), [logical-assignment.no.ts](../tests/ts-features/js-syntax/logical-assignment.no.ts) |
+| The `void` operator | supported | The value is `undefined`; as for `undefined` itself, a variable holding it needs a type annotation | [void-operator.ts](../tests/ts-features/js-syntax/void-operator.ts) |
 | Loose equality `==` / `!=` | **partial** | **Works:** only `== null` / `!= null` (null or undefined). **Not supported:** with static types, `==` is either `===` or a hidden type conversion (*types known at compile time*). **Instead:** `===` / `!==` | [loose-equality.ok.ts](../tests/ts-features/js-syntax/loose-equality.ok.ts), [loose-equality.no.ts](../tests/ts-features/js-syntax/loose-equality.no.ts) |
 | `async` functions and `await` | **unsupported** | **Why:** reserved for coroutines (*not implemented yet*). **Instead:** synchronous functions; the host does asynchronous work (and can run long computations in slices with an instruction budget) | [async-await.ts](../tests/ts-features/js-syntax/async-await.ts) |
-| The comma operator | **unsupported** | **Why:** *not implemented yet*. **Instead:** separate statements (also for several updates in a `for` header) | [comma-operator.ts](../tests/ts-features/js-syntax/comma-operator.ts) |
 | The `delete` operator | **unsupported** | **Why:** object layouts are fixed (*types known at compile time*). **Instead:** an optional property set to `undefined`, or `Map.delete` | [delete-operator.ts](../tests/ts-features/js-syntax/delete-operator.ts) |
 | `eval` and `new Function` | **unsupported** | **Why:** all code is compiled and verified ahead of time (*verifiable bytecode*). **Instead:** ship the code as a module; the host can compile and load modules | [eval.ts](../tests/ts-features/js-syntax/eval.ts) |
 | `for...in` | **unsupported** | **Why:** it enumerates property names as untyped strings, including inherited ones (*types known at compile time*). **Instead:** `for (const k of Object.keys(obj))` or a `Map` | [for-in.ts](../tests/ts-features/js-syntax/for-in.ts) |
 | Hashbang line (`#!/usr/bin/env node`) | **unsupported** | **Why:** *not implemented yet*. **Instead:** run the file with `e7 file.ts` | [hashbang.ts](../tests/ts-features/js-syntax/hashbang.ts) |
-| Object destructuring assignment (`({ a, b } = obj)`) | **unsupported** | **Why:** only array patterns can be assigned to existing variables (docs/SPEC.md section 3 does not make the difference) (*not implemented yet*). **Instead:** a declaration (`const { a, b } = obj`) or one assignment per property | [object-destructuring-assignment.ts](../tests/ts-features/js-syntax/object-destructuring-assignment.ts) |
 | Regular expression literals | **unsupported** | **Why:** *not implemented yet*. **Instead:** string methods (`indexOf`, `includes`, `startsWith`, `split`, `replaceAll`) and character code tests | [regex-literals.ts](../tests/ts-features/js-syntax/regex-literals.ts) |
 | Tagged templates and `String.raw` | **unsupported** | **Why:** *not implemented yet*. **Instead:** a function taking the parts as arguments | [tagged-templates.ts](../tests/ts-features/js-syntax/tagged-templates.ts) |
 | Throwing values other than `Error` objects | **unsupported** | **Why:** a caught value must have a known type (*types known at compile time*). **Instead:** `throw new Error(message)` (or `TypeError`, `RangeError`, ...) | [throw-non-errors.ts](../tests/ts-features/js-syntax/throw-non-errors.ts) |
 | Non-ASCII identifiers | **unsupported** | **Why:** identifiers are ASCII (string contents may be any Unicode) (*not implemented yet*). **Instead:** ASCII names | [unicode-identifiers.ts](../tests/ts-features/js-syntax/unicode-identifiers.ts) |
-| The `void` operator | **unsupported** | **Why:** *not implemented yet*. **Instead:** `undefined` | [void-operator.ts](../tests/ts-features/js-syntax/void-operator.ts) |
 
 ## JavaScript: Standard Library
 

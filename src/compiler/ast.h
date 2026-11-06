@@ -81,6 +81,7 @@ struct ObjProp {
   bool shorthand = false;
   bool spread = false;
   bool method = false;  // method shorthand `name(params) { body }` (value is an Arrow)
+  bool coverInit = false;  // `{ a = 1 }`: only valid as a destructuring assignment target (value is an Assign)
   Loc loc;
 };
 

@@ -1,9 +1,8 @@
 // @feature: The comma operator
 // @category: JavaScript: Syntax
-// @status: unsupported
-// @why: not implemented yet
-// @instead: separate statements (also for several updates in a `for` header)
-// @error: the comma operator is not supported
+// @status: supported
 let a = 1;
 const b = (a++, a * 10);
-console.log(b);
+const log: string[] = [];
+for (let i = 0, j = 3; i < j; i++, j--) log.push(`${i}${j}`);
+console.log(b, log);

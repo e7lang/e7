@@ -358,23 +358,26 @@ interface TreeNode { label: string; children: TreeNode[] }
 const t = JSON.parse('{"label":"x","children":[]}') as TreeNode;
 ```
 
-### Defaults and rest in destructuring assignments
+### Destructuring assignments
 
-Destructuring declarations, parameters and `for...of` support defaults and rest elements
-(`const [first = 0, ...rest] = nums`, `const { host = "localhost", ...other } = options`); assignments to
-existing variables only support plain patterns (`[a, b] = [b, a]`):
+Destructuring declarations, parameters and `for...of` support defaults, nesting and rest elements
+(`const [first = 0, ...rest] = nums`, `const { host = "localhost", ...other } = options`). Assignments to existing
+variables support them too when the assignment is a statement of its own (an object pattern needs parentheses):
 
-```ts e7-reject
+```ts
 let first = 0;
 let rest: number[] = [];
 [first, ...rest] = [1, 2, 3];
+let host = "", port = 0;
+({ host, port = 80 } = { host: "h" } as { host: string; port?: number | undefined });
+console.log(first, rest.join(","), host, port);
 ```
 
-```ts
-const nums = [1, 2, 3];
-const [first = 0, second = 0, ...rest] = nums;
-const { host = "localhost", ...other } = { port: 80, tls: false } as { host?: string; port: number; tls: boolean };
-console.log(first, second, rest.join(","), host, JSON.stringify(other));
+An object pattern inside a larger expression is rejected:
+
+```ts e7-reject
+let a = 0;
+const r = ({ a } = { a: 1 });
 ```
 
 ### Other rejected syntax

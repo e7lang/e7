@@ -804,7 +804,119 @@ class Parser {
     Stmt* s = A.stmt(SK::Expr, l);
     s->expr = parseExpr();
     semi();
+    if (Stmt* d = desugarPatternAssign(s->expr, l)) return d;
     return s;
+  }
+
+  // ---------------------------------------------------------------- destructuring assignment statements
+  // `({ a, b: o.x = 1, ...rest } = expr);` and `[a, , [b], ...c] = expr;` with defaults, nesting or rest become
+  //   { const { a: $d0, b: $d1 = 1, ...$d2 } = expr; a = $d0; o.x = $d1; rest = $d2; }
+  // so that the declaration's destructuring (defaults, rest, nesting) does the work. Plain array patterns
+  // (`[a, b] = [b, a]`) keep their direct compilation.
+  int destructTmp_ = 0;
+  static Expr* stripParens(Expr* e) {
+    while (e && e->k == EK::Paren) e = e->a;
+    return e;
+  }
+  bool patternNeedsDesugar(Expr* x) {
+    x = stripParens(x);
+    if (x->k == EK::Object) return true;
+    if (x->k != EK::Array) return false;
+    for (Expr* el : x->list) {
+      Expr* s = stripParens(el);
+      if (el->k == EK::Spread || s->k == EK::Assign || s->k == EK::Object || s->k == EK::Array) return true;
+    }
+    return false;
+  }
+  void bindTarget(Expr* v, VarDecl& sub, std::vector<std::pair<Expr*, std::string>>& binds) {
+    Expr* s = stripParens(v);
+    if (s->k == EK::Object || s->k == EK::Array) { patternFromExpr(s, sub, binds); return; }
+    sub.name = "$d" + std::to_string(destructTmp_++);
+    binds.push_back({v, sub.name});
+  }
+  void patternFromExpr(Expr* x, VarDecl& d, std::vector<std::pair<Expr*, std::string>>& binds) {
+    x = stripParens(x);
+    d.loc = x->loc;
+    if (x->k == EK::Object) {
+      d.isObjPat = true;
+      for (size_t k = 0; k < x->props.size(); k++) {
+        ObjProp& pr = x->props[k];
+        if (pr.method) failAt(pr.loc, "a method is not a valid destructuring target");
+        VarDecl sub;
+        sub.loc = pr.loc;
+        if (pr.spread) {
+          if (k + 1 != x->props.size()) failAt(pr.loc, "a rest property must be last in a destructuring pattern");
+          Expr* t = stripParens(pr.value);
+          if (t->k == EK::Object || t->k == EK::Array) failAt(pr.loc, "a rest property must be a variable or property");
+          sub.isRest = true;
+          sub.name = "$d" + std::to_string(destructTmp_++);
+          binds.push_back({pr.value, sub.name});
+          d.keys.push_back("");
+          d.elems.push_back(sub);
+          continue;
+        }
+        Expr* v = pr.value;
+        Expr* def = nullptr;
+        if (v->k == EK::Assign && v->raw == "=") { def = v->b; v = v->a; }
+        bindTarget(v, sub, binds);
+        sub.init = def;
+        d.keys.push_back(pr.key);
+        d.elems.push_back(sub);
+      }
+      return;
+    }
+    if (x->k == EK::Array) {
+      d.isArrayPat = true;
+      for (size_t k = 0; k < x->list.size(); k++) {
+        Expr* el = x->list[k];
+        VarDecl sub;
+        sub.loc = el->loc;
+        if (el->k == EK::Spread) {
+          if (k + 1 != x->list.size()) failAt(el->loc, "a rest element must be last in a destructuring pattern");
+          Expr* t = stripParens(el->a);
+          if (t->k == EK::Object || t->k == EK::Array) failAt(el->loc, "nested patterns in rest elements are not supported; assign to a variable");
+          sub.isRest = true;
+          sub.name = "$d" + std::to_string(destructTmp_++);
+          binds.push_back({el->a, sub.name});
+          d.elems.push_back(sub);
+          continue;
+        }
+        Expr* v = el;
+        Expr* def = nullptr;
+        Expr* s = stripParens(el);
+        if (s->k == EK::Assign && s->raw == "=") { def = s->b; v = s->a; }
+        bindTarget(v, sub, binds);
+        sub.init = def;
+        d.elems.push_back(sub);
+      }
+      return;
+    }
+    failAt(x->loc, "invalid destructuring target");
+  }
+  Stmt* desugarPatternAssign(Expr* e, Loc l) {
+    Expr* a = stripParens(e);
+    if (!a || a->k != EK::Assign || a->raw != "=" || !patternNeedsDesugar(a->a)) return nullptr;
+    std::vector<std::pair<Expr*, std::string>> binds;
+    VarDecl root;
+    patternFromExpr(a->a, root, binds);
+    root.init = a->b;
+    Stmt* blk = A.stmt(SK::Block, l);
+    Stmt* decl = A.stmt(SK::Var, l);
+    decl->isConst = true;
+    decl->decls.push_back(root);
+    blk->stmts.push_back(decl);
+    for (auto& b : binds) {
+      Stmt* es = A.stmt(SK::Expr, b.first->loc);
+      Expr* as = A.expr(EK::Assign, b.first->loc);
+      as->raw = "=";
+      as->a = b.first;
+      Expr* id = A.expr(EK::Ident, b.first->loc);
+      id->raw = b.second;
+      as->b = id;
+      es->expr = as;
+      blk->stmts.push_back(es);
+    }
+    return blk;
   }
 
   Stmt* parseImport() {
@@ -1265,7 +1377,15 @@ class Parser {
   // ---------------------------------------------------------------- expressions
   Expr* parseExpr() {
     Expr* e = parseAssign();
-    if (isP(",")) fail("the comma operator is not supported");
+    while (isP(",")) {
+      // the comma operator: evaluates both, the value is the right one (a Binary ",")
+      Expr* c = A.expr(EK::Binary, loc());
+      i++;
+      c->raw = ",";
+      c->a = e;
+      c->b = parseAssign();
+      e = c;
+    }
     return e;
   }
 
@@ -1501,7 +1621,13 @@ class Parser {
         e->a = parseUnary();
         return e;
       }
-      if (w == "void") fail("the 'void' operator is not supported");
+      if (w == "void") {
+        i++;
+        Expr* e = A.expr(EK::Unary, l);
+        e->raw = "void";
+        e->a = parseUnary();
+        return e;
+      }
       if (w == "delete") fail("'delete' is not supported; use Map for dynamic keys");
       if (w == "await") fail("'await' is not supported yet (reserved for coroutines); use a synchronous function (the host can run long work in slices with an instruction budget)");
     }
@@ -1824,6 +1950,16 @@ class Parser {
               Expr* id = A.expr(EK::Ident, pr.loc);
               id->raw = pr.key;
               pr.value = id;
+              if (isP("=")) {
+                // `{ a = 1 } = obj`: a default in a destructuring assignment (an error anywhere else)
+                Expr* as = A.expr(EK::Assign, loc());
+                i++;
+                as->raw = "=";
+                as->a = id;
+                as->b = parseAssign();
+                pr.value = as;
+                pr.coverInit = true;
+              }
             }
             e->props.push_back(pr);
             if (!eatP(",")) break;

@@ -153,8 +153,9 @@ type arguments gets its own copy of the function, class or type, checked and com
   **rest element**: `const [first, ...others] = xs` (a new array; for a tuple, a tuple of the remaining
   elements), `const { id, ...rest } = obj` (a new object with the other properties of the static type, without
   `#private` fields). A binding with a default has the element type without `undefined`. Assignments to existing
-  variables support only plain array patterns (`[a, b] = [b, a]`; no object patterns, defaults or rest); a rest element
-  must bind a name.
+  variables support array and object patterns with defaults, nesting and rest (`[a, b] = [b, a]`,
+  `({ host, port = 80, ...rest } = options);`); a pattern with defaults, nesting or rest, and every object pattern,
+  must be a statement of its own. A rest element must be a variable or property, not a pattern.
 - Object spread `{ ...a, k: v, ...b }`: the source may be an object type or a class instance (only fields are copied, not methods); later properties with the same name override earlier ones;
   **optional** properties in the source override only when present (same as TS: in `{ retries: 3, ...opts }`, `retries` has type `number`).
   The properties of the result are in JavaScript's order (entries in source order, a key keeps its first position): the
@@ -262,6 +263,9 @@ try {
   with `null` / `undefined` (also a non-nullable one, or a variable narrowed to a non-nullable type, as tsc accepts); the
   result of such a comparison is known at compile time. A `void` value cannot be compared.
 - `&&` and `||` can be used with any type in conditions (by truthiness); in value position, `a || b` returns a value (types must be compatible), and `&&` is boolean only.
+- `||=` and `&&=` assign when the target is falsy / truthy (after `x ||= v` with a non-null `v`, `x` is non-null).
+  The comma operator and `void` work as in JavaScript (a variable holding `void x` needs a type annotation, as for
+  `undefined`).
 - `??`, `??=`, `?.` (members, element access `a?.[i]`, method calls, function calls) are the same as JS. An
   optional chain short-circuits as a whole: in `a?.b.c`, `a?.b[i]` or `a?.m().n()` the links after `?.` are
   skipped (the result is `undefined`) when `a` is null or undefined, and type-checked against the non-null
