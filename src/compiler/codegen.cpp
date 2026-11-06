@@ -4273,7 +4273,7 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
       if (e->fieldSrc[fi] < 0 && K(ft) != K_R) continue;  // absent: only reference fields hold undefined
       fv[fi] = temp(K(ft));
       int si = e->fieldSrc[fi];
-      if (si >= 0 && e->props[si].spread && mayBeAbsent(ft)) has[fi] = temp(K_I);
+      if (si >= 0 && e->props[si].spread && mayBeAbsent(ft) && c->presence) has[fi] = temp(K_I);
     }
     auto propHas = [&](int si, const std::string& name, uint16_t out) {
       uint16_t nm = temp(K_R);

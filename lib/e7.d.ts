@@ -149,4 +149,8 @@ declare module "e7:test" {
   export function assertThrows(fn: () => void, expectedMessage?: string | null): void;
   /** Fails the test unconditionally. */
   export function fail(message?: string | null): never;
+  /** A promise of `value` settled in a later turn (each one after the previous, as setImmediate in Node.js). */
+  export function later<T>(value: T): Promise<T>;
+  /** A promise rejected with `error` in a later turn. */
+  export function laterReject<T = void>(error: Error): Promise<T>;
 }

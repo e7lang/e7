@@ -36,7 +36,7 @@ for (const s of withFinally()) {
 }
 const w = withFinally();
 console.log(w.next().value);
-console.log(w.return());
+console.log(w.return(undefined));
 console.log(w.next());
 
 function* inner(): Generator<number, number> {

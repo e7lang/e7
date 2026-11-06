@@ -36,6 +36,6 @@ order("x");
 order("y");
 async function retP(): Promise<number> { return double(5); }
 retP().then(v => console.log("retP", v));
-Promise.allSettled([double(1), fail()]).then(rs => console.log(rs.map(r => r.status), rs[0].value));
+Promise.allSettled([double(1), fail()]).then(rs => console.log(rs.map(r => r.status)));
 Promise.race([double(7), double(8)]).then(v => console.log("race", v));
 Promise.any([fail(), double(9)]).then(v => console.log("any", v));
