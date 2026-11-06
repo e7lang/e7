@@ -211,7 +211,17 @@ void VM::settleReaction(const Reaction& r, bool rejected, Slot v, uint8_t vt) {
       if (!rejected) { resolvePromise(d, v); return; }
       auto* arr = static_cast<ArrObj*>(r.agg);
       if (r.index < arr->len) arr->data[r.index] = v;
-      if (--d->remaining == 0) rejectPromise(d, newErrorObject("AggregateError", "All promises were rejected"));
+      if (--d->remaining == 0) {
+        TempRoot keepArr(*this, arr);
+        ArrObj* e = newErrorObject("AggregateError", "All promises were rejected");
+        TempRoot keepE(*this, e);
+        // its errors: the reasons, in the order of the promises
+        arrayPush(e, Slot{});
+        e->data[2].r = undef_;
+        arrayPush(e, Slot{});
+        e->data[3].r = arr;
+        rejectPromise(d, e);
+      }
       return;
     }
     case RK_RACE:

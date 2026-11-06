@@ -64,6 +64,12 @@ struct NativeSince { const char* name; uint32_t since; };
 inline const NativeSince* nativeSinceTable(size_t& n) {
   static const NativeSince kTable[] = {
       {"Object.has", makeVersion(0, 3, 0)},
+      {"Date.set", makeVersion(0, 3, 0)},
+      {"Error.newCause", makeVersion(0, 3, 0)}, {"Error.newAggregate", makeVersion(0, 3, 0)},
+      {"Error.cause", makeVersion(0, 3, 0)}, {"Error.errors", makeVersion(0, 3, 0)},
+      {"Array.toReversed", makeVersion(0, 3, 0)}, {"Array.toSorted", makeVersion(0, 3, 0)},
+      {"Array.toSortedCmp", makeVersion(0, 3, 0)}, {"Array.toSpliced", makeVersion(0, 3, 0)},
+      {"Array.withI", makeVersion(0, 3, 0)}, {"Array.withF", makeVersion(0, 3, 0)}, {"Array.withR", makeVersion(0, 3, 0)},
       {"Promise.resolveI", makeVersion(0, 3, 0)}, {"Promise.resolveF", makeVersion(0, 3, 0)},
       {"Promise.resolveR", makeVersion(0, 3, 0)}, {"Promise.reject", makeVersion(0, 3, 0)},
       {"Promise.new", makeVersion(0, 3, 0)}, {"Promise.resolveFnI", makeVersion(0, 3, 0)},

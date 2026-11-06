@@ -1172,10 +1172,40 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     e->intrinsic = IN_CONST_NUM;
     return T.textDecoder();
   }
+  if (name == "AggregateError") {
+    // new AggregateError(errors, message?)
+    if (args.empty() || args.size() > 2) return errT(l, "AggregateError takes an array of errors and a message");
+    if (args.size() == 1) { Expr* sx = P.arena.expr(EK::Str, l); sx->type = T.string(); args.push_back(sx); }
+    if (!argsMatch(e, args, {T.array(T.error()), T.string()}, 2, "AggregateError")) return T.unknown();
+    nat("Error.newAggregate");
+    return T.error();
+  }
   if (name == "Error" || name == "TypeError" || name == "RangeError" || name == "SyntaxError" || name == "URIError") {
+    Expr* cause = nullptr;
+    if (args.size() == 2) {
+      // new Error(message, { cause })
+      Expr* o = strip(args[1]);
+      if (o->k != EK::Object || o->props.size() != 1 || o->props[0].key != "cause" || o->props[0].spread)
+        return errT(args[1]->loc, name + " options must be an object literal { cause: error }");
+      cause = o->props[0].value;
+      Type* ct = check(cause, T.error());
+      if (ct->t != TT::Error && ct->t != TT::Caught && ct->t != TT::Unknown)
+        return errT(cause->loc, "the cause of an Error must be an Error (or a caught value), not '" + typeName(ct) + "'");
+      args.pop_back();
+    } else if (args.size() > 2) {
+      return errT(l, name + " takes a message and options { cause }");
+    }
     if (args.size() == 1) { check(args[0], T.string()); coerce(args[0], T.string()); }
-    else if (!args.empty()) return errT(l, name + " takes at most one argument (options such as { cause } are not supported)");
     if (args.empty()) { Expr* sx = P.arena.expr(EK::Str, l); sx->type = T.string(); args.push_back(sx); }
+    if (cause) {
+      Expr* nx = P.arena.expr(EK::Str, l);
+      nx->type = T.string();
+      nx->str = utf8ToUtf16(name);
+      args.insert(args.begin(), nx);
+      args.push_back(cause);
+      nat("Error.newCause");
+      return T.error();
+    }
     Expr* nx = P.arena.expr(EK::Str, l);
     nx->type = T.string();
     nx->str = utf8ToUtf16(name);

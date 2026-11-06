@@ -1100,6 +1100,55 @@ E7_NATIVE(n_errorNew) {
   e->flags |= kArrFlagError;
   r->r = e;
 }
+// new Error(message, { cause }): [name, message, cause]
+E7_NATIVE(n_errorNewCause) {
+  E7_UNUSED;
+  StrObj* name = S(vm, a[0]);
+  StrObj* msg = S(vm, a[1]);
+  ArrObj* e = vm.newArray(VT_REF, 3);
+  e->data[0].r = name;
+  e->data[1].r = msg;
+  e->data[2].r = a[2].r ? a[2].r : vm.undef();
+  e->len = 3;
+  e->flags |= kArrFlagError;
+  r->r = e;
+}
+// new AggregateError(errors, message): [name, message, undefined, errors (a copy)]
+E7_NATIVE(n_errorNewAggregate) {
+  E7_UNUSED;
+  ArrObj* src = A(vm, a[0]);
+  if (src->vt != VT_REF) vm.error("AggregateError: expected an array of errors");
+  StrObj* msg = S(vm, a[1]);
+  ArrObj* errs = vm.newArray(VT_REF, src->len);
+  VM::TempRoot keep(vm, errs);
+  if (src->len) memcpy(errs->data, src->data, (size_t)src->len * sizeof(Slot));
+  errs->len = src->len;
+  StrObj* name = vm.newStringAscii("AggregateError");
+  VM::TempRoot keepN(vm, name);
+  ArrObj* e = vm.newArray(VT_REF, 4);
+  e->data[0].r = name;
+  e->data[1].r = msg;
+  e->data[2].r = vm.undef();
+  e->data[3].r = errs;
+  e->len = 4;
+  e->flags |= kArrFlagError;
+  r->r = e;
+}
+E7_NATIVE(n_errorCause) {
+  E7_UNUSED;
+  StrObj *nm, *m;
+  errParts(vm, a[0], &nm, &m);
+  auto* e = static_cast<ArrObj*>(a[0].r);
+  r->r = e->len >= 3 && e->data[2].r ? e->data[2].r : vm.undef();
+}
+E7_NATIVE(n_errorErrors) {
+  E7_UNUSED;
+  StrObj *nm, *m;
+  errParts(vm, a[0], &nm, &m);
+  auto* e = static_cast<ArrObj*>(a[0].r);
+  if (e->len >= 4 && e->data[3].r && e->data[3].r->type == OT::Array) { r->r = e->data[3].r; return; }
+  r->r = vm.newArray(VT_REF, 0);  // not an AggregateError
+}
 E7_NATIVE(n_errorName) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = nm; }
 E7_NATIVE(n_errorMessage) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = m; }
 E7_NATIVE(n_errorToString) {  // String(e): "Name: message", or "Name" when the message is empty
@@ -1120,6 +1169,10 @@ E7_NATIVE(n_errorIs) {  // x instanceof Error / TypeError / ...: false for anyth
 
 void registerCoreNatives(VM& vm) {
   vm.registerNative("Error.new", "RR>R", n_errorNew);
+  vm.registerNative("Error.newCause", "RRR>R", n_errorNewCause);
+  vm.registerNative("Error.newAggregate", "RR>R", n_errorNewAggregate);
+  vm.registerNative("Error.cause", "R>R", n_errorCause);
+  vm.registerNative("Error.errors", "R>R", n_errorErrors);
   vm.registerNative("Error.name", "R>R", n_errorName);
   vm.registerNative("Error.message", "R>R", n_errorMessage);
   vm.registerNative("Error.toString", "R>R", n_errorToString);
@@ -1175,6 +1228,7 @@ void applyNativeCosts(VM& vm) {
   };
   static const char* out[] = {
       "Array.slice", "Array.splice", "Array.concat", "Array.newLen", "Array.setLength", "Bytes.new", "Bytes.slice",
+      "Array.toReversed", "Array.toSpliced", "Array.withI", "Array.withF", "Array.withR",
       "Buffer.new", "Buffer.slice", "Map.keys", "Map.values", "Map.entries", "Object.keys", "String.slice",
       "String.substring", "String.substr", "String.padStart", "String.padEnd", "String.repeat",
       "crypto.randomBytes", "crypto.hkdf",
@@ -1191,6 +1245,7 @@ void applyNativeCosts(VM& vm) {
   for (const char* n : hash) vm.setNativeCost(n, NC_HASH);
   for (const char* n : bigq) vm.setNativeCost(n, NC_BIGQ);
   vm.setNativeCost("Array.sort", NC_SORT);
+  vm.setNativeCost("Array.toSorted", NC_SORT);
   static const char* hashes[] = {"md5", "sha1", "sha224", "sha256", "sha384", "sha512",
                                  "sha3_224", "sha3_256", "sha3_384", "sha3_512", "keccak256"};
   for (const char* h : hashes) vm.setNativeCost(std::string("crypto.hash.") + h, NC_HASH);

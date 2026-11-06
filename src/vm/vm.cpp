@@ -171,7 +171,7 @@ double VM::randomDouble() {
 // Errors that Node.js throws as catchable exceptions carry the JavaScript error name as a message
 // prefix ("RangeError: invalid count value: -1"); see docs/SPEC.md (try/catch).
 static bool jsErrorName(const std::string& msg, std::string& name, std::string& text) {
-  static const char* const kNames[] = {"Error", "TypeError", "RangeError", "SyntaxError", "URIError"};
+  static const char* const kNames[] = {"Error", "TypeError", "RangeError", "SyntaxError", "URIError", "AggregateError"};
   for (const char* n : kNames) {
     size_t l = strlen(n);
     if (msg.size() > l + 1 && msg.compare(0, l, n) == 0 && msg[l] == ':' && msg[l + 1] == ' ') {
@@ -233,7 +233,8 @@ ArrObj* VM::newErrorObject(const std::string& name, const std::string& message) 
 bool VM::errorParts(Obj* o, StrObj** name, StrObj** message) const {
   if (!o || o->type != OT::Array) return false;
   auto* a = static_cast<ArrObj*>(o);
-  if (!(a->flags & kArrFlagError) || a->vt != VT_REF || a->len != 2) return false;
+  // [name, message], [name, message, cause] or [name, message, cause, errors] (AggregateError)
+  if (!(a->flags & kArrFlagError) || a->vt != VT_REF || a->len < 2 || a->len > 4) return false;
   Obj* n = a->data[0].r;
   Obj* m = a->data[1].r;
   if (!n || n->type != OT::String || !m || m->type != OT::String) return false;

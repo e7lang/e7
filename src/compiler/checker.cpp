@@ -195,7 +195,7 @@ std::string Checker::suggestMember(Type* t, const std::string& name) {
       add({"at", "concat", "copyWithin", "entries", "every", "fill", "filter", "find", "findIndex", "findLast",
            "findLastIndex", "flat", "flatMap", "forEach", "includes", "indexOf", "join", "keys", "lastIndexOf",
            "length", "map", "pop", "push", "reduce", "reduceRight", "reverse", "shift", "slice", "some", "sort",
-           "splice", "toString", "unshift", "values"});
+           "splice", "toReversed", "toSorted", "toSpliced", "toString", "unshift", "values", "with"});
       break;
     case TT::Bytes:
       add({"at", "buffer", "byteLength", "byteOffset", "fill", "forEach", "includes", "indexOf", "join",
@@ -1034,7 +1034,7 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   }
   if (name == "TextEncoder") { noArgs(); return T.textEncoder(); }
   if (name == "TextDecoder") { noArgs(); return T.textDecoder(); }
-  if (name == "Error") { noArgs(); return T.error(); }
+  if (name == "Error" || name == "AggregateError") { noArgs(); return T.error(); }
   if (name == "Date") { noArgs(); return T.date(); }
   if (name == "Record" || name == "Partial" || name == "Required" || name == "Pick" || name == "Omit" || name == "Readonly")
     return errT(l, "utility type '" + name + "' is not supported; use Map<K, V> or an interface");

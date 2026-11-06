@@ -721,6 +721,44 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         native("Array.slice");
         return T.array(bt->elem);  // a new (mutable) array, also from a readonly one
       }
+      // ES2023 copying methods (also on readonly arrays: they return a new mutable array)
+      if (meth("toReversed")) {
+        if (!argsMatch(e, args, {}, 0, "toReversed")) return T.unknown();
+        native("Array.toReversed");
+        return T.array(bt->elem);
+      }
+      if (meth("toSorted")) {
+        if (args.empty()) { native("Array.toSorted"); return T.array(bt->elem); }
+        if (args.size() != 1) return errT(e->loc, "toSorted takes at most one argument");
+        Type* ft = cb(args[0], {et, et}, num);
+        if (ft->t == TT::Func && ft->params.size() != 2) return errT(args[0]->loc, "toSorted comparator must take two parameters");
+        if (ft->t == TT::Func && ft->ret != num) return errT(args[0]->loc, "toSorted comparator must return a number");
+        native("Array.toSortedCmp");
+        return T.array(bt->elem);
+      }
+      if (meth("with")) {
+        if (!argsMatch(e, args, {num, et}, 2, "with")) return T.unknown();
+        native("Array.with" + K);
+        return T.array(bt->elem);
+      }
+      if (meth("toSpliced")) {
+        if (args.empty()) args.push_back(N(0));
+        if (args.size() == 1) args.push_back(N(INFINITY));
+        Expr* items;
+        if (args.size() > 2) {
+          items = P.arena.expr(EK::Array, l);
+          for (size_t i = 2; i < args.size(); i++) items->list.push_back(args[i]);
+          args.resize(2);
+          check(items, T.array(bt->elem));
+        } else {
+          items = P.arena.expr(EK::Null, l);
+          items->type = T.nullT();
+        }
+        if (!argsMatch(e, args, {num, num}, 2, "toSpliced")) return T.unknown();
+        args.push_back(items);
+        native("Array.toSpliced");
+        return T.array(bt->elem);
+      }
       if (meth("splice")) {
         if (args.empty()) return errT(e->loc, "splice requires a start index");
         if (args.size() == 1) args.push_back(N(INFINITY));
@@ -1149,6 +1187,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
     case TT::Error: {
       if (prop("message")) { native("Error.message"); return str; }
       if (prop("name")) { native("Error.name"); return str; }
+      if (prop("cause")) { native("Error.cause"); return T.optional(T.error(), false, true); }
+      if (prop("errors")) { native("Error.errors"); return T.array(T.error()); }
       if (prop("stack")) return errT(e->loc, "Error.stack is not supported (stack traces differ between engines)");
       if (meth("toString")) {
         if (!argsMatch(e, args, {}, 0, "toString")) return T.unknown();
@@ -1180,6 +1220,25 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         e->intrinsic = IN_CONST_NUM;
         e->num = 0;
         return num;
+      }
+      {
+        static const char* setters[] = {"setFullYear", "setMonth", "setDate", "setHours", "setMinutes", "setSeconds",
+                                        "setMilliseconds"};
+        static const int maxArgs[] = {3, 2, 1, 4, 3, 2, 1};
+        for (int k = 0; k < 7; k++) {
+          std::string sn = setters[k];
+          std::string us = "setUTC" + sn.substr(3);
+          if (!meth(sn.c_str()) && !meth(us.c_str())) continue;
+          if (args.empty() || (int)args.size() > maxArgs[k])
+            return errT(l, "'" + name + "' takes 1 to " + std::to_string(maxArgs[k]) + " argument(s)");
+          size_t given = args.size();
+          while (args.size() < 4) args.push_back(N(0));
+          if (!argsMatch(e, args, {num, num, num, num}, 4, name.c_str())) return T.unknown();
+          args.insert(args.begin(), N(k));
+          args.push_back(N((double)given));
+          native("Date.set");
+          return num;
+        }
       }
       if (meth("setTime")) {
         if (!argsMatch(e, args, {num}, 1, "setTime")) return T.unknown();

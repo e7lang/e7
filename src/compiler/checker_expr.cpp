@@ -1030,8 +1030,8 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
     Expr* r = strip(e->b);
     if (r->k != EK::Ident) return errT(e->b->loc, "right side of 'instanceof' must be a class name");
     if ((r->raw == "Error" || r->raw == "TypeError" || r->raw == "RangeError" || r->raw == "SyntaxError" ||
-         r->raw == "URIError") && (!lookup(r->raw) || lookup(r->raw)->k == SymK::Namespace)) {
-      if (lt->t != TT::Caught && lt->t != TT::Error && lt->t != TT::Unknown)
+         r->raw == "URIError" || r->raw == "AggregateError") && (!lookup(r->raw) || lookup(r->raw)->k == SymK::Namespace)) {
+      if (lt->t != TT::Caught && lt->t != TT::Error && lt->t != TT::Unknown && !(lt->t == TT::Optional && lt->elem->t == TT::Error))
         return errT(e->a->loc, "'instanceof " + r->raw + "' applies to a caught value or an Error");
       e->intrinsic = IN_ERROR_IS;
       e->str = utf8ToUtf16(r->raw);
