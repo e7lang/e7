@@ -129,8 +129,17 @@ bool verifyModule(const Module& m, std::string& err) {
     if (c.parent >= (int32_t)ci || c.parent < -1) return F("class %zu: invalid parent", ci);
     if (c.fields.size() > 65535) return F("class %zu: too many fields", ci);
     if (c.isRecord > 2) return F("class %zu: bad kind", ci);
-    if ((c.cflags & ~kClassFlagPresence) || ((c.cflags & kClassFlagPresence) && c.isRecord != 1))
+    if ((c.cflags & ~(kClassFlagPresence | kClassFlagAccessors)) || (c.cflags && c.isRecord != 1))
       return F("class %zu: bad class flags", ci);
+    if (c.cflags & kClassFlagAccessors) {
+      // an accessor property's field holds its accessor pair (a reference)
+      std::set<std::string> accessorNames;
+      for (const std::string& mn : c.methodNames)
+        if (mn.compare(0, 4, "get ") == 0 || mn.compare(0, 4, "set ") == 0) accessorNames.insert(mn.substr(4));
+      for (auto& fd : c.fields)
+        if (fd.vt != VT_REF && accessorNames.count(fd.name))
+          return F("class %zu: accessor field %zu is not a reference", ci, (size_t)(&fd - c.fields.data()));
+    }
     for (auto& fd : c.fields)
       if (fd.vt >= VT__COUNT) return F("class %zu: bad field type", ci);
     if (c.methodNames.size() != c.vtable.size()) return F("class %zu: bad method table", ci);

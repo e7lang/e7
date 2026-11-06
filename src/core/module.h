@@ -55,6 +55,10 @@ struct HandlerDesc {
 
 // ClassDesc::cflags: the instances carry a presence mask (D7, records only)
 constexpr uint8_t kClassFlagPresence = 1;
+// ClassDesc::cflags (0.3.1): a record (object literal) with getters / setters. Field x of the record is an
+// accessor property when the vtable has a method "get x" or "set x"; the field holds the accessor pair, a
+// tuple [getter closure or null, setter closure or null, slot of the property's value type] (BYTECODE.md 6.5)
+constexpr uint8_t kClassFlagAccessors = 2;
 
 struct FuncDesc {
   std::string name;

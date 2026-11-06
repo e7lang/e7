@@ -21,6 +21,9 @@ bool Checker::structurallyAssignable(Type* src, Type* dst) {
 
 bool Checker::structurallyAssignableImpl(Type* src, Type* dst) {
   ObjShape* ds = dst->shape;
+  // the type of an object literal with accessors holds only such object literals (whose accessors are
+  // own properties): values of other types may be class instances
+  if (ds->ownAccessors && !(src->t == TT::Object && src->shape->ownAccessors)) return false;
   if (src->t == TT::Class) {
     ClassSym* c = src->cls;
     resolveClass(c);
@@ -78,6 +81,26 @@ static bool litSubset(const Type* a, const Type* b) {
     if (!f) return false;
   }
   return (a->boolLits & ~b->boolLits) == 0;
+}
+
+// Why an object type with accessors is not assignable to another object type (for error messages)
+std::string Checker::accessorHint(Type* src, Type* dst) {
+  Type* s = baseOf(src);
+  Type* d = baseOf(dst);
+  if (s->t == TT::Array && d->t == TT::Array) return accessorHint(s->elem, d->elem);
+  if (s->t != TT::Object || d->t != TT::Object) return "";
+  ObjShape* ss = s->shape;
+  ObjShape* ds = d->shape;
+  for (auto& p : ds->props)
+    if (!ss->findProp(p.name) && (ss->findMethod("get " + p.name) || ss->findMethod("set " + p.name)))
+      return ": property '" + p.name + "' is an accessor in '" + typeName(s) + "'; e7 reads the properties of '" + typeName(d) +
+             "' as fields, so declare it there as 'get " + p.name + "(): " + typeName(p.type) + "'";
+  for (auto& m : ds->methods)
+    if ((m.name.compare(0, 4, "get ") == 0 || m.name.compare(0, 4, "set ") == 0) && !ss->findMethod(m.name))
+      return std::string(": '") + typeName(s) + "' has no " + (m.name[0] == 'g' ? "getter" : "setter") + " for '" + m.name.substr(4) + "'";
+  if (ds->ownAccessors && !ss->ownAccessors)
+    return ": the type of an object literal with accessors only holds such object literals";
+  return "";
 }
 
 bool Checker::assignable(Type* src, Type* dst) {
@@ -190,7 +213,7 @@ bool Checker::coerce(Expr*& e, Type* target, const char* ctx) {
     if (Type* c = constLit(e)) t = c;
   if (target->t == TT::Void && ctx && std::string(ctx) == "return") return false;
   if (!assignable(t, target)) {
-    err(e->loc, "type '" + typeName(t) + "' is not assignable to type '" + typeName(target) + "'");
+    err(e->loc, "type '" + typeName(t) + "' is not assignable to type '" + typeName(target) + "'" + accessorHint(t, target));
     return false;
   }
   if (target->t == TT::Optional && t->t != TT::Optional && kindOf(t) != K_R && t->t != TT::Never && t->t != TT::Unknown) {
@@ -772,6 +795,15 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
             props.push_back({f.name, f.type, f.optional, f.undefOk});
         if (!t->cls->abstractProps.empty())
           err(el.loc, "a rest property of an abstract class type with abstract properties is not supported");
+      } else if (t->t == TT::Object && t->shape->ownAccessors) {
+        // an object literal with accessors: its properties and getters (own properties), in its order
+        std::vector<std::pair<std::string, Type*>> own;
+        if (readableProps(t, el.loc, "a rest property", own))
+          for (auto& p : own)
+            if (std::find(named.begin(), named.end(), p.first) == named.end()) {
+              const ObjShape::Prop* sp = t->shape->findProp(p.first);
+              props.push_back(sp ? *sp : ObjShape::Prop{p.first, p.second, false});
+            }
       } else if (t->t == TT::Object) {
         for (auto& p : t->shape->props)
           if (std::find(named.begin(), named.end(), p.name) == named.end()) props.push_back(p);
@@ -801,8 +833,11 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
       }
     } else if (t->t == TT::Object) {
       const ObjShape::Prop* p = t->shape->findProp(key);
-      if (!p) err(d.loc, "property '" + key + "' does not exist on type '" + typeName(t) + "'");
-      else ft = p->type;
+      const ObjShape::Method* g = p ? nullptr : t->shape->findMethod("get " + key);
+      if (p) ft = p->type;
+      else if (g) ft = g->fn->ret;  // a getter (declared by an interface or an object literal): called
+      else if (t->shape->findMethod("set " + key)) err(d.loc, "property '" + key + "' has no getter");
+      else err(d.loc, "property '" + key + "' does not exist on type '" + typeName(t) + "'");
     } else if (t->t != TT::Unknown) {
       err(l, "cannot destructure a value of type '" + typeName(t) + "'");
     }

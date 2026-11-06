@@ -166,6 +166,9 @@ struct ClassRT {
   bool isTuple = false;
   bool presence = false;  // instances carry a presence mask (D7, format-3 class flag)
   bool nullProto = false; // a VM record class of regular expression groups: printed as [Object: null prototype]
+  // records with getters / setters (kClassFlagAccessors): per field, bit 0 a getter, bit 1 a setter (the
+  // field holds the accessor pair, see accessorGet in stdlib/util.h); empty for other classes
+  std::vector<uint8_t> accessors;
   uint32_t nfields = 0;
   std::vector<uint8_t> fieldVT;
   std::vector<std::string> fieldNames;

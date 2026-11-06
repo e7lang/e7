@@ -113,6 +113,7 @@ struct Stringifier {
     }
     if (++depth > 256) vm.error("JSON.stringify: nesting deeper than 256 levels (an e7 limit)");
     stack.insert(o);
+    VM::TempRoot keep(vm, o);  // a getter (script code) may make it unreachable while it is written
     std::u16string inner = indent + gap;
     StrObj *en, *em;
     if (vm.errorParts(o, &en, &em)) {  // an Error has no enumerable properties: "{}" as in JavaScript
@@ -151,6 +152,8 @@ struct Stringifier {
       for (uint32_t i : jsFieldOrder(in->cls)) {
         Slot fv = in->fields()[i];
         uint8_t fvt = in->cls->fieldVT[i];
+        if (accessorKind(in->cls, i) && !accessorGet(vm, in, i, &fv, &fvt)) continue;  // a getter's value
+        VM::TempRoot keepValue(vm, fvt == VT_REF ? fv.r : nullptr);
         if (fvt == VT_REF && (fv.r == vm.undef() || (fv.r && fv.r->type == OT::Closure))) continue;
         if (privateField(in->cls, i)) continue;  // #private fields are not serialized
         if (any) out += u',';
