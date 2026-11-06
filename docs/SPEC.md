@@ -86,7 +86,8 @@ User-defined generics are supported (section 2.3).
 - Arrays of reference elements are covariant (`Circle[]` → `Shape[]`, consistent with TS).
 - Optional properties and fields follow tsc's `exactOptionalPropertyTypes`: `x?: T` may be left out but not set to
   `undefined` (by an object literal, an assignment or a spread of a property that may hold `undefined`); declare
-  `x?: T | undefined` to allow it.
+  `x?: T | undefined` to allow it. An optional method `m?(): T` is an optional property of function type: call it as
+  `o.m?.()`, or as `o.m()` after a check (`if (o.m)`).
 - Numeric enum → `number`, string enum → `string`.
 - Function types: parameter and return types must match; an arrow function used as a callback may **declare fewer parameters** (extra arguments are ignored), and a `void`-returning context accepts any return value.
 - There is **no implicit conversion** between fixed-width integers and `number`, or between integers of different widths; use explicit conversions such as `u32(x)` or `Number(x)`.
@@ -97,8 +98,11 @@ User-defined generics are supported (section 2.3).
   (`const [n, s] = [1, "x"]` binds a `number` and a `string`; nested patterns and literals likewise); with elements of
   compatible types it is an array. `as const` is not supported (annotate the type instead).
 - A recursive function that omits its return type is an error; an explicit annotation is required.
+- A `switch` with a case for every member of an enum is exhaustive: a function may end with it without a `default`
+  or a final `return` (the `default` branch of such a switch does not see the value as `never`).
 - Narrowing: `x === null`, `x !== undefined`, `x == null`, truthiness checks `if (x)`, `instanceof`, combinations with `&&`/`||`/`!`,
-  early `return/throw/break/continue`, `x ??= v`, and assignment. Property paths are supported (after `this.head !== null`, `this.head.next` can be used directly).
+  early `return/throw/break/continue`, `x ??= v`, and assignment (also an assignment that ends an `if` branch, when the
+  other path is narrowed to the same type: `if (x === null) x = [];`). Property paths are supported (after `this.head !== null`, `this.head.next` can be used directly).
   Variables reassigned inside a loop are re-checked at the loop condition; inside closures, narrowing is kept only for `const` variables (same as TS).
 
 ### 2.3 Generics
@@ -146,7 +150,8 @@ type arguments gets its own copy of the function, class or type, checked and com
   **rest element**: `const [first, ...others] = xs` (a new array; for a tuple, a tuple of the remaining
   elements), `const { id, ...rest } = obj` (a new object with the other properties of the static type, without
   `#private` fields). A binding with a default has the element type without `undefined`. Assignments to existing
-  variables support only plain patterns (no defaults or rest); a rest element must bind a name.
+  variables support only plain array patterns (`[a, b] = [b, a]`; no object patterns, defaults or rest); a rest element
+  must bind a name.
 - Object spread `{ ...a, k: v, ...b }`: the source may be an object type or a class instance (only fields are copied, not methods); later properties with the same name override earlier ones;
   **optional** properties in the source override only when present (same as TS: in `{ retries: 3, ...opts }`, `retries` has type `number`).
   The properties of the result are in JavaScript's order (entries in source order, a key keeps its first position): the
@@ -273,14 +278,20 @@ try {
   type `T | undefined` (a default applies when the argument is omitted or `undefined`, as in JavaScript).
   A callback parameter annotated `unknown` takes its contextual type (`Array.from({ length: n }, (_: unknown, i) => i)`).
 - Spread arguments: a tuple supplies one argument per element (`f(...pair)`, evaluated once); arrays, tuples and
-  other iterables can be spread into a rest parameter anywhere in the argument list (the rest parameter is always
-  a new array). Spreading an array into other parameters is a compile error (as in TypeScript).
+  other iterables can be spread into a rest parameter of a user function anywhere in the argument list (the rest
+  parameter is always a new array); built-in functions such as `Math.max` take arrays only. Spreading an array into
+  other parameters is a compile error (as in TypeScript). A default value may refer to earlier parameters.
+- A local function value may call itself (`const f = (n: number): number => ... f(n - 1)`) when its type is known
+  without its initializer (typed parameters and a return type, or an annotation); so may a named function
+  expression through its name (`function f(n: number): number { ... f(n - 1) ... }`).
 - Classes: fields (optionally initialized, types can be inferred), constructor parameter properties (`constructor(public x: number)`), methods, static fields/methods,
   single inheritance with `extends` (the first statement of a derived class constructor must be `super(...)`; if the constructor is omitted, the superclass constructor parameters are inherited automatically),
   `super.method()`, `implements` (checked structurally), `instanceof`. Method overrides require identical signatures.
   `public/private/protected` modifiers are accepted but not enforced. `readonly` is enforced at compile time as in TypeScript: a readonly
   field (or parameter property) can only be assigned through `this` in its own class's constructor, and a `static readonly` field only by its
-  initializer. Mutable static fields can be written with `=`, compound assignment and `++`/`--`. Static fields, methods and accessors
+  initializer. A `readonly` property of an interface or object type cannot be assigned; `readonly T[]` /
+  `ReadonlyArray<T>`, `readonly [A, B]`, `ReadonlyMap` and `ReadonlySet` have no mutating methods and no element or
+  `length` writes, and are not assignable to their mutable types (the other way round is fine). Mutable static fields can be written with `=`, compound assignment and `++`/`--`. Static fields, methods and accessors
   are **inherited** as in JavaScript: `B.x` reads the static member of the nearest base class that has one; writing an inherited
   static field through a subclass (`B.x = v`, compound assignment, `++`) gives that subclass its own copy (the base class keeps
   its value), which the subclass and its own subclasses read from then on. `#private` static members are not inherited (as in
@@ -388,7 +399,8 @@ if (cfg === null) console.log("bad config: " + lastError());  // e.g. "expected 
 
 ## 7. Modules
 
-- `import { a, b as c } from "./x"`, `import * as ns from "./x"`, `import type {...}`, `export function/const/class/interface/type/enum`,
+- `import { a, b as c } from "./x"`, `import * as ns from "./x"` (functions and constants through `ns.`; import
+  classes, types and enums by name), `import type {...}`, `export function/const/class/interface/type/enum`,
   `export { a, b as c }`. Paths are relative to the current file and the extension may be omitted (tries `.ts`, `.e7`, `/index.ts`). Circular dependencies are forbidden.
 - Built-in modules: `e7:crypto`, `e7:encoding`, `e7:json`, `e7:test` (API in `lib/e7.d.ts`; `e7:json` is described in section 6.5, `e7:test` in section 7.1).
 - Host functions: `declare function name(a: string, n: number): string;`; parameters/return values are limited to
