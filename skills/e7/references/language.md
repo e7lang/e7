@@ -250,15 +250,34 @@ function isDigits(s: string): boolean {
 console.log(isDigits("123"), isDigits("12a"), "a-b-c".replaceAll("-", "+"), "k=v".split("="));
 ```
 
-### `async`, `await`, `Promise`, timers, I/O
+### `async`, `await`, `Promise`, generators (0.3)
 
-```ts e7-reject
-async function load(): Promise<string> { return "x"; }
+```ts
+async function double(x: number): Promise<number> {
+  return x * 2;
+}
+function* range(n: number): Generator<number> {
+  for (let i = 0; i < n; i++) yield i;
+}
+async function main(): Promise<void> {
+  const xs = await Promise.all([...range(3)].map(double));
+  console.log(xs);
+  try {
+    await Promise.reject(new Error("no"));
+  } catch (e) {
+    if (e instanceof Error) console.log("caught", e.message);
+  }
+}
+main();
 ```
 
-Scripts are synchronous. The host app does networking and storage and passes data in (as arguments, or
-through host functions declared with `declare function`). Long computations can be time-sliced by the host
-with an instruction budget.
+`async` functions, methods and arrows, `await`, top-level `await` (entry module), `for await`, `Promise`
+(`then` / `catch` / `finally`, `new Promise<T>(...)`, `Promise.all` / `allSettled` / `any` / `race` over
+promises of one type) and generators (`function*`, `yield`, `yield*`, `[Symbol.iterator]` generator methods)
+work as in Node.js, callbacks in the same order. There are no timers and no I/O: the host does networking
+and storage through async host functions (`declare function fetchKey(id: string): Promise<Uint8Array>`,
+settled by the host; see EMBEDDING.md) or passes data in as arguments. Async generators (`async function*`)
+are not supported yet.
 
 ### `for...in`, `in`, `delete`, `var`, `==`
 

@@ -1202,6 +1202,8 @@ void VM::resetExecution() {
   entryKind_ = 'V';
   pending_ = false;
   pendingThrow_ = nullptr;
+  resultKind_ = 'V';  // an abandoned call has no result (an async entry frame may have left its promise)
+  result_.u = 0;
   gcInhibit_ = 0;
   suspended_ = false;
   nativeDepth_ = 0;

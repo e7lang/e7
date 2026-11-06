@@ -806,8 +806,11 @@ dispatch:
     fr->ip = ip;
     frames_.push_back(Frame{cf, cip, co->closure, nb, B, false, co, C});
     LOAD_FRAME();
+    if (mode == 1) {
+      budget_ -= 1;
+      raiseThrown(thrown);  // raised at the YIELD (its handlers apply)
+    }
     TICK(1);
-    if (mode == 1) raiseThrown(thrown);  // raised at the YIELD (its handlers apply)
     DISPATCH();
   }
   // D7: field B of the record in A is not an own property (an object literal leaves it out)
