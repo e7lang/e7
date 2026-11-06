@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <map>
 #include "checker.h"
 #include "intrinsics.h"
 #include "suggest.h"
@@ -33,7 +34,9 @@ void Checker::popScope() { scope = scope->parent; }
 
 void Checker::declare(const std::string& name, Sym* s, Loc l) {
   if (scope->names.count(name)) {
-    err(l, "duplicate declaration of '" + name + "'");
+    // only `export default` declares "default" (a reserved word)
+    err(l, name == "default" ? std::string("a module cannot have more than one default export")
+                             : "duplicate declaration of '" + name + "'");
     return;
   }
   s->loc = l;
@@ -50,7 +53,94 @@ Sym* Checker::lookup(const std::string& name, bool* crossedFn) {
     }
     if (s->fnBoundary) crossed = true;
   }
+  if (name.find('.') != std::string::npos) {
+    if (crossedFn) *crossedFn = false;
+    return lookupQualified(scope, name);
+  }
   return nullptr;
+}
+
+// `ns.X` (a qualified type name, or an expression that resolveNamespaceRefs rewrote): export X of the module
+// namespace ns (`import * as ns`, or one exported by `export * as ns`); null when ns is not one (a builtin
+// module namespace or a shadowing local) or has no export X
+Sym* Checker::lookupQualified(Scope* from, const std::string& name) {
+  size_t dot = name.rfind('.');
+  if (dot == std::string::npos || dot == 0 || dot + 1 == name.size()) return nullptr;
+  Sym* base = lookupFrom(from, name.substr(0, dot));
+  if (!base || base->k != SymK::Namespace || static_cast<NamespaceSym*>(base)->builtin) return nullptr;
+  auto& members = static_cast<NamespaceSym*>(base)->members;
+  auto it = members.find(name.substr(dot + 1));
+  return it == members.end() ? nullptr : it->second;
+}
+
+// Rewrites `ns.C` (C a class, enum, generic class or namespace exported by the module namespace ns) into the
+// identifier "ns.C", which lookup() resolves to C: the code that handles a class, enum or namespace named by an
+// identifier (`new C()`, `C.staticMember`, `x instanceof C`, `E.A`, `ns2.f()`) then applies unchanged. The
+// original object stays in `a`: checkIdent turns the node back into a member access when, where it is
+// checked, `ns` names something else (a local that shadows the import).
+void Checker::resolveNamespaceRefs(FileInfo* fi) {
+  bool any = false;
+  for (auto& kv : fi->scope->names)
+    if (kv.second->k == SymK::Namespace && !static_cast<NamespaceSym*>(kv.second)->builtin) any = true;
+  if (!any) return;
+  std::function<void(Expr*)> ex;
+  std::function<void(Stmt*)> st;
+  std::function<void(VarDecl&)> decl = [&](VarDecl& d) {
+    ex(d.init);
+    for (auto& el : d.elems) decl(el);
+  };
+  auto params = [&](std::vector<Param>& ps) {
+    for (auto& p : ps) {
+      ex(p.init);
+      if (p.pattern) decl(*p.pattern);
+    }
+  };
+  ex = [&](Expr* e) {
+    if (!e) return;
+    ex(e->a);
+    ex(e->b);
+    ex(e->c);
+    ex(e->exprBody);
+    for (Expr* x : e->list) ex(x);
+    for (auto& p : e->props) ex(p.value);
+    params(e->params);
+    st(e->body);
+    if (e->k != EK::Member || e->optional || !e->a || e->a->k != EK::Ident) return;
+    Sym* base = lookupFrom(fi->scope, e->a->raw);
+    if (!base || base->k != SymK::Namespace || static_cast<NamespaceSym*>(base)->builtin) return;
+    auto& members = static_cast<NamespaceSym*>(base)->members;
+    auto it = members.find(e->raw);
+    if (it == members.end()) return;
+    Sym* m = it->second;
+    bool named = m->k == SymK::Class || m->k == SymK::Enum || m->k == SymK::Namespace ||
+                 (m->k == SymK::Generic && static_cast<GenericSym*>(m)->kind == GenericSym::Class);
+    if (!named) return;
+    e->k = EK::Ident;
+    e->raw = e->a->raw + "." + e->raw;
+  };
+  st = [&](Stmt* s) {
+    if (!s) return;
+    for (auto& d : s->decls) decl(d);
+    params(s->params);
+    st(s->body);
+    st(s->then);
+    st(s->els);
+    st(s->init);
+    for (Stmt* x : s->stmts) st(x);
+    ex(s->expr);
+    ex(s->update);
+    for (auto& c : s->cases) {
+      ex(c.test);
+      for (Stmt* x : c.body) st(x);
+    }
+    for (auto& m : s->members) {
+      ex(m.init);
+      params(m.params);
+      st(m.body);
+    }
+    for (auto& em : s->enumMembers) ex(em.init);
+  };
+  for (Stmt* s : fi->file->body) st(s);
 }
 
 std::string Checker::suggestName(const std::string& name, bool typeNames) {
@@ -328,6 +418,10 @@ void Checker::run() {
     curFn = init;
     declareFile(fi.get());
   }
+  for (auto& fi : fileInfos) {
+    curFile = fi->file->path;
+    resolveNamespaceRefs(fi.get());
+  }
   // resolve declarations
   for (auto& fi : fileInfos) {
     curFile = fi->file->path;
@@ -386,7 +480,51 @@ void Checker::run() {
 }
 
 // ------------------------------------------------------------------ file declarations
+void Checker::addExport(FileInfo* fi, const std::string& name, Sym* s, Loc l) {
+  auto it = fi->exports.find(name);
+  if (it != fi->exports.end() && it->second != s) {
+    err(l, name == "default" ? std::string("a module cannot have more than one default export")
+                             : "duplicate export '" + name + "'");
+    return;
+  }
+  fi->exports[name] = s;
+}
+
 void Checker::declareFile(FileInfo* fi) {
+  // a declaration's exports: `export <declaration>` under its name, `export default <declaration>` as "default"
+  auto exportDecl = [&](Stmt* s, const std::string& name, Sym* sym, Loc l) {
+    if (s->exported) addExport(fi, name, sym, l);
+    if (s->isDefault) addExport(fi, "default", sym, l);
+  };
+  auto declareVars = [&](Stmt* s) {
+    for (VarDecl& d : s->decls) {
+      if (d.isArrayPat || d.isObjPat) continue;  // typed when checked
+      Expr* gi = d.init;
+      while (gi && gi->k == EK::Paren) gi = gi->a;
+      if (gi && gi->k == EK::Arrow && !gi->typeParams.empty() && !d.type) {
+        // const f = <T>(x: T) => ...: a generic function (instantiated per use), not a variable
+        if (!s->isConst) { err(d.loc, "a generic arrow function must be assigned to a 'const'"); continue; }
+        GenericSym* g = newGeneric(GenericSym::Arrow, d.name, &gi->typeParams, d.loc);
+        g->arrow = gi;
+        g->parentFn = P.init;
+        d.generic = g;
+        declare(d.name, g, d.loc);
+        exportDecl(s, d.name, g, d.loc);
+        continue;
+      }
+      VarSym* v = newVar(d.name, nullptr, s->isConst, d.loc);
+      v->isGlobal = true;
+      v->owner = nullptr;
+      v->decl = &d;
+      v->declStmt = s;
+      d.sym = v;
+      v->globalIdx = (int)P.globals.size();
+      P.globals.push_back(v);
+      declare(d.name, v, d.loc);
+      exportDecl(s, d.name, v, d.loc);
+    }
+  };
+  std::vector<Stmt*> defaultExprs;  // export default <expression>
   for (Stmt* s : fi->file->body) {
     switch (s->k) {
       case SK::Func: {
@@ -395,7 +533,7 @@ void Checker::declareFile(FileInfo* fi) {
           g->decl = s;
           s->generic = g;
           declare(s->name, g, s->loc);
-          if (s->exported) fi->exports[s->name] = g;
+          exportDecl(s, s->name, g, s->loc);
           break;
         }
         FuncSym* f = newFunc(s->name, &s->params, s->retType, s->body, nullptr);
@@ -406,7 +544,7 @@ void Checker::declareFile(FileInfo* fi) {
         f->parent = nullptr;
         s->fn = f;
         declare(s->name, f, s->loc);
-        if (s->exported) fi->exports[s->name] = f;
+        exportDecl(s, s->name, f, s->loc);
         break;
       }
       case SK::Declare: {
@@ -417,7 +555,7 @@ void Checker::declareFile(FileInfo* fi) {
         f->declStmt = s;
         s->fn = f;
         declare(s->name, f, s->loc);
-        if (s->exported) fi->exports[s->name] = f;
+        exportDecl(s, s->name, f, s->loc);
         break;
       }
       case SK::Class: {
@@ -435,7 +573,7 @@ void Checker::declareFile(FileInfo* fi) {
           s->cls = h;
           s->generic = g;
           declare(s->name, g, s->loc);
-          if (s->exported) fi->exports[s->name] = g;
+          exportDecl(s, s->name, g, s->loc);
           break;
         }
         ClassSym* c = P.make<ClassSym>();
@@ -445,7 +583,7 @@ void Checker::declareFile(FileInfo* fi) {
         c->type = T.classType(c);
         s->cls = c;
         declare(s->name, c, s->loc);
-        if (s->exported) fi->exports[s->name] = c;
+        exportDecl(s, s->name, c, s->loc);
         break;
       }
       case SK::Interface: {
@@ -454,14 +592,14 @@ void Checker::declareFile(FileInfo* fi) {
           g->decl = s;
           s->generic = g;
           declare(s->name, g, s->loc);
-          if (s->exported) fi->exports[s->name] = g;
+          exportDecl(s, s->name, g, s->loc);
           break;
         }
         InterfaceSym* is = P.make<InterfaceSym>();
         is->name = s->name;
         is->decl = s;
         declare(s->name, is, s->loc);
-        if (s->exported) fi->exports[s->name] = is;
+        exportDecl(s, s->name, is, s->loc);
         break;
       }
       case SK::TypeAlias: {
@@ -470,14 +608,14 @@ void Checker::declareFile(FileInfo* fi) {
           g->decl = s;
           s->generic = g;
           declare(s->name, g, s->loc);
-          if (s->exported) fi->exports[s->name] = g;
+          exportDecl(s, s->name, g, s->loc);
           break;
         }
         AliasSym* a = P.make<AliasSym>();
         a->name = s->name;
         a->decl = s;
         declare(s->name, a, s->loc);
-        if (s->exported) fi->exports[s->name] = a;
+        exportDecl(s, s->name, a, s->loc);
         break;
       }
       case SK::Enum: {
@@ -486,38 +624,13 @@ void Checker::declareFile(FileInfo* fi) {
         e->decl = s;
         e->type = T.enumType(e);
         declare(s->name, e, s->loc);
-        if (s->exported) fi->exports[s->name] = e;
+        exportDecl(s, s->name, e, s->loc);
         break;
       }
-      case SK::Var: {
-        for (VarDecl& d : s->decls) {
-          if (d.isArrayPat || d.isObjPat) continue;  // typed when checked
-          Expr* gi = d.init;
-          while (gi && gi->k == EK::Paren) gi = gi->a;
-          if (gi && gi->k == EK::Arrow && !gi->typeParams.empty() && !d.type) {
-            // const f = <T>(x: T) => ...: a generic function (instantiated per use), not a variable
-            if (!s->isConst) { err(d.loc, "a generic arrow function must be assigned to a 'const'"); continue; }
-            GenericSym* g = newGeneric(GenericSym::Arrow, d.name, &gi->typeParams, d.loc);
-            g->arrow = gi;
-            g->parentFn = P.init;
-            d.generic = g;
-            declare(d.name, g, d.loc);
-            if (s->exported) fi->exports[d.name] = g;
-            continue;
-          }
-          VarSym* v = newVar(d.name, nullptr, s->isConst, d.loc);
-          v->isGlobal = true;
-          v->owner = nullptr;
-          v->decl = &d;
-          v->declStmt = s;
-          d.sym = v;
-          v->globalIdx = (int)P.globals.size();
-          P.globals.push_back(v);
-          declare(d.name, v, d.loc);
-          if (s->exported) fi->exports[d.name] = v;
-        }
+      case SK::Var:
+        if (s->isDefault) defaultExprs.push_back(s);  // after the other declarations (it may name one)
+        else declareVars(s);
         break;
-      }
       case SK::Import:
         bindImports(fi, s);
         break;
@@ -527,80 +640,160 @@ void Checker::declareFile(FileInfo* fi) {
         break;
     }
   }
-  // export { a, b as c }
+  // export default <expression>: a declaration of this module (other than a `let`, whose current value the
+  // export copies) is exported as itself, like `export { name as default }`; any other expression is
+  // evaluated at that point into the hidden const "default"
+  for (Stmt* s : defaultExprs) {
+    Expr* x = s->decls[0].init;
+    if (x->k == EK::Ident) {
+      auto it = fi->scope->names.find(x->raw);
+      if (it != fi->scope->names.end() &&
+          !(it->second->k == SymK::Var && !static_cast<VarSym*>(it->second)->isConst)) {
+        ImportSpec sp;
+        sp.name = x->raw;
+        sp.alias = "default";
+        sp.loc = x->loc;
+        s->k = SK::Export;
+        s->imports = {sp};
+        continue;  // exported with the export lists below
+      }
+    }
+    declareVars(s);
+  }
+  // export { a, b as c }, export { a, b as c } from "./x", export * as ns from "./x"
   for (Stmt* s : fi->file->body) {
-    if (s->k != SK::Export) continue;
+    if (s->k != SK::Export || s->starExport) continue;
+    if (s->from.empty()) {
+      for (auto& sp : s->imports) {
+        auto it = fi->scope->names.find(sp.name);
+        if (it == fi->scope->names.end()) { err(s->loc, "cannot export unknown name '" + sp.name + "'"); continue; }
+        addExport(fi, sp.alias.empty() ? sp.name : sp.alias, it->second, s->loc);
+        if (it->second->k == SymK::Func) static_cast<FuncSym*>(it->second)->exported = true;
+      }
+      continue;
+    }
+    FileInfo* tfi = nullptr;
+    if (!importTarget(s, tfi)) continue;
+    if (!s->nsAlias.empty()) addExport(fi, s->nsAlias, moduleNamespace(s, tfi, s->nsAlias), s->loc);
     for (auto& sp : s->imports) {
-      auto it = fi->scope->names.find(sp.name);
-      if (it == fi->scope->names.end()) { err(s->loc, "cannot export unknown name '" + sp.name + "'"); continue; }
-      fi->exports[sp.alias.empty() ? sp.name : sp.alias] = it->second;
-      if (it->second->k == SymK::Func) static_cast<FuncSym*>(it->second)->exported = true;
+      const std::string& as = sp.alias.empty() ? sp.name : sp.alias;
+      if (Sym* m = importedSym(s, tfi, sp.name, as)) addExport(fi, as, m, s->loc);
     }
   }
+  // export * from "./x": every export of x but "default", unless this module exports the name itself. A name
+  // that two `export *` provide with different bindings is ambiguous: an error, as in TypeScript (JavaScript
+  // leaves it out of the module)
+  auto sameBinding = [](Sym* a, Sym* b) {
+    if (a == b) return true;
+    if (a->k == SymK::Builtin && b->k == SymK::Builtin)
+      return static_cast<BuiltinSym*>(a)->id == static_cast<BuiltinSym*>(b)->id;
+    return a->k == SymK::Alias && b->k == SymK::Alias && static_cast<AliasSym*>(a)->type &&
+           static_cast<AliasSym*>(a)->type == static_cast<AliasSym*>(b)->type;
+  };
+  std::map<std::string, std::pair<Sym*, std::string>> starred;  // name -> (binding, module it came from)
+  for (Stmt* s : fi->file->body) {
+    if (s->k != SK::Export || !s->starExport) continue;
+    FileInfo* tfi = nullptr;
+    if (!importTarget(s, tfi)) continue;
+    std::map<std::string, Sym*> names;  // sorted: deterministic messages
+    if (tfi) {
+      names.insert(tfi->exports.begin(), tfi->exports.end());
+    } else {
+      for (const std::string& n : builtinModuleExports(s->from))
+        if (Sym* m = importedSym(s, nullptr, n, n)) names[n] = m;
+    }
+    for (auto& kv : names) {
+      if (kv.first == "default" || fi->exports.count(kv.first)) continue;
+      auto it = starred.find(kv.first);
+      if (it == starred.end()) starred[kv.first] = {kv.second, s->from};
+      else if (!sameBinding(it->second.first, kv.second))
+        err(s->loc, "module '" + it->second.second + "' has already exported a member named '" + kv.first +
+                        "'; re-export it explicitly to resolve the ambiguity");
+    }
+  }
+  for (auto& kv : starred) fi->exports[kv.first] = kv.second.first;
 }
 
-void Checker::bindImports(FileInfo* fi, Stmt* s) {
-  bool builtinMod = s->from.rfind("e7:", 0) == 0;
-  if (builtinMod) {
+// The module an import or a re-export names: tfi is its file, or null for a builtin module (e7:...)
+bool Checker::importTarget(Stmt* s, FileInfo*& tfi) {
+  tfi = nullptr;
+  if (s->from.rfind("e7:", 0) == 0) {
     if (s->from != "e7:crypto" && s->from != "e7:encoding" && s->from != "e7:json" && s->from != "e7:test") {
       std::string alt = closestName(s->from, builtinModuleNames());
       err(s->loc, "unknown builtin module '" + s->from + "'" +
                       (alt.empty() ? "; the builtin modules are e7:crypto, e7:encoding, e7:json and e7:test"
                                    : "; did you mean '" + alt + "'?"));
-      return;
+      return false;
     }
-    if (!s->nsAlias.empty()) {
-      NamespaceSym* ns = P.make<NamespaceSym>();
-      ns->name = s->nsAlias;
-      ns->module = s->from;
-      ns->builtin = true;
-      declare(s->nsAlias, ns, s->loc);
-      return;
-    }
-    for (auto& sp : s->imports) {
-      const auto& names = builtinModuleExports(s->from);
-      if (std::find(names.begin(), names.end(), sp.name) == names.end()) {
-        err(s->loc, "module '" + s->from + "' has no exported member '" + sp.name + "'" + didYouMean(sp.name, names));
-        continue;
-      }
-      if (sp.name == "KeyHandle") {
-        AliasSym* a = P.make<AliasSym>();
-        a->name = sp.alias;
-        a->type = T.handle();
-        a->state = 2;
-        declare(sp.alias, a, s->loc);
-        continue;
-      }
-      BuiltinSym* b = P.make<BuiltinSym>();
-      b->name = sp.alias;
-      b->id = s->from + "." + sp.name;
-      declare(sp.alias, b, s->loc);
-    }
-    return;
+    return true;
   }
   SourceFile* target = resolveModule(s->from, curFile);
-  if (!target) { err(s->loc, "cannot find module '" + s->from + "'"); return; }
+  if (!target) { err(s->loc, "cannot find module '" + s->from + "'"); return false; }
   auto it = fileInfo.find(target->path);
-  if (it == fileInfo.end()) { err(s->loc, "cannot find module '" + s->from + "'"); return; }
-  FileInfo* tfi = it->second;
-  if (!s->nsAlias.empty()) {
-    NamespaceSym* ns = P.make<NamespaceSym>();
-    ns->name = s->nsAlias;
-    ns->module = target->path;
-    ns->members = tfi->exports;  // copied after target declared (dependency order)
-    declare(s->nsAlias, ns, s->loc);
-    return;
-  }
-  for (auto& sp : s->imports) {
-    auto e = tfi->exports.find(sp.name);
-    if (e == tfi->exports.end()) {
-      std::vector<std::string> names;
-      for (auto& kv : tfi->exports) names.push_back(kv.first);
-      err(s->loc, "module '" + s->from + "' has no exported member '" + sp.name + "'" + didYouMean(sp.name, names));
-      continue;
+  if (it == fileInfo.end()) { err(s->loc, "cannot find module '" + s->from + "'"); return false; }
+  tfi = it->second;
+  return true;
+}
+
+// The binding of export `name` of the module (tfi, or the builtin module s->from when null), made available
+// as `alias`; null (reported) when the module has no such export
+Sym* Checker::importedSym(Stmt* s, FileInfo* tfi, const std::string& name, const std::string& alias) {
+  if (!tfi) {
+    const auto& names = builtinModuleExports(s->from);
+    if (std::find(names.begin(), names.end(), name) == names.end()) {
+      if (name == "default") err(s->loc, "module '" + s->from + "' has no default export");
+      else err(s->loc, "module '" + s->from + "' has no exported member '" + name + "'" + didYouMean(name, names));
+      return nullptr;
     }
-    declare(sp.alias, e->second, s->loc);
+    if (name == "KeyHandle") {
+      AliasSym* a = P.make<AliasSym>();
+      a->name = alias;
+      a->type = T.handle();
+      a->state = 2;
+      return a;
+    }
+    BuiltinSym* b = P.make<BuiltinSym>();
+    b->name = alias;
+    b->id = s->from + "." + name;
+    return b;
   }
+  // the target was declared first (dependency order), so its exports are complete
+  auto e = tfi->exports.find(name);
+  if (e == tfi->exports.end()) {
+    if (name == "default") {
+      err(s->loc, "module '" + s->from + "' has no default export");
+      return nullptr;
+    }
+    std::vector<std::string> names;
+    for (auto& kv : tfi->exports) names.push_back(kv.first);
+    err(s->loc, "module '" + s->from + "' has no exported member '" + name + "'" + didYouMean(name, names));
+    return nullptr;
+  }
+  return e->second;
+}
+
+// `import * as alias` / `export * as alias`: the module as a namespace
+NamespaceSym* Checker::moduleNamespace(Stmt* s, FileInfo* tfi, const std::string& alias) {
+  NamespaceSym* ns = P.make<NamespaceSym>();
+  ns->name = alias;
+  if (!tfi) {
+    ns->module = s->from;
+    ns->builtin = true;
+  } else {
+    ns->module = tfi->file->path;
+    ns->members = tfi->exports;  // complete: the target was declared first (dependency order)
+  }
+  return ns;
+}
+
+void Checker::bindImports(FileInfo* fi, Stmt* s) {
+  (void)fi;
+  FileInfo* tfi = nullptr;
+  if (!importTarget(s, tfi)) return;
+  // import "./x" binds nothing (the module still runs, in dependency order)
+  if (!s->nsAlias.empty()) declare(s->nsAlias, moduleNamespace(s, tfi, s->nsAlias), s->loc);
+  for (auto& sp : s->imports)
+    if (Sym* m = importedSym(s, tfi, sp.name, sp.alias)) declare(sp.alias, m, s->loc);
 }
 
 // ------------------------------------------------------------------ type resolution
@@ -756,6 +949,19 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
       case SymK::Generic:
         return genericNamedType(static_cast<GenericSym*>(s), args, l);
       default: break;
+    }
+  }
+  size_t dot = name.rfind('.');
+  if (dot != std::string::npos) {
+    // ns.T: a type exported by a module namespace (resolved by lookup above)
+    Sym* base = lookup(name.substr(0, dot));
+    if (base && base->k == SymK::Namespace && !static_cast<NamespaceSym*>(base)->builtin) {
+      if (s) return errT(l, "'" + name + "' is not a type");
+      std::string member = name.substr(dot + 1);
+      std::vector<std::string> names;
+      for (auto& kv : static_cast<NamespaceSym*>(base)->members) names.push_back(kv.first);
+      return errT(l, "module '" + name.substr(0, dot) + "' has no exported member '" + member + "'" +
+                         didYouMean(member, names));
     }
   }
   if (name == "number") { noArgs(); return T.number(); }

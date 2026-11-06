@@ -155,6 +155,12 @@ class Checker {
   FuncSym* newFunc(const std::string& name, std::vector<Param>* params, TypeNode* ret, Stmt* body, Expr* exprBody);
   VarSym* newVar(const std::string& name, Type* type, bool isConst, Loc l);
   void bindImports(FileInfo* fi, Stmt* s);
+  void addExport(FileInfo* fi, const std::string& name, Sym* s, Loc l);
+  bool importTarget(Stmt* s, FileInfo*& tfi);
+  Sym* importedSym(Stmt* s, FileInfo* tfi, const std::string& name, const std::string& alias);
+  NamespaceSym* moduleNamespace(Stmt* s, FileInfo* tfi, const std::string& alias);
+  void resolveNamespaceRefs(FileInfo* fi);
+  Sym* lookupQualified(Scope* from, const std::string& name);
 
   // ---- types
   Type* resolveType(TypeNode* n);

@@ -1,8 +1,7 @@
 // @feature: Side-effect imports (`import "./x"`)
 // @category: Modules
-// @status: unsupported
-// @why: not implemented yet
-// @instead: import a function from the module and call it
-// @error: side-effect imports are not supported
-import "./_lib/counter.ts";
-console.log("imported");
+// @status: supported
+// @note: the module runs once, in JavaScript's order (dependencies first, in source order)
+import "./_lib/side-effect.ts";
+import { count } from "./_lib/counter.ts";
+console.log("imported", count);

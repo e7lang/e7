@@ -104,6 +104,11 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       return f->type->ret;
     }
     if (s->k == SymK::Generic) return errT(l, "'" + name + "' is generic: call it, or use it as a type with type arguments");
+    if (s->k == SymK::Builtin) {
+      // a function of a builtin module that the module imported or re-exported (export { sha256 } from "e7:crypto")
+      if (isCall) return checkBuiltinCall(e, static_cast<BuiltinSym*>(s)->id, expected);
+      return errT(l, "builtin function '" + ns->name + "." + name + "' cannot be used as a value; wrap it in an arrow function");
+    }
     if (s->k == SymK::Func) {
       FuncSym* f = static_cast<FuncSym*>(s);
       resolveSig(f);
@@ -879,6 +884,14 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
       Sym* bs = base->k == EK::Ident ? lookup(base->raw) : nullptr;
       if (base->k == EK::Ident && base->raw == "Intl" && !bs)
         return errT(l, "'Intl' is not supported (locale data differs between platforms); format with toFixed / padStart, or let the host format");
+      if (bs && bs->k == SymK::Namespace && !static_cast<NamespaceSym*>(bs)->builtin) {
+        // a class is rewritten to the identifier "ns.C" (resolveNamespaceRefs): this member is something else
+        auto& members = static_cast<NamespaceSym*>(bs)->members;
+        if (members.count(c->raw)) return errT(l, "'" + base->raw + "." + c->raw + "' is not a class");
+        std::vector<std::string> names;
+        for (auto& kv : members) names.push_back(kv.first);
+        return errT(l, "module '" + base->raw + "' has no exported member '" + c->raw + "'" + didYouMean(c->raw, names));
+      }
       if (bs && bs->k == SymK::Namespace)
         return errT(l, "classes cannot be constructed through a namespace import ('new " + base->raw + "." + c->raw +
                            "'); import the class by name");

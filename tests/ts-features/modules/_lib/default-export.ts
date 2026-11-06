@@ -2,3 +2,4 @@
 export default function hello(): string {
   return "hello";
 }
+export const greeting = "hi";

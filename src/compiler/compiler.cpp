@@ -110,9 +110,10 @@ struct Loader {
       visiting.erase(path);
       return nullptr;
     }
-    // load dependencies first
+    // load dependencies first, in source order (imports, side-effect imports and re-exports): the files
+    // are initialized in this order, as JavaScript evaluates modules (depth first, each once)
     for (Stmt* s : sf->body) {
-      if (s->k != SK::Import) continue;
+      if (s->k != SK::Import && !(s->k == SK::Export && !s->from.empty())) continue;
       if (s->from.rfind("e7:", 0) == 0) continue;
       std::string content;
       std::string dep = resolvePath(s->from, path, &content);

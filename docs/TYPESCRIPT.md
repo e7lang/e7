@@ -27,7 +27,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **125 supported**, **17 partial**, **108 unsupported** (267 sample programs).
+250 features: **129 supported**, **16 partial**, **105 unsupported** (266 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -38,7 +38,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Generics](#generics) | 9 | 1 | 5 |
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
 | [Classes](#classes) | 17 | 0 | 14 |
-| [Modules](#modules) | 4 | 1 | 8 |
+| [Modules](#modules) | 8 | 0 | 5 |
 | [Enums](#enums) | 4 | 1 | 4 |
 | [Utility Types](#utility-types) | 0 | 0 | 13 |
 | [Decorators](#decorators) | 0 | 0 | 3 |
@@ -53,9 +53,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 21 | 1 | 9 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 9 | 6 | 11 |
-| **Total** | **125** | **17** | **108** |
+| **Total** | **129** | **16** | **105** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 65.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 61.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -223,18 +223,18 @@ Within each category, supported features come first, then partial and unsupporte
 
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
+| Default exports and imports (`export default`, `import x from`) | supported | `export default` of a function, class, interface or expression (evaluated once, where it stands), `export { x as default }`, `import x from`, `import x, { a } from`, `import { default as x } from` | [default-exports.ts](../tests/ts-features/modules/default-exports.ts) |
 | Export lists (`export { a, b as c }`) | supported |  | [export-lists.ts](../tests/ts-features/modules/export-lists.ts) |
 | Module state and live bindings of imported variables | supported |  | [live-bindings.ts](../tests/ts-features/modules/live-bindings.ts) |
 | Named exports and imports (`export function/const/class/interface/type/enum`, `import { a, b as c }`) | supported |  | [named-imports-exports.ts](../tests/ts-features/modules/named-imports-exports.ts) |
+| Namespace imports (`import * as ns`) | supported | Functions, constants, classes (`new ns.C()`, static members, `instanceof`, `extends`), enums and types (`ns.T`, `ns.Box<number>`) through the namespace; its members cannot be assigned, as in JavaScript | [namespace-imports.ts](../tests/ts-features/modules/namespace-imports.ts) |
+| Re-exports (`export { x } from`, `export * from`, `export * as ns from`) | supported | A module's own exports win over `export *`; a name that two `export *` provide with different bindings is an error, as in TypeScript (JavaScript leaves it out) | [re-exports.ts](../tests/ts-features/modules/re-exports.ts) |
+| Side-effect imports (`import "./x"`) | supported | The module runs once, in JavaScript's order (dependencies first, in source order) | [side-effect-imports.ts](../tests/ts-features/modules/side-effect-imports.ts) |
 | Type-only imports (`import type`, inline `type` modifiers) | supported |  | [type-only-imports.ts](../tests/ts-features/modules/type-only-imports.ts) |
-| Namespace imports (`import * as ns`) | **partial** | **Works:** functions and constants through the namespace (members cannot be assigned). **Not supported:** classes, types and enums through a namespace (`new ns.C()`, `ns.T`, `ns.E.A`; docs/SPEC.md section 7 lists `import * as ns` without the restriction) (*not implemented yet*). **Instead:** import those names directly: `import { Square, Kind } from "./shapes"` | [namespace-imports.ok.ts](../tests/ts-features/modules/namespace-imports.ok.ts), [namespace-imports.no.ts](../tests/ts-features/modules/namespace-imports.no.ts) |
 | Ambient variable and class declarations (`declare const`, `declare class`) | **unsupported** | **Why:** only functions can be provided by the host, with a signature the VM checks when the module is loaded (*verifiable bytecode*). **Instead:** a host function that returns the value: `declare function appVersion(): string` (host functions are E7's form of `declare`, docs/SPEC.md section 7; they need a host that registers them, so they have no sample here) | [ambient-declarations.ts](../tests/ts-features/modules/ambient-declarations.ts) |
 | Circular imports | **unsupported** | **Why:** modules are initialized in dependency order, so every import is initialized before it is used (*verifiable bytecode*). **Instead:** move the shared declarations into a third module | [circular-imports.ts](../tests/ts-features/modules/circular-imports.ts) |
-| Default exports and imports | **unsupported** | **Why:** *not implemented yet*. **Instead:** named exports: `export function hello()` and `import { hello } from "./x"` | [default-exports.ts](../tests/ts-features/modules/default-exports.ts) |
 | Dynamic `import()` | **unsupported** | **Why:** every module is compiled and verified ahead of time; `import()` also returns a Promise (*verifiable bytecode*). **Instead:** static imports; the host loads modules | [dynamic-import.ts](../tests/ts-features/modules/dynamic-import.ts) |
 | `import.meta` | **unsupported** | **Why:** the host, not the script, knows where modules come from (*not implemented yet*). **Instead:** pass the information in from the host (a host function or an argument) | [import-meta.ts](../tests/ts-features/modules/import-meta.ts) |
-| Re-exports (`export { x } from`, `export * from`) | **unsupported** | **Why:** *not implemented yet*. **Instead:** import the names and export them from the module: `import { area } from "./shapes"; export { area };` | [re-exports.ts](../tests/ts-features/modules/re-exports.ts) |
-| Side-effect imports (`import "./x"`) | **unsupported** | **Why:** *not implemented yet*. **Instead:** import a function from the module and call it | [side-effect-imports.ts](../tests/ts-features/modules/side-effect-imports.ts) |
 | Top-level `await` | **unsupported** | **Why:** no Promises or coroutines (reserved for a later version) (*not implemented yet*). **Instead:** synchronous code; the host does asynchronous work and passes the results in | [top-level-await.ts](../tests/ts-features/modules/top-level-await.ts) |
 
 ## Enums
