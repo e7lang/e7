@@ -1023,7 +1023,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       ObjProp* st = accessorOf(p.key, 2);
       Type* t = nullptr;
       if (g && g->value->retType) t = resolveType(g->value->retType);
-      else if (!g && st && st->value->params.size() == 1 && st->value->params[0].type) t = resolveType(st->value->params[0].type);
+      else if (st && st->value->params.size() == 1 && st->value->params[0].type) t = resolveType(st->value->params[0].type);
       if (!t) continue;
       accT[p.key] = t;
       if (g) sh->methods.push_back({"get " + p.key, T.func({}, t)});

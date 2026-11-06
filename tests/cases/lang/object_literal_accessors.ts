@@ -39,6 +39,18 @@ counter.value++;
 ++counter.value;
 counter.value *= 10;
 console.log(counter.value, counter.n);
+// the getter's type from the setter's parameter type
+const scaled = {
+  raw: 7,
+  get value() {
+    return this.raw / 2;
+  },
+  set value(v: number) {
+    this.raw = v * 2;
+  },
+};
+scaled.value -= 0.5;
+console.log(scaled.value, scaled.raw);
 
 // a setter only: writes call it
 const lines: string[] = [];

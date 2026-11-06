@@ -357,13 +357,14 @@ try {
   set twice(v: number) { this.n = v / 2; } }`, e7vm 0.3.1). `this` is the object, as in methods; the
   accessors can use the object's fields, other accessors and methods, and capture variables. They are part of
   the literal's type, as accessors (`get twice(): number; set twice(v: number)`), never as fields, so every
-  read or write of the property calls the getter or the setter (by name, like an interface's accessors):
+  read or write of the property calls the getter or the setter (by name, like an interface's accessors; the
+  representation is in [BYTECODE.md](BYTECODE.md) section 6.5):
   - the literal is assignable to an interface (or an object type) that declares the accessors (`get x(): T` /
     `set x(v: T)`), and is then used like a class implementing them; an interface that declares `x` as a
     *property* reads it as a field, so assigning the literal to it is a compile error that says to declare
     `get x(): T` there (the rule for classes, section 5 above). A getter without a setter is read-only (writing
     it is a compile error, as in tsc); a setter without a getter cannot be read. A getter and its setter have
-    one type (a setter without a parameter type takes the getter's).
+    one type (a setter without a parameter type takes the getter's, a getter without a return type the setter's).
   - The type of a literal with accessors holds only such literals (whose accessors are own properties): a
     class instance or a value of a declared interface type is not assignable to it.
   - The accessors are own enumerable properties, in the literal's order: `Object.keys` lists them;
