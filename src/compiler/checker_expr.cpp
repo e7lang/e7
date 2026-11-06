@@ -1,6 +1,7 @@
 // Checker: expressions.
 #include <cmath>
 
+#include "../core/numfmt.h"
 #include "checker.h"
 #include "intrinsics.h"
 #include "suggest.h"
@@ -316,10 +317,9 @@ Type* Checker::elemTypeForIter(Expr* e, Type* t, Loc l) {
     case TT::Bytes: return T.number();
     case TT::Map: return T.tuple({t->key, t->val});
     case TT::Generator: return t->elem;
-    case TT::Class: {
+    case TT::Class:
       if (Type* g = iteratorMethodType(t, l)) return g->elem;
-      break;
-    }
+      return errT(l, "type '" + typeName(t) + "' is not iterable");
     case TT::Unknown: return T.unknown();
     default: return errT(l, "type '" + typeName(t) + "' is not iterable");
   }
@@ -625,8 +625,32 @@ void Checker::spreadOrders() {
   }
 }
 
+// The property name a computed key `[K]` stands for: K must be a constant known at compile time (a string
+// or number literal, a const of a literal type, an enum member)
+bool Checker::constKey(Expr* k, std::string& out) {
+  Type* t = check(k, nullptr);
+  Expr* x = strip(k);
+  if (x->intrinsic == IN_CONST_STR) { out = utf16ToUtf8(x->str); return true; }
+  if (x->intrinsic == IN_CONST_NUM) { out = numberToString(x->num); return true; }
+  Type* lt = constLit(k);
+  if (!lt && t && t->lit) lt = t;
+  if (lt && lt->strLits.size() == 1 && lt->numLits.empty()) { out = utf16ToUtf8(lt->strLits[0]); return true; }
+  if (lt && lt->numLits.size() == 1 && lt->strLits.empty()) { out = numberToString(lt->numLits[0]); return true; }
+  err(k->loc, "a computed property name must be a constant known at compile time (a string or number literal, a const of a literal type, or an enum member)");
+  return false;
+}
+
 Type* Checker::checkObject(Expr* e, Type* expected) {
   Type* exp = expected ? baseOf(expected) : nullptr;
+  for (auto& p : e->props)
+    if (p.computed) {
+      std::string key;
+      if (!constKey(p.computed, key)) return T.unknown();
+      p.key = key;
+      p.computed = nullptr;
+      for (auto& q : e->props)
+        if (&q != &p && !q.spread && q.key == key && !q.computed) return errT(p.loc, "duplicate property '" + key + "'");
+    }
   bool anySpread = false, anyMethod = false;
   for (auto& p : e->props) {
     anySpread |= p.spread;
@@ -1467,9 +1491,7 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
       Type* pt = path->type;
       if (!pt || !pt->lit) continue;
       Type* v = constLit(other);
-      if (!v || other->type && other->type->lit && strip(other)->k == EK::Ident) {
-        if (!v) continue;
-      }
+      if (!v) continue;
       std::string key = pathKey(path);
       if (key.empty()) continue;
       bool eq = c->raw[0] == '=';
@@ -1916,6 +1938,26 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
 
 Type* Checker::checkIndex(Expr* e) {
   Type* ot = check(e->a, nullptr);
+  // obj[K] with K a constant known at compile time: the property K (obj.K)
+  Type* bo = baseOf(ot);
+  if ((bo->t == TT::Object || bo->t == TT::Class) && e->b) {
+    Expr* k = strip(e->b);
+    bool constant = k->k == EK::Str || (k->k == EK::Ident) || k->k == EK::Member || k->k == EK::Num;
+    if (constant) {
+      std::string key;
+      if (!constKey(e->b, key)) return T.unknown();
+      Expr* obj = e->a;
+      bool opt = e->optional;
+      e->k = EK::Member;
+      e->a = obj;
+      e->b = nullptr;
+      e->raw = key;
+      e->nameLoc = k->loc;
+      e->optional = opt;
+      e->a->type = nullptr;  // checked again as the member's object
+      return check(e, nullptr);
+    }
+  }
   if (ot->t == TT::Optional) {
     if (!e->optional || chainedOnNullable(e)) return errT(e->loc, "object is possibly null or undefined; use '?.[' or a check");
     // a?.[i]: undefined when a is null or undefined (the index is not evaluated then)

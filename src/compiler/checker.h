@@ -181,6 +181,7 @@ class Checker {
   int builtinArity(const std::string& id);
   bool isNamespaceConstant(const std::string& ns, const std::string& name);
   Type* etaExpand(Expr* e, Type* expected, int arity);
+  bool constKey(Expr* k, std::string& out);
   Type* genTypeArg(TypeNode* n);
   Type* iterResultType(Type* g, Loc l);
   Type* resolveNamedType(const std::string& name, const std::vector<TypeNode*>& args, Loc l);

@@ -13,6 +13,7 @@ struct VarSym;
 struct FuncSym;
 struct ClassSym;
 struct GenericSym;
+struct Expr;
 
 struct Loc {
   uint32_t line = 0, col = 0;
@@ -31,7 +32,7 @@ struct TypeNode {
   std::vector<Param> params;         // Func
   TypeNode* ret = nullptr;           // Func
   // accessor: 0 = property or method, 1 = `get name(): T`, 2 = `set name(v: T)` (interfaces / type literals)
-  struct Member { std::string name; TypeNode* type; bool optional = false; bool method = false; bool readonly = false; int accessor = 0; };
+  struct Member { std::string name; TypeNode* type; bool optional = false; bool method = false; bool readonly = false; int accessor = 0; Expr* computed = nullptr; };
   std::vector<Member> members;       // Object
   std::string literal;               // Literal (string literal type / null / undefined handled as Ref)
   // a return type `x is T` (Ref "boolean") / `asserts x is T` / `asserts x` (Ref "void"): the parameter
@@ -91,6 +92,7 @@ struct ObjProp {
   bool spread = false;
   bool method = false;  // method shorthand `name(params) { body }` (value is an Arrow)
   bool coverInit = false;  // `{ a = 1 }`: only valid as a destructuring assignment target (value is an Assign)
+  Expr* computed = nullptr;  // `{ [K]: v }`: the key expression (a constant known at compile time)
   Loc loc;
 };
 
@@ -183,6 +185,7 @@ struct ClassMember {
   int accessor = 0;  // Method: 1 = getter, 2 = setter
   bool isGenerator = false, isAsync = false;  // Method: *name() / async name()
   bool isDeclare = false;                     // Field: `declare x: T` (no initializer)
+  Expr* computed = nullptr;                   // `[K]` member name: a constant known at compile time
   std::vector<TypeParam> typeParams;  // generic method
   TypeNode* type = nullptr;
   Expr* init = nullptr;

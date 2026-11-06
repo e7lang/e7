@@ -614,6 +614,21 @@ class Parser {
     while (!isP("}")) {
       TypeNode::Member m;
       if (isKw("readonly") && peek().k == TK::Ident) { i++; m.readonly = true; }
+      if (isP("[") && !(peek().k == TK::Ident && ((peek(2).k == TK::Punct && peek(2).text == ":") ||
+                                               (peek(2).k == TK::Ident && peek(2).text == "in")))) {
+        // a computed member name `[K]: T` (K a constant)
+        i++;
+        m.computed = parseAssign();
+        expectP("]");
+        m.name = "[computed]";
+        if (eatP("?")) m.optional = true;
+        if (isP("(")) fail("computed method signatures are not supported; use a property of a function type");
+        expectP(":");
+        m.type = parseType();
+        o->members.push_back(m);
+        if (!eatP(";") && !eatP(",") && !isP("}") && !cur().nl) fail("expected ';'");
+        continue;
+      }
       if (isP("[")) fail("index signatures are not supported; use Map<K, V>");
       if ((isKw("get") || isKw("set")) && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num) &&
           peek(2).k == TK::Punct && peek(2).text == "(") {
@@ -1277,7 +1292,14 @@ class Parser {
         s->members.push_back(m);
         continue;
       }
-      if (isP("[")) fail("computed members / index signatures are not supported");
+      Expr* computedName = nullptr;
+      if (isP("[") && !(peek().k == TK::Ident && peek(2).k == TK::Punct && peek(2).text == ":")) {
+        // a computed member name `[K]` (K a constant known at compile time)
+        i++;
+        computedName = parseAssign();
+        expectP("]");
+      }
+      if (isP("[")) fail("index signatures are not supported; use Map<K, V>");
       if (!m.accessor && isKw("constructor") && peek().k == TK::Punct && peek().text == "(") {
         i++;
         m.kind = ClassMember::Ctor;
@@ -1294,7 +1316,12 @@ class Parser {
         continue;
       }
       Loc nameLoc = loc();
-      m.name = memberName();
+      if (computedName) {
+        m.computed = computedName;
+        m.name = "[computed]";
+      } else {
+        m.name = memberName();
+      }
       if (m.name == "#constructor") failAt(nameLoc, "'#constructor' is a reserved word");
       if (eatP("?")) m.optional = true;
       if (eatP("!")) {}
@@ -2150,7 +2177,31 @@ class Parser {
               if (!eatP(",")) break;
               continue;
             }
-            if (isP("[")) fail("computed property names are not supported");
+            Expr* computedKey = nullptr;
+            if (isP("[")) {
+              // { [K]: v } with K a constant known at compile time (resolved by the checker)
+              i++;
+              computedKey = parseAssign();
+              expectP("]");
+              pr.computed = computedKey;
+              pr.key = "[computed]";
+              if (isP("(")) {
+                Expr* f = A.expr(EK::Arrow, pr.loc);
+                parseParams(f->params, false);
+                if (eatP(":")) f->retType = parseRetType();
+                f->body = parseBlock();
+                applyPatterns(f->params, f->body, f->exprBody);
+                f->intrinsic = IN_OBJ_METHOD;
+                pr.value = f;
+                pr.method = true;
+              } else {
+                expectP(":");
+                pr.value = parseAssign();
+              }
+              e->props.push_back(pr);
+              if (!eatP(",")) break;
+              continue;
+            }
             if ((isKw("get") || isKw("set")) && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num))
               fail("accessor properties are not supported in object literals; use a plain property or a method");
             bool asyncM = false, genM = false;

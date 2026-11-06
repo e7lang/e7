@@ -859,7 +859,9 @@ Type* Checker::resolveType(TypeNode* n) {
           Type* pt = resolveType(m.type);
           bool uo = m.optional && hasUndefined(pt);
           if (m.optional) pt = T.optional(pt, false, true);
-          props.push_back({m.name, pt, m.optional, uo, m.readonly});
+          std::string name = m.name;
+          if (m.computed && !constKey(m.computed, name)) continue;
+          props.push_back({name, pt, m.optional, uo, m.readonly});
         }
         return T.anonObject(props);
       }
@@ -1143,6 +1145,13 @@ void Checker::resolveInterface(InterfaceSym* is) {
     for (auto& p : pt->shape->props) sh->props.push_back(p);
     for (auto& m : pt->shape->methods) sh->methods.push_back(m);
   }
+  for (auto& m : is->decl->typeBody->members)
+    if (m.computed) {
+      std::string key;
+      Expr* k = m.computed;
+      m.computed = nullptr;
+      if (constKey(k, key)) m.name = key;
+    }
   for (auto& m : is->decl->typeBody->members) {
     Type* pt = resolveType(m.type);
     if (sh->findProp(m.name) || sh->findMethod(m.name)) {
@@ -1304,6 +1313,16 @@ void Checker::resolveClass(ClassSym* c) {
     f->instName = f->qualName;
     f->instDepth = c->instDepth;
   };
+  // computed member names `[K]`: constants known at compile time
+  for (auto& m : d->members)
+    if (m.computed) {
+      std::string key;
+      FuncSym* f1 = curFn;
+      curFn = nullptr;
+      if (constKey(m.computed, key)) m.name = key;
+      curFn = f1;
+      m.computed = nullptr;
+    }
   if (d->extends && !holder) {
     Type* pt = resolveType(d->extends);
     if (pt->t != TT::Class) err(d->extends->loc, "a class can only extend another class");
