@@ -153,6 +153,26 @@ Type* Types::enumType(EnumSym* e) {
   return interned_[k] = t;
 }
 
+Type* Types::generator(Type* y, Type* r, Type* n, uint8_t gk) {
+  std::string k = "G" + std::to_string(gk) + ptrKey(y) + "," + ptrKey(r) + "," + ptrKey(n);
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::Generator);
+  t->elem = y;
+  t->ret = r;
+  t->val = n;
+  t->gk = gk;
+  return interned_[k] = t;
+}
+Type* Types::promise(Type* e) {
+  std::string k = "P" + ptrKey(e);
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::Promise);
+  t->elem = e;
+  return interned_[k] = t;
+}
+
 Kind kindOf(const Type* t) {
   switch (t->t) {
     case TT::Number: return K_F;
@@ -239,6 +259,15 @@ static std::string typeNameB(const Type* t, int& budget) {
     case TT::TextDecoder: return "TextDecoder";
     case TT::Error: return "Error";
     case TT::Date: return "Date";
+    case TT::Generator: {
+      static const char* const names[4] = {"Generator", "Iterator", "IterableIterator", "IteratorObject"};
+      std::string s = std::string(names[t->gk & 3]) + "<" + typeNameB(t->elem, budget);
+      bool showRet = t->ret && t->ret->t != TT::Void, showNext = t->val && t->val->t != TT::Void;
+      if (t->gk == 0 || showRet || showNext) s += ", " + (showRet || t->gk == 0 ? typeNameB(t->ret, budget) : std::string("void"));
+      if (t->gk == 0 || showNext) s += ", " + (showNext ? typeNameB(t->val, budget) : std::string("unknown"));
+      return s + ">";
+    }
+    case TT::Promise: return "Promise<" + typeNameB(t->elem, budget) + ">";
   }
   return "?";
 }

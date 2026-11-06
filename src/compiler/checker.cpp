@@ -537,6 +537,8 @@ void Checker::declareFile(FileInfo* fi) {
           break;
         }
         FuncSym* f = newFunc(s->name, &s->params, s->retType, s->body, nullptr);
+        f->isGenerator = s->isGenerator;
+        f->isAsync = s->isAsync;
         f->isTopLevel = true;
         f->declStmt = s;
         f->exported = s->exported;
@@ -1036,11 +1038,56 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "Date") { noArgs(); return T.date(); }
   if (name == "Record" || name == "Partial" || name == "Required" || name == "Pick" || name == "Omit" || name == "Readonly")
     return errT(l, "utility type '" + name + "' is not supported; use Map<K, V> or an interface");
+  if (name == "Generator" || name == "Iterator" || name == "IterableIterator" || name == "IteratorObject" ||
+      name == "Generator" || name == "IterableIterator") {
+    uint8_t gk = name == "Generator" ? 0 : name == "Iterator" ? 1 : name == "IterableIterator" ? 2 : 3;
+    size_t maxArgs = gk == 2 ? 1 : 3;
+    if (args.empty() || args.size() > maxArgs) {
+      err(l, "type '" + name + "' requires 1" + (maxArgs > 1 ? " to " + std::to_string(maxArgs) : std::string()) + " type argument(s)");
+      return T.unknown();
+    }
+    Type* y = resolveType(args[0]);
+    Type* r = args.size() > 1 ? genTypeArg(args[1]) : T.voidT();
+    Type* n = args.size() > 2 ? genTypeArg(args[2]) : T.voidT();
+    if (y->t == TT::Void || y->t == TT::Undefined) y = T.undef();
+    return T.generator(y, r, n, gk);
+  }
+  if (name == "IteratorResult" || name == "IteratorYieldResult" || name == "IteratorReturnResult") {
+    if (args.empty() || args.size() > 2) return errT(l, "type '" + name + "' requires 1 or 2 type argument(s)");
+    Type* y = resolveType(args[0]);
+    Type* r = args.size() > 1 ? genTypeArg(args[1]) : T.voidT();
+    return iterResultType(T.generator(y, r, T.voidT()), l);
+  }
   if (name == "Promise") return errT(l, "Promise is not supported (no async in E7 v1)");
   if (name == "Int32Array" || name == "Uint32Array" || name == "Float64Array" || name == "Uint16Array" ||
       name == "Int8Array" || name == "Int16Array" || name == "Float32Array" || name == "Uint8ClampedArray")
     return errT(l, "'" + name + "' is not supported; use Uint8Array, DataView or typed arrays like u32[]");
   return errT(l, "unknown type '" + name + "'" + suggestName(name, true));
+}
+
+// TReturn / TNext of a generator type: `void`, `undefined`, `unknown` and `any` mean "no value"
+Type* Checker::genTypeArg(TypeNode* n) {
+  if (n->k == TNK::Ref && n->args.empty() &&
+      (n->name == "void" || n->name == "undefined" || n->name == "unknown" || n->name == "any"))
+    return T.voidT();
+  Type* t = resolveType(n);
+  return t->t == TT::Undefined ? T.voidT() : t;
+}
+
+// IteratorResult<T, TReturn> of a generator type: { value: T; done: boolean } when TReturn is T or
+// none (then value is T | undefined); any other TReturn would make `value` a general union
+Type* Checker::iterResultType(Type* g, Loc l) {
+  Type* v = g->elem;
+  if (g->ret && g->ret->t != TT::Void && g->ret != g->elem) {
+    if (!(assignable(g->ret, g->elem) && kindOf(g->ret) == kindOf(g->elem) && !isBoxedOptional(g->elem) &&
+          isBoxedOptional(g->ret) == isBoxedOptional(g->elem)))
+      err(l, "the result of next() on '" + typeName(g) + "' would be a union of '" + typeName(g->elem) + "' and '" +
+                 typeName(g->ret) + "' (E7 types are static); give the generator the return type '" + typeName(g->elem) +
+                 "' or void");
+  } else if (!g->ret || g->ret->t == TT::Void) {
+    v = T.optional(g->elem, false, true);
+  }
+  return T.anonObject({{"value", v, false}, {"done", T.boolean(), false}});
 }
 
 // whether a type expression mentions the type named `name` (a recursive type alias)
@@ -1370,6 +1417,10 @@ void Checker::resolveClass(ClassSym* c) {
     std::string key = m.accessor == 1 ? "get " + m.name : m.accessor == 2 ? "set " + m.name : m.name;
     curFn = nullptr;
     FuncSym* f = newFunc(key, &m.params, m.retType, m.body, nullptr);
+    f->isGenerator = m.isGenerator;
+    f->isAsync = m.isAsync;
+    if ((m.isGenerator || m.isAsync) && (m.accessor || m.kind == ClassMember::Ctor))
+      err(m.loc, "an accessor or constructor cannot be a generator or async");
     f->loc = m.loc;
     f->parent = nullptr;
     f->cls = c;
@@ -1620,6 +1671,7 @@ void Checker::resolveSig(FuncSym* f) {
   }
   Type* ret = f->retNode ? resolveType(f->retNode) : nullptr;
   if (f->isCtor || f->accessor == 2) ret = T.voidT();
+  if (ret && (f->isGenerator || f->isAsync)) checkCoroutineRet(f, ret, f->retNode ? f->retNode->loc : f->loc);
   if (f->isNative) {
     if (!ret) ret = T.voidT();
     for (Type* t : ps)

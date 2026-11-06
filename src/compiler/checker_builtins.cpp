@@ -976,6 +976,38 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       return noSuch();
     }
+    case TT::Generator: {
+      // g.next(v?) / g.return(v?) / g.throw(e): an IteratorResult record
+      if (meth("next") || meth("return")) {
+        bool isNext = name == "next";
+        Type* want = isNext ? bt->val : bt->ret;
+        if (args.size() > 1) return errT(l, "'" + name + "' takes at most one argument");
+        if (args.size() == 1) {
+          if (!want || want->t == TT::Void) {
+            Type* at = check(args[0], nullptr);
+            if (at->t != TT::Undefined)
+              return errT(args[0]->loc, std::string(isNext ? "this generator receives no value from next()" : "this generator returns no value") +
+                                             " (" + typeName(bt) + ")");
+            args.clear();
+          } else {
+            check(args[0], want);
+            coerce(args[0], want, isNext ? "next() value" : "return() value");
+          }
+        }
+        e->intrinsic = isNext ? IN_GEN_NEXT : IN_GEN_RETURN;
+        Type* rt = iterResultType(bt, l);
+        e->cls = recordFor({{"value", rt->shape->props[0].type}, {"done", T.boolean()}})->cls;
+        return rt;
+      }
+      if (meth("throw")) {
+        if (!argsMatch(e, args, {T.error()}, 1, "throw")) return T.unknown();
+        e->intrinsic = IN_GEN_THROW;
+        Type* rt = iterResultType(bt, l);
+        e->cls = recordFor({{"value", rt->shape->props[0].type}, {"done", T.boolean()}})->cls;
+        return rt;
+      }
+      return noSuch();
+    }
     case TT::Map: {
       std::string K = kindSuffix(bt->key), V = kindSuffix(bt->val);
       if (prop("size")) { native("Map.size"); return num; }

@@ -33,11 +33,8 @@ bool endsWithPath(const std::string& s, const std::string& tail) {
 // length in words of the instruction at pc (the module is verified)
 size_t insLen(const uint64_t* code, size_t pc) {
   uint64_t w = code[pc];
-  uint16_t op = insOp(w);
-  if (op >= OP__COUNT || kOpInfo[op].fmt[0] != '*') return 1;
-  uint16_t c = insC(w);
-  bool meta = op == OP_CALLV || op == OP_CALLM || op == OP_CALLI;
-  return 1 + (meta ? 1 : 0) + (c + 3) / 4;
+  if (insOp(w) >= OP__COUNT) return 1;
+  return insWords(w);
 }
 
 struct RawVar {

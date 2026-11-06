@@ -106,6 +106,16 @@ bool verifyModule(const Module& m, std::string& err) {
     for (uint32_t s : f.icNames)
       if (s >= m.strs.size()) return F("function %zu: bad inline cache name", fi);
     if (f.lines.size() % 2) return F("function %zu: bad line table", fi);
+    // coroutines (format 3): generators yield a value of a fixed kind and return nothing or that
+    // kind; async functions neither yield nor receive; both return a reference (the coroutine or
+    // the promise) to their caller
+    uint8_t fk = fflagsKind(f.fflags);
+    if (fk == FK_PLAIN && f.fflags != 0) return F("function %zu: bad function flags", fi);
+    if (fk != FK_PLAIN && sigRet(m.sigs[f.sig]) != 'R') return F("function %zu: coroutine must return a reference", fi);
+    if (fk == FK_ASYNC && (fflagsYield(f.fflags) || fflagsNext(f.fflags))) return F("function %zu: bad function flags", fi);
+    if ((fk == FK_GENERATOR || fk == FK_ASYNC_GENERATOR) &&
+        (fflagsYield(f.fflags) == 0 || (fflagsReturn(f.fflags) != 0 && fflagsReturn(f.fflags) != fflagsYield(f.fflags))))
+      return F("function %zu: bad generator flags", fi);
   }
   if (m.sigs[m.funcs[m.initFunc].sig] != ">V") return F("init function must take no arguments");
 
@@ -141,7 +151,12 @@ bool verifyModule(const Module& m, std::string& err) {
     const FuncDesc& f = m.funcs[fi];
     const auto& code = f.code;
     const size_t n = code.size();
-    const char retKind = sigRet(m.sigs[f.sig]);
+    const uint8_t fkind = fflagsKind(f.fflags);
+    // RET_* in a coroutine returns the body's value (fflags), not the function's result
+    const char retKind = fkind == FK_PLAIN ? sigRet(m.sigs[f.sig]) : "VIFR"[fflagsReturn(f.fflags)];
+    const uint16_t startOp = fkind == FK_PLAIN ? OP__COUNT : fkind == FK_ASYNC ? OP_ASYNC_START : OP_GEN_START;
+    if (startOp != OP__COUNT && (f.code.empty() || insOp(f.code[0]) != startOp))
+      return F("function %zu: coroutine without its start instruction", fi);
     if (n == 0) return F("function %zu: empty code", fi);
     if (n > 0x7FFFFFFF) return F("function %zu: code too large", fi);
     std::vector<uint8_t> isStart(n, 0);
@@ -253,6 +268,42 @@ bool verifyModule(const Module& m, std::string& err) {
             next += words;
             break;
           }
+          case OP_YIELD: {
+            // A yielded value, B received value (or none), C mode; extra word: return-value register
+            if (fkind != FK_GENERATOR && fkind != FK_ASYNC_GENERATOR) return F("function %zu pc %zu: yield outside a generator", fi, pc);
+            if (next >= n) return F("function %zu pc %zu: truncated yield", fi, pc);
+            uint64_t ex = code[next];
+            uint16_t rr = (uint16_t)ex;
+            if ((ex >> 16) != 0) return F("function %zu pc %zu: bad yield metadata", fi, pc);
+            uint8_t nk = fflagsNext(f.fflags), rk = fflagsReturn(f.fflags);
+            if (!reg(a, "?IFR"[fflagsYield(f.fflags)]) || !reg(c, 'I')) return false;
+            if (b != kNoReg && (nk == 0 || !reg(b, "?IFR"[nk]))) return F("function %zu pc %zu: bad yield receive register", fi, pc);
+            if (rr != kNoReg && (rk == 0 || !reg(rr, "?IFR"[rk]))) return F("function %zu pc %zu: bad yield return register", fi, pc);
+            next++;
+            break;
+          }
+          case OP_RESUME_I:
+          case OP_RESUME_F:
+          case OP_RESUME_R: {
+            char vk = op == OP_RESUME_I ? 'I' : op == OP_RESUME_F ? 'F' : 'R';
+            if (!reg(a, 'R') || !reg(b, vk) || !reg(c, 'I')) return false;
+            if (next >= n) return F("function %zu pc %zu: truncated resume", fi, pc);
+            uint64_t ex = code[next];
+            uint16_t sr = (uint16_t)ex;
+            uint32_t mode = (uint32_t)(ex >> 16) & 3, sk = (uint32_t)(ex >> 18) & 3;
+            if ((ex >> 20) != 0 || mode == 3) return F("function %zu pc %zu: bad resume metadata", fi, pc);
+            if (sk == 0 ? sr != kNoReg : !reg(sr, "?IFR"[sk])) return F("function %zu pc %zu: bad resume value register", fi, pc);
+            if (mode == 1 && sk != 3) return F("function %zu pc %zu: throw() needs an error object", fi, pc);
+            next++;
+            break;
+          }
+          case OP_AWAIT: {
+            // A destination (any kind, or none), B the promise
+            if (fkind != FK_ASYNC && fkind != FK_ASYNC_GENERATOR) return F("function %zu pc %zu: await outside an async function", fi, pc);
+            if ((a != kNoReg && !reg(a, '*')) || !reg(b, 'R')) return false;
+            if (c != 0) return F("function %zu pc %zu: nonzero unused operand", fi, pc);
+            break;
+          }
           default:
             return F("function %zu pc %zu: bad special opcode", fi, pc);
         }
@@ -314,6 +365,8 @@ bool verifyModule(const Module& m, std::string& err) {
           }
         }
         // opcode-specific extra rules
+        if ((op == OP_GEN_START || op == OP_ASYNC_START) && (pc != 0 || op != startOp))
+          return F("function %zu pc %zu: misplaced coroutine start", fi, pc);
         if (op == OP_BOX_I && kindOfVT((uint8_t)c) != K_I) return F("function %zu pc %zu: BOX_I with non-int type", fi, pc);
         if (op == OP_INT2STR && kindOfVT((uint8_t)c) != K_I) return F("function %zu pc %zu: INT2STR with non-int type", fi, pc);
         if (op == OP_RET_I || op == OP_RET_F || op == OP_RET_R || op == OP_RET_V) {

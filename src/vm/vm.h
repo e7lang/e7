@@ -92,6 +92,10 @@ struct Frame {
   uint32_t base;
   uint16_t retDst;
   bool entry;  // returning from this frame leaves execute()
+  // a running coroutine (generator / async function) owns this frame; for a generator resumed by
+  // RESUME, retDst / doneDst are the resumer's value and done registers
+  CoroObj* coro = nullptr;
+  uint16_t doneDst = 0xFFFF;
 };
 
 struct Obj;
@@ -244,6 +248,7 @@ class VM {
   MapObj* newMap(uint8_t kvt, uint8_t vvt, KeyMode km, bool isSet);
   BigObj* newBig();
   HandleObj* newHandle(int64_t id);
+  CoroObj* newCoro(FuncRT* fn, CloObj* closure);
   Obj* undef() const { return undef_; }
 
   // External buffer accounting
@@ -274,6 +279,9 @@ class VM {
     }
     ~TempRootSlots() { vm.tempRoots_.resize(n); }
   };
+
+  // Drops the frames above `n` (unwinding): coroutines running in them are finished.
+  void dropFrames(size_t n);
 
   void collectGarbage();
   size_t bytesAllocated() const { return bytes_; }

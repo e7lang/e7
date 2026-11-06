@@ -164,6 +164,12 @@ class Checker {
 
   // ---- types
   Type* resolveType(TypeNode* n);
+  Type* bodyRet(FuncSym* f);
+  void checkCoroutineRet(FuncSym* f, Type* ret, Loc l);
+  Type* checkYield(Expr* e);
+  Type* iteratorMethodType(Type* t, Loc l);
+  Type* genTypeArg(TypeNode* n);
+  Type* iterResultType(Type* g, Loc l);
   Type* resolveNamedType(const std::string& name, const std::vector<TypeNode*>& args, Loc l);
   void resolveClass(ClassSym* c);
   void resolveInterface(InterfaceSym* s);

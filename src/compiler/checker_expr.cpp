@@ -67,6 +67,8 @@ Type* Checker::checkInner(Expr* e, Type* expected) {
     case EK::As: return checkAs(e);
     case EK::Arrow: return checkArrow(e, expected);
     case EK::Spread: return errT(e->loc, "spread is not allowed here");
+    case EK::Yield: return checkYield(e);
+    case EK::Await: return errT(e->loc, "'await' is not supported yet");
     case EK::Paren: return check(e->a, expected);
     case EK::Conv: return e->type;
     case EK::TypeOf: {
@@ -298,9 +300,76 @@ Type* Checker::elemTypeForIter(Expr* e, Type* t, Loc l) {
     case TT::String: return T.string();
     case TT::Bytes: return T.number();
     case TT::Map: return T.tuple({t->key, t->val});
+    case TT::Generator: return t->elem;
+    case TT::Class: {
+      if (Type* g = iteratorMethodType(t, l)) return g->elem;
+      break;
+    }
     case TT::Unknown: return T.unknown();
     default: return errT(l, "type '" + typeName(t) + "' is not iterable");
   }
+}
+
+// The iterator a class instance's [Symbol.iterator]() method returns (a Generator type), or null.
+Type* Checker::iteratorMethodType(Type* t, Loc l) {
+  if (t->t != TT::Class) return nullptr;
+  ClassSym* c = t->cls;
+  resolveClass(c);
+  auto it = c->methodIdx.find("[Symbol.iterator]");
+  if (it == c->methodIdx.end()) return nullptr;
+  FuncSym* f = c->vtable[it->second].fn;
+  resolveSig(f);
+  if (f->inferRet) checkFunction(f);
+  Type* r = f->type->ret;
+  if (r->t != TT::Generator || !f->type->params.empty()) {
+    err(l, "the [Symbol.iterator]() method of '" + c->name + "' must take no arguments and return a Generator, Iterator or IterableIterator");
+    return nullptr;
+  }
+  return r;
+}
+
+// yield v / yield* iterable (in the body of a generator)
+Type* Checker::checkYield(Expr* e) {
+  FuncSym* f = curFn;
+  if (!f || !f->isGenerator) return errT(e->loc, "'yield' is only allowed in the body of a generator function (function*)");
+  Type* g = f->inferRet ? nullptr : f->type->ret;
+  if (g && g->t != TT::Generator) g = nullptr;
+  if (e->delegate) {
+    Type* it = check(e->a, nullptr);
+    Type* et;
+    Type* res = T.voidT();
+    if (it->t == TT::Generator) {
+      et = it->elem;
+      res = it->ret && it->ret->t != TT::Void ? it->ret : T.voidT();
+      Type* outerNext = g && g->val ? g->val : T.voidT();
+      Type* innerNext = it->val ? it->val : T.voidT();
+      if (innerNext->t != TT::Void && innerNext != outerNext)
+        err(e->loc, "yield* of '" + typeName(it) + "': its next() values must have the type of this generator's ('" +
+                        typeName(outerNext) + "')");
+    } else if (Type* mt = iteratorMethodType(it, e->a->loc)) {
+      et = mt->elem;
+    } else {
+      et = elemTypeForIter(e->a, it, e->a->loc);
+    }
+    if (g) {
+      if (!assignable(et, g->elem)) err(e->loc, "type '" + typeName(et) + "' is not assignable to the yielded type '" + typeName(g->elem) + "'");
+    } else {
+      f->yieldTypes.push_back(et);
+    }
+    e->innerType = et;
+    return res;
+  }
+  if (e->a) {
+    Type* t = check(e->a, g ? g->elem : nullptr);
+    if (g) coerce(e->a, g->elem, "yield");
+    else f->yieldTypes.push_back(t);
+  } else {
+    if (g && !assignable(T.undef(), g->elem))
+      err(e->loc, "'yield' without a value yields undefined, which is not assignable to '" + typeName(g->elem) + "'");
+    if (!g) f->yieldTypes.push_back(T.undef());
+  }
+  Type* next = g && g->val ? g->val : T.voidT();
+  return next->t == TT::Void ? T.undef() : next;
 }
 
 Type* Checker::checkArray(Expr* e, Type* expected) {
@@ -350,6 +419,8 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
       else if (st->t == TT::String) t = T.string();
       else if (st->t == TT::Bytes) t = T.number();
       else if (st->t == TT::Map) t = T.tuple({st->key, st->val});
+      else if (st->t == TT::Generator) t = st->elem;
+      else if (Type* gt = st->t == TT::Class ? iteratorMethodType(st, x->loc) : nullptr) t = gt->elem;
       else { err(x->loc, "type '" + typeName(st) + "' cannot be spread into an array"); t = T.unknown(); }
       if (elemExp && t != elemExp && !(t->t == TT::Unknown) && !(kindOf(t) == K_R && kindOf(elemExp) == K_R && assignable(t, elemExp)))
         err(x->loc, "spread element type '" + typeName(t) + "' is not assignable to '" + typeName(elemExp) + "'");
@@ -1330,6 +1401,16 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
     if (!key.empty()) out.push_back({key, c->cls->type});
     return;
   }
+  // r.done of an IteratorResult { value: T | undefined; done: boolean }: false means r.value is a T
+  if (!whenTrue && c->k == EK::Member && c->raw == "done" && c->a->type && c->a->type->t == TT::Object) {
+    const ObjShape* sh = c->a->type->shape;
+    if (sh->props.size() == 2 && sh->props[0].name == "value" && sh->props[1].name == "done" &&
+        sh->props[0].type->t == TT::Optional && sh->name.empty()) {
+      std::string base = pathKey(c->a);
+      if (!base.empty()) out.push_back({base + ".value", sh->props[0].type->elem});
+    }
+    return;
+  }
   // truthiness of a nullable reference
   if (whenTrue && c->type && c->type->t == TT::Optional) {
     std::string key = pathKey(c);
@@ -1349,6 +1430,8 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
   if (!f) {
     std::string nm = e->raw.empty() ? "<anonymous>" : e->raw;
     f = newFunc(nm, &e->params, e->retType, e->body, e->exprBody);
+    f->isGenerator = e->isGenerator;
+    f->isAsync = e->isAsync;
     f->arrow = e;
     f->parent = curFn;
     f->defScope = scope;
@@ -1434,8 +1517,9 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
     }
   Type* ret = nullptr;
   if (e->retType) ret = resolveType(e->retType);
-  else if (exp && exp->ret->t == TT::Void) ret = T.voidT();
-  else if (exp && exp->ret->t != TT::Unknown) ret = exp->ret;
+  else if (exp && exp->ret->t == TT::Void && !e->isGenerator && !e->isAsync) ret = T.voidT();
+  else if (exp && exp->ret->t != TT::Unknown && exp->ret->t != TT::Void) ret = exp->ret;
+  if (ret) checkCoroutineRet(f, ret, e->loc);
   f->sigResolved = true;
   f->inferRet = ret == nullptr;
   f->type = T.func(ps, ret ? ret : T.unknown(), opt, rest);

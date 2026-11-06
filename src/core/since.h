@@ -52,7 +52,9 @@ inline bool parseVersion(const std::string& s, uint32_t& out) {
 
 inline uint32_t opSince(uint16_t op) {
   switch (op) {
-    // case OP_NEWTHING: return makeVersion(0, 3, 0);
+    case OP_GEN_START: case OP_ASYNC_START: case OP_YIELD: case OP_RESUME_I: case OP_RESUME_F: case OP_RESUME_R:
+    case OP_AWAIT: case OP_FIELD_ABSENT:
+      return makeVersion(0, 3, 0);
     default: return kBaselineVersion;
   }
 }
@@ -75,14 +77,7 @@ inline uint32_t nativeSince(const std::string& name) {
 
 // Number of code words of the instruction starting with word w (call-like instructions carry
 // extra words: see docs/BYTECODE.md).
-inline size_t instructionWords(uint64_t w) {
-  uint16_t op = insOp(w), c = insC(w);
-  switch (op) {
-    case OP_CALL: case OP_CALLN: case OP_CLOSURE: return 1 + (c + 3u) / 4;
-    case OP_CALLV: case OP_CALLM: case OP_CALLI: return 2 + (c + 3u) / 4;
-    default: return 1;
-  }
-}
+inline size_t instructionWords(uint64_t w) { return insWords(w); }
 
 // Features that are not an opcode or a native function but change how a VM must treat a module.
 // #private class fields: a class (not a record) field named "#x". Since 0.2.5 Object.keys,

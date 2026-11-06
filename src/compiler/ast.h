@@ -48,7 +48,9 @@ struct TypeParam {
 enum class EK {
   Num, BigLit, Str, Template, Bool, Null, Undefined, Ident, This, Super,
   Array, Object, Unary, Update, Binary, Logical, Assign, Cond, Call, New,
-  Member, Index, NonNull, As, Arrow, Spread, Conv, Paren, TypeOf
+  Member, Index, NonNull, As, Arrow, Spread, Conv, Paren, TypeOf,
+  Yield,  // a = operand (or null); delegate: yield*
+  Await   // a = operand
 };
 
 struct Stmt;
@@ -117,6 +119,8 @@ struct Expr {
   TypeNode* asType = nullptr;
   bool prefix = false;    // update
   bool optional = false;  // ?. member / call
+  bool isGenerator = false, isAsync = false;  // Arrow (function expression / method): function* / async
+  bool delegate = false;  // Yield: yield*
   // arrow function
   std::vector<TypeParam> typeParams;  // generic arrow function <T>(x: T) => ...
   std::vector<Param> params;
@@ -168,6 +172,7 @@ struct ClassMember {
   bool optional = false;
   bool isAbstract = false;
   int accessor = 0;  // Method: 1 = getter, 2 = setter
+  bool isGenerator = false, isAsync = false;  // Method: *name() / async name()
   std::vector<TypeParam> typeParams;  // generic method
   TypeNode* type = nullptr;
   Expr* init = nullptr;
@@ -202,6 +207,8 @@ struct Stmt {
   bool isDefault = false;          // `export default`: Func / Class / Interface (exported as "default"), or
                                    // Var: `export default <expression>` (a hidden const named "default")
   bool isConst = false;            // Var
+  bool isGenerator = false, isAsync = false;  // Func: function* / async function
+  bool isAwait = false;            // ForOf: for await
   std::vector<VarDecl> decls;      // Var
   std::string name;                // Func / Class / Interface / TypeAlias / Enum / labels
   std::vector<TypeParam> typeParams;

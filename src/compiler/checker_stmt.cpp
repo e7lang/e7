@@ -101,6 +101,11 @@ bool Checker::assignable(Type* src, Type* dst) {
       return src->t == TT::Set && dst->ro && src->elem == dst->elem;
     case TT::Object:
       return structurallyAssignable(src, dst);
+    case TT::Generator:
+      // all iterator types are coroutines at run time: Generator -> Iterator / IterableIterator, with the
+      // same value types (a target without TReturn / TNext accepts any)
+      return src->t == TT::Generator && (dst->gk != 0 || src->gk == 0) && src->elem == dst->elem &&
+             (dst->ret->t == TT::Void || src->ret == dst->ret) && (dst->val->t == TT::Void || src->val == dst->val);
     case TT::Number:
       return src->t == TT::Enum && !src->en->isString;
     case TT::String:
@@ -162,6 +167,25 @@ Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
 }
 
 // ------------------------------------------------------------------ functions
+// the type that `return` statements in f's body return: TReturn of a generator, T of an async
+// function's Promise<T>, else the function's return type
+Type* Checker::bodyRet(FuncSym* f) {
+  Type* r = f->type->ret;
+  if (f->isGenerator) return r->t == TT::Generator && r->ret ? r->ret : T.voidT();
+  if (f->isAsync) return r->t == TT::Promise ? r->elem : T.voidT();
+  return r;
+}
+
+// the declared return type of a generator / async function must be Generator / Promise
+void Checker::checkCoroutineRet(FuncSym* f, Type* ret, Loc l) {
+  if (f->isGenerator && !f->isAsync && ret->t != TT::Generator && ret->t != TT::Unknown)
+    err(l, "the return type of a generator must be Generator<T>, Iterator<T> or IterableIterator<T>, not '" + typeName(ret) + "'");
+  if (f->isGenerator && f->isAsync)
+    err(l, "async generators are not supported yet");
+  if (f->isAsync && !f->isGenerator && ret->t != TT::Promise && ret->t != TT::Unknown)
+    err(l, "the return type of an async function must be Promise<T>, not '" + typeName(ret) + "'");
+}
+
 void Checker::checkFunction(FuncSym* f) {
   if (f->checked || f->isNative) return;
   if (f->checking) return;
@@ -231,8 +255,9 @@ void Checker::checkBody(FuncSym* f) {
       }
     }
   }
-  Type* declaredRet = f->inferRet ? nullptr : f->type->ret;
+  Type* declaredRet = f->inferRet ? nullptr : bodyRet(f);
   f->returnTypes.clear();
+  f->yieldTypes.clear();
   if (f->isCtor) {
     // field initializers are checked in constructor context
     ClassSym* c = f->cls;
@@ -264,6 +289,7 @@ void Checker::checkBody(FuncSym* f) {
     Type* r = nullptr;
     for (Type* t : f->returnTypes) r = r ? unify(r, t, f->loc, "return statements") : t;
     if (!r) r = T.voidT();
+    if ((f->isGenerator || f->isAsync) && r->t == TT::Undefined) r = T.voidT();
     if (r->t == TT::Null || r->t == TT::Undefined) {
       err(f->loc, "cannot infer return type of '" + f->name + "' from null/undefined; add a return type annotation");
       r = T.unknown();
@@ -271,6 +297,12 @@ void Checker::checkBody(FuncSym* f) {
     // a function returning values on some paths only
     if (r->t != TT::Void && f->body && !exits(f->body)) {
       err(f->loc, "not all code paths of '" + f->name + "' return a value");
+    }
+    if (f->isGenerator) {
+      Type* y = nullptr;
+      for (Type* t : f->yieldTypes) y = y ? unify(y, t, f->loc, "yield expressions") : t;
+      if (!y || y->t == TT::Void || y->t == TT::Undefined || y->t == TT::Never) y = T.undef();
+      r = T.generator(y, r, T.voidT(), 0);
     }
     f->type = T.func(f->type->params, r, f->type->optParams, f->type->restParam);
     f->inferRet = false;
@@ -295,6 +327,8 @@ void Checker::hoistFunctions(std::vector<Stmt*>& stmts) {
       continue;
     }
     FuncSym* f = newFunc(s->name, &s->params, s->retType, s->body, nullptr);
+    f->isGenerator = s->isGenerator;
+    f->isAsync = s->isAsync;
     f->declStmt = s;
     f->parent = curFn;
     f->defScope = scope;
@@ -583,6 +617,9 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
     return bt;
   };
   if (d.isArrayPat) {
+    // a generator (or an iterable class) is destructured like an array of its values
+    if (t->t == TT::Generator) t = T.array(t->elem);
+    else if (Type* gt = t->t == TT::Class ? iteratorMethodType(t, l) : nullptr) t = T.array(gt->elem);
     for (size_t i = 0; i < d.elems.size(); i++) {
       VarDecl& el = d.elems[i];
       Type* et;
@@ -995,7 +1032,7 @@ void Checker::checkStmt(Stmt* s) {
     case SK::Return: {
       if (!curFn || curFn->isInit) { err(s->loc, "'return' outside of a function"); break; }
       FuncSym* f = curFn;
-      Type* declared = f->inferRet ? nullptr : f->type->ret;
+      Type* declared = f->inferRet ? nullptr : bodyRet(f);
       if (s->expr) {
         Type* t = check(s->expr, declared);
         if (declared) {

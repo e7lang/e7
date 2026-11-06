@@ -61,6 +61,8 @@ enum Intrinsic : int {
   IN_OBJECT_VALUES, IN_OBJECT_ENTRIES,
   IN_OBJECT_ASSIGN,      // Object.assign(target, ...sources) (target not a literal)
   IN_STR_REPLACE_FN,     // s.replace(pattern, fn) / s.replaceAll(pattern, fn) (e->bval: all)
+  // generators (0.3)
+  IN_GEN_NEXT, IN_GEN_RETURN, IN_GEN_THROW,  // g.next(v?) / g.return(v?) / g.throw(e)
   // Arrow nodes
   IN_OBJ_METHOD = 1000,  // method shorthand in an object literal (own 'this': the object)
 };

@@ -9,7 +9,9 @@
 namespace e7 {
 
 enum class OT : uint8_t {
-  String, Array, Bytes, Buffer, Instance, Closure, Cell, Box, Map, BigInt, Undefined, Handle
+  String, Array, Bytes, Buffer, Instance, Closure, Cell, Box, Map, BigInt, Undefined, Handle,
+  Coro,     // 0.3: a generator or async function activation (DESIGN-0.3.md D1)
+  Promise,  // 0.3: a promise (D2)
 };
 
 struct Obj {
@@ -101,6 +103,22 @@ struct BigObj : Obj {
 
 struct HandleObj : Obj {
   int64_t id;
+};
+
+// A coroutine: the frame of a generator or async function while it is not running (DESIGN-0.3.md D1).
+// While it runs, its registers are in an ordinary frame on the VM stack (Frame::coro points here) and
+// the saved copy below is stale (not traced by the collector).
+enum CoroState : uint8_t { CO_START, CO_SUSPENDED, CO_RUNNING, CO_DONE };
+struct PromiseObj;
+struct CoroObj : Obj {
+  FuncRT* fn;
+  CloObj* closure;
+  PromiseObj* promise;  // async function: the promise it returns (null for generators)
+  uint32_t pc;          // CO_START: the first instruction to run; CO_SUSPENDED: the YIELD / AWAIT it waits at
+  uint32_t nregs;
+  uint8_t fflags;       // the function's flags (kind and value kinds)
+  uint8_t state;        // CoroState
+  Slot* regs() { return reinterpret_cast<Slot*>(this + 1); }
 };
 
 // Runtime class info

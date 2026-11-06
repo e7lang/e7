@@ -2,6 +2,7 @@
 // Every instruction is one 64-bit word: op:16 | a:16 | b:16 | c:16  (bx = b | c<<16).
 // Call-like instructions are followed by extra words (see BYTECODE.md).
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 namespace e7 {
@@ -103,7 +104,13 @@ namespace e7 {
   /* `debugger;` statement: no-op unless a debugger is attached */ \
   X(DEBUGGER, "___", '-') \
   /* throw R[A] (an Error object); try/catch handlers are in the function's handler table */ \
-  X(THROW, "R__", '-')
+  X(THROW, "R__", '-') \
+  /* 0.3: coroutines (generators, async functions; see BYTECODE.md section 6) */ \
+  X(GEN_START, "___", '-') X(ASYNC_START, "___", '-') \
+  X(YIELD, "***", '-') X(RESUME_I, "***", '-') X(RESUME_F, "***", '-') X(RESUME_R, "***", '-') \
+  X(AWAIT, "***", '-') \
+  /* 0.3: records with a presence mask (D7) */ \
+  X(FIELD_ABSENT, "Re_", '-')
 
 enum Op : uint16_t {
 #define E7_X(name, fmt, kind) OP_##name,
@@ -128,5 +135,29 @@ inline uint16_t insC(uint64_t w) { return (uint16_t)(w >> 48); }
 inline uint32_t insBx(uint64_t w) { return (uint32_t)(w >> 32); }
 
 constexpr uint16_t kNoReg = 0xFFFF;  // "no destination" for void calls
+
+// Number of code words of the instruction starting with word w: call-like instructions carry their
+// argument lists (and CALLV / CALLM / CALLI one metadata word) after it; YIELD and RESUME_* one word.
+inline size_t insWords(uint64_t w) {
+  uint16_t op = insOp(w), c = insC(w);
+  switch (op) {
+    case OP_CALL: case OP_CALLN: case OP_CLOSURE: return 1 + (c + 3u) / 4;
+    case OP_CALLV: case OP_CALLM: case OP_CALLI: return 2 + (c + 3u) / 4;
+    case OP_YIELD: case OP_RESUME_I: case OP_RESUME_F: case OP_RESUME_R: return 2;
+    default: return 1;
+  }
+}
+
+// Function flags (format 3, FuncDesc::fflags): bits 0-1 the function kind, bits 2-3 / 4-5 / 6-7 the
+// kinds of the yielded value, of the value next(v) sends and of the return value (generators only).
+enum FuncKind : uint8_t { FK_PLAIN = 0, FK_GENERATOR = 1, FK_ASYNC = 2, FK_ASYNC_GENERATOR = 3 };
+// value kinds in fflags: 0 none, 1 I, 2 F, 3 R (Kind + 1)
+inline uint8_t fflagsKind(uint8_t ff) { return ff & 3; }
+inline uint8_t fflagsYield(uint8_t ff) { return (ff >> 2) & 3; }
+inline uint8_t fflagsNext(uint8_t ff) { return (ff >> 4) & 3; }
+inline uint8_t fflagsReturn(uint8_t ff) { return (ff >> 6) & 3; }
+inline uint8_t makeFflags(uint8_t kind, uint8_t yieldK, uint8_t nextK, uint8_t retK) {
+  return (uint8_t)(kind | (yieldK << 2) | (nextK << 4) | (retK << 6));
+}
 
 }  // namespace e7

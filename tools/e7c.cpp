@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
       info.struct_size = sizeof info;
       e7_status st = e7_inspect((const uint8_t*)data.data(), data.size(), &info);
       if (st == E7_ERR_LOAD || st == E7_ERR_ARGS) { fprintf(stderr, "e7c: %s is not a valid e7b module\n", argv[i]); return 1; }
-      printf("format:   %u%s\n", info.format, info.format == e7::kFormatVersion ? "" : " (not supported by this e7vm)");
+      printf("format:   %u%s\n", info.format, (info.format >= e7::kMinFormatVersion && info.format <= e7::kFormatVersion) ? "" : " (not supported by this e7vm)");
       if (info.format >= 2) printf("requires: e7vm %s\n", e7::versionString(info.requires_version).c_str());
       printf("debug:    %s\n", info.has_debug_info ? "yes" : "no");
       if (info.is_signed) printf("signed:   key id %s\n", toHex(info.key_id, 8).c_str());

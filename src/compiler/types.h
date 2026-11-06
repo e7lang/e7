@@ -14,7 +14,9 @@ enum class TT : uint8_t {
   Number, Bool, String, BigInt, Void, Null, Undefined, Never, Int,
   Array, Bytes, ArrayBuffer, DataView, Map, Set, Func, Class, Object, Tuple, Optional, Enum,
   Handle, TextEncoder, TextDecoder, Error, Date, Unknown,
-  Caught  // a catch variable: 'unknown' in TypeScript; narrow with instanceof Error
+  Caught,  // a catch variable: 'unknown' in TypeScript; narrow with instanceof Error
+  Generator,  // 0.3: Generator<T, TReturn, TNext> / Iterator<T> / IterableIterator<T> (elem, ret, val; gk)
+  Promise     // 0.3: Promise<T> (elem)
 };
 
 struct ObjShape;
@@ -36,6 +38,9 @@ struct Type {
   bool hasNull = false, hasUndef = false;  // Optional
   bool ro = false;  // Array / Tuple / Map / Set: readonly T[], readonly [A, B], ReadonlyMap, ReadonlySet (no mutation)
   EnumSym* en = nullptr;
+  // Generator: 0 Generator<T, TReturn, TNext>, 1 Iterator<T, TReturn, TNext>, 2 IterableIterator<T>,
+  // 3 IteratorObject (all are coroutines at run time); ret = TReturn (void: none), val = TNext (void: none)
+  uint8_t gk = 0;
 };
 
 struct GenericSym;
@@ -94,6 +99,10 @@ struct VarSym : Sym {
 struct FuncSym : Sym {
   FuncSym() : Sym(SymK::Func) {}
   Type* type = nullptr;  // Func type
+  // 0.3: generator (function*: type->ret is a Generator type) and async function (type->ret is a
+  // Promise type); yieldTypes collects the yielded types when the return type is inferred
+  bool isGenerator = false, isAsync = false;
+  std::vector<Type*> yieldTypes;
   std::vector<Param>* params = nullptr;
   TypeNode* retNode = nullptr;
   Stmt* body = nullptr;
@@ -291,6 +300,8 @@ class Types {
   Type* objectType(ObjShape* s);  // nominal (interface) object type
   Type* anonObject(const std::vector<ObjShape::Prop>& props);  // structural, interned
   Type* enumType(EnumSym* e);
+  Type* generator(Type* yieldT, Type* ret, Type* next, uint8_t gk = 0);
+  Type* promise(Type* t);
   std::vector<std::unique_ptr<ObjShape>> shapes;
 
  private:

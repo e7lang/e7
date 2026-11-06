@@ -290,7 +290,7 @@ int VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
     // unwinding is charged like the calls it undoes (one tick per dropped frame, one for the catch);
     // an exhausted budget is reported at the next safepoint in the handler's code
     budget_ -= (int64_t)(frames_.size() - k);
-    frames_.resize(k + 1);
+    dropFrames(k + 1);
     nativeDepth_ = st.nativeDepth;
     gcBlockers_ = st.gcBlockers;
     curNative_ = st.curNative;
@@ -315,7 +315,7 @@ void VM::finishPendingCatch() {
   PendingCatch pc = pendingCatch_;
   pendingCatch_ = PendingCatch{};
   budget_ -= (int64_t)(frames_.size() - pc.frame);
-  frames_.resize(pc.frame + 1);
+  dropFrames(pc.frame + 1);
   Frame& g = frames_[pc.frame];
   g.ip = g.fn->code + pc.handler->handler;  // the Error object is already in the handler's register
 }
@@ -618,6 +618,26 @@ HandleObj* VM::newHandle(int64_t id) {
   return h;
 }
 
+CoroObj* VM::newCoro(FuncRT* fn, CloObj* closure) {
+  size_t sz = sizeof(CoroObj) + (size_t)fn->nregs * sizeof(Slot);
+  auto* c = static_cast<CoroObj*>(allocRaw(OT::Coro, sz));
+  c->fn = fn;
+  c->closure = closure;
+  c->promise = nullptr;
+  c->pc = 0;
+  c->nregs = fn->nregs;
+  c->fflags = fn->d ? fn->d->fflags : 0;
+  c->state = CO_START;
+  memset(c->regs(), 0, (size_t)fn->nregs * sizeof(Slot));
+  return c;
+}
+
+void VM::dropFrames(size_t n) {
+  for (size_t i = n; i < frames_.size(); i++)
+    if (frames_[i].coro) frames_[i].coro->state = CO_DONE;
+  frames_.resize(n);
+}
+
 void VM::pin(Obj* o) {
   if (o) pins_[o]++;
 }
@@ -714,6 +734,16 @@ bool VM::checkHeap(std::string* why) const {
         if (b->vt == VT_REF && !ref(b->v.r, "a box")) return false;
         break;
       }
+      case OT::Coro: {
+        auto* c = static_cast<const CoroObj*>(o);
+        if (!ref(c->closure, "a coroutine's closure")) return false;
+        if (c->state == CO_START || c->state == CO_SUSPENDED) {
+          const Slot* rs = reinterpret_cast<const Slot*>(c + 1);
+          for (uint16_t r : c->fn->refRegs)
+            if (!ref(rs[r].r, "a coroutine's register")) return false;
+        }
+        break;
+      }
       case OT::Map: {
         auto* m = static_cast<const MapObj*>(o);
         uint32_t live = 0;
@@ -741,6 +771,7 @@ bool VM::checkHeap(std::string* why) const {
     for (uint16_t r : fr.fn->refRegs)
       if (!ref(R[r].r, "a register")) return false;
     if (!ref(fr.closure, "a frame's closure")) return false;
+    if (!ref(fr.coro, "a frame's coroutine")) return false;
   }
   for (auto& kv : pins_)
     if (!ref(kv.first, "a pinned object")) return false;
@@ -765,6 +796,7 @@ void VM::markRoots() {
     Slot* R = stack_ + fr.base;
     for (uint16_t r : fr.fn->refRegs) mark(R[r].r);
     mark(fr.closure);
+    mark(fr.coro);
   }
   if (resultKind_ == 'R') mark(result_.r);
   for (Obj* o : tempRoots_) mark(o);
@@ -801,6 +833,15 @@ void VM::traceAll() {
       case OT::Box: {
         auto* b = static_cast<BoxObj*>(o);
         if (b->vt == VT_REF) mark(b->v.r);
+        break;
+      }
+      case OT::Coro: {
+        auto* c = static_cast<CoroObj*>(o);
+        mark(c->closure);
+        mark(reinterpret_cast<Obj*>(c->promise));
+        // while running, the registers are in the frame (traced there); the saved copy is stale
+        if (c->state == CO_START || c->state == CO_SUSPENDED)
+          for (uint16_t r : c->fn->refRegs) mark(c->regs()[r].r);
         break;
       }
       case OT::Map: {
@@ -976,7 +1017,7 @@ int VM::runFrames() {
   try {
     int st = execute(0);
     if (st == ERR_SUSPENDED || st == ERR_PAUSED) suspended_ = true;
-    else frames_.clear();
+    else dropFrames(0);
     return st;
   } catch (E7Error&) {
     if (dbg_ && dbg_->takeErrorPause()) {
@@ -1015,7 +1056,7 @@ int VM::resume() {
 
 void VM::resetExecution() {
   pendingCatch_ = PendingCatch{};
-  frames_.clear();
+  dropFrames(0);
   gcInhibit_ = 0;
   suspended_ = false;
   nativeDepth_ = 0;
@@ -1089,7 +1130,7 @@ bool VM::callClosureCatching(CloObj* c, std::string& errorMessage) {
     return true;
   } catch (E7Error& e) {
     if (e.code != ERR_RUNTIME) throw;
-    frames_.erase(frames_.begin() + (std::ptrdiff_t)depth, frames_.end());
+    dropFrames(depth);
     nativeDepth_ = nd;
     gcBlockers_ = blockers;
     curNative_ = cn;

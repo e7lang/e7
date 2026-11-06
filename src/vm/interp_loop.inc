@@ -267,9 +267,26 @@ dispatch:
   CASE(ISUNDEF) R[A].i = R[B].r == undef_; DISPATCH();
   CASE(ISNULLISH) { Obj* o = R[B].r; R[A].i = !o || o == undef_; DISPATCH(); }
 
+// returning from a coroutine's frame: a generator is done (the value and done = 1 go to the resumer)
+#define CORO_RET(rv, kc)                                                     \
+  do {                                                                       \
+    CoroObj* co_ = fr->coro;                                                 \
+    co_->state = CO_DONE;                                                    \
+    bool ent_ = fr->entry;                                                   \
+    uint16_t dst_ = fr->retDst, dd_ = fr->doneDst;                           \
+    frames_.pop_back();                                                      \
+    if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS); \
+    if (ent_) { result_ = rv; resultKind_ = kc; return ERR_OK; }             \
+    LOAD_FRAME();                                                            \
+    if (dst_ != kNoReg && kc != 'V') R[dst_] = rv;                           \
+    if (dd_ != kNoReg) R[dd_].i = 1;                                         \
+    DISPATCH();                                                              \
+  } while (0)
+
 #define DO_RET(val, kc)                         \
   do {                                          \
     Slot rv = (val);                            \
+    if (E7_UNLIKELY(fr->coro != nullptr)) CORO_RET(rv, kc); \
     bool ent = fr->entry;                       \
     uint16_t dst = fr->retDst;                  \
     frames_.pop_back();                         \
@@ -668,6 +685,104 @@ dispatch:
   }
   // `debugger;`: the debug interpreter has already stopped here (DF_DEBUGGER) when appropriate
   CASE(DEBUGGER) DISPATCH();
+
+  // ---- coroutines (DESIGN-0.3.md D1)
+  // first instruction of a generator: save the frame (arguments in place) into a new coroutine and
+  // return it without running the body
+  CASE(GEN_START) {
+    fr->ip = ip;
+    CoroObj* co = newCoro(fn, fr->closure);  // may collect: the frame's registers are roots
+    R = stack_ + fr->base;
+    co->pc = (uint32_t)(ip - fn->code);
+    memcpy(co->regs(), R, (size_t)fn->nregs * sizeof(Slot));
+    co->state = CO_START;
+    Slot cv;
+    cv.r = co;
+    DO_RET(cv, 'R');
+  }
+  CASE(YIELD) {
+    ip++;  // the extra word (read on resumption)
+    CoroObj* co = fr->coro;
+    if (E7_UNLIKELY(!co)) THROW("yield outside a running generator");
+    Slot v = R[A];
+    co->pc = (uint32_t)(ip - 2 - fn->code);
+    memcpy(co->regs(), R, (size_t)fn->nregs * sizeof(Slot));
+    co->state = CO_SUSPENDED;
+    bool ent = fr->entry;
+    uint16_t dst = fr->retDst, dd = fr->doneDst;
+    frames_.pop_back();
+    if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS);
+    if (ent) { result_ = v; resultKind_ = 'R'; return ERR_OK; }
+    LOAD_FRAME();
+    if (dst != kNoReg) R[dst] = v;
+    if (dd != kNoReg) R[dd].i = 0;
+    DISPATCH();
+  }
+  // resume a generator: A coroutine, B its value (kind of the variant), C the done flag; the extra
+  // word: bits 0-15 the sent value's register, 16-17 the mode (0 next, 1 throw, 2 return), 18-19 the
+  // sent value's kind (0 none, 1 I, 2 F, 3 R)
+  CASE(RESUME_I) CASE(RESUME_F) CASE(RESUME_R) {
+    uint64_t ex = *ip++;
+    uint16_t sent = (uint16_t)ex;
+    uint32_t mode = (uint32_t)(ex >> 16) & 3, sentKind = (uint32_t)(ex >> 18) & 3;
+    uint16_t op = (uint16_t)ins;
+    uint8_t want = op == OP_RESUME_I ? 1 : op == OP_RESUME_F ? 2 : 3;
+    Obj* o = R[A].r;
+    if (E7_UNLIKELY(!o || o->type != OT::Coro)) THROW(o ? "value is not a generator" : "cannot resume null or undefined");
+    auto* co = static_cast<CoroObj*>(o);
+    uint8_t ff = co->fflags;
+    if (E7_UNLIKELY(fflagsKind(ff) != FK_GENERATOR || fflagsYield(ff) != want)) THROW("generator type mismatch");
+    uint8_t expect = mode == 0 ? fflagsNext(ff) : mode == 2 ? fflagsReturn(ff) : 3;
+    if (E7_UNLIKELY(sentKind != 0 && sentKind != expect)) THROW("generator type mismatch");
+    if (E7_UNLIKELY(co->state == CO_RUNNING)) THROW("TypeError: Generator is already running");
+    if (co->state == CO_DONE || (co->state == CO_START && mode != 0)) {
+      // not started (return / throw finish it without running the body) or already finished
+      co->state = CO_DONE;
+      if (mode == 1) { fr->ip = ip; raiseThrown(R[sent].r); }
+      if (mode == 2 && sentKind == want) R[B] = R[sent];
+      else if (fflagsReturn(ff)) {
+        // a finished generator gives undefined (a number NaN, an integer 0: the register's kind is fixed)
+        if (want == 3) R[B].r = undef_;
+        else if (want == 2) R[B].f = std::nan("");
+        else R[B].i = 0;
+      }
+      R[C].i = 1;
+      DISPATCH();
+    }
+    FuncRT* cf = co->fn;
+    uint32_t nb = fr->base + fn->nregs;
+    if (E7_UNLIKELY((size_t)nb + cf->nregs > cfg_.stackSlots || frames_.size() >= cfg_.maxFrames))
+      THROWC(ERR_STACK, "stack overflow");
+    Slot* NR = stack_ + nb;
+    memcpy(NR, co->regs(), (size_t)cf->nregs * sizeof(Slot));
+    const uint64_t* cip = cf->code + co->pc;
+    Obj* thrown = nullptr;
+    if (co->state == CO_SUSPENDED) {
+      uint64_t yw = cip[0], yx = cip[1];
+      uint16_t recv = insB(yw), modeReg = insC(yw), retReg = (uint16_t)yx;
+      NR[modeReg].i = mode;
+      uint16_t into = mode == 0 ? recv : mode == 2 ? retReg : kNoReg;
+      if (into != kNoReg) {
+        if (sentKind != 0) NR[into] = R[sent];
+        else {
+          uint8_t k = mode == 0 ? fflagsNext(ff) : fflagsReturn(ff);
+          if (k == 3) NR[into].r = undef_;
+          else if (k == 2) NR[into].f = std::nan("");
+          else NR[into].i = 0;
+        }
+      }
+      if (mode == 1) thrown = R[sent].r;
+      cip += 2;
+    }
+    co->state = CO_RUNNING;
+    fr->ip = ip;
+    frames_.push_back(Frame{cf, cip, co->closure, nb, B, false, co, C});
+    LOAD_FRAME();
+    TICK(1);
+    if (mode == 1) raiseThrown(thrown);  // raised at the YIELD (its handlers apply)
+    DISPATCH();
+  }
+  CASE(ASYNC_START) CASE(AWAIT) CASE(FIELD_ABSENT) THROW("instruction not implemented yet");
 
 #if !E7_COMPUTED_GOTO
   default:

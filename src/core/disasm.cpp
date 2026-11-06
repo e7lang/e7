@@ -39,6 +39,13 @@ std::string disassemble(const Module& m) {
       if (oi.fmt[0] == '*') {
         uint16_t c = insC(w);
         bool meta = op == OP_CALLV || op == OP_CALLM || op == OP_CALLI;
+        if (op == OP_YIELD || op == OP_RESUME_I || op == OP_RESUME_F || op == OP_RESUME_R || op == OP_AWAIT) {
+          add(" %u, %u, %u", insA(w), insB(w), c);
+          if (insWords(w) > 1 && pc + 1 < f.code.size()) add(" ex=%llx", (unsigned long long)f.code[pc + 1]);
+          out += "\n";
+          pc += insWords(w);
+          continue;
+        }
         add(" a=%u b=%u n=%u", insA(w), insB(w), c);
         if (meta && pc + 1 < f.code.size()) add(" meta=%llx", (unsigned long long)f.code[pc + 1]);
         extra = (meta ? 1 : 0) + (c + 3) / 4;
