@@ -76,6 +76,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - { base: v0.2.6 }
           - { base: v0.2.5 }
           - { base: v0.2.1 }
           - { base: v0.2.0 }
@@ -102,7 +103,7 @@ jobs:
           python3 tests/compat/forward_compat.py --old-e7 build-base/e7 --e7 build/e7 --e7c build/e7c \
             --base "$E7_COMPAT_BASE" --summary "$GITHUB_STEP_SUMMARY" \
             $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/^[[:space:]]*/--allow /' "tests/compat/forward-allow/$E7_COMPAT_BASE.txt") \
-            tests/cases/lang/*.ts tests/cases/lib/*.ts examples/*.ts
+            tests/cases/lang/*.ts tests/cases/lib/*.ts tests/cases/modules/main_*.ts examples/*.ts
 
   # Coverage of the VM, stdlib, crypto, C API and compiler over the whole ctest suite (clang
   # source-based coverage, scripts/coverage.py): a job summary and the coverage artifact

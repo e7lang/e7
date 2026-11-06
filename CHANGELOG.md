@@ -10,6 +10,35 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-11-06
+
+Compiler-only gaps from the 0.3 plan (docs/ROADMAP.md, item D). The VM, the bytecode format and the C API are
+unchanged: modules this compiler builds run on every 0.2.x VM that runs the 0.2.6 compiler's output (the
+forward-compatibility CI jobs check v0.2.6, v0.2.5, v0.2.1 and v0.2.0). docs/TYPESCRIPT.md: 129 of 250 features
+supported (117 in 0.2.6), 16 partial, 105 unsupported.
+
+### Added
+- Recursive interfaces and object type aliases, also mutually recursive and generic ones
+  (`interface Tree { children: Tree[] }`, `interface List<T> { tail: List<T> | null }`).
+- Destructuring assignment with object patterns, defaults, nesting and rest, as a statement
+  (`({ host, port = 80, ...rest } = options);`, `[first, ...others] = xs;`).
+- `||=` and `&&=`; the comma operator; the `void` operator.
+- Constant expressions in enum members (`ReadWrite = Read | Write`, `High = Low << 8`, `B = A + "-b"`).
+- Private accessors (`get #x()` / `set #x(v)`, instance and static).
+- Narrowing by a conditional expression with non-null branches (`x = x === null ? [] : x`) and of static field paths
+  (`if (C.#instance === null) C.#instance = new C(); return C.#instance;`).
+- Modules: default exports and imports (`export default`, `import x from`, `export { a as default }`), re-exports
+  (`export { x } from`, `export * from`, `export * as ns from`), side-effect imports (`import "./x"`), and classes,
+  types and enums through namespace imports (`new ns.C()`, `ns.E.A`, `let b: ns.Box<number>`). Modules are
+  initialized depth first in source order, as in JavaScript.
+
+### Fixed
+- `import type` and `export type ... from` are erased as in TypeScript: a module reached only through them is no
+  longer run, and a class or enum imported with `import type` cannot be used as a value (tsc's TS1361 error).
+- `KeyHandle` can be named through any namespace import of `e7:crypto` (`import * as c from "e7:crypto"; c.KeyHandle`).
+- `JSON.parse(text) as T` into a recursive type is a clear compile error (planned for e7vm 0.3) instead of not
+  terminating.
+
 ## [0.2.6] - 2026-11-06
 
 The subset defined (docs/ROADMAP.md, section 0.2.6). Compatible with 0.2.5: the bytecode format and the C API are
@@ -243,7 +272,8 @@ tested and hardened but has not yet run in production, so it is versioned 0.x un
   on an Android emulator, the iOS simulator, JVMs and .NET; libFuzzer targets for the loader and compiler with
   ClusterFuzzLite (ASan + UBSan) on pull requests and nightly. See [docs/PRODUCTION.md](docs/PRODUCTION.md).
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/e7lang/e7/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/e7lang/e7/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/e7lang/e7/compare/v0.2.1...v0.2.5
 [0.2.1]: https://github.com/e7lang/e7/compare/v0.2.0...v0.2.1

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- NuGet package "E7VM": the C# binding (platform/windows/E7VM.cs) plus prebuilt e7vm native
        libraries under runtimes/<rid>/native/. Pack (see .github/workflows/nuget.yml):
-         dotnet pack platform/dotnet/E7VM -c Release -p:Version=0.2.6 -p:E7NativeDir=<dir> -o out
+         dotnet pack platform/dotnet/E7VM -c Release -p:Version=0.2.7 -p:E7NativeDir=<dir> -o out
        where <dir> holds win-x64/e7vm.dll, linux-x64/libe7vm.so, linux-arm64/libe7vm.so and
        osx/libe7vm.dylib (universal arm64 + x86_64). -->
   <PropertyGroup>
@@ -11,7 +11,7 @@
     <!-- not "E7VM": E7VM.dll would collide with the native e7vm.dll on case-insensitive file systems -->
     <AssemblyName>E7</AssemblyName>
     <RootNamespace>E7</RootNamespace>
-    <Version>0.2.6</Version>
+    <Version>0.2.7</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
 

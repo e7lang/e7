@@ -195,7 +195,17 @@ Literals and `RegExp`; `test`, `exec`, `lastIndex`, `match`, `matchAll`, `replac
 and callbacks), `split`, `search`. Tested against the test262 RegExp tests and by a fuzzer that compares random
 patterns and inputs with V8.
 
-### D. Language gaps (compiler only)
+### D. Language gaps (compiler only) — mostly shipped in 0.2.7
+
+Shipped in 0.2.7: recursive types, destructuring assignment (object patterns, defaults, rest), `||=` / `&&=`, the
+comma and `void` operators, enum constant expressions, private accessors, narrowing by conditional expressions and
+of static field paths, default exports and imports, re-exports, side-effect imports, classes / types / enums through
+namespace imports. Still open for 0.3: literal types (D5), `never` in the `default` of an exhaustive switch, getters
+and setters in object literals, computed property names, built-in functions and functions with defaults as values,
+overrides with compatible signatures, `declare` fields, tagged templates and `String.raw`, type predicates and
+assertion functions, `JSON.parse` into recursive types (needs D6's descriptor back-references).
+
+Original list:
 Recursive types (D6); literal types (D5); object destructuring assignment, with defaults and rest in assignment
 patterns; `||=` / `&&=`; getters and setters in object literals; computed property names with keys known at compile
 time (string constants, enum members); `never` in the `default` of an exhaustive switch, narrowing by a conditional

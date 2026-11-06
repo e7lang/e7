@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.7
+
+- Bundles `@e7lang/e7` 0.2.7: recursive interfaces, destructuring assignment with object patterns, `||=` / `&&=`,
+  default exports and re-exports, classes and enums through namespace imports, private accessors.
+
 ## 0.2.6
 
 - Bundles `@e7lang/e7` 0.2.6: `readonly` arrays / properties and `exactOptionalPropertyTypes` checked as tsc does,
