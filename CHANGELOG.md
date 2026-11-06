@@ -10,6 +10,55 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+The language complete for its domain (docs/ROADMAP.md, section 0.3; design decisions in docs/DESIGN-0.3.md).
+Bytecode format 3 (docs/BYTECODE.md, section 6) for modules that use generators, `async`, regular expressions or
+records with a presence mask; every other module is still format 2 and runs on 0.2.x VMs. 0.2 modules run on this
+VM unchanged (the backward-compatibility CI job checks the suite compiled by 0.2.6). docs/TYPESCRIPT.md: 152 of 250
+features supported (129 in 0.2.7), 17 partial, 81 unsupported.
+
+### Added
+- Generators: `function*`, `yield`, `yield*`, generator methods, `Generator<T, TReturn, TNext>` / `Iterator<T>` /
+  `IterableIterator<T>`, `next` / `return` / `throw`; `for...of`, spread, `Array.from` and destructuring over
+  generators and classes with a `*[Symbol.iterator]()` method (leaving a loop early calls `return()`). New
+  instructions `GEN_START`, `YIELD`, `RESUME_I/F/R`; a generator is a coroutine that keeps its frame on the heap.
+- `async` / `await`: async functions, methods and arrow functions, `await`, top-level `await` in the entry module,
+  `for await`, `Promise<T>` with `then` / `catch` / `finally`, `new Promise`, `Promise.resolve` / `reject` / `all` /
+  `allSettled` / `any` / `race`. The VM runs the specification's promise jobs, so callbacks run in the order of
+  Node.js. New instructions `ASYNC_START`, `AWAIT`.
+- Host async functions (C API): `declare function f(...): Promise<T>` registered with
+  `e7_register_async_native`; the host settles tickets with `e7_settle` / `e7_settle_error`; a call returns the new
+  status `E7_PENDING` while tickets are open and continues with `e7_resume`; `e7_open_tickets`. An exported async
+  function gives the host its promise's value.
+- Literal types: string, numeric and boolean literal types and unions of literals of one base type, narrowing by
+  `===` / `!==` / `switch`, exhaustive switches whose `default` sees `never`, `as const`, `const` declarations with
+  literal types; `Awaited`, `NonNullable`, `NoInfer`, `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize`.
+- Type predicates (`x is T`, `this is T`) and assertion functions (`asserts x is T`, `asserts x`).
+- Computed property names with keys known at compile time (`{ [KEY]: v }`, class and interface members, `obj[KEY]`),
+  tagged templates and `String.raw`, `<T>x` assertions, hashbang lines, `declare` fields, overrides with fewer
+  parameters or a covariant return type, the `this` return type of methods, interface declaration merging, enum
+  members as types, built-in functions and functions with default parameters as values where a function type is
+  expected (`xs.map(Math.sqrt)`, `strs.map(Number)`, `xs.filter(Boolean)`).
+- `JSON.parse(text) as T` / `tryParse` into recursive types.
+- Standard library: `toSorted` / `toReversed` / `toSpliced` / `with`; `Date` setters (`setFullYear` ...
+  `setMilliseconds` and the UTC variants); `Error` `cause` (`new Error(msg, { cause })`) and `AggregateError` (also
+  from `Promise.any`); typed arrays `Int8Array` ... `Float64Array`, `Uint8ClampedArray`, `BigInt64Array`,
+  `BigUint64Array`; `structuredClone` of statically typed values.
+- `e7:test`: `later(v)` / `laterReject(e)`, promises settled in a later turn (tests of asynchronous ordering).
+- `console.log` of promises (`Promise { 1 }`) and generators (`Object [Generator] {}`), as Node.js prints them.
+
+### Changed
+- A property that holds `undefined` is an own property, as in JavaScript: records whose type has optional or
+  `| undefined` properties carry a presence mask (format-3 class flag, instruction `FIELD_ABSENT`), so `Object.keys`,
+  spread and `console.log` show `x: undefined` where Node.js does, and leave out properties an object literal did
+  not set. `e7c --target 0.2` keeps the 0.2 behaviour (format 2).
+- Literal types are checked: `let m: "GET" | "POST" = s` with a `string` `s` is now a compile error, as in tsc
+  (0.2 treated literal types as `string`). Programs that type-check with tsc are not affected.
+- An uncaught error of a call runs the promise jobs it queued before the call fails, as in JavaScript.
+- `e7_load` / `e7_call` / `e7_resume` may return `E7_PENDING`; hosts that do not register async natives never see it.
+
+### Not in 0.3
+- Async generators (`async function*`): see docs/DESIGN-0.3.md, implementation notes.
+
 ## [0.2.7] - 2026-11-06
 
 Compiler-only gaps from the 0.3 plan (docs/ROADMAP.md, item D). The VM, the bytecode format and the C API are
