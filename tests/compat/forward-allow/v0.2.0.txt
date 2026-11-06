@@ -15,3 +15,4 @@ tests/cases/lang/math_pow_fdlibm.ts           # same, for ** and Math.pow
 # fixed in 0.2.1
 tests/cases/lang/error_values.ts              # Error values in instanceof / String / JSON.stringify (0.2.1)
 tests/cases/lib/json_try_shape.ts             # JSON nesting-limit message (0.2.1)
+tests/cases/lang/recursive_types.ts           # console.log line breaking at 80 columns (0.2.5)

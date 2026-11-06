@@ -12,3 +12,4 @@ tests/cases/lang/map_iteration_mutation.ts    # iteration after compaction / cle
 tests/cases/lang/object_key_order.ts          # array-index keys first in Object.keys / JSON.stringify (0.2.5)
 tests/cases/lang/math_fdlibm.ts               # Math from V8's fdlibm instead of the platform libm (0.2.5)
 tests/cases/lang/math_pow_fdlibm.ts           # same, for ** and Math.pow
+tests/cases/lang/recursive_types.ts           # console.log line breaking at 80 columns (0.2.5)
