@@ -1029,6 +1029,7 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
     if (curThisClass) { noArgs(); return curThisClass->type; }
     return errT(l, "a 'this' type is only available in classes");
   }
+  if (name == "NoInfer" && args.size() == 1) return resolveType(args[0]);  // only affects tsc's inference
   if (name == "Awaited" && args.size() == 1) {
     Type* t = resolveType(args[0]);
     return t->t == TT::Promise ? t->elem : t;

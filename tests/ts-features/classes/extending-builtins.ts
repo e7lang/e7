@@ -1,7 +1,7 @@
 // @feature: Extending built-in classes (`Error`, `Map`, `Array`)
 // @category: Classes
 // @status: unsupported
-// @why: not implemented yet: built-in types are not classes in E7
+// @why: types known at compile time: built-in types (Array, Map, Error) have fixed representations and are not classes
 // @instead: throw `new Error(...)` (or `TypeError`, `RangeError`, ...) with a descriptive message; wrap a `Map` in a class field
 // @error: a class can only extend another class
 class ValidationError extends Error {

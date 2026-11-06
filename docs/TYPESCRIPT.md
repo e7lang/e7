@@ -27,7 +27,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **151 supported**, **17 partial**, **82 unsupported** (267 sample programs).
+250 features: **152 supported**, **17 partial**, **81 unsupported** (267 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -40,7 +40,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Classes](#classes) | 20 | 1 | 10 |
 | [Modules](#modules) | 9 | 0 | 4 |
 | [Enums](#enums) | 5 | 1 | 3 |
-| [Utility Types](#utility-types) | 3 | 0 | 10 |
+| [Utility Types](#utility-types) | 4 | 0 | 9 |
 | [Decorators](#decorators) | 0 | 0 | 3 |
 | [Declaration Merging](#declaration-merging) | 1 | 0 | 3 |
 | [Iterators and Generators](#iterators-and-generators) | 5 | 2 | 0 |
@@ -53,9 +53,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 24 | 1 | 6 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 11 | 6 | 9 |
-| **Total** | **151** | **17** | **82** |
+| **Total** | **152** | **17** | **81** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 43, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 35.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 54, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 23.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -124,7 +124,7 @@ Within each category, supported features come first, then partial and unsupporte
 | `void` return type and contextual `void` | supported | A `void`-returning function type accepts functions that return a value | [void-return.ts](../tests/ts-features/functions/void-return.ts) |
 | The `arguments` object | **unsupported** | **Why:** `arguments` is untyped (*types known at compile time*). **Instead:** rest parameters `...args: T[]` | [arguments-object.ts](../tests/ts-features/functions/arguments-object.ts) |
 | Call signatures in object types | **unsupported** | **Why:** functions are closures without properties (*types known at compile time*). **Instead:** an interface with a function-typed property, or a class with a method | [call-signatures.ts](../tests/ts-features/functions/call-signatures.ts) |
-| Construct signatures (`new (...) => T`) | **unsupported** | **Why:** classes are not values that can be passed around (*not implemented yet*). **Instead:** pass a factory function: `(s: string) => new SomeObject(s)` | [construct-signatures.ts](../tests/ts-features/functions/construct-signatures.ts) |
+| Construct signatures (`new (...) => T`) | **unsupported** | **Why:** classes are not values (constructor types would need run-time class values) (*types known at compile time*). **Instead:** pass a factory function: `(s: string) => new SomeObject(s)` | [construct-signatures.ts](../tests/ts-features/functions/construct-signatures.ts) |
 | Properties on functions and `call` / `apply` / `bind` | **unsupported** | **Why:** functions are closures with a fixed shape, not objects (*verifiable bytecode*). **Instead:** a class or an object literal holding the function and the data; call functions directly | [function-properties.ts](../tests/ts-features/functions/function-properties.ts) |
 | Function overloads | **unsupported** | **Why:** the implementation signature needs a union type (*types known at compile time*). **Instead:** separate functions with distinct names (`makeDateFromMs`, `makeDateFromParts`) | [overloads.ts](../tests/ts-features/functions/overloads.ts) |
 | `this` parameters | **unsupported** | **Why:** functions cannot be called with a chosen `this` (*not implemented yet*). **Instead:** pass the object as an ordinary parameter, or use a method | [this-parameter.ts](../tests/ts-features/functions/this-parameter.ts) |
@@ -147,10 +147,10 @@ Within each category, supported features come first, then partial and unsupporte
 | Tuple types (including labeled and readonly tuples) | supported |  | [tuples.ts](../tests/ts-features/objects/tuples.ts) |
 | Computed property names | **partial** | **Works:** keys known at compile time: string and number literals, consts of literal types, enum members (in object literals, classes and interfaces, and `obj[KEY]`). **Not supported:** property names must be known to fix the object layout (*types known at compile time*). **Instead:** `Map<string, V>` for keys computed at run time | [computed-property-names.ok.ts](../tests/ts-features/objects/computed-property-names.ok.ts), [computed-property-names.no.ts](../tests/ts-features/objects/computed-property-names.no.ts) |
 | Index signatures `{ [key: string]: T }` | **unsupported** | **Why:** properties are fixed fields with static types (*types known at compile time*). **Instead:** `Map<string, T>` (`JSON.parse(text) as Map<string, T>` reads a JSON object with arbitrary keys) | [index-signatures.ts](../tests/ts-features/objects/index-signatures.ts) |
-| Intersection types `A & B` | **unsupported** | **Why:** intersections are not resolved into an object type (*not implemented yet*). **Instead:** an interface that extends both: `interface ColorfulCircle extends Colorful, Circle {}` | [intersection-types.ts](../tests/ts-features/objects/intersection-types.ts) |
+| Intersection types `A & B` | **unsupported** | **Why:** intersection types are excluded (SPEC 0.1); write the combined interface (or `interface C extends A, B`) (*types known at compile time*). **Instead:** an interface that extends both: `interface ColorfulCircle extends Colorful, Circle {}` | [intersection-types.ts](../tests/ts-features/objects/intersection-types.ts) |
 | Getters and setters in object literals | **unsupported** | **Why:** object literal properties are plain fields or methods (*not implemented yet*). **Instead:** a class with `get` / `set` accessors, or methods | [object-literal-accessors.ts](../tests/ts-features/objects/object-literal-accessors.ts) |
-| Optional tuple elements `[A, B?]` | **unsupported** | **Why:** tuples have a fixed length (*not implemented yet*). **Instead:** a tuple with a nullable element `[A, B \| undefined]`, or an interface with an optional property | [tuple-optional-elements.ts](../tests/ts-features/objects/tuple-optional-elements.ts) |
-| Rest elements in tuple types `[A, ...B[]]` | **unsupported** | **Why:** tuples have a fixed length (*not implemented yet*). **Instead:** an interface `{ head: A; rest: B[] }` | [tuple-rest-elements.ts](../tests/ts-features/objects/tuple-rest-elements.ts) |
+| Optional tuple elements `[A, B?]` | **unsupported** | **Why:** a tuple has one length (its layout is fixed); use `T \| undefined` for the element (*types known at compile time*). **Instead:** a tuple with a nullable element `[A, B \| undefined]`, or an interface with an optional property | [tuple-optional-elements.ts](../tests/ts-features/objects/tuple-optional-elements.ts) |
+| Rest elements in tuple types `[A, ...B[]]` | **unsupported** | **Why:** a tuple has one length (its layout is fixed); use an array (*types known at compile time*). **Instead:** an interface `{ head: A; rest: B[] }` | [tuple-rest-elements.ts](../tests/ts-features/objects/tuple-rest-elements.ts) |
 
 ## Generics
 
@@ -177,11 +177,11 @@ Within each category, supported features come first, then partial and unsupporte
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
 | Conditional types and `infer` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** write the resulting types out (one per case) | [conditional-types.ts](../tests/ts-features/type-manipulation/conditional-types.ts) |
-| Indexed access types `T["key"]` | **unsupported** | **Why:** types are written out, not derived from other types (*not implemented yet*). **Instead:** declare the property type separately and refer to it by name | [indexed-access-types.ts](../tests/ts-features/type-manipulation/indexed-access-types.ts) |
+| Indexed access types `T["key"]` | **unsupported** | **Why:** types derived from other types (indexed access) are excluded (SPEC 0.1); write the type out (*types known at compile time*). **Instead:** declare the property type separately and refer to it by name | [indexed-access-types.ts](../tests/ts-features/type-manipulation/indexed-access-types.ts) |
 | `keyof` type operator | **unsupported** | **Why:** property names are not first-class values (*types known at compile time*). **Instead:** an enum or a string field with a `switch`, or `Map<K, V>` | [keyof.ts](../tests/ts-features/type-manipulation/keyof.ts) |
 | Mapped types (including modifiers and key remapping) | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** spell out the interface (with optional or readonly properties as needed) | [mapped-types.ts](../tests/ts-features/type-manipulation/mapped-types.ts) |
-| Template literal types | **unsupported** | **Why:** string literal types are treated as `string` (*not implemented yet*). **Instead:** `string` with run-time checks (`startsWith`, ...) | [template-literal-types.ts](../tests/ts-features/type-manipulation/template-literal-types.ts) |
-| `typeof` in type positions | **unsupported** | **Why:** types are written out, not derived from values (*not implemented yet*). **Instead:** name the type with an interface or a type alias | [typeof-type.ts](../tests/ts-features/type-manipulation/typeof-type.ts) |
+| Template literal types | **unsupported** | **Why:** template literal types are excluded (SPEC 0.1); use a union of literals (*types known at compile time*). **Instead:** `string` with run-time checks (`startsWith`, ...) | [template-literal-types.ts](../tests/ts-features/type-manipulation/template-literal-types.ts) |
+| `typeof` in type positions | **unsupported** | **Why:** types derived from values (`typeof x`) are excluded (SPEC 0.1); write the type out (*types known at compile time*). **Instead:** name the type with an interface or a type alias | [typeof-type.ts](../tests/ts-features/type-manipulation/typeof-type.ts) |
 
 ## Classes
 
@@ -213,7 +213,7 @@ Within each category, supported features come first, then partial and unsupporte
 | Class expressions | **unsupported** | **Why:** classes are declared at the top level of a scope (*not implemented yet*). **Instead:** a class declaration | [class-expressions.ts](../tests/ts-features/classes/class-expressions.ts) |
 | Classes as first-class values (`typeof C`, prototypes) | **unsupported** | **Why:** a class is a compile-time layout, not a run-time object with a prototype (*verifiable bytecode*). **Instead:** factory functions `() => new C()` | [classes-as-values.ts](../tests/ts-features/classes/classes-as-values.ts) |
 | Constructor overloads | **unsupported** | **Why:** the implementation signature needs a union type (*types known at compile time*). **Instead:** optional parameters, or static factory methods | [constructor-overloads.ts](../tests/ts-features/classes/constructor-overloads.ts) |
-| Extending built-in classes (`Error`, `Map`, `Array`) | **unsupported** | **Why:** built-in types are not classes in E7 (*not implemented yet*). **Instead:** throw `new Error(...)` (or `TypeError`, `RangeError`, ...) with a descriptive message; wrap a `Map` in a class field | [extending-builtins.ts](../tests/ts-features/classes/extending-builtins.ts) |
+| Extending built-in classes (`Error`, `Map`, `Array`) | **unsupported** | **Why:** built-in types (Array, Map, Error) have fixed representations and are not classes (*types known at compile time*). **Instead:** throw `new Error(...)` (or `TypeError`, `RangeError`, ...) with a descriptive message; wrap a `Map` in a class field | [extending-builtins.ts](../tests/ts-features/classes/extending-builtins.ts) |
 | Index signatures in classes | **unsupported** | **Why:** class layouts are fixed (*types known at compile time*). **Instead:** a `Map<string, T>` field | [index-signatures.ts](../tests/ts-features/classes/index-signatures.ts) |
 | Methods as values (unbound methods) | **unsupported** | **Why:** an unbound method loses `this` in JavaScript; E7 rejects it rather than behave differently (*JavaScript-identical behaviour*). **Instead:** an arrow function `x => obj.method(x)`, or an arrow function field | [methods-as-values.ts](../tests/ts-features/classes/methods-as-values.ts) |
 | `new.target` | **unsupported** | **Why:** *not implemented yet*. **Instead:** an explicit constructor parameter | [new-target.ts](../tests/ts-features/classes/new-target.ts) |
@@ -256,18 +256,18 @@ Within each category, supported features come first, then partial and unsupporte
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
 | `Awaited<T>` | supported | `Awaited<Promise<T>>` is `T` | [awaited.ts](../tests/ts-features/utility-types/awaited.ts) |
+| `NoInfer<T>` | supported | `NoInfer<T>` is `T` (it only steers tsc's inference) | [no-infer.ts](../tests/ts-features/utility-types/no-infer.ts) |
 | `NonNullable<T>` | supported | `NonNullable<T>` removes `null` and `undefined` | [non-nullable.ts](../tests/ts-features/utility-types/non-nullable.ts) |
 | Intrinsic string types (`Uppercase`, `Lowercase`, `Capitalize`, `Uncapitalize`) | supported | `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize` of string literal types (ASCII letters; of `string`, `string`) | [string-manipulation.ts](../tests/ts-features/utility-types/string-manipulation.ts) |
 | `Exclude<T, U>` and `Extract<T, U>` | **unsupported** | **Why:** union types other than with `null` / `undefined` are not supported (*types known at compile time*). **Instead:** write the resulting type | [exclude-extract.ts](../tests/ts-features/utility-types/exclude-extract.ts) |
 | `Parameters`, `ReturnType`, `ConstructorParameters`, `InstanceType` | **unsupported** | **Why:** they need `typeof` types and conditional types (*types known at compile time*). **Instead:** name the types with aliases and use them in the declarations | [function-types.ts](../tests/ts-features/utility-types/function-types.ts) |
-| `NoInfer<T>` | **unsupported** | **Why:** *not implemented yet*. **Instead:** an explicit type argument at the call | [no-infer.ts](../tests/ts-features/utility-types/no-infer.ts) |
 | `Omit<T, K>` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** a separate interface (the larger interface can extend it) | [omit.ts](../tests/ts-features/utility-types/omit.ts) |
 | `Partial<T>` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** an interface with optional properties (`interface UserPatch { name?: string; age?: number }`) | [partial.ts](../tests/ts-features/utility-types/partial.ts) |
 | `Pick<T, K>` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** a separate interface (the source interface can extend it) | [pick.ts](../tests/ts-features/utility-types/pick.ts) |
 | `Readonly<T>` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** an interface with `readonly` properties | [readonly.ts](../tests/ts-features/utility-types/readonly.ts) |
 | `Record<K, V>` | **unsupported** | **Why:** properties are fixed fields (*types known at compile time*). **Instead:** `Map<K, V>`, or an interface with the known keys | [record.ts](../tests/ts-features/utility-types/record.ts) |
 | `Required<T>` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** spell out the interface without `?` | [required.ts](../tests/ts-features/utility-types/required.ts) |
-| `ThisType<T>`, `ThisParameterType`, `OmitThisParameter` | **unsupported** | **Why:** functions cannot be called with a chosen `this` (*not implemented yet*). **Instead:** object literal methods (`this` is the object) or classes | [this-type.ts](../tests/ts-features/utility-types/this-type.ts) |
+| `ThisType<T>`, `ThisParameterType`, `OmitThisParameter` | **unsupported** | **Why:** `ThisType<T>` types `this` in object literals that are not methods of a known class (*types known at compile time*). **Instead:** object literal methods (`this` is the object) or classes | [this-type.ts](../tests/ts-features/utility-types/this-type.ts) |
 
 ## Decorators
 
@@ -302,8 +302,8 @@ Within each category, supported features come first, then partial and unsupporte
 
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
-| `Symbol()` values and symbol-keyed properties | **unsupported** | **Why:** property names are fixed identifiers (*not implemented yet*). **Instead:** string constants, or a private field | [symbols.ts](../tests/ts-features/symbols/symbols.ts) |
-| `unique symbol` types | **unsupported** | **Why:** *not implemented yet*. **Instead:** string constants or an enum | [unique-symbol.ts](../tests/ts-features/symbols/unique-symbol.ts) |
+| `Symbol()` values and symbol-keyed properties | **unsupported** | **Why:** `Symbol` values as property keys would make an object's layout depend on run-time values (SPEC 0.1) (*types known at compile time*). **Instead:** string constants, or a private field | [symbols.ts](../tests/ts-features/symbols/symbols.ts) |
+| `unique symbol` types | **unsupported** | **Why:** `Symbol` values (SPEC 0.1); property names are fixed (*types known at compile time*). **Instead:** string constants or an enum | [unique-symbol.ts](../tests/ts-features/symbols/unique-symbol.ts) |
 | Well-known symbols (`Symbol.iterator`, `Symbol.toPrimitive`, ...) | **unsupported** | **Why:** `Symbol` values (only `[Symbol.iterator]` is accepted, as a generator method) (*not implemented yet*). **Instead:** ordinary methods (`toString()`, `toArray()`) | [well-known-symbols.ts](../tests/ts-features/symbols/well-known-symbols.ts) |
 
 ## Mixins
