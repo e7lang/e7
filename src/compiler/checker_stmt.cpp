@@ -67,9 +67,25 @@ static bool isAncestor(ClassSym* anc, ClassSym* c) {
   return false;
 }
 
+// whether every value of literal type a is one of literal type b's (same base)
+static bool litSubset(const Type* a, const Type* b) {
+  if (a->t != b->t) return false;
+  for (auto& s : a->strLits)
+    if (!std::binary_search(b->strLits.begin(), b->strLits.end(), s)) return false;
+  for (double d : a->numLits) {
+    bool f = false;
+    for (double e : b->numLits) f = f || e == d || (e != e && d != d);
+    if (!f) return false;
+  }
+  return (a->boolLits & ~b->boolLits) == 0;
+}
+
 bool Checker::assignable(Type* src, Type* dst) {
   if (src == dst) return true;
   if (src->t == TT::Unknown || dst->t == TT::Unknown || src->t == TT::Never) return true;
+  // literal types (D5): a literal type is its base type with fewer values
+  if (dst->lit) return src->lit && litSubset(src, dst);
+  if (src->lit) return assignable(src->litBase, dst);
   switch (dst->t) {
     case TT::Optional: {
       if (src->t == TT::Null) return dst->hasNull;
@@ -123,10 +139,49 @@ Expr* Checker::wrapConv(Expr* e, ConvKind k, Type* t) {
   return c;
 }
 
+static Expr* stripParens(Expr* e) {
+  while (e && e->k == EK::Paren) e = e->a;
+  return e;
+}
+
+// The literal type of a constant expression ("a", 1, -2, true, `x`, c ? "a" : "b"), or null
+Type* Checker::constLit(Expr* e) {
+  while (e && (e->k == EK::Paren || (e->k == EK::Conv && e->conv == ConvKind::None))) e = e->a;
+  if (!e) return nullptr;
+  switch (e->k) {
+    case EK::Str: return T.strLit({e->str});
+    case EK::Template: return e->list.empty() && e->quasis.size() == 1 ? T.strLit({e->quasis[0]}) : nullptr;
+    case EK::Num: return e->type && e->type->t == TT::Number ? T.numLit({e->num}) : nullptr;
+    case EK::Bool: return T.boolLit(e->bval ? 2 : 1);
+    case EK::Unary:
+      if (e->raw == "-" && e->a && stripParens(e->a)->k == EK::Num && e->type && e->type->t == TT::Number)
+        return T.numLit({-stripParens(e->a)->num});
+      return nullptr;
+    case EK::Cond: {
+      Type* a = constLit(e->b);
+      Type* b = a ? constLit(e->c) : nullptr;
+      return b ? T.litUnion(a, b) : nullptr;
+    }
+    default:
+      return e->type && e->type->lit ? e->type : nullptr;
+  }
+}
+
+// a variable's type from its initializer: a const keeps the literal type of a constant ("a"), other
+// variables get the base type (TypeScript's widening)
+Type* Checker::inferVarType(Expr* init, Type* t, bool isConst) {
+  if (!isConst) return widen(t);
+  if (Type* c = init && (t->t == TT::String || t->t == TT::Number || t->t == TT::Bool) ? constLit(init) : nullptr) return c;
+  return t;
+}
+
 bool Checker::coerce(Expr*& e, Type* target, const char* ctx) {
   Type* t = e->type;
   if (!t || !target) return true;
   if (t == target) return true;
+  // a constant of a literal type's base: its value decides ("GET" is a "GET" | "POST")
+  if (baseOf(target)->lit && !t->lit && (t->t == TT::String || t->t == TT::Number || t->t == TT::Bool))
+    if (Type* c = constLit(e)) t = c;
   if (target->t == TT::Void && ctx && std::string(ctx) == "return") return false;
   if (!assignable(t, target)) {
     err(e->loc, "type '" + typeName(t) + "' is not assignable to type '" + typeName(target) + "'");
@@ -141,7 +196,14 @@ bool Checker::coerce(Expr*& e, Type* target, const char* ctx) {
   return true;
 }
 
-Type* Checker::widen(Type* t) { return t; }
+// the type a mutable location gets from a value: literal types become their base type (TypeScript
+// widens `let x = "a"` to string)
+Type* Checker::widen(Type* t) {
+  if (!t) return t;
+  if (t->lit) return t->litBase;
+  if (t->t == TT::Optional && t->elem->lit) return T.optional(t->elem->litBase, t->hasNull, t->hasUndef);
+  return t;
+}
 
 Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
   if (a == b) return a;
@@ -350,6 +412,45 @@ void Checker::checkBlockStmts(std::vector<Stmt*>& stmts) {
 }
 
 // a switch over an enum value whose cases name every member of the enum (as tsc, exhaustive)
+bool Checker::switchCoversLits(Stmt* s) {
+  Type* dt = s->expr ? s->expr->type : nullptr;
+  if (!dt || !dt->lit) return false;
+  Type* covered = nullptr;
+  for (auto& c : s->cases)
+    if (c.test)
+      if (Type* lt = constLit(c.test)) covered = covered ? T.litUnion(covered, lt) : lt;
+  return covered && litMinus(dt, covered) == nullptr;
+}
+
+// whether a switch clause's body ends by leaving the switch (no fall-through into the next clause)
+bool Checker::exitsClause(SwitchCase& c) {
+  for (Stmt* x : c.body)
+    if (exits(x) || x->k == SK::Break) return true;
+  return false;
+}
+
+// the values of literal type a that are not in b (null: none left)
+Type* Checker::litMinus(Type* a, Type* b) {
+  if (!b) return a;
+  if (a->t == TT::String) {
+    std::vector<std::u16string> v;
+    for (auto& s : a->strLits)
+      if (!std::binary_search(b->strLits.begin(), b->strLits.end(), s)) v.push_back(s);
+    return v.empty() ? nullptr : T.strLit(v);
+  }
+  if (a->t == TT::Number) {
+    std::vector<double> v;
+    for (double d : a->numLits) {
+      bool in = false;
+      for (double e : b->numLits) in = in || e == d;
+      if (!in) v.push_back(d);
+    }
+    return v.empty() ? nullptr : T.numLit(v);
+  }
+  uint8_t m = a->boolLits & ~b->boolLits;
+  return m ? T.boolLit(m) : nullptr;
+}
+
 bool Checker::switchCoversEnum(Stmt* s) {
   Type* dt = s->expr ? s->expr->type : nullptr;
   if (!dt || dt->t != TT::Enum || !dt->en) return false;
@@ -403,7 +504,7 @@ bool Checker::exits(Stmt* s) {
       // exits if there is a default and every case ends by exiting (no breaks)
       bool hasDefault = false;
       for (auto& c : s->cases) if (!c.test) hasDefault = true;
-      if (!hasDefault && !switchCoversEnum(s)) return false;  // an enum switch with every member is exhaustive
+      if (!hasDefault && !switchCoversEnum(s) && !switchCoversLits(s)) return false;  // an enum / literal switch with every value is exhaustive
       for (size_t i = 0; i < s->cases.size(); i++) {
         auto& c = s->cases[i];
         for (Stmt* x : c.body) if (containsBreakFor(x, "", 0)) return false;
@@ -577,7 +678,7 @@ Type* Checker::globalVarType(VarSym* v) {
       err(d.loc, "an expression of type 'void' cannot be assigned to a variable");
       t = T.unknown();
     }
-    v->type = t;
+    v->type = inferVarType(d.init, t, v->isConst);
     d.sym = v;
     v->checked = true;  // initializer already checked
   } else {
@@ -781,7 +882,7 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
           err(d.loc, "an expression of type 'void' cannot be assigned to a variable");
           t = T.unknown();
         }
-        declared = t;
+        declared = inferVarType(d.init, t, isConst);
       }
     } else if (!declared) {
       err(d.loc, "'" + d.name + "' needs a type annotation or initializer");
@@ -838,7 +939,7 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
         err(d.loc, "an expression of type 'void' cannot be assigned to a variable");
         it = T.unknown();
       }
-      t = it;
+      t = simple ? inferVarType(d.init, it, isConst) : widen(it);
     }
   } else {
     if (!declared) {
@@ -1107,16 +1208,50 @@ void Checker::checkStmt(Stmt* s) {
       for (auto& c : s->cases)
         for (Stmt* x : c.body) all.push_back(x);
       hoistFunctions(all);
-      for (auto& c : s->cases) {
+      // literal types (D5): each clause sees the discriminant narrowed to its case values (with the
+      // values of the empty clauses that fall into it), the default clause the values left (never when
+      // the switch covers them all)
+      std::string dkey = dt->lit || (dt->t == TT::Enum && dt->en) ? pathKey(s->expr) : "";
+      Type* group = nullptr;
+      bool groupOk = true;
+      Type* covered = nullptr;
+      for (size_t ci = 0; ci < s->cases.size(); ci++) {
+        auto& c = s->cases[ci];
+        Type* cv = nullptr;
         if (c.test) {
           Type* ct = check(c.test, dt);
+          if (dt->lit)
+            if (Type* lt = constLit(c.test)) {
+              ct = lt;
+              cv = lt;
+            }
           if (ct != dt && !(dt->t == TT::Unknown || ct->t == TT::Unknown)) {
-            if (!assignable(ct, dt)) err(c.test->loc, "case type '" + typeName(ct) + "' is not comparable to '" + typeName(dt) + "'");
+            bool ok = assignable(ct, dt) || (ct->lit && dt->lit && baseLit(ct) == baseLit(dt));
+            if (!ok) err(c.test->loc, "case type '" + typeName(ct) + "' is not comparable to '" + typeName(dt) + "'");
           }
+          if (cv && dt->lit) covered = covered ? T.litUnion(covered, cv) : cv;
+          if (cv && groupOk) group = group ? T.litUnion(group, cv) : cv;
+          else groupOk = false;
         } else {
           defaults++;
+          groupOk = false;
+        }
+        pushScope();
+        if (!dkey.empty() && dt->lit) {
+          if (c.test && groupOk && group) setNarrow(dkey, group);
+          else if (!c.test && (ci == 0 || exitsClause(s->cases[ci - 1]))) {
+            Type* rest = litMinus(dt, covered);
+            setNarrow(dkey, rest ? rest : T.never());
+          }
+        } else if (!dkey.empty() && !c.test && switchCoversEnum(s) && (ci == 0 || exitsClause(s->cases[ci - 1]))) {
+          setNarrow(dkey, T.never());
         }
         for (Stmt* x : c.body) checkStmt(x);
+        popScope();
+        if (!c.body.empty()) {
+          group = nullptr;
+          groupOk = true;
+        }
       }
       if (defaults > 1) err(s->loc, "multiple default clauses");
       loops.pop_back();

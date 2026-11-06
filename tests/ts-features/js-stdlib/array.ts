@@ -1,7 +1,7 @@
 // @feature: `Array` methods
 // @category: JavaScript: Standard Library
-// @status: partial
-// @note: ES2022 methods (`map filter reduce find findLast flat flatMap at includes splice sort` ...)
+// @status: supported
+// @note: ES2023 methods (`map filter reduce find findLast flat flatMap at includes splice sort toSorted toReversed toSpliced with` ...)
 const a = [5, 1, 4, 2, 3];
 console.log(a.map(x => x * 2), a.filter(x => x % 2 === 1), a.reduce((s, x) => s + x, 0), a.find(x => x > 3), a.findLast(x => x > 3));
 console.log(a.findIndex(x => x === 4), a.some(x => x > 4), a.every(x => x > 0), a.includes(3), a.indexOf(9), a.at(-1), a.join("|"));
@@ -15,3 +15,4 @@ const d = [1, 2, 3, 4];
 d.length = 2;
 d.unshift(0);
 console.log(d, d.shift(), d.pop(), d);
+console.log(a.toSorted(), a.toReversed(), a.toSpliced(1, 2, 7), a.with(0, 9), a);

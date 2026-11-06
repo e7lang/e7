@@ -1394,6 +1394,27 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
   if (c->k == EK::Binary && (c->raw == "===" || c->raw == "!==" || c->raw == "==" || c->raw == "!=")) {
     Expr* l = strip(c->a);
     Expr* r = strip(c->b);
+    // a literal-typed path compared with a constant: x === "a" narrows x to "a", x !== "a" to the others
+    for (int side = 0; side < 2; side++) {
+      Expr* path = side == 0 ? l : r;
+      Expr* other = side == 0 ? r : l;
+      Type* pt = path->type;
+      if (!pt || !pt->lit) continue;
+      Type* v = constLit(other);
+      if (!v || other->type && other->type->lit && strip(other)->k == EK::Ident) {
+        if (!v) continue;
+      }
+      std::string key = pathKey(path);
+      if (key.empty()) continue;
+      bool eq = c->raw[0] == '=';
+      if (eq == whenTrue) {
+        if (v->lit && baseLit(v) == baseLit(pt) && v->strLits.size() + v->numLits.size() + (v->boolLits ? 1 : 0) == 1) out.push_back({key, v});
+      } else if (v->strLits.size() + v->numLits.size() + (v->boolLits == 1 || v->boolLits == 2 ? 1 : 0) == 1) {
+        Type* rest = litMinus(pt, v);
+        out.push_back({key, rest ? rest : T.never()});
+      }
+      return;
+    }
     Expr* path = nullptr;
     Expr* lit = nullptr;
     if (r->k == EK::Null || r->k == EK::Undefined) { path = l; lit = r; }
@@ -1846,7 +1867,48 @@ Type* Checker::checkIndexOn(Expr* e, Type* ot) {
   }
 }
 
+// The type `e as const` gives: a literal type for a constant, a readonly tuple for an array literal and
+// an object type with readonly properties for an object literal, of those recursively (null: e is
+// something else)
+Type* Checker::asConstType(Expr* e) {
+  e = strip(e);
+  if (e->k == EK::Str || e->k == EK::Bool || (e->k == EK::Template && e->list.empty())) return constLit(e);
+  if (e->k == EK::Num || (e->k == EK::Unary && e->raw == "-" && strip(e->a)->k == EK::Num)) {
+    if (e->k == EK::Num) return T.numLit({e->num});
+    return T.numLit({-strip(e->a)->num});
+  }
+  if (e->k == EK::Array) {
+    std::vector<Type*> es;
+    for (Expr* x : e->list) {
+      if (x->k == EK::Spread) return nullptr;
+      Type* t = asConstType(x);
+      if (!t) return nullptr;
+      es.push_back(t);
+    }
+    if (es.empty()) return nullptr;
+    return T.tuple(es, true);
+  }
+  if (e->k == EK::Object) {
+    std::vector<ObjShape::Prop> props;
+    for (auto& p : e->props) {
+      if (p.spread || p.method || p.shorthand) return nullptr;
+      Type* t = asConstType(p.value);
+      if (!t) return nullptr;
+      props.push_back({p.key, t, false, false, true});
+    }
+    return T.anonObject(props);
+  }
+  return nullptr;
+}
+
 Type* Checker::checkAs(Expr* e) {
+  if (e->asType && e->asType->k == TNK::Ref && e->asType->name == "const" && e->asType->args.empty() && !lookup("const")) {
+    Type* t = asConstType(e->a);
+    if (!t) return errT(e->loc, "'as const' is supported for literals and for arrays and objects of literals");
+    check(e->a, t);
+    coerce(e->a, t, "as const");
+    return t;
+  }
   Type* target = resolveType(e->asType);
   Expr* inner = strip(e->a);
   if (inner->k == EK::Call && inner->a->k == EK::Member && strip(inner->a->a)->k == EK::Ident &&

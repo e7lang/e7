@@ -1,6 +1,9 @@
 #include "types.h"
 
+#include <algorithm>
 #include <cstdio>
+
+#include "../core/numfmt.h"
 
 namespace e7 {
 
@@ -173,6 +176,66 @@ Type* Types::promise(Type* e) {
   return interned_[k] = t;
 }
 
+Type* Types::strLit(std::vector<std::u16string> vals) {
+  std::sort(vals.begin(), vals.end());
+  vals.erase(std::unique(vals.begin(), vals.end()), vals.end());
+  std::string k = "LS";
+  for (auto& v : vals) {
+    k += std::to_string(v.size()) + ":";
+    for (char16_t c : v) { k += (char)(c & 0xFF); k += (char)(c >> 8); }
+  }
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::String);
+  t->lit = true;
+  t->litBase = string_;
+  t->strLits = vals;
+  return interned_[k] = t;
+}
+Type* Types::numLit(std::vector<double> vals) {
+  for (double& d : vals) d = d + 0.0;  // -0 is the literal 0
+  std::sort(vals.begin(), vals.end(), [](double a, double b) { return a < b || (a != a && b == b); });
+  vals.erase(std::unique(vals.begin(), vals.end(), [](double a, double b) { return a == b || (a != a && b != b); }), vals.end());
+  std::string k = "LN";
+  for (double d : vals) {
+    char b[40];
+    snprintf(b, sizeof b, "%.17g,", d);
+    k += b;
+  }
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::Number);
+  t->lit = true;
+  t->litBase = number_;
+  t->numLits = vals;
+  return interned_[k] = t;
+}
+Type* Types::boolLit(uint8_t mask) {
+  if ((mask & 3) == 3) return bool_;
+  std::string k = "LB" + std::to_string(mask & 3);
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::Bool);
+  t->lit = true;
+  t->litBase = bool_;
+  t->boolLits = mask & 3;
+  return interned_[k] = t;
+}
+Type* Types::litUnion(Type* a, Type* b) {
+  if (!a->lit || !b->lit || a->litBase != b->litBase) return nullptr;
+  if (a->t == TT::String) {
+    std::vector<std::u16string> v = a->strLits;
+    v.insert(v.end(), b->strLits.begin(), b->strLits.end());
+    return strLit(v);
+  }
+  if (a->t == TT::Number) {
+    std::vector<double> v = a->numLits;
+    v.insert(v.end(), b->numLits.begin(), b->numLits.end());
+    return numLit(v);
+  }
+  return boolLit(a->boolLits | b->boolLits);
+}
+
 Kind kindOf(const Type* t) {
   switch (t->t) {
     case TT::Number: return K_F;
@@ -204,6 +267,20 @@ static const char* intName(uint8_t vt) {
 static std::string typeNameB(const Type* t, int& budget) {
   if (!t) return "?";
   if (--budget < 0) return "...";
+  if (t->lit) {
+    std::string s;
+    auto sep = [&]() { if (!s.empty()) s += " | "; };
+    for (auto& v : t->strLits) {
+      sep();
+      s += "\"";
+      for (char c : utf16ToUtf8(v)) s += (c == '"' || c == '\\') ? std::string("\\") + c : std::string(1, c);
+      s += "\"";
+    }
+    for (double d : t->numLits) { sep(); s += numberToString(d); }
+    if (t->boolLits & 1) { sep(); s += "false"; }
+    if (t->boolLits & 2) { sep(); s += "true"; }
+    return s.empty() ? "never" : s;
+  }
   switch (t->t) {
     case TT::Number: return "number";
     case TT::Bool: return "boolean";

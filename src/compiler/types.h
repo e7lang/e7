@@ -41,6 +41,13 @@ struct Type {
   // Generator: 0 Generator<T, TReturn, TNext>, 1 Iterator<T, TReturn, TNext>, 2 IterableIterator<T>,
   // 3 IteratorObject (all are coroutines at run time); ret = TReturn (void: none), val = TNext (void: none)
   uint8_t gk = 0;
+  // literal types (D5): a string / number / boolean type restricted to these values; t is the base's
+  // (String / Number / Bool), so the representation and every operation are the base's
+  bool lit = false;
+  Type* litBase = nullptr;
+  std::vector<std::u16string> strLits;  // sorted
+  std::vector<double> numLits;          // sorted (0 and -0 are one literal)
+  uint8_t boolLits = 0;                 // bit 0: false, bit 1: true
 };
 
 struct GenericSym;
@@ -302,6 +309,12 @@ class Types {
   Type* anonObject(const std::vector<ObjShape::Prop>& props);  // structural, interned
   Type* enumType(EnumSym* e);
   Type* generator(Type* yieldT, Type* ret, Type* next, uint8_t gk = 0);
+  // literal types: the union of the given values (a full boolean set is `boolean`)
+  Type* strLit(std::vector<std::u16string> vals);
+  Type* numLit(std::vector<double> vals);
+  Type* boolLit(uint8_t mask);
+  // the union of two literal types of one base
+  Type* litUnion(Type* a, Type* b);
   Type* promise(Type* t);
   std::vector<std::unique_ptr<ObjShape>> shapes;
 
@@ -347,6 +360,8 @@ inline std::vector<std::pair<std::string, Type*>> enumerableProps(Type* t) {
   }
   return out;
 }
+// The type without literal restriction: "a" | "b" -> string
+inline Type* baseLit(Type* t) { return t && t->lit ? t->litBase : t; }
 // Optional primitives are stored boxed.
 inline bool isBoxedOptional(const Type* t) {
   return t->t == TT::Optional && kindOf(t->elem) != K_R;

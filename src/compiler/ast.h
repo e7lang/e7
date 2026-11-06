@@ -34,6 +34,8 @@ struct TypeNode {
   struct Member { std::string name; TypeNode* type; bool optional = false; bool method = false; bool readonly = false; int accessor = 0; };
   std::vector<Member> members;       // Object
   std::string literal;               // Literal (string literal type / null / undefined handled as Ref)
+  bool numLiteral = false;           // Literal: a numeric literal type (value in `num`)
+  double num = 0;
 };
 
 // A type parameter <T extends C = D>

@@ -27,12 +27,12 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **133 supported**, **18 partial**, **99 unsupported** (268 sample programs).
+250 features: **137 supported**, **15 partial**, **98 unsupported** (265 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
-| [Everyday Types](#everyday-types) | 13 | 3 | 4 |
-| [Narrowing](#narrowing) | 8 | 2 | 4 |
+| [Everyday Types](#everyday-types) | 15 | 2 | 3 |
+| [Narrowing](#narrowing) | 9 | 1 | 4 |
 | [More on Functions](#more-on-functions) | 14 | 1 | 6 |
 | [Object Types](#object-types) | 12 | 0 | 6 |
 | [Generics](#generics) | 9 | 1 | 5 |
@@ -52,10 +52,10 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Type Compatibility and Inference](#type-compatibility-and-inference) | 5 | 1 | 0 |
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 22 | 1 | 8 |
-| [JavaScript: Standard Library](#javascript-standard-library) | 10 | 6 | 10 |
-| **Total** | **133** | **18** | **99** |
+| [JavaScript: Standard Library](#javascript-standard-library) | 11 | 5 | 10 |
+| **Total** | **137** | **15** | **98** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 57.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 51.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -65,10 +65,12 @@ Within each category, supported features come first, then partial and unsupporte
 |---|---|---|---|
 | Array types `T[]` and `Array<T>` | supported |  | [arrays.ts](../tests/ts-features/everyday/arrays.ts) |
 | Type assertions with `as` | supported | Upcasts, removing `null` and class downcasts are checked at run time; `JSON.parse(text) as T` validates the shape | [as-assertions.ts](../tests/ts-features/everyday/as-assertions.ts) |
+| `as const` assertions | supported | On literals and on arrays and objects of literals (readonly tuples and objects of literal types) | [as-const.ts](../tests/ts-features/everyday/as-const.ts) |
 | `bigint` primitive and literals | supported |  | [bigint.ts](../tests/ts-features/everyday/bigint.ts) |
 | Contextually typed anonymous functions | supported |  | [contextual-typing.ts](../tests/ts-features/everyday/contextual-typing.ts) |
 | Parameter and return type annotations | supported |  | [function-annotations.ts](../tests/ts-features/everyday/function-annotations.ts) |
 | Interfaces | supported |  | [interfaces.ts](../tests/ts-features/everyday/interfaces.ts) |
+| Literal types | supported | String, numeric and boolean literal types and unions of literals of one base type, checked as tsc checks them and narrowed by `===` and `switch`; at run time they are their base type | [literal-types.ts](../tests/ts-features/everyday/literal-types.ts) |
 | Non-null assertion operator `x!` | supported | Checked at run time (a failed assertion ends the call) | [non-null-assertion.ts](../tests/ts-features/everyday/non-null-assertion.ts) |
 | `null` and `undefined` with `strictNullChecks` | supported |  | [null-undefined.ts](../tests/ts-features/everyday/null-undefined.ts) |
 | Anonymous object types and optional properties | supported |  | [object-types.ts](../tests/ts-features/everyday/object-types.ts) |
@@ -76,12 +78,10 @@ Within each category, supported features come first, then partial and unsupporte
 | The `satisfies` operator | supported | The expression keeps its own type | [satisfies.ts](../tests/ts-features/everyday/satisfies.ts) |
 | Type aliases | supported |  | [type-aliases.ts](../tests/ts-features/everyday/type-aliases.ts) |
 | Type inference for variables and return values | supported |  | [type-inference.ts](../tests/ts-features/everyday/type-inference.ts) |
-| Literal types | **partial** | **Works:** string literal types and unions of them are checked by tsc and treated as `string` by E7. **Not supported:** numeric and boolean literal types are not represented (*not implemented yet*). **Instead:** `number` / `boolean` (or an enum) with a run-time check | [literal-types.ok.ts](../tests/ts-features/everyday/literal-types.ok.ts), [literal-types.no.ts](../tests/ts-features/everyday/literal-types.no.ts) |
 | Union types | **partial** | **Works:** unions with `null` / `undefined` (`T \| null \| undefined`). **Not supported:** a value of `string \| number` needs a run-time type tag that typed registers do not carry (*types known at compile time*). **Instead:** one function per type, an interface with a discriminating field and optional properties, or overload by name | [union-types.ok.ts](../tests/ts-features/everyday/union-types.ok.ts), [union-types.no.ts](../tests/ts-features/everyday/union-types.no.ts) |
 | The `unknown` type | **partial** | **Works:** only as the type of a `catch` variable (narrowed with `instanceof`) and of an ignored callback parameter. **Not supported:** an `unknown` value would need run-time type tests (*types known at compile time*). **Instead:** a concrete type; `JSON.parse(text) as T` / `tryParse` for external data | [unknown.ok.ts](../tests/ts-features/everyday/unknown.ok.ts), [unknown.no.ts](../tests/ts-features/everyday/unknown.no.ts) |
 | Angle-bracket type assertions `<T>x` | **unsupported** | **Why:** only the `as` form is parsed (*not implemented yet*). **Instead:** `x as T` | [angle-bracket-assertions.ts](../tests/ts-features/everyday/angle-bracket-assertions.ts) |
 | The `any` type | **unsupported** | **Why:** every value must have a static type (*types known at compile time*). **Instead:** a concrete type or an interface; `Map<K, V>` for dynamic keys | [any.ts](../tests/ts-features/everyday/any.ts) |
-| `as const` assertions | **unsupported** | **Why:** readonly literal types are not represented (*not implemented yet*). **Instead:** annotate the type, such as `const t: readonly [number, string] = [1, "x"]` | [as-const.ts](../tests/ts-features/everyday/as-const.ts) |
 | The `object` type | **unsupported** | **Why:** `object` has no known properties (*types known at compile time*). **Instead:** an interface or a class | [object-type.ts](../tests/ts-features/everyday/object-type.ts) |
 
 ## Narrowing
@@ -93,10 +93,10 @@ Within each category, supported features come first, then partial and unsupporte
 | Narrowing after a conditional assignment (`if (x === null) x = v; use(x)`) | supported | An `if` branch (or both) ending in an assignment of a non-null value, a conditional expression with non-null branches, and static field paths | [conditional-assignment.ts](../tests/ts-features/narrowing/conditional-assignment.ts) |
 | Control-flow analysis (early return, `throw`, loops) | supported |  | [control-flow.ts](../tests/ts-features/narrowing/control-flow.ts) |
 | Equality narrowing (`===`, `!==`, `== null`) | supported |  | [equality.ts](../tests/ts-features/narrowing/equality.ts) |
+| Exhaustiveness checking (`never`, exhaustive `switch`) | supported | A `switch` with a case for every enum member or literal is exhaustive; its `default` branch sees the value as `never` | [exhaustive-switch.ts](../tests/ts-features/narrowing/exhaustive-switch.ts) |
 | `instanceof` narrowing | supported |  | [instanceof.ts](../tests/ts-features/narrowing/instanceof.ts) |
 | Narrowing of property paths | supported |  | [property-paths.ts](../tests/ts-features/narrowing/property-paths.ts) |
 | Truthiness narrowing | supported |  | [truthiness.ts](../tests/ts-features/narrowing/truthiness.ts) |
-| Exhaustiveness checking (`never`, exhaustive `switch`) | **partial** | **Works:** a `switch` with a case for every enum member is exhaustive: no `default` or final `return` is needed. **Not supported:** the `default` branch of a `switch` over every enum member does not see the value as `never` (*not implemented yet*). **Instead:** leave out the `default` branch (the `switch` is exhaustive), or make it throw | [exhaustive-switch.ok.ts](../tests/ts-features/narrowing/exhaustive-switch.ok.ts), [exhaustive-switch.no.ts](../tests/ts-features/narrowing/exhaustive-switch.no.ts) |
 | `typeof` type guards | **partial** | **Works:** `typeof x` is a compile-time constant: the static type name, also in each instantiation of a generic function. **Not supported:** narrowing by `typeof` needs a union type or a run-time type tag; in generic code each instantiation is type-checked as a whole, so the branch for other types must also compile (*types known at compile time*). **Instead:** separate functions per type, or a field that tells the cases apart | [typeof-guards.ok.ts](../tests/ts-features/narrowing/typeof-guards.ok.ts), [typeof-guards.no.ts](../tests/ts-features/narrowing/typeof-guards.no.ts) |
 | Assertion functions (`asserts x is T`) | **unsupported** | **Why:** assertion signatures are not parsed (*not implemented yet*). **Instead:** an explicit check that throws, followed by the narrowed use (`if (x === null) throw ...`) | [assertion-functions.ts](../tests/ts-features/narrowing/assertion-functions.ts) |
 | Discriminated unions | **unsupported** | **Why:** union types other than with `null` / `undefined` need run-time type tags (*types known at compile time*). **Instead:** one interface with a discriminating field (string or enum) and optional properties | [discriminated-unions.ts](../tests/ts-features/narrowing/discriminated-unions.ts) |
@@ -393,6 +393,7 @@ Within each category, supported features come first, then partial and unsupporte
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
 | `Array.from` and `Array.of` | supported |  | [array-from.ts](../tests/ts-features/js-stdlib/array-from.ts) |
+| `Array` methods | supported | ES2023 methods (`map filter reduce find findLast flat flatMap at includes splice sort toSorted toReversed toSpliced with` ...) | [array.ts](../tests/ts-features/js-stdlib/array.ts) |
 | `BigInt` functions | supported |  | [bigint-functions.ts](../tests/ts-features/js-stdlib/bigint-functions.ts) |
 | `console.log` / `info` / `warn` / `error` and format specifiers | supported | Values are printed like Node.js `util.inspect` | [console.ts](../tests/ts-features/js-stdlib/console.ts) |
 | `Map` and `Set` | supported |  | [map-set.ts](../tests/ts-features/js-stdlib/map-set.ts) |
@@ -402,9 +403,8 @@ Within each category, supported features come first, then partial and unsupporte
 | `String` methods | supported | `split` / `replace` take string patterns; `localeCompare` compares code units | [string.ts](../tests/ts-features/js-stdlib/string.ts) |
 | `TextEncoder` / `TextDecoder` | supported |  | [text-encoding.ts](../tests/ts-features/js-stdlib/text-encoding.ts) |
 | URI functions (`encodeURIComponent`, `decodeURI`, ...) | supported |  | [uri-functions.ts](../tests/ts-features/js-stdlib/uri-functions.ts) |
-| `Array` methods | **partial** | **Works:** ES2022 methods (`map filter reduce find findLast flat flatMap at includes splice sort` ...). **Not supported:** the ES2023 copying methods (`toSorted`, `toReversed`, `toSpliced`, `with`) (*not implemented yet*). **Instead:** copy, then sort: `[...xs].sort()` | [array.ok.ts](../tests/ts-features/js-stdlib/array.ok.ts), [array.no.ts](../tests/ts-features/js-stdlib/array.no.ts) |
-| `Date` | **partial** | **Works:** UTC semantics (local time is UTC); constructors, `Date.UTC` / `parse` / `now`, getters, `setTime`, string conversions. **Not supported:** `set*` methods other than `setTime`, and locale formatting (*not implemented yet*). **Instead:** compute with `Date.UTC(...)` and `setTime` | [date.ok.ts](../tests/ts-features/js-stdlib/date.ok.ts), [date.no.ts](../tests/ts-features/js-stdlib/date.no.ts) |
-| Error types (`Error`, `TypeError`, `RangeError`, `SyntaxError`, `URIError`) | **partial** | **Works:** construction, `name` / `message`, `instanceof`, catching errors raised by the standard library. **Not supported:** the `cause` option, `AggregateError`, `stack` (*not implemented yet*). **Instead:** put the cause into the message | [errors.ok.ts](../tests/ts-features/js-stdlib/errors.ok.ts), [errors.no.ts](../tests/ts-features/js-stdlib/errors.no.ts) |
+| `Date` | **partial** | **Works:** UTC semantics (local time is UTC); constructors, `Date.UTC` / `parse` / `now`, getters, `setTime`, string conversions. **Not supported:** locale formatting (`toLocaleDateString`, `Intl`) depends on locale data that differs between platforms (*JavaScript-identical behaviour*). **Instead:** `toISOString()`, or format with `getUTCFullYear()` / `padStart` | [date.ok.ts](../tests/ts-features/js-stdlib/date.ok.ts), [date.no.ts](../tests/ts-features/js-stdlib/date.no.ts) |
+| Error types (`Error`, `TypeError`, `RangeError`, `SyntaxError`, `URIError`) | **partial** | **Works:** construction (also with `{ cause }`), `name` / `message` / `cause`, `AggregateError` and its `errors`, `instanceof`, catching errors raised by the standard library. **Not supported:** `stack` (stack traces differ between engines) (*JavaScript-identical behaviour*). **Instead:** log `e.message` (the host gets the e7 stack trace of an uncaught error) | [errors.ok.ts](../tests/ts-features/js-stdlib/errors.ok.ts), [errors.no.ts](../tests/ts-features/js-stdlib/errors.no.ts) |
 | `JSON.stringify` / `JSON.parse` | **partial** | **Works:** `JSON.parse(text) as T` validates the text against `T` while parsing. **Not supported:** `JSON.parse` returns `any`; reviver functions see untyped values (*types known at compile time*). **Instead:** `JSON.parse(text) as T` (or `tryParse(text) as T \| null` from `e7:json`) | [json.ok.ts](../tests/ts-features/js-stdlib/json.ok.ts), [json.no.ts](../tests/ts-features/js-stdlib/json.no.ts) |
 | `Object` static methods | **partial** | **Works:** `Object.keys`, `values`, `entries`, `assign`, `freeze`. **Not supported:** methods that create, inspect or change object layouts and prototypes at run time (`create`, `defineProperty`, `getPrototypeOf`, `setPrototypeOf`, `fromEntries`, `groupBy`) (*verifiable bytecode*). **Instead:** classes, object literals and `Map` | [object-static.ok.ts](../tests/ts-features/js-stdlib/object-static.ok.ts), [object-static.no.ts](../tests/ts-features/js-stdlib/object-static.no.ts) |
 | Typed arrays, `ArrayBuffer`, `DataView` | **partial** | **Works:** `Uint8Array`, `ArrayBuffer` and `DataView` (all getters and setters, both byte orders). **Not supported:** typed arrays other than `Uint8Array` (`Int32Array`, `Float64Array`, ...), `SharedArrayBuffer`, `Atomics` (*not implemented yet*). **Instead:** `number[]`, fixed-width integer arrays such as `u32[]`, or a `DataView` | [typed-arrays.ok.ts](../tests/ts-features/js-stdlib/typed-arrays.ok.ts), [typed-arrays.no.ts](../tests/ts-features/js-stdlib/typed-arrays.no.ts) |

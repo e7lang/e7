@@ -172,6 +172,12 @@ class Checker {
   Type* checkAwait(Expr* e);
   Type* promiseCallbackRet(Expr* cb, Type* ret, Loc l);
   Type* iteratorMethodType(Type* t, Loc l);
+  Type* constLit(Expr* e);
+  Type* inferVarType(Expr* init, Type* t, bool isConst);
+  bool exitsClause(SwitchCase& c);
+  Type* litMinus(Type* a, Type* b);
+  bool switchCoversLits(Stmt* s);
+  Type* asConstType(Expr* e);
   Type* genTypeArg(TypeNode* n);
   Type* iterResultType(Type* g, Loc l);
   Type* resolveNamedType(const std::string& name, const std::vector<TypeNode*>& args, Loc l);

@@ -879,27 +879,35 @@ Type* Checker::resolveType(TypeNode* n) {
     case TNK::Union: {
       bool hasNull = false, hasUndef = false;
       Type* base = nullptr;
-      bool literalStrings = false;
+      // unions of literals of one base type ("a" | "b", 0 | 1, true | false) are literal types; a literal
+      // with its base type is the base type
+      auto join = [&](Type* t) -> bool {
+        if (!base || base == t) { base = t; return true; }
+        if (base->lit && t->lit) {
+          if (Type* u = T.litUnion(base, t)) { base = u; return true; }
+          return false;
+        }
+        if (baseLit(base) == baseLit(t) && (base->lit || t->lit)) { base = baseLit(base); return true; }
+        return false;
+      };
       for (TypeNode* a : n->args) {
-        Type* t = (a->k == TNK::Literal) ? (literalStrings = true, T.string()) : resolveType(a);
+        Type* t = resolveType(a);
         if (t->t == TT::Null) hasNull = true;
         else if (t->t == TT::Undefined) hasUndef = true;
         else if (t->t == TT::Optional) {
           hasNull |= t->hasNull;
           hasUndef |= t->hasUndef;
-          if (base && base != t->elem) return errT(n->loc, "union types other than 'T | null | undefined' are not supported");
-          base = t->elem;
-        } else {
-          if (base && base != t) return errT(n->loc, "union types other than 'T | null | undefined' are not supported");
-          base = t;
+          if (!join(t->elem)) return errT(n->loc, "union types other than 'T | null | undefined' are not supported (E7 types are static; a union of literals must have one base type)");
+        } else if (!join(t)) {
+          return errT(n->loc, "union types other than 'T | null | undefined' are not supported (E7 types are static; a union of literals must have one base type)");
         }
       }
-      (void)literalStrings;
       if (!base) return hasNull ? T.nullT() : T.undef();
       return T.optional(base, hasNull, hasUndef);
     }
     case TNK::Literal:
-      return T.string();  // string literal types are treated as 'string'
+      if (n->numLiteral) return T.numLit({n->num});
+      return T.strLit({utf8ToUtf16(n->literal)});
   }
   return T.unknown();
 }
@@ -993,6 +1001,7 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "boolean") { noArgs(); return T.boolean(); }
   if (name == "bigint") { noArgs(); return T.bigint(); }
   if (name == "void") { noArgs(); return T.voidT(); }
+  if (name == "true" || name == "false") { noArgs(); return T.boolLit(name == "true" ? 2 : 1); }
   if (name == "null") { noArgs(); return T.nullT(); }
   if (name == "undefined") { noArgs(); return T.undef(); }
   if (name == "never") { noArgs(); return T.never(); }

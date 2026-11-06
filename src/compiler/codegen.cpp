@@ -2449,6 +2449,10 @@ void Gen::genSwitch(Stmt* s) {
 void Gen::readVar(VarSym* v, uint16_t dst, Type* want) {
   Type* st = v->type;
   if (!want) want = st;
+  if (want->t == TT::Never) {  // narrowed to never: never runs
+    if (dst != kNoReg) loadZero(dst, kindOfReg(dst));
+    return;
+  }
   static const uint16_t gget[3] = {OP_GGET_I, OP_GGET_F, OP_GGET_R};
   static const uint16_t cget[3] = {OP_CGET_I, OP_CGET_F, OP_CGET_R};
   static const uint16_t uget[3] = {OP_UGET_I, OP_UGET_F, OP_UGET_R};
@@ -2519,6 +2523,12 @@ void Gen::genClosure(FuncSym* f, uint16_t dst) {
 // ======================================================================= expressions
 uint16_t Gen::gen(Expr* e) {
   Expr* x = strip(e);
+  // a variable narrowed to never (the default of an exhaustive switch): code that never runs
+  if (x->k == EK::Ident && x->type && x->type->t == TT::Never) {
+    uint16_t r = temp(K_I);
+    loadZero(r, K_I);
+    return r;
+  }
   if (x->k == EK::Num && x->type && x->type->t == TT::Number) return numConst(x->num);
   if (x->k == EK::Ident && x->intrinsic == IN_CONST_NUM && x->type && x->type->t == TT::Number) return numConst(x->num);
   if (x->k == EK::Ident && x->var && !x->var->isGlobal && x->intrinsic == 0 && !x->var->captured) {
@@ -2661,6 +2671,7 @@ void Gen::condJump(Expr* e, bool jumpIf, Label* target) {
 
 uint16_t Gen::toStringReg(uint16_t src, Type* t) {
   switch (t->t) {
+    case TT::Never: { uint16_t r = temp(K_R); loadStr(r, u""); return r; }  // never runs
     case TT::String: return src;
     case TT::Number: { uint16_t r = temp(K_R); emit(OP_NUM2STR, r, src); return r; }
     case TT::Int: { uint16_t r = temp(K_R); emit(OP_INT2STR, r, src, t->vt); return r; }
@@ -4105,7 +4116,10 @@ void Gen::genConsoleLog(Expr* e) {
     size_t m0 = mark();
     uint16_t v = gen(a);
     Type* t = a->type;
-    if (kindOf(t) != K_R) {
+    if (t->t == TT::Never) {
+      v = temp(K_R);
+      emit(OP_LOADUNDEF, v);
+    } else if (kindOf(t) != K_R) {
       uint16_t b = temp(K_R);
       if (kindOf(t) == K_F) emit(OP_BOX_F, b, v);
       else emit(OP_BOX_I, b, v, vtOf(t));

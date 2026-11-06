@@ -537,7 +537,16 @@ class Parser {
       lt->literal = utf16ToUtf8(t[i++].str);
       return lt;
     }
-    if (cur().k == TK::Num || isP("-")) fail("numeric literal types are not supported");
+    if (cur().k == TK::Num || (isP("-") && peek().k == TK::Num)) {
+      bool neg = eatP("-");
+      if (cur().k != TK::Num) fail("expected a number");
+      if (!cur().text.empty() && cur().text.back() == 'n') fail("bigint literal types are not supported");
+      TypeNode* lt = A.type(TNK::Literal, l);
+      lt->numLiteral = true;
+      lt->num = neg ? -t[i].num : t[i].num;
+      i++;
+      return lt;
+    }
     if (cur().k != TK::Ident) fail("expected type");
     TypeNode* r = A.type(TNK::Ref, l);
     r->name = t[i++].text;
@@ -1722,10 +1731,16 @@ class Parser {
       Tok op = t[i];
       if (op.k == TK::Ident && (op.text == "as" || op.text == "satisfies")) {
         i++;
-        if (isKw("const")) fail("'as const' is not supported (readonly literal types); annotate the type instead, such as const t: [number, string] = [1, \"x\"]");
         Expr* e = A.expr(EK::As, l);
         e->a = lhs;
-        e->asType = parseType();
+        if (op.text == "as" && isKw("const")) {
+          // `x as const`: literal types, readonly tuples and objects (the type node is the name "const")
+          e->asType = A.type(TNK::Ref, loc());
+          e->asType->name = "const";
+          i++;
+        } else {
+          e->asType = parseType();
+        }
         if (op.text == "satisfies") e->raw = "satisfies";
         lhs = e;
         continue;
