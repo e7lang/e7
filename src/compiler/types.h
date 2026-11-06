@@ -18,7 +18,10 @@ enum class TT : uint8_t {
   Generator,  // 0.3: Generator<T, TReturn, TNext> / Iterator<T> / IterableIterator<T> (elem, ret, val; gk)
   Promise,    // 0.3: Promise<T> (elem)
   TypedArray, // 0.3: Int8Array ... Float64Array, BigInt64Array, BigUint64Array (vt: the element kind, TAKind)
-  RegExp      // 0.3: RegExp (reCaps / reNames: the groups of a literal; reCaps -1 for a pattern unknown until run time)
+  RegExp,     // 0.3: RegExp (reCaps / reNames: the groups of a literal; reCaps -1 for a pattern unknown until run time)
+  // 0.3.1: AsyncGenerator<T, TReturn, TNext> / AsyncIterator<T> / AsyncIterableIterator<T> / AsyncIterable<T>
+  // (elem, ret, val and gk as for Generator: all are async generators at run time)
+  AsyncGenerator
 };
 
 struct ObjShape;
@@ -70,6 +73,12 @@ struct ObjShape {
   std::vector<Prop> props;
   struct Method { std::string name; Type* fn; };
   std::vector<Method> methods;
+  // the type of an object literal with getters / setters (methods "get x" / "set x"): its values are
+  // always such object literals, whose accessors are own properties (a class's are not), so spread,
+  // rest and Object.values / entries / assign read them; `order` lists the properties and accessors
+  // in the literal's order (JavaScript's property order)
+  bool ownAccessors = false;
+  std::vector<std::string> order;
   const Prop* findProp(const std::string& n) const {
     for (auto& p : props) if (p.name == n) return &p;
     return nullptr;
@@ -194,6 +203,10 @@ struct ClassSym : Sym {
   int state = 0;  // 0 = unresolved, 1 = resolving, 2 = resolved
   bool isRecord = false;
   bool isTuple = false;
+  // record of an object literal with getters / setters: field x holds the accessor pair (a tuple
+  // [getter, setter, value]: the closures, and a slot that is never set whose type is the property's),
+  // vtable entries "get x" / "set x" call them (kClassFlagAccessors)
+  bool hasAccessors = false;
   bool isAbstract = false;
   bool presence = false;  // record whose fields may be absent or hold undefined: a presence mask (D7)
   // generics: 1 = holder of the static members of a generic class (one per template),
@@ -327,6 +340,8 @@ class Types {
   Type* anonObject(const std::vector<ObjShape::Prop>& props);  // structural, interned
   Type* enumType(EnumSym* e);
   Type* generator(Type* yieldT, Type* ret, Type* next, uint8_t gk = 0);
+  // gk: 0 AsyncGenerator, 1 AsyncIterator, 2 AsyncIterableIterator, 3 AsyncIterable
+  Type* asyncGenerator(Type* yieldT, Type* ret, Type* next, uint8_t gk = 0);
   // literal types: the union of the given values (a full boolean set is `boolean`)
   Type* strLit(std::vector<std::u16string> vals);
   Type* numLit(std::vector<double> vals);
@@ -376,6 +391,13 @@ inline std::vector<std::pair<std::string, Type*>> enumerableProps(Type* t) {
     for (auto& f : t->cls->fields)
       if (f.name.empty() || f.name[0] != '#') out.push_back({f.name, f.type});
     for (auto& ap : t->cls->abstractProps) out.push_back({ap.first, ap.second});
+  } else if (t->t == TT::Object && t->shape->ownAccessors) {
+    // an object literal with accessors: its properties and getters (own properties) in the literal's order
+    // (the checker rejects setter-only accessors where they would be read)
+    for (auto& n : t->shape->order) {
+      if (const ObjShape::Prop* p = t->shape->findProp(n)) out.push_back({p->name, p->type});
+      else if (const ObjShape::Method* g = t->shape->findMethod("get " + n)) out.push_back({n, g->fn->ret});
+    }
   } else if (t->t == TT::Object) {
     for (auto& p : t->shape->props) out.push_back({p.name, p.type});
   }

@@ -278,8 +278,45 @@ main();
 promises of one type) and generators (`function*`, `yield`, `yield*`, `[Symbol.iterator]` generator methods)
 work as in Node.js, callbacks in the same order. There are no timers and no I/O: the host does networking
 and storage through async host functions (`declare function fetchKey(id: string): Promise<Uint8Array>`,
-settled by the host; see EMBEDDING.md) or passes data in as arguments. Async generators (`async function*`)
-are not supported yet.
+settled by the host; see EMBEDDING.md) or passes data in as arguments.
+
+Async generators (`async function*`, e7vm 0.3.1) produce values over time; `for await` consumes them and
+calls `return()` when the loop is left early, so `finally` blocks run:
+
+```ts
+async function* pages(n: number): AsyncGenerator<string[]> {
+  try {
+    for (let i = 0; i < n; i++) {
+      await null;  // e.g. an async host function fetching page i
+      yield [`item${2 * i}`, `item${2 * i + 1}`];
+    }
+  } finally {
+    console.log("closed");
+  }
+}
+
+async function* take<T>(src: AsyncIterable<T>, n: number): AsyncGenerator<T> {
+  if (n <= 0) return;
+  let k = 0;
+  for await (const x of src) {
+    yield x;
+    if (++k >= n) return;
+  }
+}
+
+async function main(): Promise<void> {
+  for await (const page of take(pages(10), 2)) console.log(page.join(","));
+  const g = pages(1);
+  console.log(await g.next(), await g.next());
+}
+main();
+```
+
+The types are `AsyncGenerator<T, TReturn, TNext>`, `AsyncIterator<T>`, `AsyncIterableIterator<T>` and
+`AsyncIterable<T>`; `next` / `return` / `throw` return a `Promise` of `{ value, done }` and may be called without
+awaiting (the requests are queued, as in JavaScript). A class is an async iterable through
+`async *[Symbol.asyncIterator]()`. `yield*` takes another async generator, or an array, a generator or an
+iterable class (values that are promises are awaited, as in JavaScript).
 
 ### `for...in`, `in`, `delete`, `var`, `==`
 
@@ -401,7 +438,7 @@ const r = ({ a } = { a: 1 });
 ### Other rejected syntax
 
 `with`, `delete`, `in`, `new.target`, `eval`, `Symbol` values, `keyof`/`typeof` in type positions, conditional,
-mapped and template literal types, intersection types, accessors in object literals, async generators.
+mapped and template literal types, intersection types.
 Identifiers are ASCII only. (The comma operator, `void`, tagged templates, `String.raw`, `<T>x` assertions and
 all typed arrays are supported.)
 
@@ -417,6 +454,27 @@ all typed arrays are supported.)
 - Spread arguments: tuples into any parameters (`f(...pair)`), arrays and tuples into rest parameters.
 - Object literal methods `{ n: 2, twice(x: number) { return x * this.n; } }` (`this` is the object); an
   object literal can implement an interface with methods.
+- Object literal getters and setters (e7vm 0.3.1): `this` is the object; the literal implements interfaces that
+  declare the accessors (`get x(): T` / `set x(v: T)`), not ones that declare `x` as a property (read as a field).
+  They are own properties: `Object.keys`, `JSON.stringify`, spread and destructuring see them (calling the getter),
+  `console.log` prints `[Getter]`. A getter without a setter is read-only.
+
+```ts
+interface Temperature { celsius: number; get fahrenheit(): number; set fahrenheit(v: number) }
+const t: Temperature = {
+  celsius: 20,
+  get fahrenheit() { return this.celsius * 1.8 + 32; },
+  set fahrenheit(f) { this.celsius = (f - 32) / 1.8; },
+};
+t.fahrenheit += 18;
+const p = { x: 3, y: 4, get length(): number { return Math.hypot(this.x, this.y); } };
+console.log(t.celsius, p.length, JSON.stringify(p), p);  // 30 5 {"x":3,"y":4,"length":5} { x: 3, y: 4, length: [Getter] }
+```
+
+```ts e7-reject
+interface HasArea { readonly area: number }
+const sq: HasArea = { get area() { return 9; } };
+```
 - `?.` (also `a?.[i]`), `??`, `??=`, `!` (checked at run time), `as T` (upcasts; class downcasts are checked at
   run time).
 - Narrowing works on `=== null`, `!== undefined`, `== null`, truthiness, `instanceof`, early returns, and

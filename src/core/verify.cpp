@@ -129,8 +129,17 @@ bool verifyModule(const Module& m, std::string& err) {
     if (c.parent >= (int32_t)ci || c.parent < -1) return F("class %zu: invalid parent", ci);
     if (c.fields.size() > 65535) return F("class %zu: too many fields", ci);
     if (c.isRecord > 2) return F("class %zu: bad kind", ci);
-    if ((c.cflags & ~kClassFlagPresence) || ((c.cflags & kClassFlagPresence) && c.isRecord != 1))
+    if ((c.cflags & ~(kClassFlagPresence | kClassFlagAccessors)) || (c.cflags && c.isRecord != 1))
       return F("class %zu: bad class flags", ci);
+    if (c.cflags & kClassFlagAccessors) {
+      // an accessor property's field holds its accessor pair (a reference)
+      std::set<std::string> accessorNames;
+      for (const std::string& mn : c.methodNames)
+        if (mn.compare(0, 4, "get ") == 0 || mn.compare(0, 4, "set ") == 0) accessorNames.insert(mn.substr(4));
+      for (auto& fd : c.fields)
+        if (fd.vt != VT_REF && accessorNames.count(fd.name))
+          return F("class %zu: accessor field %zu is not a reference", ci, (size_t)(&fd - c.fields.data()));
+    }
     for (auto& fd : c.fields)
       if (fd.vt >= VT__COUNT) return F("class %zu: bad field type", ci);
     if (c.methodNames.size() != c.vtable.size()) return F("class %zu: bad method table", ci);
@@ -297,7 +306,23 @@ bool verifyModule(const Module& m, std::string& err) {
             uint64_t ex = code[next];
             uint16_t sr = (uint16_t)ex;
             uint32_t mode = (uint32_t)(ex >> 16) & 3, sk = (uint32_t)(ex >> 18) & 3;
-            if ((ex >> 20) != 0 || mode == 3) return F("function %zu pc %zu: bad resume metadata", fi, pc);
+            if (mode == 3) return F("function %zu pc %zu: bad resume metadata", fi, pc);
+            if (ex & kResumeAsync) {
+              // a request to an async generator (0.3.1): B gets its promise; the IteratorResult record
+              // class ({ value, done: boolean }) and the value type of T (the generator's kinds are
+              // checked at run time)
+              if (op != OP_RESUME_R || (ex >> 45) != 0 || resumeElemVT(ex) >= VT__COUNT)
+                return F("function %zu pc %zu: bad resume metadata", fi, pc);
+              uint32_t ci = resumeClass(ex);
+              if (ci >= m.classes.size()) return F("function %zu pc %zu: bad resume metadata", fi, pc);
+              const ClassDesc& rc = m.classes[ci];
+              Kind vk = kindOfVT(rc.fields.empty() ? VT_REF : rc.fields[0].vt);
+              if (!rc.isRecord || rc.fields.size() != 2 || rc.fields[0].name != "value" || rc.fields[1].name != "done" ||
+                  rc.fields[1].vt != VT_BOOL || (vk != K_R && vk != kindOfVT(resumeElemVT(ex))))
+                return F("function %zu pc %zu: bad iterator result class", fi, pc);
+            } else if ((ex >> 20) != 0) {
+              return F("function %zu pc %zu: bad resume metadata", fi, pc);
+            }
             if (sk == 0 ? sr != kNoReg : !reg(sr, "?IFR"[sk])) return F("function %zu pc %zu: bad resume value register", fi, pc);
             if (mode == 1 && sk != 3) return F("function %zu pc %zu: throw() needs an error object", fi, pc);
             next++;

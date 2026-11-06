@@ -1013,7 +1013,7 @@ class Parser {
       d.isObjPat = true;
       for (size_t k = 0; k < x->props.size(); k++) {
         ObjProp& pr = x->props[k];
-        if (pr.method) failAt(pr.loc, "a method is not a valid destructuring target");
+        if (pr.method || pr.accessor) failAt(pr.loc, pr.method ? "a method is not a valid destructuring target" : "an accessor is not a valid destructuring target");
         VarDecl sub;
         sub.loc = pr.loc;
         if (pr.spread) {
@@ -2293,8 +2293,41 @@ class Parser {
               if (!eatP(",")) break;
               continue;
             }
-            if ((isKw("get") || isKw("set")) && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num))
-              fail("accessor properties are not supported in object literals; use a plain property or a method");
+            if ((isKw("get") || isKw("set")) && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num ||
+                                                 (peek().k == TK::Punct && peek().text == "["))) {
+              // accessor property: get name(): T { body } / set name(v: T) { body } (own 'this': the object)
+              pr.accessor = isKw("get") ? 1 : 2;
+              i++;
+              Loc nameLoc = loc();
+              if (eatP("[")) {
+                pr.computed = parseAssign();
+                pr.key = "[computed]";
+                expectP("]");
+              } else {
+                pr.key = propName();
+              }
+              if (isP("<")) failAt(nameLoc, "an accessor cannot have type parameters");
+              if (!isP("(")) failAt(nameLoc, "expected '(' after the accessor name");
+              Expr* f = A.expr(EK::Arrow, pr.loc);
+              f->raw = (pr.accessor == 1 ? "get " : "set ") + pr.key;
+              parseParams(f->params, false);
+              if (pr.accessor == 1 && !f->params.empty()) failAt(nameLoc, "a 'get' accessor cannot have parameters");
+              if (pr.accessor == 2 && (f->params.size() != 1 || f->params[0].rest || f->params[0].optional || f->params[0].init))
+                failAt(nameLoc, "a 'set' accessor must have exactly one parameter (not optional, rest or with a default)");
+              if (isP(":")) {
+                if (pr.accessor == 2) failAt(nameLoc, "a 'set' accessor cannot have a return type annotation");
+                i++;
+                f->retType = parseRetType();
+              }
+              if (!isP("{")) fail("expected '{' (accessor body)");
+              f->body = parseBlock();
+              applyPatterns(f->params, f->body, f->exprBody);
+              f->intrinsic = IN_OBJ_METHOD;
+              pr.value = f;
+              e->props.push_back(pr);
+              if (!eatP(",")) break;
+              continue;
+            }
             bool asyncM = false, genM = false;
             if (isKw("async") && !peek().nl && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num ||
                                                 (peek().k == TK::Punct && peek().text == "*"))) {

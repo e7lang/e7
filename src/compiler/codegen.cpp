@@ -538,7 +538,9 @@ struct Gen {
   // generators (0.3)
   static uint8_t kindCode(Type* t) { return !t || t->t == TT::Void ? 0 : (uint8_t)(kindOf(t) + 1); }
   Type* bodyRet(FuncSym* f) {
-    if (f->isGenerator) return f->type->ret->t == TT::Generator && f->type->ret->ret ? f->type->ret->ret : T.voidT();
+    if (f->isGenerator)
+      return (f->type->ret->t == TT::Generator || f->type->ret->t == TT::AsyncGenerator) && f->type->ret->ret ? f->type->ret->ret
+                                                                                                             : T.voidT();
     if (f->isAsync) return f->type->ret->t == TT::Promise ? f->type->ret->elem : T.voidT();
     return f->type->ret;
   }
@@ -558,6 +560,27 @@ struct Gen {
   // run to its end is closed (return())
   uint16_t iterToArray(uint16_t coll, Type* t, int maxN, Type* elemT);
   void genGenMethod(Expr* e, uint16_t dst);
+  // async generators (0.3.1)
+  // awaits the value v of type t (a Promise<X>, or a value awaited as Promise.resolve(v); t void: v is
+  // unused and undefined is awaited) into dst of type dstT (kNoReg: the value is dropped)
+  void awaitValue(uint16_t v, Type* t, uint16_t dst, Type* dstT);
+  void genAsyncYield(Expr* e, uint16_t dst);
+  // yield* of a sync iterable (an array, a generator, an iterable class) in an async generator: the
+  // specification's async-from-sync iterator, step by step (mode / recv / retReg: the yield's registers)
+  void genAsyncYieldFromSync(Expr* e, uint16_t dst, uint16_t mode, uint16_t recv, uint16_t retReg);
+  uint16_t asyncIteratorOf(uint16_t coll, Type* t, Type** gt);  // an async generator / [Symbol.asyncIterator]()
+  // the { value: T, done } record the requests of a loop or a yield* are answered with
+  ClassSym* iterRecord(Type* gt) { return C.recordFor({{"value", gt->elem}, {"done", T.boolean()}})->cls; }
+  // next / throw / return (mode 0 / 1 / 2) on the async generator `it`: dst gets the request's promise
+  void emitAsyncRequest(Type* gt, uint16_t it, uint16_t dst, uint16_t sent, uint8_t sentKind, uint32_t mode, ClassSym* rc) {
+    uint16_t z = temp(K_I);
+    emit(OP_RESUME_R, it, dst, z);
+    emitWord((uint64_t)(sentKind ? sent : kNoReg) | ((uint64_t)mode << 16) | ((uint64_t)sentKind << 18) |
+             resumeAsyncBits((uint32_t)rc->classIdx, vtOf(gt->elem)));
+  }
+  // AsyncIteratorClose: await it.return() (quiet: its errors are dropped)
+  void emitAsyncIterClose(Type* gt, uint16_t it, bool quiet);
+  void genForAwaitIter(Stmt* s, const std::string& label, uint16_t it, Type* gt);
   // the hidden parameters of an override with fewer parameters: zero values
   void padArgs(FuncSym* f, std::vector<uint16_t>& args) {
     for (Type* p : f->padParams) {
@@ -577,7 +600,7 @@ struct Gen {
   }
   // functions the compiler adds (the resolve / reject functions of new Promise): created after the
   // others, at fixed indices
-  std::vector<int> synthKinds;  // 0..2 resolve I/F/R, 3 resolve void, 4 reject
+  std::vector<int> synthKinds;  // 0..2 resolve I/F/R, 3 resolve void, 4 reject, 5..7 closeIterator I/F/R
   uint32_t synthBase = 0;
   uint32_t synthFn(int kind) {
     for (size_t i = 0; i < synthKinds.size(); i++)
@@ -623,6 +646,8 @@ struct Gen {
   // for (i = 0; i < length(arr); i++) body(element register): elements read with the kind of et
   void forEachElem(uint16_t arr, Type* et, const std::function<void(uint16_t)>& body);
   FuncSym* accessorFn(Expr* m, bool set, Type** fnType);
+  void callGetterByName(uint16_t dst, uint16_t obj, const std::string& name, Type* fn);
+  void readByName(uint16_t dst, uint16_t obj, Type* ot, const std::string& name, Type* t);
   uint16_t accessorReceiver(Expr* m);
   void accessorCall(Expr* m, uint16_t obj, bool set, uint16_t v, uint16_t dst);
   std::vector<uint16_t> genArgs(std::vector<Expr*>& args, Type* ft, bool restPacked, size_t* nGiven);
@@ -664,6 +689,28 @@ FuncSym* Gen::accessorFn(Expr* m, bool set, Type** fnType) {
   }
   *fnType = f ? f->type : nullptr;
   return f;
+}
+
+// Calls the getter "get <name>" (function type fn) of an object by name into dst.
+void Gen::callGetterByName(uint16_t dst, uint16_t obj, const std::string& name, Type* fn) {
+  Kind rk = kindOf(fn->ret);
+  std::string sg = "R>";
+  sg += rk == K_V ? 'V' : kindChar(rk);
+  D->icNames.push_back(kStr(utf8ToUtf16("get " + name)));
+  emit(OP_CALLI, rk == K_V ? kNoReg : dst, obj, 0);
+  emitWord((uint64_t)(uint32_t)(D->icNames.size() - 1) | ((uint64_t)sig(sg) << 32));
+}
+
+// Reads property `name` of a value of object type ot into dst (t: its type): a property by name, or a
+// getter (declared by an interface or an object literal) by a call.
+void Gen::readByName(uint16_t dst, uint16_t obj, Type* ot, const std::string& name, Type* t) {
+  if (ot->t == TT::Object && !ot->shape->findProp(name))
+    if (const ObjShape::Method* g = ot->shape->findMethod("get " + name)) {
+      callGetterByName(dst, obj, name, g->fn);
+      return;
+    }
+  D->icNames.push_back(kStr(utf8ToUtf16(name)));
+  emit(op3(K(t), OP_GETN_I, OP_GETN_F, OP_GETN_R), dst, obj, (uint16_t)(D->icNames.size() - 1));
 }
 
 // Receiver of an accessor call: the object (instance / interface), this (super.x), none (static).
@@ -782,6 +829,7 @@ bool Gen::run(const std::string& name) {
     cd.parent = c->parent ? c->parent->classIdx : -1;
     cd.isRecord = c->isTuple ? 2 : c->isRecord ? 1 : 0;
     cd.cflags = c->presence && cd.isRecord == 1 ? kClassFlagPresence : 0;
+    if (c->hasAccessors && cd.isRecord == 1) cd.cflags |= kClassFlagAccessors;
     for (auto& f : c->fields) cd.fields.push_back(FieldDesc{f.name, vtOf(f.type)});
     for (auto& m : c->vtable) {
       cd.vtable.push_back((uint32_t)m.fn->funcIdx);
@@ -1034,7 +1082,7 @@ void Gen::genFunctionOnce(FuncSym* f) {
   argcReg = kNoReg;
   emittedFieldInits = false;
   D->fflags = 0;
-  if (f->isGenerator && f->type->ret->t == TT::Generator) {
+  if (f->isGenerator && (f->type->ret->t == TT::Generator || f->type->ret->t == TT::AsyncGenerator)) {
     Type* g = f->type->ret;
     uint8_t yk = kindCode(g->elem), nk = kindCode(g->val), rk = kindCode(g->ret);
     if (rk && rk != yk) {
@@ -1042,7 +1090,8 @@ void Gen::genFunctionOnce(FuncSym* f) {
                       typeName(g->elem) + "'");
       rk = 0;
     }
-    D->fflags = makeFflags(FK_GENERATOR, yk, nk, rk);
+    // an async generator (0.3.1) starts like a generator: its requests are answered by the VM's queue
+    D->fflags = makeFflags(g->t == TT::AsyncGenerator ? FK_ASYNC_GENERATOR : FK_GENERATOR, yk, nk, rk);
     emit(OP_GEN_START);
   }
   if (f->isAsync && !f->isGenerator && f->type->ret->t == TT::Promise) {
@@ -1057,9 +1106,11 @@ void Gen::genFunctionOnce(FuncSym* f) {
   line(start);
   prologue(f);
   if (f->trampField >= 0) {
-    // object literal method: call the closure stored in the field (register 0 is the object)
+    // object literal method: call the closure stored in the field (register 0 is the object); an
+    // accessor: the getter / setter in the accessor pair stored in the field
     uint16_t clo = temp(K_R);
     emit(OP_GETF_R, clo, 0, (uint16_t)f->trampField);
+    if (f->accessor) emit(OP_GETF_R, clo, clo, (uint16_t)(f->accessor - 1));
     std::vector<uint16_t> args;
     for (size_t i = 0; i < f->type->params.size(); i++) args.push_back((uint16_t)(1 + i));
     Kind rk = kindOf(f->type->ret);
@@ -1340,8 +1391,7 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
           if (t->t == TT::Class) {
             emit(op3(fk, OP_GETF_I, OP_GETF_F, OP_GETF_R), v, src, (uint16_t)t->cls->fieldIdx[fs[k].first]);
           } else {
-            D->icNames.push_back(kStr(utf8ToUtf16(fs[k].first)));
-            emit(op3(fk, OP_GETN_I, OP_GETN_F, OP_GETN_R), v, src, (uint16_t)(D->icNames.size() - 1));
+            readByName(v, src, t, fs[k].first, fs[k].second);
           }
           vs.push_back(v);
         }
@@ -1439,10 +1489,10 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
         r = temp(K(et));
         emit(op3(K(et), OP_GETF_I, OP_GETF_F, OP_GETF_R), r, src, (uint16_t)fi);
       } else {
-        et = t->shape->findProp(key)->type;
+        const ObjShape::Prop* sp = t->shape->findProp(key);
+        et = sp ? sp->type : t->shape->findMethod("get " + key)->fn->ret;  // a getter: called
         r = temp(K(et));
-        D->icNames.push_back(kStr(utf8ToUtf16(key)));
-        emit(op3(K(et), OP_GETN_I, OP_GETN_F, OP_GETN_R), r, src, (uint16_t)(D->icNames.size() - 1));
+        readByName(r, src, t, key, et);
       }
     }
     if (useDefault) {
@@ -1619,6 +1669,14 @@ void Gen::genStmt(Stmt* s) {
           r = temp(K_R);
           emit(OP_LOADUNDEF, r);
         }
+      } else if (fn->isAsync && fn->isGenerator) {
+        // `return v` in an async generator awaits v (0.3.1); then finally blocks run
+        Type* t = s->expr->type ? s->expr->type : T.voidT();
+        uint16_t v = kNoReg;
+        if (t->t == TT::Void) genDiscard(s->expr);
+        else v = gen(s->expr);
+        r = rk == K_V ? kNoReg : temp(rk);
+        awaitValue(v, t, r, bodyRet(fn));
       } else if (fn->isAsync && s->expr->type && s->expr->type->t == TT::Promise) {
         // `return p` in an async function: its promise adopts p
         rk = K_R;
@@ -1827,6 +1885,14 @@ void Gen::genForOf(Stmt* s) {
   if (t->t == TT::TypedArray) {  // over its elements as an array
     callNative("TA.toArray", {coll}, coll, 'R');
     t = T.array(t->vt >= 9 ? T.bigint() : T.number());
+  }
+  if (s->isAwait && (t->t == TT::AsyncGenerator || (t->t == TT::Class && t->cls->methodIdx.count("[Symbol.asyncIterator]")))) {
+    // for await over an async iterable (0.3.1)
+    Type* gt = nullptr;
+    uint16_t it = asyncIteratorOf(coll, t, &gt);
+    if (gt) genForAwaitIter(s, label, it, gt);
+    release(m0);
+    return;
   }
   if (t->t == TT::Generator || t->t == TT::Class) {
     Type* gt = nullptr;
@@ -2096,6 +2162,10 @@ uint16_t Gen::iterToArray(uint16_t coll, Type* t, int maxN, Type* elemT) {
 
 void Gen::genYield(Expr* e, uint16_t dst) {
   Type* g = fn->type->ret;
+  if (fn->isGenerator && fn->isAsync && g->t == TT::AsyncGenerator) {
+    genAsyncYield(e, dst);
+    return;
+  }
   if (!fn->isGenerator || g->t != TT::Generator) { err(e->loc, "yield outside a generator"); return; }
   Kind yk = kindOf(g->elem);
   Kind nk = kindCode(g->val) ? kindOf(g->val) : K_V;
@@ -2210,6 +2280,432 @@ void Gen::genYield(Expr* e, uint16_t dst) {
   release(m0);
 }
 
+// ======================================================================= async generators (0.3.1)
+void Gen::awaitValue(uint16_t v, Type* t, uint16_t dst, Type* dstT) {
+  size_t m0 = mark();
+  uint16_t p;
+  Type* vt;
+  if (t->t == TT::Promise) {
+    p = v;
+    vt = t->elem;
+  } else {
+    if (t->t == TT::Void) {
+      v = temp(K_R);
+      emit(OP_LOADUNDEF, v);
+      t = T.undef();
+    }
+    p = temp(K_R);
+    callNative(std::string("Promise.resolve") + kindChar(kindOf(t)), {v, vtReg(t)}, p, 'R');
+    vt = t;
+  }
+  if (dst == kNoReg || vt->t == TT::Void) {
+    emit(OP_AWAIT, kNoReg, p);
+    if (dst != kNoReg) emit(OP_LOADUNDEF, dst);
+  } else if (K(vt) == K(dstT) && isBoxedOptional(vt) == isBoxedOptional(dstT)) {
+    emit(OP_AWAIT, dst, p);
+  } else {
+    uint16_t x = temp(K(vt));
+    emit(OP_AWAIT, x, p);
+    boxIfNeeded(dst, x, vt, dstT);
+  }
+  release(m0);
+}
+
+uint16_t Gen::asyncIteratorOf(uint16_t coll, Type* t, Type** gt) {
+  if (t->t == TT::AsyncGenerator) {
+    *gt = t;
+    return coll;
+  }
+  // a class with a [Symbol.asyncIterator]() method: call it
+  ClassSym* c = t->t == TT::Class ? t->cls : nullptr;
+  int idx = -1;
+  if (c) {
+    auto mi = c->methodIdx.find("[Symbol.asyncIterator]");
+    if (mi != c->methodIdx.end()) idx = mi->second;
+  }
+  if (idx < 0) {
+    err(Loc(), "cannot iterate over '" + typeName(t) + "' with for await");
+    *gt = nullptr;
+    return coll;
+  }
+  FuncSym* f = c->vtable[(size_t)idx].fn;
+  *gt = f->type->ret;
+  uint16_t it = temp(K_R);
+  emit(OP_CALLM, it, coll, 0);
+  emitWord((uint64_t)(uint32_t)idx | ((uint64_t)sig(sigOf(f)) << 32));
+  return it;
+}
+
+void Gen::emitAsyncIterClose(Type* gt, uint16_t it, bool quiet) {
+  size_t m0 = mark();
+  ClassSym* rc = iterRecord(gt);
+  uint16_t req = temp(K_R);
+  uint32_t a = (uint32_t)pc();
+  emitAsyncRequest(gt, it, req, kNoReg, 0, 2, rc);
+  emit(OP_AWAIT, kNoReg, req);
+  if (quiet) {
+    // errors of return() are dropped: a handler around it continues after it
+    uint32_t b = (uint32_t)pc();
+    Label* after = newLabel();
+    jump(OP_JMP, 0, after);
+    uint16_t er = temp(K_R);
+    D->handlers.push_back(HandlerDesc{a, b, (uint32_t)pc(), er});
+    place(after);
+  }
+  release(m0);
+}
+
+// for await (const x of asyncIterable): each step awaits next(); leaving the loop early (break, return,
+// a throw from the body) awaits the iterator's return(), as AsyncIteratorClose does
+void Gen::genForAwaitIter(Stmt* s, const std::string& label, uint16_t it, Type* gt) {
+  VarDecl& d = s->decls[0];
+  std::vector<VarSym*> vars;
+  std::function<void(VarDecl&)> col = [&](VarDecl& x) {
+    if (x.sym) vars.push_back(x.sym);
+    for (auto& sub : x.elems) col(sub);
+  };
+  col(d);
+  for (VarSym* v : vars) declareLocal(v);
+  Type* et = gt->elem;
+  ClassSym* rc = iterRecord(gt);
+  uint16_t req = temp(K_R), res = temp(K_R), done = temp(K_I), v = temp(kindOf(et));
+  Label* top = newLabel();
+  Label* brk = newLabel();
+  Label* end = newLabel();
+  regionPool.emplace_back(new Region());
+  Region* r = regionPool.back().get();
+  r->loopDepth = loops.size();
+  r->finGen = [this, gt, it]() { emitAsyncIterClose(gt, it, false); };
+  regions.push_back(r);
+  place(top);
+  emitAsyncRequest(gt, it, req, kNoReg, 0, 0, rc);
+  emit(OP_AWAIT, res, req);
+  emit(OP_GETF_I, done, res, 1);
+  jump(OP_JT, done, end);
+  openSeg(r);
+  {
+    size_t m1 = mark();
+    emit(op3(kindOf(et), OP_GETF_I, OP_GETF_F, OP_GETF_R), v, res, 0);
+    destructure(d, v, et);
+    release(m1);
+  }
+  pushLoop({label, brk, top, true});
+  genStmt(s->body);
+  loops.pop_back();
+  closeSeg(r);
+  regions.pop_back();
+  jump(OP_JMP, 0, top);
+  place(brk);
+  emitAsyncIterClose(gt, it, false);
+  jump(OP_JMP, 0, end);
+  if (!r->segs.empty()) {
+    size_t m1 = mark();
+    uint16_t er = temp(K_R);
+    addHandlers(r, (uint32_t)pc(), er, s->loc);
+    emitAsyncIterClose(gt, it, true);
+    emit(OP_THROW, er);
+    release(m1);
+  }
+  place(end);
+  for (VarSym* x : vars) {
+    auto vi = varReg.find(x);
+    if (vi != varReg.end()) { freeReg(vi->second); varReg.erase(vi); dbgClose(x); }
+  }
+}
+
+// yield v in an async generator: v is awaited, then AsyncGeneratorYield; return(v) at the yield awaits v
+// and returns it (AsyncGeneratorUnwrapYieldResumption); yield* forwards to an async iterable
+void Gen::genAsyncYield(Expr* e, uint16_t dst) {
+  Type* g = fn->type->ret;
+  Kind yk = kindOf(g->elem);
+  Kind nk = kindCode(g->val) ? kindOf(g->val) : K_V;
+  Kind rk = kindCode(g->ret) ? kindOf(g->ret) : K_V;
+  size_t m0 = mark();
+  uint16_t mode = temp(K_I);
+  uint16_t recv = nk == K_V ? kNoReg : temp(nk);
+  uint16_t retReg = rk == K_V ? kNoReg : temp(rk);
+  // the awaited value of return(v) (in place)
+  auto awaitRet = [&]() { awaitValue(retReg, rk == K_V ? T.voidT() : g->ret, retReg, rk == K_V ? T.voidT() : g->ret); };
+  if (!e->delegate) {
+    uint16_t v = temp(yk);
+    if (e->a) {
+      Type* t = e->a->type;
+      uint16_t x = t->t == TT::Void ? kNoReg : gen(e->a);
+      if (t->t == TT::Void) genDiscard(e->a);
+      awaitValue(x, t, v, g->elem);
+    } else {
+      awaitValue(kNoReg, T.voidT(), v, g->elem);
+    }
+    emit(OP_YIELD, v, recv, mode);
+    emitWord(retReg);
+    Label* cont = newLabel();
+    jump(OP_JF, mode, cont);
+    awaitRet();
+    emitReturnValue(retReg, rk);
+    place(cont);
+    if (dst != kNoReg) {
+      if (recv != kNoReg) mov(dst, recv, nk);
+      else emit(OP_LOADUNDEF, dst);
+    }
+    release(m0);
+    return;
+  }
+  Type* srcT = e->a->type;
+  if (!(srcT->t == TT::AsyncGenerator || (srcT->t == TT::Class && srcT->cls->methodIdx.count("[Symbol.asyncIterator]")))) {
+    genAsyncYieldFromSync(e, dst, mode, recv, retReg);
+    release(m0);
+    return;
+  }
+  // yield* asyncIterable
+  uint16_t coll = temp(K_R);
+  genInto(e->a, coll);
+  Type* gt = nullptr;
+  uint16_t it = asyncIteratorOf(coll, e->a->type, &gt);
+  if (!gt) { release(m0); return; }
+  ClassSym* rc = iterRecord(gt);
+  Kind ik = kindOf(gt->elem);
+  uint16_t req = temp(K_R), res = temp(K_R), done = temp(K_I), iv = temp(ik), er = temp(K_R);
+  uint16_t one = temp(K_I), two = temp(K_I), cmp = temp(K_I);
+  uint16_t out = yk == ik && isBoxedOptional(g->elem) == isBoxedOptional(gt->elem) ? iv : temp(yk);
+  uint8_t innerNext = kindCode(gt->val);
+  Label* loop = newLabel();
+  Label* pThrow = newLabel();
+  Label* pReturn = newLabel();
+  Label* check = newLabel();
+  Label* yieldIt = newLabel();
+  Label* fin = newLabel();
+  loadInt(mode, 0);
+  loadInt(one, 1);
+  loadInt(two, 2);
+  emit(OP_LOADUNDEF, er);
+  place(loop);
+  emit(OP_EQ_I, cmp, mode, one);
+  jump(OP_JT, cmp, pThrow);
+  emit(OP_EQ_I, cmp, mode, two);
+  jump(OP_JT, cmp, pReturn);
+  // received a value: inner.next(v)
+  emitAsyncRequest(gt, it, req, innerNext ? recv : kNoReg, innerNext ? kindCode(g->val) : 0, 0, rc);
+  emit(OP_AWAIT, res, req);
+  jump(OP_JMP, 0, check);
+  // received an error: inner.throw(e)
+  place(pThrow);
+  emitAsyncRequest(gt, it, req, er, 3, 1, rc);
+  emit(OP_AWAIT, res, req);
+  jump(OP_JMP, 0, check);
+  // received return(v): inner.return(v); when it is done, its value is awaited and returned from here
+  place(pReturn);
+  {
+    uint8_t sk = kindCode(gt->ret) && retReg != kNoReg ? kindCode(g->ret) : 0;
+    emitAsyncRequest(gt, it, req, retReg, sk, 2, rc);
+    emit(OP_AWAIT, res, req);
+    emit(OP_GETF_I, done, res, 1);
+    jump(OP_JF, done, yieldIt);
+    // (the value is not awaited again: the current specification and V8, see docs/DESIGN-0.3.md)
+    if (rk != K_V && kindCode(gt->ret) && rk == ik) {
+      emit(op3(ik, OP_GETF_I, OP_GETF_F, OP_GETF_R), iv, res, 0);
+      boxIfNeeded(retReg, iv, gt->elem, g->ret);
+    }
+    emitReturnValue(retReg, rk);
+  }
+  place(check);
+  emit(OP_GETF_I, done, res, 1);
+  jump(OP_JT, done, fin);
+  place(yieldIt);
+  emit(op3(ik, OP_GETF_I, OP_GETF_F, OP_GETF_R), iv, res, 0);
+  if (out != iv) boxIfNeeded(out, iv, gt->elem, g->elem);
+  // the inner value is yielded as it is (not awaited again); a throw() into the yield, or a rejected
+  // return(v) value, is forwarded to the inner iterator's throw()
+  uint32_t ya = (uint32_t)pc();
+  emit(OP_YIELD, out, recv, mode);
+  emitWord(retReg);
+  Label* notRet = newLabel();
+  emit(OP_EQ_I, cmp, mode, two);
+  jump(OP_JF, cmp, notRet);
+  awaitRet();
+  place(notRet);
+  uint32_t yb = (uint32_t)pc();
+  jump(OP_JMP, 0, loop);
+  D->handlers.push_back(HandlerDesc{ya, yb, (uint32_t)pc(), er});
+  loadInt(mode, 1);
+  jump(OP_JMP, 0, loop);
+  place(fin);
+  if (dst != kNoReg) {
+    if (kindCode(gt->ret) && e->type && e->type->t != TT::Void) emit(op3(ik, OP_GETF_I, OP_GETF_F, OP_GETF_R), dst, res, 0);
+    else emit(OP_LOADUNDEF, dst);
+  }
+  release(m0);
+}
+
+// yield* of a sync iterable in an async generator: CreateAsyncFromSyncIterator. Each step calls the sync
+// iterator at once, then awaits its value as the specification's continuation does (PromiseResolve,
+// then, the outer await: two jobs); a rejected value closes the iterator (a sync generator's return());
+// throw() into an iterator without a throw method (an array) rejects with a TypeError, return(v)
+// without a return method gives { value: v, done: true }
+void Gen::genAsyncYieldFromSync(Expr* e, uint16_t dst, uint16_t mode, uint16_t recv, uint16_t retReg) {
+  Type* g = fn->type->ret;
+  Kind yk = kindOf(g->elem);
+  Kind rk = kindCode(g->ret) ? kindOf(g->ret) : K_V;
+  Type* srcT = e->a->type;
+  uint16_t coll = temp(K_R);
+  genInto(e->a, coll);
+  bool isArr = srcT->t == TT::Array;
+  Type* gt = nullptr;
+  uint16_t it = coll;
+  if (!isArr) {
+    it = iteratorOf(coll, srcT, &gt);
+    if (!gt) return;
+  }
+  Type* raw = isArr ? srcT->elem : gt->elem;
+  bool isP = raw->t == TT::Promise;
+  Type* vt = isP ? (raw->elem->t == TT::Void ? T.undef() : raw->elem) : raw;
+  Kind sk = kindOf(raw), vk = kindOf(vt);
+  bool hasRet = gt && kindCode(gt->ret) && !isP;  // the generator returns a value (of the yielded kind)
+  uint16_t sv = temp(sk), done = temp(K_I), p = temp(K_R), p2 = temp(K_R), av = temp(vk), er = temp(K_R), er2 = temp(K_R);
+  uint16_t nul = temp(K_R), one = temp(K_I), two = temp(K_I), cmp = temp(K_I), u = temp(K_R);
+  uint16_t idx = isArr ? temp(K_I) : kNoReg, n = isArr ? temp(K_I) : kNoReg, closeFn = isArr ? kNoReg : temp(K_R);
+  uint16_t out = yk == vk && isBoxedOptional(g->elem) == isBoxedOptional(vt) ? av : temp(yk);
+  emit(OP_LOADNULL, nul);
+  emit(OP_LOADUNDEF, u);
+  emit(OP_LOADUNDEF, er);
+  loadInt(one, 1);
+  loadInt(two, 2);
+  loadInt(mode, 0);
+  if (isArr) {
+    loadInt(idx, 0);
+  } else {
+    // the closeIterator closure of the continuation (onRejected), over a cell holding the iterator
+    uint16_t cell = temp(K_R);
+    emit(OP_NEWCELL, cell, VT_REF);
+    emit(OP_CSET_R, cell, it);
+    emit(OP_CLOSURE, closeFn, (uint16_t)synthFn(5 + (int)kindOf(gt->elem)), 1);
+    emitRegList({cell});
+  }
+  Label* loop = newLabel();
+  Label* pThrow = newLabel();
+  Label* pReturn = newLabel();
+  Label* nextDone = newLabel();
+  Label* yieldIt = newLabel();
+  Label* fin = newLabel();
+  std::vector<std::pair<uint32_t, uint32_t>> syncRanges;  // calls into the sync iterator: a throw rejects
+  auto syncResume = [&](uint32_t m, uint16_t sent, uint8_t skind) {
+    uint32_t a = (uint32_t)pc();
+    emitResume(gt, it, sv, done, sent, skind, m);
+    syncRanges.push_back({a, (uint32_t)pc()});
+  };
+  // AsyncFromSyncIteratorContinuation + the outer await: v (type t) awaited into dst (type dstT, or
+  // kNoReg) after two jobs; a rejection closes the iterator first when closeOnRej
+  auto continuation = [&](uint16_t v, Type* t, bool closeOnRej, uint16_t d, Type* dstT) {
+    Type* pt = t;
+    if (t->t == TT::Promise) {
+      mov(p, v, K_R);
+      pt = t->elem->t == TT::Void ? T.undef() : t->elem;
+    } else {
+      callNative(std::string("Promise.resolve") + kindChar(kindOf(t)), {v, vtReg(t)}, p, 'R');
+    }
+    callNative("Promise.then", {p, nul, closeOnRej && !isArr ? closeFn : nul, vtReg(pt)}, p2, 'R');
+    if (d == kNoReg) {
+      emit(OP_AWAIT, kNoReg, p2);
+    } else if (K(pt) == K(dstT) && isBoxedOptional(pt) == isBoxedOptional(dstT)) {
+      emit(OP_AWAIT, d, p2);
+    } else {
+      uint16_t x = temp(K(pt));
+      emit(OP_AWAIT, x, p2);
+      boxIfNeeded(d, x, pt, dstT);
+    }
+  };
+  place(loop);
+  emit(OP_EQ_I, cmp, mode, one);
+  jump(OP_JT, cmp, pThrow);
+  emit(OP_EQ_I, cmp, mode, two);
+  jump(OP_JT, cmp, pReturn);
+  // received a value: the sync iterator's next(v)
+  if (isArr) {
+    emit(OP_ALENI, n, coll);
+    emit(OP_LT_I, cmp, idx, n);
+    jump(OP_JF, cmp, nextDone);
+    emit(op3(sk, OP_AGETI_I, OP_AGETI_F, OP_AGETI_R), sv, coll, idx);
+    emit(OP_ADDI_I, idx, idx, 1);
+  } else {
+    uint8_t innerNext = kindCode(gt->val);
+    syncResume(0, innerNext ? recv : kNoReg, innerNext ? kindCode(g->val) : 0);
+    jump(OP_JT, done, nextDone);
+  }
+  continuation(sv, raw, true, av, vt);
+  jump(OP_JMP, 0, yieldIt);
+  // done: the value of the yield* expression (the generator's return value, or undefined)
+  place(nextDone);
+  if (hasRet) continuation(sv, raw, false, av, vt);
+  else continuation(u, T.undef(), false, kNoReg, T.undef());
+  jump(OP_JMP, 0, fin);
+  // received an error: the sync iterator's throw(e); an array has none: it is closed (nothing to do)
+  // and the request rejects with a TypeError
+  place(pThrow);
+  if (isArr) {
+    uint16_t nm = temp(K_R), msg = temp(K_R), te = temp(K_R);
+    loadStr(nm, u"TypeError");
+    loadStr(msg, u"The iterator does not provide a 'throw' method.");
+    callNative("Error.new", {nm, msg}, te, 'R');
+    callNative("Promise.reject", {te, vtReg(T.undef())}, p, 'R');
+    emit(OP_AWAIT, kNoReg, p);  // raises the TypeError a job later
+    emit(OP_THROW, te);
+  } else {
+    syncResume(1, er, 3);
+    jump(OP_JT, done, nextDone);
+    continuation(sv, raw, true, av, vt);
+    jump(OP_JMP, 0, yieldIt);
+  }
+  // received return(v) (already awaited at the yield): the sync iterator's return(v); an array has none:
+  // { value: v, done: true } at once
+  place(pReturn);
+  if (isArr) {
+    callNative("Promise.resolveR", {u, vtReg(T.undef())}, p, 'R');
+    emit(OP_AWAIT, kNoReg, p);
+    emitReturnValue(retReg, rk);
+  } else {
+    bool sendRet = kindCode(gt->ret) && retReg != kNoReg && kindCode(gt->ret) == kindCode(g->ret);
+    syncResume(2, sendRet ? retReg : kNoReg, sendRet ? kindCode(g->ret) : 0);
+    Label* notDone = newLabel();
+    jump(OP_JF, done, notDone);
+    if (hasRet && rk != K_V && rk == sk) continuation(sv, raw, false, retReg, g->ret);
+    else if (rk != K_V) continuation(retReg, g->ret, false, retReg, g->ret);
+    else continuation(u, T.undef(), false, kNoReg, T.undef());
+    emitReturnValue(retReg, rk);
+    place(notDone);
+    continuation(sv, raw, false, av, vt);
+    jump(OP_JMP, 0, yieldIt);
+  }
+  // a call into the sync iterator threw: the request rejects (the error is raised a job later)
+  if (!syncRanges.empty()) {
+    uint32_t h = (uint32_t)pc();
+    for (auto& r : syncRanges) D->handlers.push_back(HandlerDesc{r.first, r.second, h, er2});
+    callNative("Promise.reject", {er2, vtReg(T.undef())}, p, 'R');
+    emit(OP_AWAIT, kNoReg, p);
+    emit(OP_THROW, er2);
+  }
+  // the value is yielded as it is (AsyncGeneratorYield); a throw() into the yield, or a rejected return(v)
+  // value, goes to the sync iterator's throw()
+  place(yieldIt);
+  if (out != av) boxIfNeeded(out, av, vt, g->elem);
+  uint32_t ya = (uint32_t)pc();
+  emit(OP_YIELD, out, recv, mode);
+  emitWord(retReg);
+  Label* notRet = newLabel();
+  emit(OP_EQ_I, cmp, mode, two);
+  jump(OP_JF, cmp, notRet);
+  awaitValue(retReg, rk == K_V ? T.voidT() : g->ret, retReg, rk == K_V ? T.voidT() : g->ret);
+  place(notRet);
+  uint32_t yb = (uint32_t)pc();
+  jump(OP_JMP, 0, loop);
+  D->handlers.push_back(HandlerDesc{ya, yb, (uint32_t)pc(), er});
+  loadInt(mode, 1);
+  jump(OP_JMP, 0, loop);
+  place(fin);
+  if (dst != kNoReg) {
+    if (hasRet && e->type && e->type->t != TT::Void) mov(dst, av, vk);
+    else emit(OP_LOADUNDEF, dst);
+  }
+}
+
 // g.next(v?) / g.return(v?) / g.throw(e): resumes the generator and builds the IteratorResult record
 void Gen::genGenMethod(Expr* e, uint16_t dst) {
   Expr* m = strip(e->a);
@@ -2224,6 +2720,14 @@ void Gen::genGenMethod(Expr* e, uint16_t dst) {
     sent = gen(e->list[0]);
     sk = kindCode(e->list[0]->type);
     if (mode == 1) sk = 3;
+  }
+  if (gt->t == TT::AsyncGenerator) {
+    // an async generator (0.3.1): a promise of the IteratorResult record (built by the VM)
+    uint16_t p = dst != kNoReg && kindOfReg(dst) == K_R ? dst : temp(K_R);
+    emitAsyncRequest(gt, it, p, sent, sk, mode, e->cls);
+    if (dst != kNoReg) mov(dst, p, K_R);
+    release(m0);
+    return;
   }
   Kind yk = kindOf(gt->elem);
   uint16_t v = temp(yk), done = temp(K_I);
@@ -2261,6 +2765,25 @@ void Gen::emitSynthFns() {
   for (int kind : synthKinds) {
     FuncDesc fd;
     D = &fd;
+    if (kind >= 5) {
+      // (reason) => { iterator.return() (its errors dropped); throw reason }: the async-from-sync
+      // iterator's closeIterator (0.3.1); the sync generator is upvalue 0, kind - 5 its yielded kind
+      Kind k = (Kind)(kind - 5);
+      fd.name = "closeIterator";
+      fd.upvalKinds = {(uint8_t)K_R};
+      fd.sig = sig("R>V");
+      fd.nparams = 1;
+      fd.regKinds = {(uint8_t)K_R, (uint8_t)K_R, (uint8_t)k, (uint8_t)K_I, (uint8_t)K_R};
+      emit(OP_UGET_R, 1, 0);
+      uint32_t a = (uint32_t)pc();
+      emit(op3(k, OP_RESUME_I, OP_RESUME_F, OP_RESUME_R), 1, 2, 3);
+      emitWord((uint64_t)kNoReg | (2ull << 16));
+      uint32_t b = (uint32_t)pc();
+      fd.handlers.push_back(HandlerDesc{a, b, b, 4});
+      emit(OP_THROW, 0);
+      M.funcs.push_back(fd);
+      continue;
+    }
     // (value) => resolveFn(promise, value) / (reason) => rejectFn(promise, reason): the promise is
     // the closure's upvalue 0
     static const char* const names[5] = {"resolve", "resolve", "resolve", "resolve", "reject"};
@@ -4271,10 +4794,10 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
         raw = temp(K(sft));
         emit(op3(K(sft), OP_GETF_I, OP_GETF_F, OP_GETF_R), raw, vals[si], (uint16_t)idx);
       } else {
-        sft = st->shape->findProp(name)->type;
+        const ObjShape::Prop* sp = st->shape->findProp(name);
+        sft = sp ? sp->type : st->shape->findMethod("get " + name)->fn->ret;  // a getter of an object literal
         raw = temp(K(sft));
-        D->icNames.push_back(kStr(utf8ToUtf16(name)));
-        emit(op3(K(sft), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, vals[si], (uint16_t)(D->icNames.size() - 1));
+        readByName(raw, vals[si], st, name, sft);
       }
       return raw;
     };
@@ -4403,6 +4926,24 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
   for (auto& p : e->props) {
     int fi = c->fieldIdx[p.key];
     size_t m0 = mark();
+    if (p.accessor) {
+      // the accessor pair [getter, setter, (value)] of the getter and setter of this key, at the first of them
+      if (set[fi]) { release(m0); continue; }
+      ClassSym* pc = C.tupleRecord(c->fields[fi].type);
+      uint16_t pair = temp(K_R);
+      emit(OP_NEW, pair, (uint16_t)pc->classIdx);
+      for (auto& q : e->props)
+        if (q.accessor && q.key == p.key) {
+          size_t m1 = mark();
+          uint16_t clo = gen(q.value);
+          emit(OP_SETF_R, pair, (uint16_t)(q.accessor - 1), clo);
+          release(m1);
+        }
+      emit(OP_SETF_R, obj, (uint16_t)fi, pair);
+      set[fi] = true;
+      release(m0);
+      continue;
+    }
     uint16_t v = gen(p.value);
     emit(op3(K(c->fields[fi].type), OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)fi, v);
     set[fi] = true;
@@ -4715,6 +5256,12 @@ void Gen::genObjectEnum(Expr* e, uint16_t dst) {
   Type* at = baseOf(e->type);
   Type* vt = entries ? at->elem->elems[1] : at->elem;
   std::vector<std::pair<std::string, Type*>> props = enumerableProps(ot);
+  // getters declared by an interface: own properties when the value is an object literal with accessors
+  // (a class's are not, and Object.keys does not list them)
+  if (ot->t == TT::Object && !ot->shape->ownAccessors)
+    for (auto& m : ot->shape->methods)
+      if (m.name.compare(0, 4, "get ") == 0 && !ot->shape->findProp(m.name.substr(4)) && m.fn->ret == vt)
+        props.push_back({m.name.substr(4), m.fn->ret});
   uint16_t d = dst == kNoReg ? temp(K_R) : dst;
   uint16_t obj = temp(K_R), keys = temp(K_R), res = temp(K_R);
   genInto(objE, obj);
@@ -4733,8 +5280,12 @@ void Gen::genObjectEnum(Expr* e, uint16_t dst) {
       jump(OP_JF, eq, no);
       Type* pt = props[pi].second;
       uint16_t raw = temp(K(pt));
-      D->icNames.push_back(nameConsts[pi]);
-      emit(op3(K(pt), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, obj, (uint16_t)(D->icNames.size() - 1));
+      if (ot->t == TT::Object) {
+        readByName(raw, obj, ot, props[pi].first, pt);
+      } else {
+        D->icNames.push_back(nameConsts[pi]);
+        emit(op3(K(pt), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, obj, (uint16_t)(D->icNames.size() - 1));
+      }
       uint16_t v = temp(K(vt));
       unboxNarrowed(v, raw, pt, vt);
       if (entries) {
@@ -4789,8 +5340,13 @@ void Gen::genObjectAssign(Expr* e, uint16_t dst) {
       }
       uint32_t nc = kStr(utf8ToUtf16(p.first));
       uint16_t raw = temp(K(sv));
-      D->icNames.push_back(nc);
-      emit(op3(K(sv), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, src, (uint16_t)(D->icNames.size() - 1));
+      Type* srcT = baseOf(e->list[si]->type);
+      if (srcT->t == TT::Object) {
+        readByName(raw, src, srcT, p.first, sv);
+      } else {
+        D->icNames.push_back(nc);
+        emit(op3(K(sv), OP_GETN_I, OP_GETN_F, OP_GETN_R), raw, src, (uint16_t)(D->icNames.size() - 1));
+      }
       Label* skip = newLabel();
       if (sv->t == TT::Optional && sv->hasUndef) {
         uint16_t c = temp(K_I);

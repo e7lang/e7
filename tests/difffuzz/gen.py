@@ -91,6 +91,9 @@ class Gen:
         self.lines = []
         self.loop_depth = 0
         self.in_fn = False
+        # an async generator statement was emitted: its jobs run for many ticks, and how many of them
+        # Node.js runs after an uncaught top-level error is up to Node (the program does not end with one)
+        self.long_jobs = False
         # nullable / class variables tested in an enclosing condition: tsc narrows them there (to `never`
         # in a dead branch, where `x?.m()` or `x instanceof C` are errors), so they are used there only in
         # comparisons with null and `??` (vars(narrowed_ok=True))
@@ -1189,7 +1192,7 @@ class Gen:
             self.declare(b, STR, False)
 
     def stmt(self, ind, d):
-        k = self.r.randrange(100)
+        k = self.r.randrange(102)
         if d <= 0:
             k = self.r.choice([0, 30, 50])
         if k < 25:
@@ -1208,8 +1211,10 @@ class Gen:
             self.stmt_destructure(ind, max(d, 1))
         elif k < 99:
             self.stmt_coroutine(ind, max(d, 1))
-        else:
+        elif k < 100:
             self.stmt_regexp(ind, max(d, 1))
+        else:
+            self.stmt_accessors(ind, max(d, 1))
 
     # ---------------------------------------------------------------- regular expressions (0.3)
     REGEXPS = [r"/\d+/", r"/(\w)(\w)?/", r"/(?<w>[a-z]+)/i", r"/\s+/", r"/^./u", r"/(?<=a)b/", r"/x*/",
@@ -1238,10 +1243,53 @@ class Gen:
         else:
             self.emit(ind, f"console.log(new RegExp({src}, \"g\").exec({s}));")
 
+    # ---------------------------------------------------------------- getters and setters in object literals (0.3.1)
+    def stmt_accessors(self, ind, d):
+        r = self.r
+        k = r.randrange(6)
+        v = self.fresh("acc")
+        if k == 0:
+            # a literal's own type: getter / setter pair, getter only, setter only, a method using them
+            self.emit(ind, f"const {v} = {{ n: {self.num(d - 1)}, s: {self.string(d - 1)}, get twice(): number {{ return this.n * 2; }}, "
+                           f"set twice(x: number) {{ this.n = x / 2; }}, get tag(): string {{ return this.s + \":\" + this.n; }}, "
+                           f"set only(x: string) {{ this.s = x; }}, sum(): number {{ return this.twice + this.n; }} }};")
+            self.emit(ind, f"{v}.twice = {self.num(d - 1)};")
+            if r.random() < 0.5:
+                self.emit(ind, f"{v}.twice {self.pick(['+=', '-=', '*='])} {self.num(d - 1)};")
+            if r.random() < 0.5:
+                self.emit(ind, f"{v}.only = {self.string(d - 1)};")
+            self.emit(ind, f"console.log({v}, {v}.twice, {v}.tag, {v}.sum(), Object.keys({v}), JSON.stringify({v}));")
+        elif k == 1:
+            # through an interface: object literals and class instances
+            self.emit(ind, f"const {v}: AccI[] = [accMake({self.num(d - 1)}), new AccC({self.num(d - 1)}), accMake({self.num(d - 1)})];")
+            self.emit(ind, f"for (const a of {v}) accBump(a, {self.num(d - 1)});")
+            self.emit(ind, f"console.log({v}, {v}.map(a => a.v), JSON.stringify({v}), {v}.map(a => Object.keys(a)));")
+        elif k == 2:
+            # spread, rest and Object.values / entries call the getters
+            self.emit(ind, f"const {v} = {{ a: {self.num(d - 1)}, get b(): number {{ return this.a + 1; }}, c: {self.num(d - 1)} }};")
+            self.emit(ind, f"const {{ a: {v}a, ...{v}r }} = {v};")
+            self.emit(ind, f"console.log({{ ...{v} }}, {v}a, {v}r, Object.values({v}), Object.entries({v}));")
+        elif k == 3:
+            # closures captured by accessors; a counter read through a getter
+            self.emit(ind, f"const {v} = accMake({self.num(d - 1)});")
+            for _ in range(r.randrange(1, 4)):
+                self.emit(ind, f"{v}.v {self.pick(['=', '+=', '-='])} {self.num(d - 1)};")
+            self.emit(ind, f"console.log({v}.v, {v}.reads, {v}.label, {v});")
+        elif k == 4:
+            # nested literals: `this` is the innermost object
+            self.emit(ind, f"const {v} = {{ name: {self.string(d - 1)}, inner: {{ x: {self.num(d - 1)}, get y(): number {{ return this.x * 3; }} }}, "
+                           f"get desc(): string {{ return this.name + \"/\" + this.inner.y; }} }};")
+            self.emit(ind, f"{v}.inner.x = {self.num(d - 1)};")
+            self.emit(ind, f"console.log({v}.desc, {v}, JSON.stringify({v}));")
+        else:
+            # a getter that throws: caught at the read and inside JSON.stringify
+            self.emit(ind, f"const {v} = {{ ok: {self.num(d - 1)}, get bad(): number {{ if (this.ok > {self.num(d - 1)}) throw new RangeError(\"bad \" + this.ok); return this.ok; }} }};")
+            self.emit(ind, f"try {{ console.log({v}.bad, JSON.stringify({v})); }} catch (e) {{ if (e instanceof RangeError) console.log(\"caught\", e.message); }}")
+
     # ---------------------------------------------------------------- generators, async, literal types (0.3)
     def stmt_coroutine(self, ind, d):
         r = self.r
-        k = r.randrange(7)
+        k = r.randrange(10)
         n = r.randrange(0, 5)
         if k == 0:
             # a generator over its range, left early or not; return() runs its finally block
@@ -1268,9 +1316,26 @@ class Gen:
             self.emit(ind, f"Promise.all([aStep(\"p\", {self.num(d - 1)}, 1), later({self.num(d - 1)})]).then(v => console.log(\"all\", v));")
             if r.random() < 0.5:
                 self.emit(ind, f"Promise.allSettled([aFail({r.randrange(0, 3)}), aStep(\"q\", 1, 0)]).then(rs => console.log(rs.map(x => x.status)));")
-        else:
+        elif k == 6:
             sz = r.choice(["\"s\"", "\"m\"", "\"l\""])
             self.emit(ind, f"console.log(sizeName({sz}), sizeName(pickSize({self.num(d - 1)})));")
+        elif k == 7:
+            # async generators (0.3.1): for await left early or not, interleaved with the other jobs
+            self.long_jobs = True
+            self.emit(ind, f"agDrain(\"{self.fresh('ad')}\", {n}, {r.randrange(0, 6)}).then(s => console.log(\"drained\", s));")
+        elif k == 8:
+            # requests queued without awaiting, with return / throw among them
+            self.long_jobs = True
+            sends = ", ".join(str(r.randrange(-3, 9)) for _ in range(r.randrange(0, 5)))
+            self.emit(ind, f"agQueue(\"{self.fresh('aq')}\", [{sends}], {r.randrange(0, 3)});")
+        else:
+            # yield* of an async generator, or of sync iterables (arrays of values and of promises, a sync
+            # generator), left early or not
+            self.long_jobs = True
+            if r.random() < 0.5:
+                self.emit(ind, f"agPrintAll({n}, \"{self.fresh('ao')}\");")
+            else:
+                self.emit(ind, f"agMixedLoop({n}, {r.randrange(0, 8)}, \"{self.fresh('am')}\");")
 
     # ---------------------------------------------------------------- declarations
     def gen_classes(self):
@@ -1373,6 +1438,51 @@ class Gen:
             "  for (let i = 0; i < n; i++) await null;",
             "  throw new Error(\"failed \" + n);",
             "}",
+            "async function* agRange(n: number, tag: string): AsyncGenerator<number> {",
+            "  try {",
+            "    for (let i = 0; i < n; i++) { if (i % 2 === 1) await null; yield i; }",
+            "  } finally { console.log(\"aclosed\", tag); }",
+            "}",
+            "async function* agAcc(tag: string): AsyncGenerator<number, void, number> {",
+            "  let t = 0;",
+            "  try {",
+            "    while (t < 20) { const v = yield t; t += v; await Promise.resolve(); console.log(tag, \"acc\", t); }",
+            "  } finally { console.log(tag, \"acc finally\", t); }",
+            "}",
+            "async function* agOuter(n: number, tag: string): AsyncGenerator<number> {",
+            "  yield -1;",
+            "  yield* agRange(n, tag);",
+            "  yield -2;",
+            "}",
+            "async function agDrain(tag: string, n: number, stop: number): Promise<number> {",
+            "  let s = 0;",
+            "  for await (const x of agRange(n, tag)) { if (x >= stop) break; console.log(tag, x); s += x; }",
+            "  return s;",
+            "}",
+            "function agQueue(tag: string, sends: number[], op: number): void {",
+            "  const g = agAcc(tag);",
+            "  for (const v of sends) g.next(v).then(r => console.log(tag, \"next\", r.value, r.done));",
+            "  if (op === 1) g.return(undefined).then(r => console.log(tag, \"ret\", r.value, r.done));",
+            "  if (op === 2) g.throw(new Error(\"x\")).then(r => console.log(tag, \"thr\", r.value), (e: unknown) => console.log(tag, \"rejected\", e instanceof Error));",
+            "  g.next(1).then(r => console.log(tag, \"last\", r.value, r.done));",
+            "}",
+            "async function agPrintAll(n: number, tag: string): Promise<void> {",
+            "  for await (const x of agOuter(n, tag)) console.log(tag, \"outer\", x);",
+            "}",
+            "function* sgRange(n: number, tag: string): Generator<number> {",
+            "  try { for (let i = 0; i < n; i++) yield i * 3; } finally { console.log(\"sclosed\", tag); }",
+            "}",
+            "async function* agMixed(n: number, tag: string): AsyncGenerator<number> {",
+            "  try {",
+            "    yield* [n, n + 1];",
+            "    yield* [Promise.resolve(n * 2), new Promise<number>(res => res(n * 2 + 1))];",
+            "    yield* sgRange(n, tag);",
+            "  } finally { console.log(\"mclosed\", tag); }",
+            "}",
+            "async function agMixedLoop(n: number, stop: number, tag: string): Promise<void> {",
+            "  let k = 0;",
+            "  for await (const x of agMixed(n, tag)) { if (k++ >= stop) break; console.log(tag, \"mixed\", x); }",
+            "}",
             "type Size = \"s\" | \"m\" | \"l\";",
             "function sizeName(z: Size): string {",
             "  switch (z) { case \"s\": return \"small\"; case \"m\": return \"medium\"; case \"l\": return \"large\"; }",
@@ -1413,6 +1523,25 @@ class Gen:
             "function compose(f: (x: number) => number, g: (x: number) => number): (x: number) => number {",
             "  return (x: number) => g(f(x));",
             "}",
+            "interface AccI { get v(): number; set v(x: number); readonly label: string }",
+            "function accMake(init: number) {",
+            "  let v = init;",
+            "  let reads = 0;",
+            "  return {",
+            "    label: \"lit\",",
+            "    get v(): number { reads++; return v; },",
+            "    set v(x: number) { v = x; },",
+            "    get reads(): number { return reads; },",
+            "  };",
+            "}",
+            "class AccC implements AccI {",
+            "  label = \"cls\";",
+            "  raw: number;",
+            "  constructor(raw: number) { this.raw = raw; }",
+            "  get v(): number { return this.raw; }",
+            "  set v(x: number) { this.raw = x; }",
+            "}",
+            "function accBump(a: AccI, by: number): void { a.v += by; }",
         ]
         for fi in range(r.randrange(1, 5)):
             kind = self.pick(["num", "num", "str", "bool", "rec", "rest", "opt", "thrower"])
@@ -1463,7 +1592,7 @@ class Gen:
         self.gen_classes()
         for _ in range(nstmts):
             self.stmt(0, 3)
-        if self.chance(0.03):
+        if self.chance(0.03) and not self.long_jobs:
             self.lines.append("throw new Error(\"final uncaught\");")
         return "\n".join(self.lines) + "\n"
 

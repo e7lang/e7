@@ -136,6 +136,10 @@ inline size_t instructionWords(uint64_t w) { return insWords(w); }
 // #private class fields: a class (not a record) field named "#x". Since 0.2.5 Object.keys,
 // JSON.stringify and console.log skip them (as JavaScript does); older VMs would list them.
 constexpr uint32_t kPrivateFieldsSince = makeVersion(0, 2, 5);
+// Getters and setters in object literals: records with kClassFlagAccessors (module.h). Since 0.3.1
+// Object.keys, JSON.stringify, console.log, structuredClone and e7:test's deepEqual treat their accessor
+// properties as JavaScript does; older VMs reject the class flag.
+constexpr uint32_t kRecordAccessorsSince = makeVersion(0, 3, 1);
 
 // The minimum VM version for a module; `why` names the newest feature used (empty for the baseline).
 inline uint32_t moduleRequires(const Module& m, std::string* why = nullptr) {
@@ -157,6 +161,28 @@ inline uint32_t moduleRequires(const Module& m, std::string* why = nullptr) {
     for (const FuncDesc& f : m.funcs)
       if (f.fflags && req < v030) { req = v030; if (why) *why = fflagsKind(f.fflags) == FK_GENERATOR ? "generators" : "async functions"; }
     if (!m.regexps.empty() && req < v030) { req = v030; if (why) *why = "regular expressions"; }
+  }
+  for (const ClassDesc& c : m.classes)
+    if ((c.cflags & kClassFlagAccessors) && req < kRecordAccessorsSince) {
+      req = kRecordAccessorsSince;
+      if (why) *why = "getters and setters in object literals";
+    }
+  // 0.3.1: async generators (function kind 3, requests to them: RESUME_R with kResumeAsync)
+  constexpr uint32_t v031 = makeVersion(0, 3, 1);
+  if (req < v031) {
+    for (const FuncDesc& f : m.funcs) {
+      if (req >= v031) break;
+      if (fflagsKind(f.fflags) == FK_ASYNC_GENERATOR) { req = v031; if (why) *why = "async generators"; break; }
+      for (size_t pc = 0; pc < f.code.size(); pc += instructionWords(f.code[pc])) {
+        uint16_t op = insOp(f.code[pc]);
+        if (op >= OP__COUNT) break;
+        if (op == OP_RESUME_R && pc + 1 < f.code.size() && (f.code[pc + 1] & kResumeAsync)) {
+          req = v031;
+          if (why) *why = "async generators";
+          break;
+        }
+      }
+    }
   }
   for (const NativeImport& n : m.natives) {
     uint32_t s = nativeSince(n.name);

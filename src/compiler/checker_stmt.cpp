@@ -21,6 +21,9 @@ bool Checker::structurallyAssignable(Type* src, Type* dst) {
 
 bool Checker::structurallyAssignableImpl(Type* src, Type* dst) {
   ObjShape* ds = dst->shape;
+  // the type of an object literal with accessors holds only such object literals (whose accessors are
+  // own properties): values of other types may be class instances
+  if (ds->ownAccessors && !(src->t == TT::Object && src->shape->ownAccessors)) return false;
   if (src->t == TT::Class) {
     ClassSym* c = src->cls;
     resolveClass(c);
@@ -80,6 +83,26 @@ static bool litSubset(const Type* a, const Type* b) {
   return (a->boolLits & ~b->boolLits) == 0;
 }
 
+// Why an object type with accessors is not assignable to another object type (for error messages)
+std::string Checker::accessorHint(Type* src, Type* dst) {
+  Type* s = baseOf(src);
+  Type* d = baseOf(dst);
+  if (s->t == TT::Array && d->t == TT::Array) return accessorHint(s->elem, d->elem);
+  if (d->t == TT::Object && d->shape->ownAccessors && !(s->t == TT::Object && s->shape->ownAccessors))
+    return ": the type of an object literal with accessors only holds such object literals";
+  if (s->t != TT::Object || d->t != TT::Object) return "";
+  ObjShape* ss = s->shape;
+  ObjShape* ds = d->shape;
+  for (auto& p : ds->props)
+    if (!ss->findProp(p.name) && (ss->findMethod("get " + p.name) || ss->findMethod("set " + p.name)))
+      return ": property '" + p.name + "' is an accessor in '" + typeName(s) + "'; e7 reads the properties of '" + typeName(d) +
+             "' as fields, so declare it there as 'get " + p.name + "(): " + typeName(p.type) + "'";
+  for (auto& m : ds->methods)
+    if ((m.name.compare(0, 4, "get ") == 0 || m.name.compare(0, 4, "set ") == 0) && !ss->findMethod(m.name))
+      return std::string(": '") + typeName(s) + "' has no " + (m.name[0] == 'g' ? "getter" : "setter") + " for '" + m.name.substr(4) + "'";
+  return "";
+}
+
 bool Checker::assignable(Type* src, Type* dst) {
   if (src == dst) return true;
   if (src->t == TT::Unknown || dst->t == TT::Unknown || src->t == TT::Never) return true;
@@ -127,6 +150,10 @@ bool Checker::assignable(Type* src, Type* dst) {
       // all iterator types are coroutines at run time: Generator -> Iterator / IterableIterator, with the
       // same value types (a target without TReturn / TNext accepts any)
       return src->t == TT::Generator && (dst->gk != 0 || src->gk == 0) && src->elem == dst->elem &&
+             (dst->ret->t == TT::Void || src->ret == dst->ret) && (dst->val->t == TT::Void || src->val == dst->val);
+    case TT::AsyncGenerator:
+      // the same for async generators (0.3.1): AsyncGenerator -> AsyncIterator / AsyncIterableIterator / AsyncIterable
+      return src->t == TT::AsyncGenerator && (dst->gk != 0 || src->gk == 0) && src->elem == dst->elem &&
              (dst->ret->t == TT::Void || src->ret == dst->ret) && (dst->val->t == TT::Void || src->val == dst->val);
     case TT::Number:
       return src->t == TT::Enum && !src->en->isString;
@@ -190,7 +217,7 @@ bool Checker::coerce(Expr*& e, Type* target, const char* ctx) {
     if (Type* c = constLit(e)) t = c;
   if (target->t == TT::Void && ctx && std::string(ctx) == "return") return false;
   if (!assignable(t, target)) {
-    err(e->loc, "type '" + typeName(t) + "' is not assignable to type '" + typeName(target) + "'");
+    err(e->loc, "type '" + typeName(t) + "' is not assignable to type '" + typeName(target) + "'" + accessorHint(t, target));
     return false;
   }
   if (target->t == TT::Optional && t->t != TT::Optional && kindOf(t) != K_R && t->t != TT::Never && t->t != TT::Unknown) {
@@ -241,7 +268,7 @@ Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
 // function's Promise<T>, else the function's return type
 Type* Checker::bodyRet(FuncSym* f) {
   Type* r = f->type->ret;
-  if (f->isGenerator) return r->t == TT::Generator && r->ret ? r->ret : T.voidT();
+  if (f->isGenerator) return (r->t == TT::Generator || r->t == TT::AsyncGenerator) && r->ret ? r->ret : T.voidT();
   if (f->isAsync) return r->t == TT::Promise ? r->elem : T.voidT();
   return r;
 }
@@ -250,8 +277,9 @@ Type* Checker::bodyRet(FuncSym* f) {
 void Checker::checkCoroutineRet(FuncSym* f, Type* ret, Loc l) {
   if (f->isGenerator && !f->isAsync && ret->t != TT::Generator && ret->t != TT::Unknown)
     err(l, "the return type of a generator must be Generator<T>, Iterator<T> or IterableIterator<T>, not '" + typeName(ret) + "'");
-  if (f->isGenerator && f->isAsync)
-    err(l, "async generators are not supported yet");
+  if (f->isGenerator && f->isAsync && ret->t != TT::AsyncGenerator && ret->t != TT::Unknown)
+    err(l, "the return type of an async generator must be AsyncGenerator<T>, AsyncIterator<T>, AsyncIterableIterator<T> or "
+           "AsyncIterable<T>, not '" + typeName(ret) + "'");
   if (f->isAsync && !f->isGenerator && ret->t != TT::Promise && ret->t != TT::Unknown)
     err(l, "the return type of an async function must be Promise<T>, not '" + typeName(ret) + "'");
 }
@@ -373,7 +401,7 @@ void Checker::checkBody(FuncSym* f) {
       Type* y = nullptr;
       for (Type* t : f->yieldTypes) y = y ? unify(y, t, f->loc, "yield expressions") : t;
       if (!y || y->t == TT::Void || y->t == TT::Undefined || y->t == TT::Never) y = T.undef();
-      r = T.generator(y, r, T.voidT(), 0);
+      r = f->isAsync ? T.asyncGenerator(y, r, T.voidT(), 0) : T.generator(y, r, T.voidT(), 0);
     }
     f->type = T.func(f->type->params, r, f->type->optParams, f->type->restParam);
     f->inferRet = false;
@@ -772,6 +800,15 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
             props.push_back({f.name, f.type, f.optional, f.undefOk});
         if (!t->cls->abstractProps.empty())
           err(el.loc, "a rest property of an abstract class type with abstract properties is not supported");
+      } else if (t->t == TT::Object && t->shape->ownAccessors) {
+        // an object literal with accessors: its properties and getters (own properties), in its order
+        std::vector<std::pair<std::string, Type*>> own;
+        if (readableProps(t, el.loc, "a rest property", own))
+          for (auto& p : own)
+            if (std::find(named.begin(), named.end(), p.first) == named.end()) {
+              const ObjShape::Prop* sp = t->shape->findProp(p.first);
+              props.push_back(sp ? *sp : ObjShape::Prop{p.first, p.second, false});
+            }
       } else if (t->t == TT::Object) {
         for (auto& p : t->shape->props)
           if (std::find(named.begin(), named.end(), p.name) == named.end()) props.push_back(p);
@@ -801,8 +838,11 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
       }
     } else if (t->t == TT::Object) {
       const ObjShape::Prop* p = t->shape->findProp(key);
-      if (!p) err(d.loc, "property '" + key + "' does not exist on type '" + typeName(t) + "'");
-      else ft = p->type;
+      const ObjShape::Method* g = p ? nullptr : t->shape->findMethod("get " + key);
+      if (p) ft = p->type;
+      else if (g) ft = g->fn->ret;  // a getter (declared by an interface or an object literal): called
+      else if (t->shape->findMethod("set " + key)) err(d.loc, "property '" + key + "' has no getter");
+      else err(d.loc, "property '" + key + "' does not exist on type '" + typeName(t) + "'");
     } else if (t->t != TT::Unknown) {
       err(l, "cannot destructure a value of type '" + typeName(t) + "'");
     }
@@ -1138,11 +1178,29 @@ void Checker::checkStmt(Stmt* s) {
           if (s->declareKind) s->expr = ie->a->a;
         }
       }
+      bool asyncIter = false;
       if (!et) {
         Type* it = check(s->expr, nullptr);
-        et = elemTypeForIter(s->expr, it, s->expr->loc);
+        Type* ag = it->t == TT::AsyncGenerator ? it : asyncIteratorMethodType(it, s->expr->loc);
+        if (ag && s->isAwait) {
+          // for await over an async iterable (0.3.1): its values are not awaited again
+          et = ag->elem;
+          asyncIter = true;
+        } else if (ag && it->t == TT::AsyncGenerator) {
+          err(s->expr->loc, "type '" + typeName(it) + "' is an async iterable: use 'for await'");
+          et = T.unknown();
+        } else {
+          et = elemTypeForIter(s->expr, it, s->expr->loc);
+        }
       }
-      if (s->isAwait) {
+      if (s->isAwait && asyncIter) {
+        if (!curFn || (!curFn->isAsync && !curFn->isInit))
+          err(s->loc, "'for await' is only allowed in async functions and at the top level of the entry module");
+        else if (curFn->isInit && !curFn->isAsync) {
+          curFn->isAsync = true;
+          curFn->type = T.func({}, T.promise(T.voidT()));
+        }
+      } else if (s->isAwait) {
         // for await: each element is awaited (a promise gives its value)
         if (!curFn || (!curFn->isAsync && !curFn->isInit))
           err(s->loc, "'for await' is only allowed in async functions and at the top level of the entry module");

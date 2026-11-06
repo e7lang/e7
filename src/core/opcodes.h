@@ -148,6 +148,17 @@ inline size_t insWords(uint64_t w) {
   }
 }
 
+// The extra word of RESUME_*: bits 0-15 the sent value's register, 16-17 the mode, 18-19 the sent
+// value's kind. Bit 20 (0.3.1, RESUME_R only): a request to an async generator; B receives the request's
+// promise, which is resolved with an IteratorResult record of class bits 21-36 whose primitive value
+// is boxed with the value type in bits 37-44 (the yielded type T). The other bits are 0.
+constexpr uint64_t kResumeAsync = 1ull << 20;
+inline uint32_t resumeClass(uint64_t ex) { return (uint32_t)(ex >> 21) & 0xFFFF; }
+inline uint8_t resumeElemVT(uint64_t ex) { return (uint8_t)(ex >> 37); }
+inline uint64_t resumeAsyncBits(uint32_t cls, uint8_t elemVT) {
+  return kResumeAsync | ((uint64_t)(cls & 0xFFFF) << 21) | ((uint64_t)elemVT << 37);
+}
+
 // Function flags (format 3, FuncDesc::fflags): bits 0-1 the function kind, bits 2-3 / 4-5 / 6-7 the
 // kinds of the yielded value, of the value next(v) sends and of the return value (generators only).
 enum FuncKind : uint8_t { FK_PLAIN = 0, FK_GENERATOR = 1, FK_ASYNC = 2, FK_ASYNC_GENERATOR = 3 };

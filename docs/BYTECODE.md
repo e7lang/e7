@@ -303,7 +303,8 @@ string/byte types) are checked by the interpreter at runtime. So even maliciousl
 - `requires` is the oldest e7vm that can run the module. The compiler computes it from the instructions and native
   functions the module uses (each has a "since" version, `src/core/since.h`), and from features that change how a
   VM must treat it: a class (not a record) with a field named `#...` (a `#private` field, hidden from
-  `Object.keys`, `JSON.stringify` and `console.log` since e7vm 0.2.5) requires 0.2.5; a VM older than `requires` rejects the
+  `Object.keys`, `JSON.stringify` and `console.log` since e7vm 0.2.5) requires 0.2.5, a record with accessors
+  (section 6.5) 0.3.1; a VM older than `requires` rejects the
   module with `E7_ERR_VERSION` instead of failing verification. `e7c --target 0.2` makes newer features compile
   errors, so a server can build modules for the VM versions of the apps in the field.
 - `e7_inspect()` (and `e7c --info`) read the format, `requires` and signature without loading a module.
@@ -332,11 +333,12 @@ funcs   u32 n, n x (str name, u32 sig, u16 nparams, u8 fflags, ...)    fflags ne
   literal. The VM compiles every entry when the module is loaded; a pattern that does not compile fails the load
   (`E7_ERR_LOAD`).
 - **cflags**, bit 0: the instances carry a presence mask (D7): one bit per field after the fields, all set by `NEW`;
-  allowed for records only (`kind` 1). Other bits are 0.
-- **fflags**: bits 0-1 the function kind (0 plain, 1 generator, 2 `async`, 3 `async` generator); bits 2-3 the kind
-  of the yielded value, bits 4-5 the kind of the value `next(v)` sends, bits 6-7 the kind of the value the body
-  returns (generators: none or the yielded kind; `async` functions: the promise's value), each 0 none, 1 `I`,
-  2 `F`, 3 `R`. A plain function has fflags 0.
+  allowed for records only (`kind` 1). Bit 1 (0.3.1): a record with accessor properties (section 6.5). Other bits
+  are 0.
+- **fflags**: bits 0-1 the function kind (0 plain, 1 generator, 2 `async`, 3 `async` generator, since 0.3.1);
+  bits 2-3 the kind of the yielded value, bits 4-5 the kind of the value `next(v)` sends, bits 6-7 the kind of the
+  value the body returns (generators and async generators: none or the yielded kind; `async` functions: the
+  promise's value), each 0 none, 1 `I`, 2 `F`, 3 `R`. A plain function has fflags 0.
 
 ### 6.2 New instructions (`since 0.3.0`)
 
@@ -345,7 +347,7 @@ funcs   u32 n, n x (str name, u32 sig, u16 nparams, u8 fflags, ...)    fflags ne
 | `GEN_START` | `___` | First instruction of a generator: create its coroutine, save the frame (arguments in place), return the coroutine to the caller |
 | `ASYNC_START` | `v__` | First instruction of an `async` function: create its coroutine (owning this frame) and its promise, of value type `A`; the body continues |
 | `YIELD` | `***` | `A` yielded value (yield kind), `B` received value (next kind, or `0xFFFF`), `C` mode (`I`); one following word: bits 0-15 the register receiving `return(v)`'s value (return kind, or `0xFFFF`), the rest 0. Saves the frame and gives `A` to the resumer with `done = false`; on resumption `B` receives the sent value and `C` the mode (0 `next`, 2 `return`); `throw(e)` raises `e` at this instruction |
-| `RESUME_I` / `RESUME_F` / `RESUME_R` | `***` | `A` coroutine (`R`), `B` destination of the value (kind of the variant), `C` destination of the done flag (`I`); one following word: bits 0-15 the register with the sent value (`0xFFFF`: none), bits 16-17 the mode (0 `next`, 1 `throw`, 2 `return`), bits 18-19 the sent value's kind (0 none, 1 `I`, 2 `F`, 3 `R`), the rest 0 |
+| `RESUME_I` / `RESUME_F` / `RESUME_R` | `***` | `A` coroutine (`R`), `B` destination of the value (kind of the variant), `C` destination of the done flag (`I`); one following word: bits 0-15 the register with the sent value (`0xFFFF`: none), bits 16-17 the mode (0 `next`, 1 `throw`, 2 `return`), bits 18-19 the sent value's kind (0 none, 1 `I`, 2 `F`, 3 `R`), the rest 0 (0.3.1: bits 20-44 of an async generator request, below) |
 | `AWAIT` | `***` | `A` destination (any kind, or `0xFFFF`), `B` promise (`R`), `C` 0; one word. Suspends the `async` function until the promise settles; then `A` receives the value, or the rejection is raised at this instruction. Leaving the frame gives the caller the function's promise (the first await) or ends the microtask |
 | `FIELD_ABSENT` | `Re_` | Clear the presence bit of field `B` of the record in `A` (D7); `SETF` / `SETN` set it again |
 
@@ -356,6 +358,38 @@ propagating to the caller. The module initializer may be `async` (top-level `awa
 fflags. The host signature of an exported `async` function has the promise's value as its return code; the call
 returns that value once the promise settles (or `E7_PENDING` while host tickets are open).
 
+**Async generators (0.3.1).** A function of kind 3 starts with `GEN_START` (its call returns the coroutine without
+running the body) and may contain `YIELD` and `AWAIT`. Its `next(v)` / `throw(e)` / `return(v)` are `RESUME_R` with
+bit 20 of the extra word set (an *async request*):
+
+| Extra word of `RESUME_R` | Meaning |
+|---|---|
+| bits 0-19 | as for every `RESUME` (sent register, mode, sent kind) |
+| bit 20 | 1: a request to an async generator; `B` receives the request's promise (`C` is set to 0) |
+| bits 21-36 | the class of the IteratorResult record the promise is resolved with: a record `{ value, done }` whose `done` field is a boolean |
+| bits 37-44 | the value type of the yielded type `T` (a primitive value in a reference `value` field is boxed with it) |
+| bits 45-63 | 0 |
+
+The VM keeps the request queue of the ECMAScript specification in the coroutine. A request gets its promise at
+once; `next` on a finished generator resolves it with `{ value: undefined, done: true }`, `throw` on a generator that
+has not started or has finished rejects it, `return(v)` on such a generator awaits `v` (then resolves). Otherwise the
+request is queued, and the body runs (its frame is pushed as for `RESUME`, but nothing is written to the
+resumer's registers when it leaves) only if the generator waits at its start or at a `YIELD`; a generator that
+runs or waits at an `AWAIT` answers the request later. In an async generator's frame:
+
+- `YIELD` resolves the first request with `{ value: A, done: false }`; if another request is queued, the body
+  continues at once with that request's value (`B`, the return register and the mode `C` as for a resumption, or
+  the error raised at the `YIELD`), otherwise the frame is saved and popped. The compiler awaits the yielded value
+  before the `YIELD` (`yield v` awaits `v`) and, for mode 2, awaits the return value after it.
+- `AWAIT` suspends the frame like in an `async` function (the caller gets nothing).
+- `RET_*` completes the generator: the first request gets `{ value, done: true }`, then the requests queued after it
+  are answered (`next`: `{ value: undefined, done: true }`, `throw`: rejected, `return(v)`: after awaiting `v`).
+  An error that leaves the frame rejects the first request's promise instead, and the frame's caller continues.
+
+The records are instances of the class the request names (a primitive field gets `NaN` / `0` where JavaScript has
+`undefined`). The generator's kinds are checked against the request's at run time (`generator type mismatch`), as for
+`RESUME`.
+
 Promise, iterator, regular expression and typed array operations are native functions with `since 0.3.0`
 (`Promise.*`, `TA.*`, `RegExp.*`, `Array.toSorted` / `toReversed` / `toSpliced` / `with*`, `Date.set`,
 `Error.newCause` / `newAggregate` / `cause` / `errors`, `JSON.parseRec` / `tryParseRec`, `Object.has`,
@@ -363,13 +397,16 @@ Promise, iterator, regular expression and typed array operations are native func
 
 ### 6.3 Verification (additions)
 
-1. `GEN_START` is the first instruction of every generator function and appears nowhere else; the same for
-   `ASYNC_START` in `async` functions, whose operand must be a value type of the fflags' return kind (`R` when
-   none). A generator's or `async` function's signature returns `R`.
-2. `YIELD` appears only in generator functions, `AWAIT` only in `async` functions; `YIELD`'s registers have the
-   kinds in `fflags` (`B` and the return register only when that kind is not none), `C` is `I`.
+1. `GEN_START` is the first instruction of every generator and async generator function and appears nowhere
+   else; the same for `ASYNC_START` in `async` functions, whose operand must be a value type of the fflags' return
+   kind (`R` when none). A coroutine's signature returns `R`.
+2. `YIELD` appears only in generators and async generators, `AWAIT` only in `async` functions and async
+   generators; `YIELD`'s registers have the kinds in `fflags` (`B` and the return register only when that kind is
+   not none), `C` is `I`.
 3. `RESUME_*`: `A` is `R`, `B` has the variant's kind, `C` is `I`; the sent register exists exactly when its kind
-   is not none and has that kind; mode 3 is invalid and mode 1 (`throw`) needs an `R` value. The coroutine's kinds
+   is not none and has that kind; mode 3 is invalid and mode 1 (`throw`) needs an `R` value. Bits 20-63 of the extra
+   word are 0, except in an async request (0.3.1: `RESUME_R` only, a record class `{ value, done: boolean }` whose
+   `value` field is a reference or has the kind of the value type in bits 37-44, bits 45-63 0). The coroutine's kinds
    are compared with the variant and the sent value **at run time** (the register is an untyped reference): a
    mismatch, a resumption of a running coroutine or of a non-coroutine is a runtime error, as for the signature
    check of `CALLV`.
@@ -381,6 +418,29 @@ Promise, iterator, regular expression and typed array operations are native func
 ### 6.4 Compatibility
 
 - A format-3 module has `requires` 0.3.0 or later; a 0.2.x VM rejects it with `E7_ERR_VERSION` before reading the
-  body (forward-compatibility CI job).
+  body (forward-compatibility CI job). A module with an async generator (function kind 3) or an async request
+  (`RESUME_R` with bit 20) has `requires` 0.3.1: a 0.3.0 VM rejects it with `E7_ERR_VERSION`, and
+  `e7c --target 0.3` refuses it.
 - The 0.3 promise extends section 5's: every 0.3.x VM runs every module compiled by a 0.2.x or 0.3.x compiler (the
   backward-compatibility CI job runs the suite compiled by the 0.2.6 compiler on the current VM).
+
+### 6.5 Records with accessors (`since 0.3.1`)
+
+Getters and setters in object literals (SPEC section 5) use no new instruction or native function: a record whose
+literal has accessors carries **cflags bit 1** (`kClassFlagAccessors`, records only). In such a record, field `x`
+is an accessor property when the vtable has a method named `get x` and / or `set x`; the field holds the
+**accessor pair**, a tuple (kind 2) of three fields: the getter closure (`() => T`, or null), the setter closure
+(`(v: T) => void`, or null) and a slot that is never written, whose value type is the property's. The methods
+`get x` / `set x` (the targets of `CALLI` by name) load the pair and call its closure. Natives that read
+properties treat the field as JavaScript treats an accessor property: `Object.keys` lists it, `JSON.stringify`
+(also `console.log`'s `%j`) and `e7:test`'s `assertEqual` call the getter (a closure with no parameters whose return
+kind is the slot's; anything else is the runtime error "malformed accessor property"), `console.log` prints
+`[Getter]`, `[Setter]` or `[Getter/Setter]`, and `structuredClone` refuses it (a runtime error; the compiler
+rejects types with accessors).
+
+- Verification: the flag only on records (`kind` 1); a field named by an accessor method is a reference field.
+  The accessor pair is checked when a native calls the getter (above).
+- `requires` is 0.3.1 for a module with the flag (`kRecordAccessorsSince` in `src/core/since.h`); a 0.3.0 VM
+  rejects it with `E7_ERR_VERSION`, and `e7c --target 0.3.0` refuses the program ("the program uses getters and
+  setters in object literals, which needs e7vm 0.3.1"). Modules that do not use the feature compile to the same
+  bytes as before and run on 0.3.0.

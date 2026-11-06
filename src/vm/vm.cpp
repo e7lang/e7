@@ -266,6 +266,8 @@ bool VM::willBeCaught() const {
     if (handlerAt(k)) return true;
     // an async function turns an error into the rejection of its promise
     if (frames_[k].coro && fflagsKind(frames_[k].coro->fflags) == FK_ASYNC && frames_[k].coro->promise) return true;
+    // an async generator rejects the promise of its current request
+    if (frames_[k].coro && isAsyncGen(frames_[k].coro)) return true;
   }
   return false;
 }
@@ -279,6 +281,31 @@ int VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
     const HandlerDesc* h = handlerAt(k);
     if (!h) {
       CoroObj* co = frames_[k].coro;
+      if (co && isAsyncGen(co)) {
+        // the error leaves an async generator (0.3.1): it is completed, the promise of its current
+        // request is rejected and the requests queued after it are answered; its caller continues
+        budget_ -= (int64_t)(frames_.size() - k);
+        nativeDepth_ = st.nativeDepth;
+        gcBlockers_ = st.gcBlockers;
+        curNative_ = st.curNative;
+        callbackNatives_.resize(st.callbacks);
+        tempRoots_.resize(st.tempRoots);
+        gcInhibit_ = st.gcInhibit;
+        Obj* v = errorValue(e);  // may collect: the frames are still in place
+        TempRoot keep(*this, v);
+        TempRoot keepCo(*this, co);
+        bool ent = frames_[k].entry;
+        dropFrames(k);  // marks co done
+        Slot ev;
+        ev.r = v;
+        agenCompleteStep(co, true, ev, 3, true);
+        agenDrainQueue(co);
+        if (ent) {
+          resultKind_ = 'V';
+          return 3;
+        }
+        return 1;
+      }
       if (!co || fflagsKind(co->fflags) != FK_ASYNC || !co->promise) continue;
       // the error leaves an async function: its promise is rejected and the function returns it
       budget_ -= (int64_t)(frames_.size() - k);
@@ -790,6 +817,11 @@ static size_t externalBytes(const Obj* o) {
       return m->entries.capacity() * sizeof(MapEntry) + m->buckets.capacity() * 4;
     }
     case OT::BigInt: return static_cast<const BigObj*>(o)->mag.capacity() * sizeof(uint32_t);
+    case OT::Coro: {
+      // an async generator's queued requests (counted as they are queued and answered)
+      auto* c = static_cast<const CoroObj*>(o);
+      return isAsyncGen(c) && c->queue ? c->queue->size() * sizeof(AGenRequest) : 0;
+    }
     default: return 0;
   }
 }
@@ -802,6 +834,11 @@ void VM::freeObj(Obj* o) {
     case OT::Map: static_cast<MapObj*>(o)->~MapObj(); break;
     case OT::BigInt: static_cast<BigObj*>(o)->~BigObj(); break;
     case OT::Promise: static_cast<PromiseObj*>(o)->reactions.~vector(); break;
+    case OT::Coro: {
+      auto* c = static_cast<CoroObj*>(o);
+      if (isAsyncGen(c)) delete c->queue;
+      break;
+    }
     case OT::RegExp: {
       auto* r = static_cast<RegExpObj*>(o);
       if (r->progBytes && r->prog.use_count() == 1) bytes_ -= r->progBytes;  // the last holder of the program
@@ -904,7 +941,12 @@ bool VM::checkHeap(std::string* why) const {
         auto* c = static_cast<const CoroObj*>(o);
         if (!ref(c->closure, "a coroutine's closure")) return false;
         if (!ref(c->promise, "a coroutine's promise")) return false;
-        if (!ref(c->items, "a native iterator's items")) return false;
+        if (!c->fn && !ref(c->items, "a native iterator's items")) return false;
+        if (isAsyncGen(c) && c->queue)
+          for (const AGenRequest& q : *c->queue)
+            if (!ref(q.promise, "an async generator request") ||
+                ((q.kind == 3 || q.mode == 1) && !ref(q.value.r, "an async generator request's value")))
+              return false;
         if (c->fn && (c->state == CO_START || c->state == CO_SUSPENDED)) {
           const Slot* rs = reinterpret_cast<const Slot*>(c + 1);
           for (uint16_t r : c->fn->refRegs)
@@ -1047,7 +1089,12 @@ void VM::traceAll() {
         auto* c = static_cast<CoroObj*>(o);
         mark(c->closure);
         mark(reinterpret_cast<Obj*>(c->promise));
-        mark(c->items);
+        if (!c->fn) mark(c->items);
+        if (isAsyncGen(c) && c->queue)
+          for (const AGenRequest& q : *c->queue) {
+            mark(q.promise);
+            if (q.kind == 3 || q.mode == 1) mark(q.value.r);
+          }
         // while running, the registers are in the frame (traced there); the saved copy is stale
         if (c->fn && (c->state == CO_START || c->state == CO_SUSPENDED))
           for (uint16_t r : c->fn->refRegs) mark(c->regs()[r].r);
@@ -1171,6 +1218,12 @@ ModuleRT* VM::loadModule(Module&& mod) {
       c.vtable.push_back(&M->funcs[d.vtable[k]]);
       c.methodNames.push_back(d.methodNames[k]);
       c.methodIndex[d.methodNames[k]] = (uint32_t)k;
+    }
+    if (d.cflags & kClassFlagAccessors) {
+      c.accessors.assign(c.nfields, 0);
+      for (uint32_t k = 0; k < c.nfields; k++)
+        c.accessors[k] = (uint8_t)((c.methodIndex.count("get " + c.fieldNames[k]) ? 1 : 0) |
+                                   (c.methodIndex.count("set " + c.fieldNames[k]) ? 2 : 0));
     }
   }
   // regular expression literals (D4): compiled once, shared by the RegExp objects made from them. The

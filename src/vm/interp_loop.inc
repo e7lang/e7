@@ -272,6 +272,7 @@ dispatch:
   do {                                                                       \
     CoroObj* co_ = fr->coro;                                                 \
     if (fflagsKind(co_->fflags) == FK_ASYNC) ASYNC_RET(rv, kc);              \
+    if (fflagsKind(co_->fflags) == FK_ASYNC_GENERATOR) AGEN_RET(rv, kc);     \
     co_->state = CO_DONE;                                                    \
     bool ent_ = fr->entry;                                                   \
     uint16_t dst_ = fr->retDst, dd_ = fr->doneDst;                           \
@@ -304,6 +305,24 @@ dispatch:
     if (ent_) { result_.r = p_; resultKind_ = 'R'; return ERR_OK; }         \
     LOAD_FRAME();                                                            \
     if (dst_ != kNoReg) R[dst_].r = p_;                                      \
+    DISPATCH();                                                              \
+  } while (0)
+
+// returning from an async generator's frame (0.3.1): it is completed, its first request gets
+// { value, done: true } and the requests queued after it are answered (AsyncGeneratorDrainQueue)
+#define AGEN_RET(rv, kc)                                                     \
+  do {                                                                       \
+    CoroObj* co_ = fr->coro;                                                 \
+    fr->ip = ip;                                                             \
+    co_->state = CO_DONE;                                                    \
+    /* before the frame is popped: its registers keep the value alive */     \
+    agenCompleteStep(co_, false, (rv), kc == 'V' ? 0 : kc == 'I' ? 1 : kc == 'F' ? 2 : 3, true); \
+    agenDrainQueue(co_);                                                     \
+    bool ent_ = fr->entry;                                                   \
+    frames_.pop_back();                                                      \
+    if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS); \
+    if (ent_) { resultKind_ = 'V'; return ERR_OK; }                         \
+    LOAD_FRAME();                                                            \
     DISPATCH();                                                              \
   } while (0)
 
@@ -751,6 +770,40 @@ dispatch:
     ip++;  // the extra word (read on resumption)
     CoroObj* co = fr->coro;
     if (E7_UNLIKELY(!co)) THROW("yield outside a running generator");
+    if (E7_UNLIKELY(fflagsKind(co->fflags) == FK_ASYNC_GENERATOR)) {
+      // AsyncGeneratorYield (0.3.1; the value is already awaited): the first request gets
+      // { value, done: false }; a request queued after it is answered here at once, else the
+      // generator suspends
+      fr->ip = ip;
+      agenCompleteStep(co, false, R[A], fflagsYield(co->fflags), false);  // may collect: the frame is in place
+      R = stack_ + fr->base;
+      if (co->queue && !co->queue->empty()) {
+        const AGenRequest& q = co->queue->front();
+        uint16_t recv = B, retReg = (uint16_t)ip[-1];
+        R[C].i = q.mode;
+        uint16_t into = q.mode == 0 ? recv : q.mode == 2 ? retReg : kNoReg;
+        if (into != kNoReg) {
+          if (q.kind != 0) R[into] = q.value;
+          else {
+            uint8_t k = q.mode == 0 ? fflagsNext(co->fflags) : fflagsReturn(co->fflags);
+            if (k == 3) R[into].r = undef_;
+            else if (k == 2) R[into].f = std::nan("");
+            else R[into].i = 0;
+          }
+        }
+        if (q.mode == 1) raiseThrown(q.value.r);  // at the YIELD (its handlers apply)
+        DISPATCH();
+      }
+      co->pc = (uint32_t)(ip - 2 - fn->code);
+      memcpy(co->regs(), R, (size_t)fn->nregs * sizeof(Slot));
+      co->state = CO_SUSPENDED;
+      bool ent = fr->entry;
+      frames_.pop_back();
+      if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS);
+      if (ent) { resultKind_ = 'V'; return ERR_OK; }
+      LOAD_FRAME();
+      DISPATCH();
+    }
     Slot v = R[A];
     co->pc = (uint32_t)(ip - 2 - fn->code);
     memcpy(co->regs(), R, (size_t)fn->nregs * sizeof(Slot));
@@ -778,38 +831,56 @@ dispatch:
     if (E7_UNLIKELY(!o || o->type != OT::Coro)) THROW(o ? "value is not a generator" : "cannot resume null or undefined");
     auto* co = static_cast<CoroObj*>(o);
     uint8_t ff = co->fflags;
-    if (E7_UNLIKELY(fflagsKind(ff) != FK_GENERATOR || fflagsYield(ff) != want)) THROW("generator type mismatch");
-    uint8_t expect = mode == 0 ? fflagsNext(ff) : mode == 2 ? fflagsReturn(ff) : 3;
-    if (E7_UNLIKELY(sentKind != 0 && sentKind != expect)) THROW("generator type mismatch");
-    if (E7_UNLIKELY(co->state == CO_RUNNING)) THROW("TypeError: Generator is already running");
-    if (co->state == CO_DONE || (co->state == CO_START && mode != 0)) {
-      // not started (return / throw finish it without running the body) or already finished
-      co->state = CO_DONE;
-      if (mode == 1) { fr->ip = ip; raiseThrown(R[sent].r); }
-      if (mode == 2 && sentKind == want) R[B] = R[sent];
-      else if (fflagsReturn(ff)) {
-        // a finished generator gives undefined (a number NaN, an integer 0: the register's kind is fixed)
-        if (want == 3) R[B].r = undef_;
-        else if (want == 2) R[B].f = std::nan("");
-        else R[B].i = 0;
-      }
-      R[C].i = 1;
-      DISPATCH();
-    }
-    if (!co->fn) {
-      // a native iterator (String.prototype.matchAll): the next element of its array
-      auto* items = static_cast<ArrObj*>(co->items);
-      if (mode == 0 && co->pc < items->len) {
-        co->state = CO_SUSPENDED;
-        R[B] = items->data[co->pc++];
-        R[C].i = 0;
+    uint16_t vdst = B, ddst = C;
+    if (E7_UNLIKELY((ex & kResumeAsync) != 0)) {
+      // a request to an async generator (0.3.1): B receives its promise; the body runs now only when
+      // it waits at its start or at a yield (AsyncGeneratorResume)
+      if (E7_UNLIKELY(!isAsyncGen(co))) THROW("generator type mismatch");
+      fr->ip = ip;
+      Slot sv;
+      sv.u = 0;
+      if (sentKind != 0) sv = R[sent];
+      bool run = false;
+      PromiseObj* p = agenRequest(co, mode, sv, (uint8_t)sentKind, &M->classes[resumeClass(ex)], resumeElemVT(ex), &run);
+      R = stack_ + fr->base;
+      R[B].r = p;
+      R[C].i = 0;
+      if (!run) DISPATCH();
+      vdst = ddst = kNoReg;  // the generator gives its caller nothing when it yields, awaits or returns
+    } else {
+      if (E7_UNLIKELY(fflagsKind(ff) != FK_GENERATOR || fflagsYield(ff) != want)) THROW("generator type mismatch");
+      uint8_t expect = mode == 0 ? fflagsNext(ff) : mode == 2 ? fflagsReturn(ff) : 3;
+      if (E7_UNLIKELY(sentKind != 0 && sentKind != expect)) THROW("generator type mismatch");
+      if (E7_UNLIKELY(co->state == CO_RUNNING)) THROW("TypeError: Generator is already running");
+      if (co->state == CO_DONE || (co->state == CO_START && mode != 0)) {
+        // not started (return / throw finish it without running the body) or already finished
+        co->state = CO_DONE;
+        if (mode == 1) { fr->ip = ip; raiseThrown(R[sent].r); }
+        if (mode == 2 && sentKind == want) R[B] = R[sent];
+        else if (fflagsReturn(ff)) {
+          // a finished generator gives undefined (a number NaN, an integer 0: the register's kind is fixed)
+          if (want == 3) R[B].r = undef_;
+          else if (want == 2) R[B].f = std::nan("");
+          else R[B].i = 0;
+        }
+        R[C].i = 1;
         DISPATCH();
       }
-      co->state = CO_DONE;
-      if (mode == 1) { fr->ip = ip; raiseThrown(R[sent].r); }
-      R[B].r = mode == 2 && sentKind == want ? R[sent].r : undef_;
-      R[C].i = 1;
-      DISPATCH();
+      if (!co->fn) {
+        // a native iterator (String.prototype.matchAll): the next element of its array
+        auto* items = static_cast<ArrObj*>(co->items);
+        if (mode == 0 && co->pc < items->len) {
+          co->state = CO_SUSPENDED;
+          R[B] = items->data[co->pc++];
+          R[C].i = 0;
+          DISPATCH();
+        }
+        co->state = CO_DONE;
+        if (mode == 1) { fr->ip = ip; raiseThrown(R[sent].r); }
+        R[B].r = mode == 2 && sentKind == want ? R[sent].r : undef_;
+        R[C].i = 1;
+        DISPATCH();
+      }
     }
     FuncRT* cf = co->fn;
     uint32_t nb = fr->base + fn->nregs;
@@ -838,7 +909,7 @@ dispatch:
     }
     co->state = CO_RUNNING;
     fr->ip = ip;
-    frames_.push_back(Frame{cf, cip, co->closure, nb, B, false, co, C});
+    frames_.push_back(Frame{cf, cip, co->closure, nb, vdst, false, co, ddst});
     LOAD_FRAME();
     if (mode == 1) {
       budget_ -= 1;
@@ -871,7 +942,10 @@ dispatch:
   // the job.
   CASE(AWAIT) {
     CoroObj* co = fr->coro;
-    if (E7_UNLIKELY(!co || fflagsKind(co->fflags) != FK_ASYNC || !co->promise)) THROW("await outside a running async function");
+    // an async function (its promise goes to the caller at the first await) or an async generator
+    // (0.3.1: its caller has the request's promise already)
+    if (E7_UNLIKELY(!co || !((fflagsKind(co->fflags) == FK_ASYNC && co->promise) || fflagsKind(co->fflags) == FK_ASYNC_GENERATOR)))
+      THROW("await outside a running async function");
     Obj* po = R[B].r;
     if (E7_UNLIKELY(!po || po->type != OT::Promise)) THROW("await: the value is not a promise");
     auto* awaited = static_cast<PromiseObj*>(po);
@@ -889,9 +963,13 @@ dispatch:
     uint16_t dst = fr->retDst;
     frames_.pop_back();
     if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS);
-    if (ent) { result_.r = pr; resultKind_ = 'R'; return ERR_OK; }
+    if (ent) {
+      if (pr) { result_.r = pr; resultKind_ = 'R'; }
+      else resultKind_ = 'V';
+      return ERR_OK;
+    }
     LOAD_FRAME();
-    if (dst != kNoReg) R[dst].r = pr;
+    if (dst != kNoReg && pr) R[dst].r = pr;
     DISPATCH();
   }
 

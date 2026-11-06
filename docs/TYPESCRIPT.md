@@ -27,14 +27,14 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **153 supported**, **18 partial**, **79 unsupported** (268 sample programs).
+250 features: **155 supported**, **17 partial**, **78 unsupported** (267 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
 | [Everyday Types](#everyday-types) | 16 | 2 | 2 |
 | [Narrowing](#narrowing) | 11 | 1 | 2 |
 | [More on Functions](#more-on-functions) | 15 | 0 | 6 |
-| [Object Types](#object-types) | 12 | 1 | 5 |
+| [Object Types](#object-types) | 13 | 1 | 4 |
 | [Generics](#generics) | 9 | 1 | 5 |
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
 | [Classes](#classes) | 20 | 1 | 10 |
@@ -43,7 +43,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Utility Types](#utility-types) | 4 | 0 | 9 |
 | [Decorators](#decorators) | 0 | 0 | 3 |
 | [Declaration Merging](#declaration-merging) | 1 | 0 | 3 |
-| [Iterators and Generators](#iterators-and-generators) | 5 | 2 | 0 |
+| [Iterators and Generators](#iterators-and-generators) | 6 | 1 | 0 |
 | [Symbols](#symbols) | 0 | 0 | 3 |
 | [Mixins](#mixins) | 0 | 0 | 1 |
 | [Triple-Slash Directives](#triple-slash-directives) | 2 | 0 | 0 |
@@ -53,9 +53,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 25 | 1 | 5 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 11 | 7 | 8 |
-| **Total** | **153** | **18** | **79** |
+| **Total** | **155** | **17** | **78** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 55, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 21.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 55, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 19.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -136,6 +136,7 @@ Within each category, supported features come first, then partial and unsupporte
 | Assigning objects with more properties than the target type | supported | An object with extra properties can be assigned to a narrower type (fresh literals with unknown properties are errors, as in tsc) | [excess-properties.ts](../tests/ts-features/objects/excess-properties.ts) |
 | Extending interfaces (single and multiple) | supported |  | [extending-interfaces.ts](../tests/ts-features/objects/extending-interfaces.ts) |
 | Accessors declared in interfaces (`get x(): T`) | supported | An interface *property* is read as a field, so a class implements it with a field; declare accessors as `get` / `set` in the interface | [interface-accessors.ts](../tests/ts-features/objects/interface-accessors.ts) |
+| Getters and setters in object literals | supported | Needs e7vm 0.3.1; the accessors are part of the literal's type (`get x(): T`), so it is assignable to interfaces that declare them, not to ones that declare `x` as a property (read as a field); a getter and its setter have one type | [object-literal-accessors.ts](../tests/ts-features/objects/object-literal-accessors.ts) |
 | Methods in object literals | supported |  | [object-literal-methods.ts](../tests/ts-features/objects/object-literal-methods.ts) |
 | Optional methods in interfaces (`m?(): T`) | supported | An optional method is an optional property of function type: call it with `obj.m?.()`, or after checking it | [optional-methods.ts](../tests/ts-features/objects/optional-methods.ts) |
 | Optional properties | supported |  | [optional-properties.ts](../tests/ts-features/objects/optional-properties.ts) |
@@ -148,7 +149,6 @@ Within each category, supported features come first, then partial and unsupporte
 | Computed property names | **partial** | **Works:** keys known at compile time: string and number literals, consts of literal types, enum members (in object literals, classes and interfaces, and `obj[KEY]`). **Not supported:** property names must be known to fix the object layout (*types known at compile time*). **Instead:** `Map<string, V>` for keys computed at run time | [computed-property-names.ok.ts](../tests/ts-features/objects/computed-property-names.ok.ts), [computed-property-names.no.ts](../tests/ts-features/objects/computed-property-names.no.ts) |
 | Index signatures `{ [key: string]: T }` | **unsupported** | **Why:** properties are fixed fields with static types (*types known at compile time*). **Instead:** `Map<string, T>` (`JSON.parse(text) as Map<string, T>` reads a JSON object with arbitrary keys) | [index-signatures.ts](../tests/ts-features/objects/index-signatures.ts) |
 | Intersection types `A & B` | **unsupported** | **Why:** intersection types are excluded (SPEC 0.1); write the combined interface (or `interface C extends A, B`) (*types known at compile time*). **Instead:** an interface that extends both: `interface ColorfulCircle extends Colorful, Circle {}` | [intersection-types.ts](../tests/ts-features/objects/intersection-types.ts) |
-| Getters and setters in object literals | **unsupported** | **Why:** object literal properties are plain fields or methods (*not implemented yet*). **Instead:** a class with `get` / `set` accessors, or methods | [object-literal-accessors.ts](../tests/ts-features/objects/object-literal-accessors.ts) |
 | Optional tuple elements `[A, B?]` | **unsupported** | **Why:** a tuple has one length (its layout is fixed); use `T \| undefined` for the element (*types known at compile time*). **Instead:** a tuple with a nullable element `[A, B \| undefined]`, or an interface with an optional property | [tuple-optional-elements.ts](../tests/ts-features/objects/tuple-optional-elements.ts) |
 | Rest elements in tuple types `[A, ...B[]]` | **unsupported** | **Why:** a tuple has one length (its layout is fixed); use an array (*types known at compile time*). **Instead:** an interface `{ head: A; rest: B[] }` | [tuple-rest-elements.ts](../tests/ts-features/objects/tuple-rest-elements.ts) |
 
@@ -290,12 +290,12 @@ Within each category, supported features come first, then partial and unsupporte
 
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
+| Async iteration (`for await`, async generators) | supported | Async generators need e7vm 0.3.1; `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (as for generators) | [async-iteration.ts](../tests/ts-features/iterators/async-iteration.ts) |
 | `for...of` over arrays, `entries()`, `keys()`, `values()` | supported | An array's `entries()` / `keys()` / `values()` are used directly in `for...of` (they are not iterator objects) | [for-of-arrays.ts](../tests/ts-features/iterators/for-of-arrays.ts) |
 | Iterating `Map` and `Set` | supported |  | [for-of-map-set.ts](../tests/ts-features/iterators/for-of-map-set.ts) |
 | `for...of` over strings (by code point) | supported |  | [for-of-strings.ts](../tests/ts-features/iterators/for-of-strings.ts) |
 | Generator functions (`function*`, `yield`, `yield*`) | supported | `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (the value's representation is fixed) | [generators.ts](../tests/ts-features/iterators/generators.ts) |
 | Spreading iterables and `Array.from` | supported |  | [spread-iterables.ts](../tests/ts-features/iterators/spread-iterables.ts) |
-| Async iteration (`for await`, async generators) | **partial** | **Works:** `for await` over arrays of promises or values (each one awaited, in the order of Node.js). **Not supported:** async generators (`async function*`) (*not implemented yet*). **Instead:** an async function that returns an array, or a generator of promises | [async-iteration.ok.ts](../tests/ts-features/iterators/async-iteration.ok.ts), [async-iteration.no.ts](../tests/ts-features/iterators/async-iteration.no.ts) |
 | Custom iterables (`[Symbol.iterator]()`) | **partial** | **Works:** a class whose `[Symbol.iterator]()` method returns a generator works with `for...of`, spread, `Array.from` and destructuring. **Not supported:** an iterator written by hand (an object with a `next()` method); iterators are generators at run time (*not implemented yet*). **Instead:** a generator: `*[Symbol.iterator]() { ... yield v; }` | [iterator-protocol.ok.ts](../tests/ts-features/iterators/iterator-protocol.ok.ts), [iterator-protocol.no.ts](../tests/ts-features/iterators/iterator-protocol.no.ts) |
 
 ## Symbols

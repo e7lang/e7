@@ -281,6 +281,17 @@ class VM {
   void rejectPromise(PromiseObj* p, Obj* reason);
   // PerformPromiseThen: adds the reaction, or queues its job when p is already settled
   void promiseThen(PromiseObj* p, const Reaction& r);
+  // ---- async generators (promise.cpp, 0.3.1): the request queue of the specification
+  // next(v) / throw(e) / return(v) (mode 0 / 1 / 2) on the async generator co: queues the request
+  // (AsyncGeneratorEnqueue) and returns its promise; *resume is set when the body must continue now
+  // (AsyncGeneratorResume: the interpreter pushes its frame with the request's completion)
+  PromiseObj* agenRequest(CoroObj* co, uint32_t mode, Slot sent, uint8_t sentKind, ClassRT* cls, uint8_t elemVT,
+                          bool* resume);
+  // AsyncGeneratorCompleteStep: settles the first request with { value: v, done } (v of kind vkind:
+  // 0 none, 1 I, 2 F, 3 R) or rejects it with v (rejected)
+  void agenCompleteStep(CoroObj* co, bool rejected, Slot v, uint8_t vkind, bool done);
+  void agenDrainQueue(CoroObj* co);   // AsyncGeneratorDrainQueue (the generator is completed)
+  void agenAwaitReturn(CoroObj* co);  // AsyncGeneratorAwaitReturn (the first request is a return)
   // a host ticket: a pending promise of value type vt settled later by settleTicket
   int64_t newTicket(PromiseObj* p, void* hostData = nullptr);
   bool ticketHostData(int64_t ticket, void** data) const;

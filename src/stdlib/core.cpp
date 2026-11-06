@@ -104,7 +104,10 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Buffer: return u"[object ArrayBuffer]";
     case OT::Handle: return u"[object KeyHandle]";
     case OT::Promise: return u"[object Promise]";
-    case OT::Coro: return static_cast<CoroObj*>(o)->fn ? u"[object Generator]" : u"[object RegExp String Iterator]";
+    case OT::Coro: {
+      auto* c = static_cast<CoroObj*>(o);
+      return !c->fn ? u"[object RegExp String Iterator]" : isAsyncGen(c) ? u"[object AsyncGenerator]" : u"[object Generator]";
+    }
     case OT::RegExp: return regexpToString(static_cast<RegExpObj*>(o));
     default: return u"[object Object]";
   }
@@ -283,8 +286,11 @@ std::string functionBase(const CloObj* c) {
   std::string nm = c->fn->name;
   size_t dot = nm.find_last_of('.');
   if (dot != std::string::npos) nm = nm.substr(dot + 1);
-  if (nm.empty() || nm[0] == '<') return "[Function (anonymous)]";
-  return "[Function: " + nm + "]";
+  // Node.js names the kind of a generator or async function: [GeneratorFunction: g], [AsyncFunction: f], ...
+  static const char* const kKind[] = {"Function", "GeneratorFunction", "AsyncFunction", "AsyncGeneratorFunction"};
+  const char* kind = kKind[c->fn->d ? fflagsKind(c->fn->d->fflags) : 0];
+  if (nm.empty() || nm[0] == '<') return std::string("[") + kind + " (anonymous)]";
+  return std::string("[") + kind + ": " + nm + "]";
 }
 
 constexpr uint32_t kMaxArrayLength = 100;
@@ -339,7 +345,10 @@ struct Inspector {
       case OT::BigInt: return bigDecimal(vm, static_cast<BigObj*>(o), charge) + "n";
       case OT::Closure: return functionBase(static_cast<CloObj*>(o));
       case OT::Handle: return "KeyHandle {}";
-      case OT::Coro: return static_cast<CoroObj*>(o)->fn ? "Object [Generator] {}" : "Object [RegExp String Iterator] {}";
+      case OT::Coro: {
+        auto* c = static_cast<CoroObj*>(o);
+        return !c->fn ? "Object [RegExp String Iterator] {}" : isAsyncGen(c) ? "Object [AsyncGenerator] {}" : "Object [Generator] {}";
+      }
       case OT::RegExp: return utf16ToUtf8(regexpToString(static_cast<RegExpObj*>(o)));
       case OT::Promise: {
         auto* p = static_cast<PromiseObj*>(o);
@@ -575,6 +584,10 @@ struct Inspector {
           const std::string& k = c->fieldNames[i];
           std::u16string k16 = isPlainKey(k) ? std::u16string() : utf8ToUtf16(k);
           std::string name = isPlainKey(k) ? k : quoteJS(k16.data(), k16.size());
+          if (uint8_t ak = accessorKind(c, i)) {  // an accessor property is not read (Node.js)
+            out.push_back(name + ": " + (ak == 3 ? "[Getter/Setter]" : ak == 1 ? "[Getter]" : "[Setter]"));
+            continue;
+          }
           out.push_back(name + ": " + item(in->fields()[i], c->fieldVT[i], rt));
         }
         break;
@@ -824,6 +837,25 @@ std::string formatLog(VM& vm, ArrObj* a) {
 }
 
 }  // namespace
+
+bool accessorGet(VM& vm, InstObj* in, uint32_t i, Slot* out, uint8_t* vt) {
+  // field i holds the accessor pair [getter, setter, value slot] (checked: the bytecode is untrusted)
+  Obj* p = i < in->cls->nfields && in->cls->fieldVT[i] == VT_REF ? in->fields()[i].r : nullptr;
+  if (!p || p->type != OT::Instance) vm.error("malformed accessor property");
+  auto* pair = static_cast<InstObj*>(p);
+  const ClassRT* pc = pair->cls;
+  if (!pc->isTuple || pc->nfields != 3 || pc->fieldVT[0] != VT_REF) vm.error("malformed accessor property");
+  Obj* g = pair->fields()[0].r;
+  if (!g) return false;  // a setter only
+  if (g->type != OT::Closure) vm.error("malformed accessor property");
+  auto* c = static_cast<CloObj*>(g);
+  uint8_t rvt = pc->fieldVT[2];
+  if (c->fn->nparams != 0 || c->fn->retKind != kindChar(kindOfVT(rvt))) vm.error("malformed accessor property");
+  VM::TempRoot keep(vm, in);
+  *out = vm.callClosure(c, nullptr, 0);
+  *vt = rvt;
+  return true;
+}
 
 // Field indices of a class / record in JavaScript property order: array-index keys ascending first, then the
 // others in definition order (Object.keys, JSON.stringify, console.log).
@@ -1106,6 +1138,8 @@ struct Cloner {
       case OT::Instance: {
         auto* in = static_cast<InstObj*>(o);
         if (!in->cls->isRecord) vm.error("DataCloneError: a class instance cannot be cloned");
+        if (!in->cls->accessors.empty())  // the copy would need a class with data properties instead
+          vm.error("structuredClone of an object with getters or setters is not supported (an e7 limit)");
         // the groups of a match become a plain object (the clone has Object.prototype)
         InstObj* c = vm.newInstance(in->cls->nullProto ? vm.groupsClass(in->cls->fieldNames, false) : in->cls);
         keep(o, c);

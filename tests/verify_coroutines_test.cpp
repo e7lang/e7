@@ -151,7 +151,7 @@ int main() {
   }, "bad class flags");
   expectReject("unknown class flag", [&](e7::Module& m) {
     for (auto& c : m.classes)
-      if (c.isRecord == 1) { c.cflags = 2; break; }
+      if (c.isRecord == 1) { c.cflags = 8; break; }
   }, "bad class flags");
   // run time: FIELD_ABSENT on a record whose class has no presence mask
   expectReject("FIELD_ABSENT without a presence mask", [&](e7::Module& m) {
@@ -168,6 +168,131 @@ int main() {
       if (f.regKinds[r] == e7::K_R) { refReg = (uint16_t)r; break; }
     f.code[pc] = (f.code[pc] & ~(0xFFFFull << 32)) | ((uint64_t)refReg << 32);
   }, "generator type mismatch");
+
+  // ---- async generators (0.3.1): function kind 3, requests to them (RESUME_R with kResumeAsync)
+  {
+    static const char* kAsyncSrc =
+        "function* syncGen(): Generator<number> { yield 1; }\n"
+        "async function* agen(n: number): AsyncGenerator<number, number, number> {\n"
+        "  let t = 0;\n"
+        "  for (let i = 0; i < n; i++) t += yield i;\n"
+        "  return t;\n"
+        "}\n"
+        "async function* other(): AsyncGenerator<string> { yield 'x'; }\n"
+        "export async function main(): Promise<number> {\n"
+        "  let s = 0;\n"
+        "  for await (const x of agen(3)) s += x;\n"
+        "  const g = agen(2);\n"
+        "  await g.next(0);\n"
+        "  await g.next(5);\n"
+        "  const r = await g.next(6);\n"
+        "  for (const y of syncGen()) s += y * 100;\n"
+        "  for await (const z of other()) s += z.length * 1000;\n"
+        "  return s + r.value * 10;\n"
+        "}\n";
+    e7::CompileOutput ac = e7::compileSource("ag.ts", kAsyncSrc);
+    CHECK(ac.ok);
+    if (!ac.ok) {
+      fprintf(stderr, "%s", ac.errorText().c_str());
+      return 1;
+    }
+    double av = 0;
+    std::string aerr;
+    CHECK(run(ac.module, &aerr, &av) == E7_OK);
+    CHECK(av == 3 + 110 + 100 + 1000);  // 0+1+2, return 5+6, the sync generator's 1, one string of length 1
+    CHECK(ac.module.minVm == ((0u << 16) | (3u << 8) | 1u));
+    size_t agi = funcNamed(ac.module, "agen"), ami = funcNamed(ac.module, "main"), asi = funcNamed(ac.module, "syncGen");
+    CHECK(agi != SIZE_MAX && ami != SIZE_MAX && asi != SIZE_MAX);
+    CHECK(e7::fflagsKind(ac.module.funcs[agi].fflags) == e7::FK_ASYNC_GENERATOR);
+    if (failures) return 1;
+    auto expectRejectA = [&](const char* what, const std::function<void(e7::Module&)>& f, const char* msg) {
+      e7::Module m = ac.module;
+      f(m);
+      std::string e;
+      int st = run(m, &e);
+      if (st == E7_OK || e.find(msg) == std::string::npos) {
+        fprintf(stderr, "FAIL %s: status %d, error '%s' (expected '%s')\n", what, st, e.c_str(), msg);
+        failures++;
+      }
+    };
+    // the first async request in main (the for await's next())
+    auto asyncResume = [](const e7::FuncDesc& f) {
+      for (size_t pc = 0; pc < f.code.size(); pc += e7::insWords(f.code[pc]))
+        if (e7::insOp(f.code[pc]) == e7::OP_RESUME_R && (f.code[pc + 1] & e7::kResumeAsync)) return pc;
+      return SIZE_MAX;
+    };
+    expectRejectA("async generator flags with ASYNC_START",
+                  [&](e7::Module& m) { m.funcs[agi].code[0] = e7::encode(e7::OP_ASYNC_START, 0); },
+                  "coroutine without its start instruction");
+    expectRejectA("async request with RESUME_F", [&](e7::Module& m) {
+      auto& f = m.funcs[ami];
+      size_t pc = asyncResume(f);
+      f.code[pc] = (f.code[pc] & ~0xFFFFull) | e7::OP_RESUME_F;
+      // B must be an F register for RESUME_F: then only the metadata is wrong
+      uint16_t fr = 0;
+      for (size_t r = 0; r < f.regKinds.size(); r++)
+        if (f.regKinds[r] == e7::K_F) { fr = (uint16_t)r; break; }
+      f.code[pc] = (f.code[pc] & ~(0xFFFFull << 32)) | ((uint64_t)fr << 32);
+    }, "bad resume metadata");
+    expectRejectA("async request with a class out of range", [&](e7::Module& m) {
+      auto& f = m.funcs[ami];
+      size_t pc = asyncResume(f);
+      f.code[pc + 1] = (f.code[pc + 1] & ~(0xFFFFull << 21)) | ((uint64_t)0xFFF0 << 21);
+    }, "bad resume metadata");
+    expectRejectA("async request with bits above the value type", [&](e7::Module& m) {
+      auto& f = m.funcs[ami];
+      size_t pc = asyncResume(f);
+      f.code[pc + 1] |= 1ull << 50;
+    }, "bad resume metadata");
+    expectRejectA("async request with a bad value type", [&](e7::Module& m) {
+      auto& f = m.funcs[ami];
+      size_t pc = asyncResume(f);
+      f.code[pc + 1] = (f.code[pc + 1] & ~(0xFFull << 37)) | (200ull << 37);
+    }, "bad resume metadata");
+    expectRejectA("async request with a class that is not { value, done }", [&](e7::Module& m) {
+      auto& f = m.funcs[ami];
+      size_t pc = asyncResume(f);
+      uint32_t ci = e7::resumeClass(f.code[pc + 1]);
+      m.classes[ci].fields[1].name = "finished";
+    }, "bad iterator result class");
+    expectRejectA("class bits without the async flag", [&](e7::Module& m) {
+      auto& f = m.funcs[ami];
+      size_t pc = asyncResume(f);
+      f.code[pc + 1] = (f.code[pc + 1] & ~e7::kResumeAsync) | (1ull << 37);
+    }, "bad resume metadata");
+    // run time: the coroutine is an untyped reference
+    expectRejectA("async request to a sync generator", [&](e7::Module& m) {
+      // the for...of over syncGen (RESUME_F) made an async request (RESUME_R with the async bits)
+      auto& f = m.funcs[ami];
+      uint64_t asyncBits = f.code[asyncResume(f) + 1] & ~0xFFFFFull;
+      size_t pc = findOp(f, e7::OP_RESUME_F);
+      uint16_t rr = 0;
+      for (size_t r = 0; r < f.regKinds.size(); r++)
+        if (f.regKinds[r] == e7::K_R) { rr = (uint16_t)r; break; }
+      f.code[pc] = e7::encode(e7::OP_RESUME_R, e7::insA(f.code[pc]), rr, e7::insC(f.code[pc]));
+      f.code[pc + 1] |= asyncBits;
+    }, "generator type mismatch");
+    expectRejectA("sync resume of an async generator", [&](e7::Module& m) {
+      auto& f = m.funcs[ami];
+      size_t pc = asyncResume(f);
+      f.code[pc + 1] &= 0xFFFFF;  // no async flag and class
+      f.code[pc] = (f.code[pc] & ~0xFFFFull) | e7::OP_RESUME_F;
+      // B must be an F register now
+      uint16_t fr = 0;
+      for (size_t r = 0; r < f.regKinds.size(); r++)
+        if (f.regKinds[r] == e7::K_F) { fr = (uint16_t)r; break; }
+      f.code[pc] = (f.code[pc] & ~(0xFFFFull << 32)) | ((uint64_t)fr << 32);
+    }, "generator type mismatch");
+    expectRejectA("async request with the wrong value type", [&](e7::Module& m) {
+      auto& f = m.funcs[ami];
+      size_t pc = asyncResume(f);
+      // the class's value field is a number: a reference value type is accepted by the verifier only
+      // with a reference field, so make the field a reference too (the generator yields numbers)
+      uint32_t ci = e7::resumeClass(f.code[pc + 1]);
+      m.classes[ci].fields[0].vt = 10;  // VT_REF
+      f.code[pc + 1] = (f.code[pc + 1] & ~(0xFFull << 37)) | (10ull << 37);
+    }, "generator type mismatch");
+  }
 
   // run time (security review): a BigInt typed-array native applied to a byte array (the kind is an
   // immediate the bytecode chooses) must not access 8-byte elements of a 1-byte array

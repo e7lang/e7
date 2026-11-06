@@ -1,0 +1,8 @@
+module loaded
+fetched 1
+value 10
+fetched 2
+value 20
+fetched 3
+value 30
+60

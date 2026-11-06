@@ -402,7 +402,8 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       Type* b = baseOf(t);
       if (t->t == TT::Optional || (b->t != TT::Object && b->t != TT::Class))
         return errT(args[0]->loc, "Object." + name + " requires an object");
-      std::vector<std::pair<std::string, Type*>> props = enumerableProps(b);
+      std::vector<std::pair<std::string, Type*>> props;
+      if (!readableProps(b, args[0]->loc, ("Object." + name).c_str(), props)) return T.unknown();
       if (props.empty()) return errT(args[0]->loc, "Object." + name + " of an object type without properties is not supported");
       Type* vt = nullptr;
       for (auto& p : props) {
@@ -454,7 +455,9 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
         Type* sb = baseOf(st);
         if (st->t == TT::Optional || (sb->t != TT::Object && sb->t != TT::Class))
           return errT(args[i]->loc, "Object.assign sources must be objects");
-        for (auto& p : enumerableProps(sb)) {
+        std::vector<std::pair<std::string, Type*>> sprops;
+        if (!readableProps(sb, args[i]->loc, "Object.assign", sprops)) return T.unknown();
+        for (auto& p : sprops) {
           Type* dt = nullptr;
           if (tb->t == TT::Class) {
             auto it = tb->cls->fieldIdx.find(p.first);
@@ -464,6 +467,8 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
             else dt = tb->cls->abstractProp(p.first);
           } else if (const ObjShape::Prop* tp = tb->shape->findProp(p.first)) {
             dt = tp->type;
+          } else if (tb->shape->findMethod("get " + p.first) || tb->shape->findMethod("set " + p.first)) {
+            return errT(args[i]->loc, "Object.assign: '" + p.first + "' is an accessor of the target; assign it directly");
           }
           if (!dt)
             return errT(args[i]->loc, "Object.assign: the target type '" + typeName(tb) + "' has no property '" + p.first +
@@ -494,7 +499,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       if (args.size() == 2) {
         // Array.from({ length: n }, (_, i) => ...)
         Expr* o = strip(args[0]);
-        if (o->k != EK::Object || o->props.size() != 1 || o->props[0].key != "length")
+        if (o->k != EK::Object || o->props.size() != 1 || o->props[0].key != "length" || o->props[0].accessor)
           return errT(l, "Array.from(x, fn) is only supported as Array.from({ length: n }, fn)");
         check(o->props[0].value, num);
         if (!coerce(o->props[0].value, num)) return T.unknown();
@@ -675,6 +680,7 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
         case TT::Class: return x->cls->isRecord ? nullptr : "a class instance (it would become a plain object)";
         case TT::Func: return "a function";
         case TT::Generator: return "a generator";
+        case TT::AsyncGenerator: return "an async generator";
         case TT::Promise: return "a promise";
         case TT::Handle: return "a KeyHandle";
         case TT::TextEncoder: case TT::TextDecoder: return "a TextEncoder / TextDecoder";
@@ -682,6 +688,9 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
         case TT::Map: { const char* k = bad(x->key); return k ? k : bad(x->val); }
         case TT::Tuple: for (Type* el : x->elems) if (const char* r = bad(el)) return r; return nullptr;
         case TT::Object:
+          for (auto& m : x->shape->methods)
+            if (m.name.compare(0, 4, "get ") == 0 || m.name.compare(0, 4, "set ") == 0)
+              return "an object with getters or setters (the copy has data properties instead, so it is not of the same type)";
           if (!x->shape->methods.empty()) return "an object with methods";
           for (auto& p : x->shape->props) if (const char* r = bad(p.type)) return r;
           return nullptr;
@@ -1270,7 +1279,7 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     if (args.size() == 2) {
       // new Error(message, { cause })
       Expr* o = strip(args[1]);
-      if (o->k != EK::Object || o->props.size() != 1 || o->props[0].key != "cause" || o->props[0].spread)
+      if (o->k != EK::Object || o->props.size() != 1 || o->props[0].key != "cause" || o->props[0].spread || o->props[0].accessor)
         return errT(args[1]->loc, name + " options must be an object literal { cause: error }");
       cause = o->props[0].value;
       Type* ct = check(cause, T.error());

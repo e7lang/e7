@@ -1120,8 +1120,20 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
     if (y->t == TT::Void || y->t == TT::Undefined) y = T.undef();
     return T.generator(y, r, n, gk);
   }
-  if (name == "AsyncGenerator" || name == "AsyncIterator" || name == "AsyncIterable" || name == "AsyncIterableIterator")
-    return errT(l, "async generators are not supported yet (" + name + ")");
+  if (name == "AsyncGenerator" || name == "AsyncIterator" || name == "AsyncIterableIterator" || name == "AsyncIterable") {
+    // all are async generators at run time (0.3.1)
+    uint8_t gk = name == "AsyncGenerator" ? 0 : name == "AsyncIterator" ? 1 : name == "AsyncIterableIterator" ? 2 : 3;
+    if (args.empty() || args.size() > 3) {
+      err(l, "type '" + name + "' requires 1 to 3 type argument(s)");
+      return T.unknown();
+    }
+    Type* y = resolveType(args[0]);
+    Type* r = args.size() > 1 ? genTypeArg(args[1]) : T.voidT();
+    Type* n = args.size() > 2 ? genTypeArg(args[2]) : T.voidT();
+    if (y->t == TT::Void || y->t == TT::Undefined) y = T.undef();
+    if (y->t == TT::Promise) return errT(l, "an async generator cannot yield promises (yield awaits them): use '" + typeName(y->elem) + "'");
+    return T.asyncGenerator(y, r, n, gk);
+  }
   if (name == "IteratorResult" || name == "IteratorYieldResult" || name == "IteratorReturnResult") {
     if (args.empty() || args.size() > 2) return errT(l, "type '" + name + "' requires 1 or 2 type argument(s)");
     Type* y = resolveType(args[0]);

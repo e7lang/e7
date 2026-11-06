@@ -92,6 +92,7 @@ struct ObjProp {
   bool shorthand = false;
   bool spread = false;
   bool method = false;  // method shorthand `name(params) { body }` (value is an Arrow)
+  int accessor = 0;     // 1 = `get name() { body }`, 2 = `set name(v) { body }` (value is an Arrow; own 'this')
   bool coverInit = false;  // `{ a = 1 }`: only valid as a destructuring assignment target (value is an Assign)
   Expr* computed = nullptr;  // `{ [K]: v }`: the key expression (a constant known at compile time)
   Loc loc;
