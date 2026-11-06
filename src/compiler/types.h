@@ -17,7 +17,8 @@ enum class TT : uint8_t {
   Caught,  // a catch variable: 'unknown' in TypeScript; narrow with instanceof Error
   Generator,  // 0.3: Generator<T, TReturn, TNext> / Iterator<T> / IterableIterator<T> (elem, ret, val; gk)
   Promise,    // 0.3: Promise<T> (elem)
-  TypedArray  // 0.3: Int8Array ... Float64Array, BigInt64Array, BigUint64Array (vt: the element kind, TAKind)
+  TypedArray, // 0.3: Int8Array ... Float64Array, BigInt64Array, BigUint64Array (vt: the element kind, TAKind)
+  RegExp      // 0.3: RegExp (reCaps / reNames: the groups of a literal; reCaps -1 for a pattern unknown until run time)
 };
 
 struct ObjShape;
@@ -49,6 +50,13 @@ struct Type {
   std::vector<std::u16string> strLits;  // sorted
   std::vector<double> numLits;          // sorted (0 and -0 are one literal)
   uint8_t boolLits = 0;                 // bit 0: false, bit 1: true
+  // regular expressions (D4): a RegExp type with the groups of a literal (reCaps >= 0), and the result
+  // of a match, an Array type of strings with `re` set (index, input, groups, indices; reExec: an
+  // exec result, whose index and input are always there)
+  int32_t reCaps = -1;
+  std::vector<std::string> reNames;
+  Type* re = nullptr;
+  bool reExec = false;
 };
 
 struct GenericSym;
@@ -327,6 +335,8 @@ class Types {
   Type* litUnion(Type* a, Type* b);
   Type* promise(Type* t);
   Type* typedArray(uint8_t kind);
+  Type* regexp(int32_t caps = -1, const std::vector<std::string>& names = {});  // -1: unknown groups
+  Type* matchArray(Type* re, bool exec);
   std::vector<std::unique_ptr<ObjShape>> shapes;
 
  private:

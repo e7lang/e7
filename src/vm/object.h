@@ -1,5 +1,6 @@
 // Heap object layouts.
 #pragma once
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -12,7 +13,10 @@ enum class OT : uint8_t {
   String, Array, Bytes, Buffer, Instance, Closure, Cell, Box, Map, BigInt, Undefined, Handle,
   Coro,     // 0.3: a generator or async function activation (DESIGN-0.3.md D1)
   Promise,  // 0.3: a promise (D2)
+  RegExp,   // 0.3: a regular expression (D4)
 };
+
+namespace re { struct Program; }
 
 struct Obj {
   Obj* gcNext;
@@ -31,12 +35,36 @@ struct StrObj : Obj {
 
 // Obj::flags of an Array: an Error object, [name, message] (created only by the VM and the Error natives)
 constexpr uint16_t kArrFlagError = 2;
+// 0.3 (D4): the result of a regular expression match (exec / match / matchAll): an array of strings
+// (undefined for groups that did not participate) whose block also holds a MatchExtra after the
+// ArrObj; kArrFlagIndices: the `indices` array of a match with the d flag (MatchExtra::groups only)
+constexpr uint16_t kArrFlagMatch = 4;
+constexpr uint16_t kArrFlagIndices = 8;
 
 struct ArrObj : Obj {
   uint8_t vt;
   uint32_t len;
   uint32_t cap;
   Slot* data;
+};
+
+struct MatchExtra {
+  double index;
+  Obj* input;    // the subject string (null for indices arrays)
+  Obj* groups;   // the groups object (an instance of a VM record class) or undefined
+  Obj* indices;  // d flag: the indices array (kArrFlagIndices), or null
+};
+inline MatchExtra* matchExtra(ArrObj* a) { return reinterpret_cast<MatchExtra*>(a + 1); }
+inline const MatchExtra* matchExtra(const ArrObj* a) { return reinterpret_cast<const MatchExtra*>(a + 1); }
+inline bool hasMatchExtra(const Obj* o) { return o->flags & (kArrFlagMatch | kArrFlagIndices); }
+
+// A regular expression (D4): the compiled program (shared with the module for a literal, owned for
+// `new RegExp`), its source and lastIndex.
+struct RegExpObj : Obj {
+  std::shared_ptr<const re::Program> prog;
+  Obj* source;          // StrObj: the pattern text (as given; `source` escapes it)
+  double lastIndex;
+  uint32_t extBytes;    // external bytes accounted for an owned program
 };
 
 struct BufObj : Obj {
@@ -122,6 +150,9 @@ struct CoroObj : Obj {
   uint32_t nregs;
   uint8_t fflags;       // the function's flags (kind and value kinds)
   uint8_t state;        // CoroState
+  // fn == nullptr: a native iterator (D4, String.prototype.matchAll): RESUME gives the elements of the
+  // array `items` in order (pc is the next index)
+  Obj* items;
   Slot* regs() { return reinterpret_cast<Slot*>(this + 1); }
 };
 
@@ -132,6 +163,7 @@ struct ClassRT {
   bool isRecord = false;
   bool isTuple = false;
   bool presence = false;  // instances carry a presence mask (D7, format-3 class flag)
+  bool nullProto = false; // a VM record class of regular expression groups: printed as [Object: null prototype]
   uint32_t nfields = 0;
   std::vector<uint8_t> fieldVT;
   std::vector<std::string> fieldNames;

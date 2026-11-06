@@ -504,6 +504,14 @@ ProgramPtr compile(const std::u16string& source, const std::string& flags, std::
 uint32_t captureCount(const Program& p) { return p.captureCount; }
 const std::vector<NamedGroup>& namedGroups(const Program& p) { return p.names; }
 bool hasFlag(const Program& p, char f) { return f != 0 && p.flagText.find(f) != std::string::npos; }
+const std::string& flagText(const Program& p) { return p.flagText; }
+size_t programSize(const Program& p) {
+  size_t n = sizeof(Program) + p.code.size() * sizeof(Inst) + p.strings.size() * sizeof(char16_t) +
+             p.first.ranges.size() * sizeof(Range);
+  for (const CharClass& c : p.classes) n += sizeof(CharClass) + c.ranges.size() * sizeof(Range);
+  for (const NamedGroup& g : p.names) n += sizeof(NamedGroup) + g.name.size();
+  return n;
+}
 const char* unicodeVersion() { return ucd::version(); }
 
 bool exec(const Program& p, const char16_t* input, size_t len, size_t start, bool sticky,

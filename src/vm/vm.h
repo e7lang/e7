@@ -83,6 +83,7 @@ struct ModuleRT {
   std::vector<Slot> globals;
   std::vector<NativeBinding> natives;
   std::vector<uint32_t> sigMap;
+  std::vector<std::shared_ptr<const re::Program>> regexps;  // compiled Module::regexps (format 3)
   bool initialized = false;
 };
 
@@ -253,6 +254,14 @@ class VM {
   HandleObj* newHandle(int64_t id);
   CoroObj* newCoro(FuncRT* fn, CloObj* closure);
   PromiseObj* newPromise(uint8_t vt);
+  // ---- regular expressions (stdlib/regexp.cpp, DESIGN-0.3.md D4)
+  RegExpObj* newRegExp(std::shared_ptr<const re::Program> prog, StrObj* source, uint32_t extBytes);
+  // an array of strings with a MatchExtra (flag kArrFlagMatch or kArrFlagIndices), its references null
+  ArrObj* newMatchArray(uint8_t vt, uint32_t cap, uint16_t flag);
+  // a native iterator (CoroObj without a function) over the elements of items (an array of references)
+  CoroObj* newNativeIterator(ArrObj* items);
+  // the record class of a groups object with these property names (VM-owned, shared by all modules)
+  ClassRT* groupsClass(const std::vector<std::string>& names);
 
   // ---- promises and the microtask queue (promise.cpp, DESIGN-0.3.md D2)
   // Resolves p with v (of p's value type); a promise value (a thenable) is adopted through a job.
@@ -519,6 +528,7 @@ class VM {
   size_t dbgRetDepth_ = 0;  // stepping: returning below this frame depth stops at the next instruction
   int catchDepth_ = 0;
 
+  std::unordered_map<std::string, std::unique_ptr<ClassRT>> groupsClasses_;
   std::unordered_map<std::string, NativeEntry> natives_;
   std::unordered_map<std::string, uint32_t> sigIds_;
   std::vector<std::string> sigs_;
@@ -550,6 +560,7 @@ void registerDateNatives(VM& vm);
 void registerTestNatives(VM& vm);
 void registerPromiseNatives(VM& vm);  // promise.cpp
 void registerTypedArrayNatives(VM& vm);  // stdlib/typed.cpp
+void registerRegExpNatives(VM& vm);  // stdlib/regexp.cpp
 void applyNativeCosts(VM& vm);  // core.cpp
 
 }  // namespace e7

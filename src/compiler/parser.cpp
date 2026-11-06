@@ -13,12 +13,13 @@ namespace e7 {
 
 namespace {
 
-enum class TK { Eof, Ident, Num, BigInt, Str, TmplFull, TmplHead, TmplMid, TmplTail, Punct, PrivateName };
+enum class TK { Eof, Ident, Num, BigInt, Str, TmplFull, TmplHead, TmplMid, TmplTail, Punct, PrivateName, Regex };
 
 struct Tok {
   TK k = TK::Eof;
   std::string text;      // identifier / punctuator / number raw
   std::u16string str;    // string / template cooked value
+  std::string flags;     // Regex: the flags (text: the pattern source, as written)
   double num = 0;
   bool isInt = false;
   bool nl = false;       // newline before this token
@@ -76,6 +77,7 @@ class Lexer {
         continue;
       }
       if (c == '"' || c == '\'') { lexString(t, c); out.push_back(t); continue; }
+      if (c == '/' && regexAllowed(out)) { lexRegex(t); out.push_back(t); continue; }
       lexPunct(t);
       if (t.text == "{") braceDepth++;
       else if (t.text == "}") braceDepth--;
@@ -333,6 +335,71 @@ class Lexer {
     }
   }
 
+  // A '/' starts a regular expression literal where an expression can start: decided by the previous
+  // token, as JavaScript tools do (after a value, an identifier, ')' or ']' it is a division)
+  static bool regexAllowed(const std::vector<Tok>& out) {
+    if (out.empty()) return true;
+    const Tok& pv = out.back();
+    switch (pv.k) {
+      case TK::Punct:
+        return !(pv.text == ")" || pv.text == "]" || pv.text == "++" || pv.text == "--");
+      case TK::TmplHead:
+      case TK::TmplMid:
+        return true;
+      case TK::Ident: {
+        static const char* const kw[] = {"return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+                                         "throw", "case", "do", "else", "yield", "await"};
+        for (const char* k : kw)
+          if (pv.text == k) return true;
+        return false;
+      }
+      default:
+        return false;
+    }
+  }
+
+  // /pattern/flags: the pattern is kept as written (the compiler checks it with the regular expression
+  // engine); only its end is found here
+  void lexRegex(Tok& t) {
+    t.k = TK::Regex;
+    p++; col++;
+    size_t start = p;
+    bool inClass = false;
+    auto lineEnd = [this](size_t q) {
+      if (q >= s.size() || s[q] == '\n' || s[q] == '\r') return true;
+      // U+2028 / U+2029
+      return (unsigned char)s[q] == 0xE2 && q + 2 < s.size() && (unsigned char)s[q + 1] == 0x80 &&
+             ((unsigned char)s[q + 2] == 0xA8 || (unsigned char)s[q + 2] == 0xA9);
+    };
+    while (true) {
+      if (lineEnd(p)) fail("unterminated regular expression literal");
+      char c = s[p];
+      if (c == '\\') {
+        p++; col++;
+        if (lineEnd(p)) fail("unterminated regular expression literal");
+        skipUtf8Char();
+        continue;
+      }
+      if (c == '/' && !inClass) break;
+      if (c == '[') inClass = true;
+      else if (c == ']') inClass = false;
+      skipUtf8Char();
+    }
+    t.text = s.substr(start, p - start);
+    p++; col++;
+    while (p < s.size() && (isIdPart(s[p]) || (unsigned char)s[p] >= 0x80)) {
+      size_t q = p;
+      skipUtf8Char();
+      t.flags += s.substr(q, p - q);
+    }
+  }
+  void skipUtf8Char() {
+    unsigned char c = (unsigned char)s[p];
+    size_t n = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : 4;
+    p = p + n > s.size() ? s.size() : p + n;
+    col++;
+  }
+
   void lexPunct(Tok& t) {
     static const char* puncts[] = {
         ">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??=",
@@ -405,6 +472,7 @@ class Parser {
     switch (tk.k) {
       case TK::Eof: return "end of file";
       case TK::Str: return "string";
+      case TK::Regex: return "regular expression";
       case TK::Num: return tk.text;
       default: return tk.text;
     }
@@ -2111,6 +2179,13 @@ class Parser {
       case TK::TmplFull:
       case TK::TmplHead:
         return parseTemplate();
+      case TK::Regex: {
+        Expr* e = A.expr(EK::RegExp, l);
+        e->raw = tk.text;
+        e->regexFlags = tk.flags;
+        i++;
+        return e;
+      }
       case TK::Ident: {
         const std::string& w = tk.text;
         if (w == "true" || w == "false") { Expr* e = A.expr(EK::Bool, l); e->bval = w == "true"; i++; return e; }
@@ -2275,7 +2350,6 @@ class Parser {
           expectP("}");
           return e;
         }
-        if (tk.text == "/" || tk.text == "/=") fail("regular expressions are not supported; use string methods such as indexOf, includes, startsWith, split or replaceAll");
         break;
       }
       case TK::PrivateName:

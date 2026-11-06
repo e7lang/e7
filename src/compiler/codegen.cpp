@@ -759,6 +759,7 @@ bool Gen::run(const std::string& name) {
   }
   M.funcs.resize(idx);
   synthBase = idx;
+  for (auto& r : P.regexps) M.regexps.push_back({r.first, r.second});
   // globals
   for (VarSym* g : P.globals) {
     GlobalDesc gd;
@@ -2786,6 +2787,16 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
       return;
     }
     case EK::Str: if (dst != kNoReg) loadStr(dst, e->str); return;
+    case EK::RegExp: {
+      // a new RegExp object for each evaluation, sharing the program the VM compiled at load
+      if (dst == kNoReg) return;
+      size_t m0 = mark();
+      uint16_t ix = temp(K_I);
+      loadInt(ix, e->ival);
+      callNative("RegExp.lit", {ix}, dst, 'R');
+      release(m0);
+      return;
+    }
     case EK::Bool: if (dst != kNoReg) loadInt(dst, e->bval ? 1 : 0); return;
     case EK::Null: if (dst != kNoReg) emit(OP_LOADNULL, dst); return;
     case EK::Undefined: if (dst != kNoReg) emit(OP_LOADUNDEF, dst); return;
@@ -3245,6 +3256,11 @@ void Gen::storeTo(Expr* target, uint16_t v) {
       if (t->intrinsic == IN_ARR_LENGTH_SET) {
         uint16_t obj = gen(t->a);
         callNative("Array.setLength", {obj, v}, kNoReg, 'V');
+        break;
+      }
+      if (t->intrinsic == IN_LASTINDEX_SET) {
+        uint16_t obj = gen(t->a);
+        callNative("RegExp.setLastIndex", {obj, v}, kNoReg, 'V');
         break;
       }
       uint16_t obj = gen(t->a);

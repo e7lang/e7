@@ -1,6 +1,7 @@
 #include "vm.h"
 
 #include "debug.h"
+#include "../regexp/regexp.h"
 
 #include <chrono>
 #include <cmath>
@@ -69,6 +70,7 @@ VM::VM(const VMConfig& cfg) : cfg_(cfg) {
   registerTestNatives(*this);
   registerPromiseNatives(*this);
   registerTypedArrayNatives(*this);
+  registerRegExpNatives(*this);
   applyNativeCosts(*this);
 }
 
@@ -658,12 +660,83 @@ CoroObj* VM::newCoro(FuncRT* fn, CloObj* closure) {
   c->fn = fn;
   c->closure = closure;
   c->promise = nullptr;
+  c->items = nullptr;
   c->pc = 0;
   c->nregs = fn->nregs;
   c->fflags = fn->d ? fn->d->fflags : 0;
   c->state = CO_START;
   memset(c->regs(), 0, (size_t)fn->nregs * sizeof(Slot));
   return c;
+}
+
+CoroObj* VM::newNativeIterator(ArrObj* items) {
+  auto* c = static_cast<CoroObj*>(allocRaw(OT::Coro, sizeof(CoroObj)));
+  c->fn = nullptr;
+  c->closure = nullptr;
+  c->promise = nullptr;
+  c->items = items;
+  c->pc = 0;
+  c->nregs = 0;
+  c->fflags = (uint8_t)(FK_GENERATOR | (3 << 2));  // yields references; next / return take nothing
+  c->state = CO_START;
+  return c;
+}
+
+RegExpObj* VM::newRegExp(std::shared_ptr<const re::Program> prog, StrObj* source, uint32_t extBytes) {
+  if (extBytes) accountExternal(extBytes);
+  void* mem;
+  try {
+    mem = allocRaw(OT::RegExp, sizeof(RegExpObj));
+  } catch (...) {
+    if (extBytes) accountExternalUnchecked(-(int64_t)extBytes);
+    throw;
+  }
+  Obj hdr = *static_cast<Obj*>(mem);
+  auto* r = new (mem) RegExpObj();
+  *static_cast<Obj*>(r) = hdr;
+  r->prog = std::move(prog);
+  r->source = source;
+  r->lastIndex = 0;
+  r->extBytes = extBytes;
+  return r;
+}
+
+ArrObj* VM::newMatchArray(uint8_t vt, uint32_t cap, uint16_t flag) {
+  NoGC ng(*this);
+  auto* a = static_cast<ArrObj*>(allocRaw(OT::Array, sizeof(ArrObj) + sizeof(MatchExtra)));
+  a->flags = flag;
+  a->vt = vt;
+  a->len = 0;
+  a->cap = 0;
+  a->data = nullptr;
+  MatchExtra* x = matchExtra(a);
+  x->index = 0;
+  x->input = nullptr;
+  x->groups = undef_;
+  x->indices = nullptr;
+  if (cap) arrayReserve(a, cap);
+  return a;
+}
+
+ClassRT* VM::groupsClass(const std::vector<std::string>& names) {
+  std::string key;
+  for (auto& n : names) key += n + ",";
+  auto it = groupsClasses_.find(key);
+  if (it != groupsClasses_.end()) return it->second.get();
+  auto c = std::make_unique<ClassRT>();
+  c->isRecord = true;
+  c->presence = true;  // every group is an own property, also when it did not participate
+  c->nullProto = true;
+  c->nfields = (uint32_t)names.size();
+  for (size_t k = 0; k < names.size(); k++) {
+    c->fieldVT.push_back(VT_REF);
+    c->fieldNames.push_back(names[k]);
+    c->fieldIndex[names[k]] = (uint32_t)k;
+    c->refFields.push_back((uint16_t)k);
+  }
+  ClassRT* p = c.get();
+  groupsClasses_[key] = std::move(c);
+  return p;
 }
 
 void VM::dropFrames(size_t n) {
@@ -690,6 +763,7 @@ static size_t externalBytes(const Obj* o) {
       return m->entries.capacity() * sizeof(MapEntry) + m->buckets.capacity() * 4;
     }
     case OT::BigInt: return static_cast<const BigObj*>(o)->mag.capacity() * sizeof(uint32_t);
+    case OT::RegExp: return static_cast<const RegExpObj*>(o)->extBytes;
     default: return 0;
   }
 }
@@ -702,6 +776,7 @@ void VM::freeObj(Obj* o) {
     case OT::Map: static_cast<MapObj*>(o)->~MapObj(); break;
     case OT::BigInt: static_cast<BigObj*>(o)->~BigObj(); break;
     case OT::Promise: static_cast<PromiseObj*>(o)->reactions.~vector(); break;
+    case OT::RegExp: static_cast<RegExpObj*>(o)->prog.~shared_ptr(); break;
     default: break;
   }
   free(o);
@@ -733,8 +808,17 @@ bool VM::checkHeap(std::string* why) const {
         if (a->vt == VT_REF)
           for (uint32_t i = 0; i < a->len; i++)
             if (!ref(a->data[i].r, "an array element")) return false;
+        if (hasMatchExtra(a)) {
+          const MatchExtra* x = matchExtra(a);
+          if (!ref(x->input, "a match's input") || !ref(x->groups, "a match's groups") || !ref(x->indices, "a match's indices"))
+            return false;
+        }
         break;
       }
+      case OT::RegExp:
+        if (!static_cast<const RegExpObj*>(o)->prog) return fail("regular expression without a program");
+        if (!ref(static_cast<const RegExpObj*>(o)->source, "a regular expression's source")) return false;
+        break;
       case OT::Buffer:
         if (!static_cast<const BufObj*>(o)->data && static_cast<const BufObj*>(o)->len) return fail("buffer without data");
         break;
@@ -783,7 +867,8 @@ bool VM::checkHeap(std::string* why) const {
         auto* c = static_cast<const CoroObj*>(o);
         if (!ref(c->closure, "a coroutine's closure")) return false;
         if (!ref(c->promise, "a coroutine's promise")) return false;
-        if (c->state == CO_START || c->state == CO_SUSPENDED) {
+        if (!ref(c->items, "a native iterator's items")) return false;
+        if (c->fn && (c->state == CO_START || c->state == CO_SUSPENDED)) {
           const Slot* rs = reinterpret_cast<const Slot*>(c + 1);
           for (uint16_t r : c->fn->refRegs)
             if (!ref(rs[r].r, "a coroutine's register")) return false;
@@ -879,8 +964,15 @@ void VM::traceAll() {
         auto* a = static_cast<ArrObj*>(o);
         if (a->vt == VT_REF)
           for (uint32_t i = 0; i < a->len; i++) mark(a->data[i].r);
+        if (hasMatchExtra(a)) {
+          MatchExtra* x = matchExtra(a);
+          mark(x->input);
+          mark(x->groups);
+          mark(x->indices);
+        }
         break;
       }
+      case OT::RegExp: mark(static_cast<RegExpObj*>(o)->source); break;
       case OT::Bytes: mark(static_cast<BytesObj*>(o)->buf); break;
       case OT::Instance: {
         auto* in = static_cast<InstObj*>(o);
@@ -918,8 +1010,9 @@ void VM::traceAll() {
         auto* c = static_cast<CoroObj*>(o);
         mark(c->closure);
         mark(reinterpret_cast<Obj*>(c->promise));
+        mark(c->items);
         // while running, the registers are in the frame (traced there); the saved copy is stale
-        if (c->state == CO_START || c->state == CO_SUSPENDED)
+        if (c->fn && (c->state == CO_START || c->state == CO_SUSPENDED))
           for (uint16_t r : c->fn->refRegs) mark(c->regs()[r].r);
         break;
       }
@@ -1042,6 +1135,13 @@ ModuleRT* VM::loadModule(Module&& mod) {
       c.methodNames.push_back(d.methodNames[k]);
       c.methodIndex[d.methodNames[k]] = (uint32_t)k;
     }
+  }
+  // regular expression literals (D4): compiled once, shared by the RegExp objects made from them
+  for (auto& rd : m.regexps) {
+    std::string rerr;
+    re::ProgramPtr p = re::compile(utf8ToUtf16(rd.source), rd.flags, rerr);
+    if (!p) errorCode(ERR_LOAD, "%s", rerr.c_str());
+    M->regexps.push_back(std::shared_ptr<const re::Program>(std::move(p)));
   }
   // string constants (rooted through the module)
   modules.push_back(std::move(mrt));

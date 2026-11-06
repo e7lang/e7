@@ -992,6 +992,72 @@ int main() {
     CHECK(e7_call(vm, m, "syncCall", nullptr, 0, &ret) == E7_OK && ret.v.num == 3);
     e7_vm_free(vm);
   }
+  // 0.3 (D4): regular expressions are bounded like any other script work. A catastrophic pattern
+  // (/(a+)+$/ on "aaa...!", 2^n steps) ends with E7_ERR_BUDGET, also with suspension (the matcher runs in a
+  // native, which cannot suspend halfway: it may run past the slice by VM::kNativeOverrun, then fails);
+  // a match that fits in the overrun completes and the call suspends after it. The backtracking stacks
+  // count against the memory limit.
+  {
+    const char* src =
+        "export function redos(n: number): boolean { return /(a+)+$/.test(\"a\".repeat(n) + \"!\"); }\n"
+        "export function thenLoop(n: number): boolean {\n"
+        "  const r = /(a+)+$/.test(\"a\".repeat(n) + \"!\");\n"
+        "  let t = 0;\n"
+        "  for (let i = 0; i < 100; i++) t += i;\n"
+        "  return r && t > 0;\n"
+        "}\n"
+        "export function stack(n: number): boolean { return /(?:a|b)*c/.test(\"a\".repeat(n)); }\n"
+        "export function dyn(n: number): boolean { return new RegExp(\"(x+x+)+y\").test(\"x\".repeat(n)); }\n"
+        "export function caught(n: number): string {\n"
+        "  try { return String(/(a+)+$/.test(\"a\".repeat(n) + \"!\")); } catch (e) { return \"caught\"; }\n"
+        "}\n";
+    std::vector<uint8_t> bc = compile(src);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.memory_limit = 32u << 20;
+    e7_vm* vm = e7_vm_new(&cfg);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_value n = num(10), r;
+    CHECK(e7_call(vm, m, "redos", &n, 1, &r) == E7_OK && r.type == E7_BOOL && r.v.boolean == 0);
+    n = num(60);
+    e7_set_budget(vm, 10000000);
+    uint64_t t0 = e7_ticks_used(vm);
+    CHECK(e7_call(vm, m, "redos", &n, 1, &r) == E7_ERR_BUDGET);
+    CHECK(e7_ticks_used(vm) - t0 <= 10000000);
+    CHECK(e7_call(vm, m, "dyn", &n, 1, &r) == E7_ERR_BUDGET);
+    CHECK(e7_call(vm, m, "caught", &n, 1, &r) == E7_ERR_BUDGET);  // not a catchable error
+    e7_set_budget(vm, 0);
+    n = num(4000000);
+    CHECK(e7_call(vm, m, "stack", &n, 1, &r) == E7_ERR_MEMORY);
+    n = num(1000);
+    CHECK(e7_call(vm, m, "stack", &n, 1, &r) == E7_OK && r.v.boolean == 0);
+    e7_vm_free(vm);
+
+    cfg.suspend_on_budget = 1;
+    vm = e7_vm_new(&cfg);
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    n = num(60);
+    e7_set_budget(vm, 100000);
+    e7_status st = e7_call(vm, m, "redos", &n, 1, &r);
+    for (int k = 0; st == E7_SUSPENDED && k < 1000; k++) {
+      e7_set_budget(vm, 100000);
+      st = e7_resume(vm, &r);
+    }
+    CHECK(st == E7_ERR_BUDGET);
+    n = num(16);  // about a million steps: past the slice, within the overrun
+    e7_set_budget(vm, 100000);
+    uint64_t t1 = e7_ticks_used(vm);
+    st = e7_call(vm, m, "thenLoop", &n, 1, &r);
+    int slices = 1;
+    for (; st == E7_SUSPENDED && slices < 1000; slices++) {
+      e7_set_budget(vm, 100000);
+      st = e7_resume(vm, &r);
+    }
+    CHECK(st == E7_OK && r.type == E7_BOOL && r.v.boolean == 0 && slices >= 2);
+    CHECK(e7_ticks_used(vm) - t1 > 500000);
+    e7_vm_free(vm);
+  }
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

@@ -45,6 +45,8 @@ constexpr int kMaxNesting = 256;
 uint32_t captureCount(const Program& p);                       // capture groups, not counting group 0
 const std::vector<NamedGroup>& namedGroups(const Program& p);  // in source order
 bool hasFlag(const Program& p, char f);                         // one of "dgimsuy"
+const std::string& flagText(const Program& p);                  // the flags in V8's order ("dgimsuy")
+size_t programSize(const Program& p);                           // approximate bytes held by the program
 
 // Resource limits: charge(n) is called for every batch of n matcher steps and may throw to stop the
 // match (the VM throws its budget error); reserve(bytes) is called before the backtracking stacks grow

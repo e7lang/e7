@@ -58,7 +58,8 @@ enum class EK {
   Array, Object, Unary, Update, Binary, Logical, Assign, Cond, Call, New,
   Member, Index, NonNull, As, Arrow, Spread, Conv, Paren, TypeOf,
   Yield,  // a = operand (or null); delegate: yield*
-  Await   // a = operand
+  Await,  // a = operand
+  RegExp  // a regular expression literal: raw = the pattern as written, regexFlags
 };
 
 struct Stmt;
@@ -108,6 +109,7 @@ struct Expr {
   bool isIntLit = false;     // Num: written as integer literal
   std::string raw;           // Num raw text / BigLit digits / Ident name / Member name / op
   std::u16string str;        // Str
+  std::string regexFlags;    // RegExp
   bool bval = false;
   // template
   std::vector<std::u16string> quasis;

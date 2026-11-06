@@ -67,6 +67,8 @@ enum Intrinsic : int {
   IN_PROMISE_THEN,       // p.then(f, r?) / p.catch(r) (raw "catch") / p.finally(f) (raw "finally")
   IN_PROMISE_STATIC,     // Promise.resolve / reject / all / allSettled / any / race (raw = the name)
   IN_NEW_PROMISE,        // new Promise<T>(executor)
+  // regular expressions (0.3)
+  IN_LASTINDEX_SET,      // re.lastIndex = v (Member target)
   // Arrow nodes
   IN_OBJ_METHOD = 1000,  // method shorthand in an object literal (own 'this': the object)
 };

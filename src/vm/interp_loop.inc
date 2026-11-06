@@ -655,6 +655,14 @@ dispatch:
   CASE(SCAT) {
     Obj* x = R[B].r;
     Obj* y = R[C].r;
+    if (E7_UNLIKELY(x == undef_ || y == undef_)) {
+      // a string-typed value that is undefined at run time (a regular expression group that did not
+      // participate, typed string as TypeScript types it): "undefined", as in JavaScript
+      fr->ip = ip;
+      StrObj* u = newStringAscii("undefined");
+      if (x == undef_) x = u;
+      if (y == undef_) y = u;
+    }
     STR_CHECK(x);
     STR_CHECK(y);
     auto* sx = static_cast<StrObj*>(x);
@@ -774,6 +782,21 @@ dispatch:
         else if (want == 2) R[B].f = std::nan("");
         else R[B].i = 0;
       }
+      R[C].i = 1;
+      DISPATCH();
+    }
+    if (!co->fn) {
+      // a native iterator (String.prototype.matchAll): the next element of its array
+      auto* items = static_cast<ArrObj*>(co->items);
+      if (mode == 0 && co->pc < items->len) {
+        co->state = CO_SUSPENDED;
+        R[B] = items->data[co->pc++];
+        R[C].i = 0;
+        DISPATCH();
+      }
+      co->state = CO_DONE;
+      if (mode == 1) { fr->ip = ip; raiseThrown(R[sent].r); }
+      R[B].r = mode == 2 && sentKind == want ? R[sent].r : undef_;
       R[C].i = 1;
       DISPATCH();
     }

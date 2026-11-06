@@ -18,6 +18,12 @@ static Expr* mkNum(Program& P, Types& T, double v, Loc l) {
   e->type = T.number();
   return e;
 }
+static Expr* mkStr(Program& P, Types& T, const std::u16string& v, Loc l) {
+  Expr* e = P.arena.expr(EK::Str, l);
+  e->str = v;
+  e->type = T.string();
+  return e;
+}
 static Expr* mkNull(Program& P, Types& T, Loc l) {
   Expr* e = P.arena.expr(EK::Null, l);
   e->type = T.nullT();
@@ -1355,7 +1361,31 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     e->intrinsic = IN_NEW_PROMISE;
     return T.promise(vt);
   }
-  if (name == "RegExp" || name == "WeakMap" || name == "WeakSet" || name == "Proxy")
+  if (name == "RegExp") {
+    // new RegExp(pattern, flags?) with a string or a RegExp: a pattern known at run time (groups unknown); a
+    // syntax error is a catchable SyntaxError
+    if (args.empty() || args.size() > 2) return errT(l, "new RegExp takes a pattern and optional flags");
+    for (Expr* a : args)
+      if (a->k == EK::Spread) return errT(a->loc, "spread is not supported here");
+    Type* t = check(args[0], nullptr);
+    Type* bt = baseOf(t);
+    if (t->t == TT::Optional || (bt->t != TT::String && bt->t != TT::RegExp))
+      return errT(args[0]->loc, "new RegExp needs a string or a RegExp, not '" + typeName(t) + "'");
+    if (args.size() == 2) {
+      check(args[1], T.string());
+      if (!coerce(args[1], T.string())) return T.unknown();
+      nat(bt->t == TT::RegExp ? "RegExp.newRe" : "RegExp.new");
+      return T.regexp();
+    }
+    if (bt->t == TT::RegExp) {
+      nat("RegExp.copy");
+      return t;
+    }
+    args.push_back(mkStr(P, T, u"", l));
+    nat("RegExp.new");
+    return T.regexp();
+  }
+  if (name == "WeakMap" || name == "WeakSet" || name == "Proxy")
     return errT(l, "'" + name + "' is not supported in E7");
   return errT(l, "cannot find class '" + name + "'");
 }
