@@ -169,6 +169,28 @@ int main() {
     f.code[pc] = (f.code[pc] & ~(0xFFFFull << 32)) | ((uint64_t)refReg << 32);
   }, "generator type mismatch");
 
+  // run time (security review): a BigInt typed-array native applied to a byte array (the kind is an
+  // immediate the bytecode chooses) must not access 8-byte elements of a 1-byte array
+  {
+    e7::CompileOutput ta = e7::compileSource("t.ts",
+                                             "export async function main(): Promise<number> {\n"
+                                             "  const a = new BigInt64Array(16);\n"
+                                             "  a[15] = 0x4142434445464748n;\n"
+                                             "  return Number(a[15]);\n"
+                                             "}\n");
+    CHECK(ta.ok);
+    size_t ti = funcNamed(ta.module, "main");
+    bool patched = false;
+    for (auto& c : ta.module.funcs[ti].code)
+      if (!patched && e7::insOp(c) == e7::OP_LOADI && e7::insB(c) == 9) {
+        c = e7::encode(e7::OP_LOADI, e7::insA(c), 0, e7::insC(c));  // TA.new kind 9 (BigInt64Array) -> 0 (Uint8Array)
+        patched = true;
+      }
+    CHECK(patched);
+    std::string e;
+    CHECK(run(ta.module, &e) == E7_ERR_RUNTIME && e.find("not a BigInt64Array") != std::string::npos);
+  }
+
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

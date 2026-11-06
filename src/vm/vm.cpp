@@ -1065,7 +1065,8 @@ int VM::runInit(ModuleRT* mod) {
 }
 
 void VM::unloadModule(ModuleRT* mod) {
-  if (!frames_.empty() || suspended_) return;
+  // not while a call runs, is suspended or waits: its promises, jobs and coroutines may refer to the module
+  if (!frames_.empty() || suspended_ || pending_ || !microtasks_.empty() || !tickets_.empty()) return;
   for (size_t i = modules.size(); i-- > 0;) {
     if (modules[i].get() != mod) continue;
     if (dbg_) dbg_->moduleUnloading(mod);

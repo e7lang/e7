@@ -83,6 +83,12 @@ static BytesObj* TA(VM& vm, Slot s) {
   if (E7_UNLIKELY(!s.r || s.r->type != OT::Bytes)) vm.error(s.r ? "expected a typed array" : "cannot read properties of null or undefined (typed array)");
   return static_cast<BytesObj*>(s.r);
 }
+// the 64-bit element natives: the array's own kind decides the element size (bytecode chooses the native)
+static BytesObj* BigTA(VM& vm, Slot s) {
+  BytesObj* b = TA(vm, s);
+  if (E7_UNLIKELY(!taIsBig(taKind(b)))) vm.error("TypeError: not a BigInt64Array or BigUint64Array");
+  return b;
+}
 static uint8_t kindArg(VM& vm, Slot s) {
   if (s.i < 0 || s.i >= TA__COUNT) vm.error("bad typed array kind");
   return (uint8_t)s.i;
@@ -160,18 +166,18 @@ TA_NATIVE(ta_fromBuffer) {
   r->r = b;
 }
 TA_NATIVE(ta_length) { TA_UNUSED; r->f = taLength(TA(vm, a[0])); }
-TA_NATIVE(ta_get) { TA_UNUSED; BytesObj* b = TA(vm, a[0]); r->f = taGetNum(b, index(vm, b, a[1].f)); }
-TA_NATIVE(ta_set) { TA_UNUSED; BytesObj* b = TA(vm, a[0]); taSetNum(b, index(vm, b, a[1].f), a[2].f); }
+TA_NATIVE(ta_get) { TA_UNUSED; BytesObj* b = TA(vm, a[0]); if (taIsBig(taKind(b))) vm.error("TypeError: a BigInt typed array"); r->f = taGetNum(b, index(vm, b, a[1].f)); }
+TA_NATIVE(ta_set) { TA_UNUSED; BytesObj* b = TA(vm, a[0]); if (taIsBig(taKind(b))) vm.error("TypeError: a BigInt typed array"); taSetNum(b, index(vm, b, a[1].f), a[2].f); }
 TA_NATIVE(ta_getBig) {
   TA_UNUSED;
-  BytesObj* b = TA(vm, a[0]);
+  BytesObj* b = BigTA(vm, a[0]);
   uint64_t v = taGetRaw64(b, index(vm, b, a[1].f));
   bool neg = taKind(b) == TA_BI64 && (int64_t)v < 0;
   r->r = bigFromU64(vm, neg ? 0 - v : v, neg);
 }
 TA_NATIVE(ta_setBig) {
   TA_UNUSED;
-  BytesObj* b = TA(vm, a[0]);
+  BytesObj* b = BigTA(vm, a[0]);
   uint32_t i = index(vm, b, a[1].f);
   storeLE(b->ptr() + (size_t)i * 8, 8, bigToU64(Big(vm, a[2])));
 }
@@ -200,7 +206,7 @@ TA_NATIVE(ta_fill) {
 }
 TA_NATIVE(ta_fillBig) {
   TA_UNUSED;
-  BytesObj* b = TA(vm, a[0]);
+  BytesObj* b = BigTA(vm, a[0]);
   uint32_t n = taLength(b);
   int64_t from = rel(a[2].f, n), to = rel(a[3].f, n);
   uint64_t v = bigToU64(Big(vm, a[1]));

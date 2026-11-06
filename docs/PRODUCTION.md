@@ -170,6 +170,29 @@ suspend mode, and the verifier and code generation for `finally`, generics, gett
 `capi_test` (bounded overrun with suspension; console.log, `%j`, `JSON.stringify` and default sort against the budget
 and memory limit).
 
+### 3.7 Seventh security review: the 0.3 VM changes (coroutines, promises, presence masks, typed arrays)
+
+A separate AI review agent (given the source, the threat model and the 0.3 design, without our tests' conclusions)
+reviewed the VM side of 0.3 except the regular expression engine (reviewed separately): coroutines (`GEN_START`,
+`YIELD`, `RESUME_*`, `ASYNC_START`, `AWAIT` and the async return and error boundary), the verifier rules and format-3
+reading, the promise job queue, host tickets and the async C API, presence masks (`FIELD_ABSENT`), typed arrays,
+`structuredClone` and the recursive JSON descriptors. It built ASan+UBSan and confirmed findings 1-3 with
+proofs of concept (crafted modules and one plain script). All four are fixed:
+
+| # | Severity | Issue | Fix |
+|---|---|---|---|
+| 1 | Critical | The 64-bit typed-array natives (`TA.getBig` / `setBig` / `fillBig`) did not check the array's element kind: a crafted module applying them to a byte array accessed 8-byte elements of a 1-byte array (out-of-bounds read and write) | They check that the array is a `BigInt64Array` / `BigUint64Array` (and the number natives that it is not) |
+| 2 | High | `then` without an `onFulfilled` handler passed the value to the derived promise without comparing value types: crafted bytecode could make a number read as a reference | `Promise.then` requires one representation for a pass-through, and every pass-through checks it again when the job runs |
+| 3 | High | `structuredClone` recursed once per nesting level: a plain script with a 400,000-node linked list overflowed the C++ stack | At most 256 levels (as `JSON.stringify`); deeper values fail with a catchable `DataCloneError` |
+| 4 | Low | `unloadModule` (not reachable through the C API) could free a module while promises, jobs or coroutines of a pending call referred to it | Not while a call waits for tickets or has queued jobs |
+
+Areas the review confirmed correct: the verifier's coroutine rules and format-3 bounds; RESUME's stack and frame
+checks, `CO_RUNNING` against re-entry, coroutines finished when frames are unwound; GC rooting of promises, reactions,
+queued jobs, tickets and saved coroutine registers (traced only while suspended); presence masks; the `@n` JSON
+back-references (bounded recursion, checked indices); the `allSettled` record class checks; the typed-array number
+paths, offsets and alignment; the async native thunk and `e7_settle`. Regression tests: `verify_coroutines_test`
+(malformed coroutine bytecode, a BigInt native on a byte array), `structured_clone_deep.ts`.
+
 **Configuration the host must apply** (see EMBEDDING.md §6): enable signature checking, set an instruction budget and a memory limit. The command-line tool `e7` is for development only
 and sets no budget by default.
 

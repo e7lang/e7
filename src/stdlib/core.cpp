@@ -1048,10 +1048,18 @@ struct Cloner {
   VM& vm;
   std::unordered_map<Obj*, Obj*> done;
   std::vector<Obj*> roots;  // the copies (kept reachable while copying)
+  int depth = 0;            // nesting (the C++ stack), bounded as JSON's
+  struct Deeper {
+    int& d;
+    explicit Deeper(int& x) : d(x) { d++; }
+    ~Deeper() { d--; }
+  };
   Obj* copy(Obj* o) {
     if (!o || o == vm.undef()) return o;
     auto it = done.find(o);
     if (it != done.end()) return it->second;
+    Deeper deeper(depth);
+    if (depth > 256) vm.error("DataCloneError: the value is nested too deeply to clone (more than 256 levels)");
     vm.chargeWork(1);
     switch (o->type) {
       case OT::String: case OT::BigInt: return o;  // immutable
