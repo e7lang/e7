@@ -175,7 +175,7 @@ jobs:
           export NUGET_PACKAGES="$RUNNER_TEMP/nuget-packages"
           echo "NUGET_PACKAGES=$NUGET_PACKAGES" >> "$GITHUB_ENV"
           dotnet add package E7VM --version "$VERSION" --source "$GITHUB_WORKSPACE/feed"
-          cp "$GITHUB_WORKSPACE/platform/windows/test/Program.cs" Program.cs
+          cp "$GITHUB_WORKSPACE"/platform/windows/test/*.cs .   # Program.cs, ModuleManagerTests.cs
           cat E7PkgTest.csproj
       - name: Run tests (dotnet run, default native probing)
         working-directory: ${{ runner.temp }}/app

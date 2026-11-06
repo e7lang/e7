@@ -269,6 +269,13 @@ namespace E7
                 return c!;
             }
 
+            public Completion Next()  // CallAwait / LoadAwait: blocks the calling thread
+            {
+                _ready.Wait(Cancel.Token);
+                _queue.TryDequeue(out var c);
+                return c!;
+            }
+
             public void Dispose()
             {
                 try { Cancel.Cancel(); } catch (ObjectDisposedException) { }  // host operations still running
@@ -510,27 +517,8 @@ namespace E7
         public async Task<object?> CallAsync(E7Module module, string function, object?[] args, CancellationToken cancellationToken)
         {
             if (module == null) throw new ArgumentNullException(nameof(module));
-            args ??= new object?[] { null };
             var run = Begin(cancellationToken);
-            int st;
-            object? result = null;
-            var buffers = new List<IntPtr>();
-            try
-            {
-                var vals = new Value[Math.Max(args.Length, 1)];
-                for (int i = 0; i < args.Length; i++) vals[i] = ToNative(args[i], buffers);
-                st = e7_call(_vm, module.Ptr, Z(function), vals, (UIntPtr)(uint)args.Length, out var ret);
-                if (st == 0) result = FromNative(ret);
-            }
-            catch
-            {
-                End(run);
-                throw;
-            }
-            finally
-            {
-                FreeAll(buffers);
-            }
+            var (st, result) = StartCall(run, module, function, args);
             return await Drive(run, st, result);
         }
 
@@ -543,6 +531,34 @@ namespace E7
             int st = e7_load(_vm, bytecode, (UIntPtr)(uint)bytecode.Length, out var m);
             run.Module = m;
             await Drive(run, st, null);
+            return new E7Module(run.Module);
+        }
+
+        /// <summary>
+        /// Calls an exported function and blocks until it finishes: the calling thread is the VM's thread and settles
+        /// the async host functions' results in the order they complete (as Java's callAwait). Host functions start
+        /// without a SynchronizationContext here, so an <c>async</c> host function does not wait for the blocked
+        /// thread. Throws <see cref="E7Exception"/> like <see cref="Call"/>.
+        /// </summary>
+        public object? CallAwait(E7Module module, string function, params object?[] args)
+        {
+            if (module == null) throw new ArgumentNullException(nameof(module));
+            var run = Begin(CancellationToken.None);
+            return Blocking(run, () => StartCall(run, module, function, args));
+        }
+
+        /// <summary><see cref="Load"/> for a module whose top-level code awaits async host functions, blocking
+        /// like <see cref="CallAwait"/>.</summary>
+        public E7Module LoadAwait(byte[] bytecode)
+        {
+            if (bytecode == null) throw new ArgumentNullException(nameof(bytecode));
+            var run = Begin(CancellationToken.None);
+            Blocking(run, () =>
+            {
+                int st = e7_load(_vm, bytecode, (UIntPtr)(uint)bytecode.Length, out var m);
+                run.Module = m;
+                return (st, null);
+            });
             return new E7Module(run.Module);
         }
 
@@ -563,6 +579,29 @@ namespace E7
             run.Dispose();
         }
 
+        // the first step of an async call: e7_call (status, and the result when E7_OK)
+        private (int, object?) StartCall(AsyncRun run, E7Module module, string function, object?[] args)
+        {
+            args ??= new object?[] { null };
+            var buffers = new List<IntPtr>();
+            try
+            {
+                var vals = new Value[Math.Max(args.Length, 1)];
+                for (int i = 0; i < args.Length; i++) vals[i] = ToNative(args[i], buffers);
+                int st = e7_call(_vm, module.Ptr, Z(function), vals, (UIntPtr)(uint)args.Length, out var ret);
+                return (st, st == 0 ? FromNative(ret) : null);
+            }
+            catch
+            {
+                End(run);
+                throw;
+            }
+            finally
+            {
+                FreeAll(buffers);
+            }
+        }
+
         // E7_PENDING: settle completions in the order they arrive and resume, until the call finishes
         private async Task<object?> Drive(AsyncRun run, int st, object? result)
         {
@@ -577,31 +616,79 @@ namespace E7
                     }
                     catch (OperationCanceledException)
                     {
-                        if (_vm == IntPtr.Zero) throw new ObjectDisposedException(nameof(E7VM));
-                        if (_currentRun == run)
-                        {
-                            _currentRun = null;
-                            e7_abort_suspended(_vm);
-                        }
+                        Abandoned(run);
                         throw;
                     }
-                    if (_vm == IntPtr.Zero) throw new ObjectDisposedException(nameof(E7VM));
-                    if (!Settle(c)) continue;  // not open any more
-                    st = e7_resume(_vm, out var ret);
-                    if (st == 0) result = FromNative(ret);
+                    Advance(c, ref st, ref result);
                 }
-                if (st == (int)E7Status.Suspended)
-                {  // an async call does not stop for the budget: abandon it
-                    e7_abort_suspended(_vm);
-                    throw new E7Exception(E7Status.Suspended, "instruction budget exhausted (the async call was abandoned)");
-                }
-                Check(st);
-                return result;
+                return Finish(st, result);
             }
             finally
             {
                 End(run);
             }
+        }
+
+        // the blocking driver of CallAwait / LoadAwait
+        private object? Blocking(AsyncRun run, Func<(int, object?)> first)
+        {
+            var context = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(null);
+            try
+            {
+                var (st, result) = first();
+                while (st == (int)E7Status.Pending)
+                {
+                    Completion c;
+                    try
+                    {
+                        c = run.Next();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Abandoned(run);
+                        throw;
+                    }
+                    Advance(c, ref st, ref result);
+                }
+                return Finish(st, result);
+            }
+            finally
+            {
+                End(run);
+                SynchronizationContext.SetSynchronizationContext(context);
+            }
+        }
+
+        // the call was cancelled, abandoned (AbortSuspended) or the VM disposed
+        private void Abandoned(AsyncRun run)
+        {
+            if (_vm == IntPtr.Zero) throw new ObjectDisposedException(nameof(E7VM));
+            if (_currentRun == run)
+            {
+                _currentRun = null;
+                e7_abort_suspended(_vm);
+            }
+        }
+
+        // a host operation completed: settle its ticket and let the script continue
+        private void Advance(Completion c, ref int st, ref object? result)
+        {
+            if (_vm == IntPtr.Zero) throw new ObjectDisposedException(nameof(E7VM));
+            if (!Settle(c)) return;  // not open any more
+            st = e7_resume(_vm, out var ret);
+            if (st == 0) result = FromNative(ret);
+        }
+
+        private object? Finish(int st, object? result)
+        {
+            if (st == (int)E7Status.Suspended)
+            {  // an async call does not stop for the budget: abandon it
+                e7_abort_suspended(_vm);
+                throw new E7Exception(E7Status.Suspended, "instruction budget exhausted (the async call was abandoned)");
+            }
+            Check(st);
+            return result;
         }
 
         // Settles a ticket on the VM's thread; false if it is not open. A value of the wrong type rejects the promise.

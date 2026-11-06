@@ -117,6 +117,13 @@ export function syncCall(): number { return 3; }";
             h.Next().Tcs.SetResult(new byte[2]);  // on this thread
             Check(await call is double d3 && d3 == 7, "async: completed on the calling thread");
         }
+        using (var h = new AsyncHost())  // CallAwait: the calling thread waits and settles
+        {
+            var completer = Task.Run(() => h.Next().Tcs.SetResult(new byte[3]));
+            Check(h.Vm.CallAwait(h.M, "keyLength", "k") is double d && d == 8, "async: CallAwait blocks until the operation completes");
+            completer.Wait();
+            Check(h.Vm.CallAwait(h.M, "stamp") is double d2 && d2 == 10, "async: CallAwait of an export settled at once");
+        }
         using (var h = new AsyncHost())  // rejections
         {
             var call = h.Vm.CallAsync(h.M, "failing");
@@ -385,6 +392,7 @@ export function nothing(): void {}
         Check(!E7VM.VerifyDetached(manifest, dsig, pub) && !E7VM.VerifyDetached(Encoding.UTF8.GetBytes("x"), dsig, katPub), "VerifyDetached rejects");
 
         AsyncTests().GetAwaiter().GetResult();
+        failures += ModuleManagerTests.Run();
 
         if (failures > 0) { Console.WriteLine($"{failures} check(s) failed"); return 1; }
         Console.WriteLine("all C# binding tests passed");
