@@ -857,6 +857,8 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     }
     return errT(l, "module 'e7:crypto' has no function '" + n + "'" + didYouMean(n, builtinModuleExports("e7:crypto")));
   }
+  if (id == "Symbol()" || id.compare(0, 7, "Symbol.") == 0)
+    return errT(l, "'Symbol' is not supported (property names are fixed identifiers); use string constants or a private field");
   return errT(l, "unknown builtin '" + id + "'");
 }
 
@@ -871,7 +873,18 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     e->native = n;
     e->intrinsic = IN_NATIVE_NORECV;
   };
-  if (c->k != EK::Ident) return errT(l, "unsupported 'new' expression");
+  if (c->k != EK::Ident) {
+    if (c->k == EK::Member) {
+      Expr* base = strip(c->a);
+      Sym* bs = base->k == EK::Ident ? lookup(base->raw) : nullptr;
+      if (base->k == EK::Ident && base->raw == "Intl" && !bs)
+        return errT(l, "'Intl' is not supported (locale data differs between platforms); format with toFixed / padStart, or let the host format");
+      if (bs && bs->k == SymK::Namespace)
+        return errT(l, "classes cannot be constructed through a namespace import ('new " + base->raw + "." + c->raw +
+                           "'); import the class by name");
+    }
+    return errT(l, "unsupported 'new' expression");
+  }
   const std::string& name = c->raw;
   Sym* s = lookup(name);
   if (s && s->k == SymK::Generic && static_cast<GenericSym*>(s)->kind == GenericSym::Class) {

@@ -3,7 +3,7 @@
 // @status: unsupported
 // @why: not implemented yet: user-defined type guards are not parsed
 // @instead: `instanceof`
-// @error: method overloads are not supported
+// @error: type predicates ('x is T') are not supported
 class FileSystemObject {
   isFile(): this is FileRep { return this instanceof FileRep; }
 }

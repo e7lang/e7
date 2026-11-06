@@ -3,7 +3,7 @@
 // @status: unsupported
 // @why: not implemented yet: user-defined type guards are not parsed
 // @instead: `instanceof`, `=== null` checks, or a function that returns the narrowed value or `null`
-// @error: function overloads / declarations without body are not supported
+// @error: type predicates ('x is T') are not supported
 function isDefined(s: string | undefined): s is string {
   return s !== undefined;
 }

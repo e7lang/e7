@@ -3,7 +3,7 @@
 // @status: unsupported
 // @why: types known at compile time: functions are closures without properties
 // @instead: an interface with a function-typed property, or a class with a method
-// @error: expected property name
+// @error: call signatures in interfaces are not supported
 type DescribableFunction = {
   description: string;
   (someArg: number): boolean;

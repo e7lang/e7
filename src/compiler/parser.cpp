@@ -332,6 +332,7 @@ class Lexer {
         return;
       }
     }
+    if (s[p] == '#' && p + 1 < s.size() && s[p + 1] == '!') fail("hashbang lines (#!) are not supported");
     fail(std::string("unexpected character '") + s[p] + "'");
   }
 };
@@ -426,6 +427,7 @@ class Parser {
     Loc l = loc();
     eatP("|");
     TypeNode* first = parseTypeNoUnion();
+    if (isKw("extends") && !cur().nl) fail("conditional types (T extends U ? X : Y) are not supported; E7 types are concrete");
     if (!isP("|")) return first;
     TypeNode* u = A.type(TNK::Union, l);
     u->args.push_back(first);
@@ -441,8 +443,17 @@ class Parser {
       arr->elem = ty;
       ty = arr;
     }
+    if (isP("[") && !cur().nl) fail("indexed access types (T[\"key\"]) are not supported; name the property type directly");
     if (isP("&")) fail("intersection types are not supported");
     return ty;
+  }
+  // a return type: type predicates and assertion signatures are reported by name
+  TypeNode* parseRetType() {
+    if (isKw("asserts") && peek().k == TK::Ident)
+      fail("assertion functions ('asserts x is T') are not supported; throw if the check fails and narrow at the call site");
+    if (cur().k == TK::Ident && peek().k == TK::Ident && peek().text == "is")
+      fail("type predicates ('x is T') are not supported; return boolean and narrow at the call site (typeof, instanceof, comparisons)");
+    return parseType();
   }
   bool looksLikeFunctionType() {
     // at '(' : function type if matching ')' is followed by '=>'
@@ -460,6 +471,8 @@ class Parser {
   TypeNode* parsePrimaryType() {
     Loc l = loc();
     if (isP("<")) fail("generic function types (<T>(x: T) => T) are not supported; use a concrete function type");
+    if (isKw("new") && peek().k == TK::Punct && (peek().text == "(" || peek().text == "<"))
+      fail("constructor types ('new (...) => T') are not supported; pass a function that creates the object");
     if (isKw("readonly")) {
       i++;
       TypeNode* t = parseTypeNoUnion();
@@ -498,7 +511,9 @@ class Parser {
       TypeNode* tu = A.type(TNK::Tuple, l);
       while (!isP("]")) {
         if (cur().k == TK::Ident && peek().k == TK::Punct && peek().text == ":") i += 2;  // labeled tuple
+        if (isP("...")) fail("rest elements in tuple types are not supported; use an array type");
         tu->args.push_back(parseType());
+        if (isP("?")) fail("optional tuple elements are not supported; use 'T | undefined' for the element");
         if (!eatP(",")) break;
       }
       expectP("]");
@@ -568,7 +583,7 @@ class Parser {
         if (isGet) {
           if (!f->params.empty()) fail("a 'get' accessor cannot have parameters");
           expectP(":");
-          f->ret = parseType();
+          f->ret = parseRetType();
         } else {
           if (f->params.size() != 1) fail("a 'set' accessor must have exactly one parameter");
           if (isP(":")) fail("a 'set' accessor cannot have a return type annotation");
@@ -582,6 +597,9 @@ class Parser {
         }
         continue;
       }
+      if (isP("(") || isP("<")) fail("call signatures in interfaces are not supported; use a function type ((x: T) => R)");
+      if (isKw("new") && peek().k == TK::Punct && (peek().text == "(" || peek().text == "<"))
+        fail("construct signatures are not supported; pass a function that creates the object");
       m.name = propName();
       if (eatP("?")) m.optional = true;
       if (isP("<"))
@@ -603,7 +621,7 @@ class Parser {
         }
         expectP(")");
         expectP(":");
-        f->ret = parseType();
+        f->ret = parseRetType();
         m.type = f;
         // an optional method `m?(): T` is an optional property of function type (called as obj.m?.())
         m.method = !m.optional;
@@ -885,7 +903,7 @@ class Parser {
     s->name = ident();
     parseTypeParams(s->typeParams);
     parseParams(s->params, false);
-    if (eatP(":")) s->retType = parseType();
+    if (eatP(":")) s->retType = parseRetType();
     if (!isP("{")) fail("function overloads / declarations without body are not supported");
     s->body = parseBlock();
     Expr* none = nullptr;
@@ -904,7 +922,7 @@ class Parser {
       if (isP("<")) fail("generic native declarations are not supported");
       parseParams(s->params, false);
       expectP(":");
-      s->retType = parseType();
+      s->retType = parseRetType();
       semi();
       return s;
     }
@@ -939,6 +957,8 @@ class Parser {
         s->members.push_back(m);
         continue;
       }
+      if (isP("@")) fail("decorators are not supported");
+      if (isKw("accessor") && peek().k == TK::Ident && !peek().nl) fail("auto-accessors ('accessor x') are not supported; use a field, or get / set accessors");
       bool any = true;
       // a modifier keyword followed by a name (not by '(' ':' '=' ';' ...) is a modifier
       auto modifierFollows = [&]() {
@@ -998,7 +1018,7 @@ class Parser {
           parseTypeParams(m.typeParams);
         }
         parseParams(m.params, false);
-        if (eatP(":")) m.retType = parseType();
+        if (eatP(":")) m.retType = parseRetType();
         if (m.accessor == 1 && !m.params.empty()) failAt(nameLoc, "a 'get' accessor cannot have parameters");
         if (m.accessor == 2 && (m.params.size() != 1 || m.params[0].rest || m.params[0].optional || m.params[0].init))
           failAt(nameLoc, "a 'set' accessor must have exactly one parameter (not optional, rest or with a default)");
@@ -1285,7 +1305,7 @@ class Parser {
         Expr* f = A.expr(EK::Arrow, l);
         parseTypeParams(f->typeParams);
         parseParams(f->params, false);
-        if (eatP(":")) f->retType = parseType();
+        if (eatP(":")) f->retType = parseRetType();
         if (!isP("=>") || cur().nl) fail("expected '=>' (generic arrow function)");
         i++;
         parseArrowBody(f);
@@ -1294,7 +1314,7 @@ class Parser {
       try {
         Expr* f = A.expr(EK::Arrow, l);
         parseParams(f->params, false);
-        if (eatP(":")) f->retType = parseType();
+        if (eatP(":")) f->retType = parseRetType();
         if (!isP("=>") || cur().nl) { i = save; return nullptr; }
         i++;
         parseArrowBody(f);
@@ -1712,7 +1732,7 @@ class Parser {
           Expr* f = A.expr(EK::Arrow, l);
           if (cur().k == TK::Ident && !isP("(")) f->raw = ident();
           parseParams(f->params, false);
-          if (eatP(":")) f->retType = parseType();
+          if (eatP(":")) f->retType = parseRetType();
           f->body = parseBlock();
           applyPatterns(f->params, f->body, f->exprBody);
           f->intrinsic = IN_FUNC_EXPR;
@@ -1785,7 +1805,7 @@ class Parser {
               Expr* f = A.expr(EK::Arrow, pr.loc);
               f->raw = pr.key;
               parseParams(f->params, false);
-              if (eatP(":")) f->retType = parseType();
+              if (eatP(":")) f->retType = parseRetType();
               if (!isP("{")) fail("expected '{' (method body)");
               f->body = parseBlock();
               applyPatterns(f->params, f->body, f->exprBody);

@@ -4,5 +4,5 @@
 // @status: unsupported
 // @why: not implemented yet
 // @instead: run the file with `e7 file.ts`
-// @error: unexpected character '#'
+// @error: hashbang lines (#!) are not supported
 console.log("script");

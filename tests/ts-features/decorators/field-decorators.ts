@@ -3,7 +3,7 @@
 // @status: unsupported
 // @why: verifiable bytecode: a decorator changes field initialization at run time
 // @instead: initialize the field explicitly (or validate in a setter)
-// @error: expected property name
+// @error: decorators are not supported
 function double(_: undefined, ctx: ClassFieldDecoratorContext): (v: number) => number {
   return v => v * 2;
 }

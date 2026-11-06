@@ -3,7 +3,7 @@
 // @status: unsupported
 // @why: not implemented yet: class expressions and constructor types
 // @instead: composition (a field holding the helper object) or a common base class
-// @error: expected ';' but found '('
+// @error: constructor types ('new (...) => T') are not supported
 type Constructor = new (...args: any[]) => {};
 function Scale<TBase extends Constructor>(Base: TBase) {
   return class Scaling extends Base {

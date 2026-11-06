@@ -3,7 +3,7 @@
 // @status: unsupported
 // @why: verifiable bytecode: a decorator replaces a method with a run-time value
 // @instead: call a wrapper explicitly inside the method, or use a higher-order function
-// @error: expected property name
+// @error: decorators are not supported
 function logged(target: () => string, ctx: ClassMethodDecoratorContext): () => string {
   console.log("decorating " + String(ctx.name));
   return target;

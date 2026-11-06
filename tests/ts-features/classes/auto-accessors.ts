@@ -3,7 +3,7 @@
 // @status: unsupported
 // @why: not implemented yet
 // @instead: a field, or a private field with `get` / `set` accessors
-// @error: expected ';' but found 'name'
+// @error: auto-accessors ('accessor x') are not supported
 class Person {
   accessor name = "Ann";
 }
