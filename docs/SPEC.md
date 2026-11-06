@@ -36,7 +36,8 @@ three references that can each be checked mechanically:
    - **Behaviour equals JavaScript.** If E7 cannot reproduce JavaScript's behaviour exactly, the construct is a
      compile error rather than something that runs differently (section 9 lists the exceptions that remain).
 
-   Features that satisfy the rules but are not implemented yet (async generators, ...)
+   Features that satisfy the rules but are not implemented yet (`yield*` of a sync iterable in an async generator,
+   auto-accessors, ...)
    are listed as such. [TYPESCRIPT.md](TYPESCRIPT.md) lists every TypeScript feature with its status, the reason and
    what to write instead; each row is a sample program that CI compiles (and, for supported features, compares with
    Node.js), so the table always matches the compiler.
@@ -398,6 +399,19 @@ try {
 - `async` functions, methods and arrow functions, `await` (also top-level in the entry module; an imported module
   with top-level `await` is a compile error), `for await (const x of xs)` over arrays (each element awaited) and
   generators.
+- Async generators (e7vm 0.3.1): `async function*` declarations and expressions, async generator methods
+  (`async *m()`, also `async *[Symbol.asyncIterator]()` and in object literals). Types:
+  `AsyncGenerator<T, TReturn = void, TNext = (none)>`, `AsyncIterator<T>`, `AsyncIterableIterator<T>` and
+  `AsyncIterable<T>` (all async generators at run time; `TReturn` is `void` or `T`, as for generators). In the body,
+  `yield v` awaits `v` (a `Promise<T>` yields its value) and `return v` awaits `v`; `yield*` takes an async generator
+  or an instance of a class with an `[Symbol.asyncIterator]()` method returning one (values, `next(v)` arguments,
+  `return(v)` and `throw(e)` are forwarded); `yield*` of a sync iterable (an array, a generator) is a compile error
+  (write `for (const x of xs) yield x;`). `next(v)` / `return(v)` / `throw(e)` return
+  `Promise<IteratorResult<T, TReturn>>`; requests made while the generator runs or awaits are queued and answered in
+  order, and `return` / `throw` on a generator that has not started or has finished behave as in JavaScript (the
+  request queue of the specification). `for await (const x of it)` over an async iterable awaits each `next()`;
+  leaving the loop early (`break`, `return`, a `throw` from the body) awaits `it.return()`, so the generator's
+  `finally` blocks run. A generator prints as `Object [AsyncGenerator] {}`.
 - `Promise<T>`: `then` (callbacks returning `U` or `Promise<U>`), `catch` (a handler returning `T`, or nothing),
   `finally`, `new Promise<T>((resolve, reject) => ...)` (`reject` takes an `Error`; an error thrown by the executor
   rejects), `Promise.resolve` / `reject` / `all` / `allSettled` / `any` / `race` over arrays of promises of one type
@@ -633,9 +647,10 @@ or host function that was running (or that called back into the script, like `Ar
 | `console.log` of functions | `[Function: f]` (name inferred from the variable or property) | `[Function (anonymous)]` for arrow functions and function expressions; `%o` does not list their hidden properties |
 | `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null` |
 | Key order of optional properties added later | A property added to an object goes last | The property order of an object is its layout, fixed when it is created: an object literal puts the optional properties of its type that it does not set last, in declaration order, so properties added later appear in JavaScript's order unless several are added in another order |
-| `next()` on a finished generator whose return type is a primitive (`Generator<number, number>`) | `{ value: undefined, done: true }` | `value` is `NaN` (number), `0` / `false` (integers, booleans): the value's representation is fixed |
-| Default parameter values of a generator function | Evaluated at the call | Evaluated when the body first runs (the first `next()`) |
-| Iterators written by hand (an object with `next()`) | Any object with `next()` | Iterators are generators (`function*`); a class is iterable through `*[Symbol.iterator]()` |
+| `next()` on a finished generator whose return type is a primitive (`Generator<number, number>`, also `AsyncGenerator`) | `{ value: undefined, done: true }` | `value` is `NaN` (number), `0` / `false` (integers, booleans): the value's representation is fixed |
+| Default parameter values of a generator function (also `async function*`) | Evaluated at the call | Evaluated when the body first runs (the first `next()`) |
+| Iterators written by hand (an object with `next()`) | Any object with `next()` | Iterators are generators (`function*`, `async function*`); a class is iterable through `*[Symbol.iterator]()` / `async *[Symbol.asyncIterator]()` |
+| `yield*` of a sync iterable in an async generator | Wraps it in an async-from-sync iterator | Compile error: `for (const x of xs) yield x;` |
 | Asynchronous host operations, timers | The event loop (`setTimeout`, I/O) | No timers; host functions returning promises settle through tickets, and a call returns `E7_PENDING` while tickets are open (the host is the event loop) |
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
 | JSON of the wrong shape | Accepted (no validation) | `JSON.parse(text) as T` ends the call (not catchable); `tryParse(text) as T \| null` from `e7:json` returns `null`. Syntax errors are a catchable `SyntaxError` in both |

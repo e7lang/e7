@@ -167,6 +167,17 @@ Type* Types::generator(Type* y, Type* r, Type* n, uint8_t gk) {
   t->gk = gk;
   return interned_[k] = t;
 }
+Type* Types::asyncGenerator(Type* y, Type* r, Type* n, uint8_t gk) {
+  std::string k = "AG" + std::to_string(gk) + ptrKey(y) + "," + ptrKey(r) + "," + ptrKey(n);
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::AsyncGenerator);
+  t->elem = y;
+  t->ret = r;
+  t->val = n;
+  t->gk = gk;
+  return interned_[k] = t;
+}
 Type* Types::typedArray(uint8_t kind) {
   std::string k = "TA" + std::to_string(kind);
   auto it = interned_.find(k);
@@ -370,9 +381,12 @@ static std::string typeNameB(const Type* t, int& budget) {
     case TT::Error: return "Error";
     case TT::Date: return "Date";
     case TT::RegExp: return "RegExp";
-    case TT::Generator: {
+    case TT::Generator:
+    case TT::AsyncGenerator: {
       static const char* const names[4] = {"Generator", "Iterator", "IterableIterator", "IteratorObject"};
-      std::string s = std::string(names[t->gk & 3]) + "<" + typeNameB(t->elem, budget);
+      static const char* const anames[4] = {"AsyncGenerator", "AsyncIterator", "AsyncIterableIterator", "AsyncIterable"};
+      std::string s = std::string(t->t == TT::AsyncGenerator ? anames[t->gk & 3] : names[t->gk & 3]) + "<" +
+                      typeNameB(t->elem, budget);
       bool showRet = t->ret && t->ret->t != TT::Void, showNext = t->val && t->val->t != TT::Void;
       if (t->gk == 0 || showRet || showNext) s += ", " + (showRet || t->gk == 0 ? typeNameB(t->ret, budget) : std::string("void"));
       if (t->gk == 0 || showNext) s += ", " + (showNext ? typeNameB(t->val, budget) : std::string("unknown"));

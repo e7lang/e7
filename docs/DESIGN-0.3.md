@@ -345,9 +345,20 @@ What 0.3 implements differs from the decisions above in these points:
   function is not `async` (the call is finished when the work it started is). An uncaught error of the call itself
   runs the jobs it queued first (as JavaScript does), then ends the call. For tests, `e7:test` provides `later(v)`
   and `laterReject(e)`: promises the VM settles itself, one per turn, in creation order (`setImmediate` in the
-  Node.js shim). **Async generators (`async function*`) are not implemented**: they are rarely needed by the target
-  scripts (an async function returning an array, or `for await` over an array of promises, covers them), and their
-  request queue is a separate state machine; they wait for a later release.
+  Node.js shim). **Async generators (`async function*`) came in 0.3.1** (they were left out of 0.3.0): a coroutine
+  of function kind 3 that starts like a generator (`GEN_START`), whose `next` / `throw` / `return` requests are
+  `RESUME_R` with an "async request" bit in its extra word (BYTECODE.md section 6.2). The VM keeps the request queue
+  of the specification in the coroutine (AsyncGeneratorEnqueue, Resume, Yield, CompleteStep, DrainQueue,
+  AwaitReturn): a request gets a promise at once and runs the body only when the generator waits at its start or at
+  a `yield`; `YIELD` in an async generator answers the first request and, when another is queued, continues without
+  suspending; `RET_*` and an error leaving the frame answer the current request and drain the queue. The compiler
+  emits the awaits around them (`yield v` and `return v` await `v`, `return(v)` at a `yield` awaits `v` before
+  returning, `for await` awaits each request's promise), so the number of promise jobs is the specification's and
+  the order of callbacks is Node's. The IteratorResult records are built by the VM, of the record class the request
+  names (the caller's view of `{ value, done }`). `yield*` returns the inner iterator's value after `return(v)`
+  without awaiting it again (the current specification and V8; older editions had one more await). `yield*` of a
+  sync iterable is not supported (its async-from-sync iterator's `throw()` changed in recent editions and differs
+  between Node.js versions), so it is a compile error.
 - **D3.** As decided. Records get the presence class flag only when the module may need format 3: `e7c --target 0.2`
   compiles them without masks (the 0.2 behaviour).
 - **D4.** As decided; the engine is `src/regexp/` (a parser following V8's, a compiled program, a matcher with two

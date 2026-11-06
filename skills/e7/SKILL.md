@@ -33,8 +33,8 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | `JSON.parse(text)` | `JSON.parse(text) as T` (validated against `T`; a shape mismatch ends the call and cannot be caught, a syntax error is a catchable `SyntaxError`); for untrusted input `tryParse(text) as T \| null` from `e7:json` (`null` on bad input, `lastError()` says why) |
 | `arr.map(obj.method)` | `arr.map(x => obj.method(x))` (methods are not values) |
 | `Buffer`, `crypto.subtle`, `require("crypto")`, `fs`, `process` | `Uint8Array`, `e7:crypto`, `e7:encoding`, or a host function |
-| `async function*` (async generators) | an `async` function returning an array, or `for await` over an array of promises |
 | an object literal `{ get x() { ... } }` passed as `interface I { x: number }` | declare the accessor in the interface: `get x(): number` (object literal accessors need e7vm 0.3.1) |
+| `yield* array` in an `async function*` | `for (const x of array) yield x;` |
 
 Behaviour that differs from JavaScript at run time:
 
@@ -52,18 +52,18 @@ interfaces and type aliases (also recursive and generic), generics, enums, liter
 with narrowing and exhaustive `switch`, `T | null | undefined`, type predicates (`x is T`) and assertion functions,
 destructuring, spread, optional chaining, `??`, template literals and tagged templates, closures, `try` / `catch` /
 `finally`, generators (`function*`, `yield*`, `[Symbol.iterator]`), `async` / `await`, `Promise` (`then`, `all`,
-`allSettled`, `any`, `race`, `new Promise`), top-level `await`, `for await` over arrays, regular expressions
-(literals, `RegExp`, `match` / `matchAll` / `replace` / `split`), `Map`, `Set`, `Date`, `JSON` (typed with
-`as T`), `BigInt`, typed arrays (`Uint8Array` ... `Float64Array`, `BigInt64Array`), `DataView`, `structuredClone`,
-ES modules (named, default, namespace imports, re-exports), and E7's machine integers and `e7:crypto` /
-`e7:encoding` / `e7:json` / `e7:test` modules.
+`allSettled`, `any`, `race`, `new Promise`), top-level `await`, async generators (`async function*`, `for await`
+over them; e7vm 0.3.1), `for await` over arrays, regular expressions (literals, `RegExp`, `match` / `matchAll` /
+`replace` / `split`), `Map`, `Set`, `Date`, `JSON` (typed with `as T`), `BigInt`, typed arrays (`Uint8Array` ...
+`Float64Array`, `BigInt64Array`), `DataView`, `structuredClone`, ES modules (named, default, namespace imports,
+re-exports), and E7's machine integers and `e7:crypto` / `e7:encoding` / `e7:json` / `e7:test` modules.
 
 **Not supported** (compile errors with a hint): `any` / `unknown` as declared types, unions of different types
 (`string | number`, discriminated unions of objects), intersections, index signatures / `Record` / mapped,
 conditional, `keyof`, `typeof` and template literal types, `Symbol` values, `Proxy` / `Reflect` / `eval`,
 `for...in` / `delete` / `in`, `var`, class expressions and mixins, decorators, namespaces, JSX, `WeakMap` /
-`WeakSet`, `Intl` and locale formatting, timers and I/O (`setTimeout`, `fetch`: the host does them), async
-generators, methods used as values. The full table with a reason and a replacement
+`WeakSet`, `Intl` and locale formatting, timers and I/O (`setTimeout`, `fetch`: the host does them), `yield*` of
+an array in an async generator, methods used as values. The full table with a reason and a replacement
 for each of 250 TypeScript features: [docs/TYPESCRIPT.md](https://github.com/e7lang/e7/blob/main/docs/TYPESCRIPT.md).
 
 For the complete list (destructuring limits, class rules, operators, every standard-library method) read

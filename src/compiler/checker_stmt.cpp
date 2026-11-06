@@ -151,6 +151,10 @@ bool Checker::assignable(Type* src, Type* dst) {
       // same value types (a target without TReturn / TNext accepts any)
       return src->t == TT::Generator && (dst->gk != 0 || src->gk == 0) && src->elem == dst->elem &&
              (dst->ret->t == TT::Void || src->ret == dst->ret) && (dst->val->t == TT::Void || src->val == dst->val);
+    case TT::AsyncGenerator:
+      // the same for async generators (0.3.1): AsyncGenerator -> AsyncIterator / AsyncIterableIterator / AsyncIterable
+      return src->t == TT::AsyncGenerator && (dst->gk != 0 || src->gk == 0) && src->elem == dst->elem &&
+             (dst->ret->t == TT::Void || src->ret == dst->ret) && (dst->val->t == TT::Void || src->val == dst->val);
     case TT::Number:
       return src->t == TT::Enum && !src->en->isString;
     case TT::String:
@@ -264,7 +268,7 @@ Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
 // function's Promise<T>, else the function's return type
 Type* Checker::bodyRet(FuncSym* f) {
   Type* r = f->type->ret;
-  if (f->isGenerator) return r->t == TT::Generator && r->ret ? r->ret : T.voidT();
+  if (f->isGenerator) return (r->t == TT::Generator || r->t == TT::AsyncGenerator) && r->ret ? r->ret : T.voidT();
   if (f->isAsync) return r->t == TT::Promise ? r->elem : T.voidT();
   return r;
 }
@@ -273,8 +277,9 @@ Type* Checker::bodyRet(FuncSym* f) {
 void Checker::checkCoroutineRet(FuncSym* f, Type* ret, Loc l) {
   if (f->isGenerator && !f->isAsync && ret->t != TT::Generator && ret->t != TT::Unknown)
     err(l, "the return type of a generator must be Generator<T>, Iterator<T> or IterableIterator<T>, not '" + typeName(ret) + "'");
-  if (f->isGenerator && f->isAsync)
-    err(l, "async generators are not supported yet");
+  if (f->isGenerator && f->isAsync && ret->t != TT::AsyncGenerator && ret->t != TT::Unknown)
+    err(l, "the return type of an async generator must be AsyncGenerator<T>, AsyncIterator<T>, AsyncIterableIterator<T> or "
+           "AsyncIterable<T>, not '" + typeName(ret) + "'");
   if (f->isAsync && !f->isGenerator && ret->t != TT::Promise && ret->t != TT::Unknown)
     err(l, "the return type of an async function must be Promise<T>, not '" + typeName(ret) + "'");
 }
@@ -396,7 +401,7 @@ void Checker::checkBody(FuncSym* f) {
       Type* y = nullptr;
       for (Type* t : f->yieldTypes) y = y ? unify(y, t, f->loc, "yield expressions") : t;
       if (!y || y->t == TT::Void || y->t == TT::Undefined || y->t == TT::Never) y = T.undef();
-      r = T.generator(y, r, T.voidT(), 0);
+      r = f->isAsync ? T.asyncGenerator(y, r, T.voidT(), 0) : T.generator(y, r, T.voidT(), 0);
     }
     f->type = T.func(f->type->params, r, f->type->optParams, f->type->restParam);
     f->inferRet = false;
@@ -1173,11 +1178,29 @@ void Checker::checkStmt(Stmt* s) {
           if (s->declareKind) s->expr = ie->a->a;
         }
       }
+      bool asyncIter = false;
       if (!et) {
         Type* it = check(s->expr, nullptr);
-        et = elemTypeForIter(s->expr, it, s->expr->loc);
+        Type* ag = it->t == TT::AsyncGenerator ? it : asyncIteratorMethodType(it, s->expr->loc);
+        if (ag && s->isAwait) {
+          // for await over an async iterable (0.3.1): its values are not awaited again
+          et = ag->elem;
+          asyncIter = true;
+        } else if (ag && it->t == TT::AsyncGenerator) {
+          err(s->expr->loc, "type '" + typeName(it) + "' is an async iterable: use 'for await'");
+          et = T.unknown();
+        } else {
+          et = elemTypeForIter(s->expr, it, s->expr->loc);
+        }
       }
-      if (s->isAwait) {
+      if (s->isAwait && asyncIter) {
+        if (!curFn || (!curFn->isAsync && !curFn->isInit))
+          err(s->loc, "'for await' is only allowed in async functions and at the top level of the entry module");
+        else if (curFn->isInit && !curFn->isAsync) {
+          curFn->isAsync = true;
+          curFn->type = T.func({}, T.promise(T.voidT()));
+        }
+      } else if (s->isAwait) {
         // for await: each element is awaited (a promise gives its value)
         if (!curFn || (!curFn->isAsync && !curFn->isInit))
           err(s->loc, "'for await' is only allowed in async functions and at the top level of the entry module");

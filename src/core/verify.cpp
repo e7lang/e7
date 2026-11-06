@@ -306,7 +306,23 @@ bool verifyModule(const Module& m, std::string& err) {
             uint64_t ex = code[next];
             uint16_t sr = (uint16_t)ex;
             uint32_t mode = (uint32_t)(ex >> 16) & 3, sk = (uint32_t)(ex >> 18) & 3;
-            if ((ex >> 20) != 0 || mode == 3) return F("function %zu pc %zu: bad resume metadata", fi, pc);
+            if (mode == 3) return F("function %zu pc %zu: bad resume metadata", fi, pc);
+            if (ex & kResumeAsync) {
+              // a request to an async generator (0.3.1): B gets its promise; the IteratorResult record
+              // class ({ value, done: boolean }) and the value type of T (the generator's kinds are
+              // checked at run time)
+              if (op != OP_RESUME_R || (ex >> 45) != 0 || resumeElemVT(ex) >= VT__COUNT)
+                return F("function %zu pc %zu: bad resume metadata", fi, pc);
+              uint32_t ci = resumeClass(ex);
+              if (ci >= m.classes.size()) return F("function %zu pc %zu: bad resume metadata", fi, pc);
+              const ClassDesc& rc = m.classes[ci];
+              Kind vk = kindOfVT(rc.fields.empty() ? VT_REF : rc.fields[0].vt);
+              if (!rc.isRecord || rc.fields.size() != 2 || rc.fields[0].name != "value" || rc.fields[1].name != "done" ||
+                  rc.fields[1].vt != VT_BOOL || (vk != K_R && vk != kindOfVT(resumeElemVT(ex))))
+                return F("function %zu pc %zu: bad iterator result class", fi, pc);
+            } else if ((ex >> 20) != 0) {
+              return F("function %zu pc %zu: bad resume metadata", fi, pc);
+            }
             if (sk == 0 ? sr != kNoReg : !reg(sr, "?IFR"[sk])) return F("function %zu pc %zu: bad resume value register", fi, pc);
             if (mode == 1 && sk != 3) return F("function %zu pc %zu: throw() needs an error object", fi, pc);
             next++;

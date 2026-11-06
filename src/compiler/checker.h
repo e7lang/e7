@@ -175,6 +175,7 @@ class Checker {
   Type* regexpGroupsType(Type* re);  // the groups object of a literal with named groups
   Type* promiseCallbackRet(Expr* cb, Type* ret, Loc l);
   Type* iteratorMethodType(Type* t, Loc l);
+  Type* asyncIteratorMethodType(Type* t, Loc l);  // 0.3.1: [Symbol.asyncIterator]()
   Type* constLit(Expr* e);
   Type* inferVarType(Expr* init, Type* t, bool isConst);
   bool exitsClause(SwitchCase& c);

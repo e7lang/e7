@@ -229,9 +229,157 @@ void VM::settleReaction(const Reaction& r, bool rejected, Slot v, uint8_t vt) {
       if (rejected) rejectPromise(d, v.r);
       else resolvePromise(d, v);
       return;
+    case RK_AGEN_RETURN: {
+      // the value of return(v) settled: the generator is completed, the request gets it (or its reason)
+      auto* co = static_cast<CoroObj*>(r.a);
+      if (!co || co->type != OT::Coro || !isAsyncGen(co)) return;
+      TempRoot keep(*this, co);
+      co->state = CO_DONE;
+      agenCompleteStep(co, rejected, v, rejected ? 3 : (uint8_t)(kindOfVT(vt) + 1), true);
+      agenDrainQueue(co);
+      return;
+    }
     default:
       return;
   }
+}
+
+// ---------------------------------------------------------------- async generators (0.3.1)
+// The request queue of the specification (AsyncGeneratorEnqueue, CompleteStep, DrainQueue, AwaitReturn).
+// The body runs in the interpreter (RESUME, YIELD, AWAIT and RET_* of an async generator's frame).
+
+// CreateIterResultObject(v, done) as a record of class c ({ value, done }): v has kind vkind (0: none,
+// undefined); a primitive in a `T | undefined` field is boxed with elemVT
+static InstObj* iterResult(VM& vm, ClassRT* c, uint8_t elemVT, Slot v, uint8_t vkind, bool done) {
+  Kind fk = kindOfVT(c->fieldVT[0]);
+  Slot val = v;
+  if (vkind == 0) {
+    // no value: undefined (a primitive field: NaN / 0, the representation is fixed)
+    if (fk == K_R) val.r = vm.undef();
+    else if (fk == K_F) val.f = std::nan("");
+    else val.i = 0;
+  } else if (fk == K_R && vkind != 3) {
+    if ((uint8_t)(kindOfVT(elemVT) + 1) != vkind) vm.error("generator type mismatch");
+    val.r = vm.newBox(elemVT, v);
+  } else if ((uint8_t)(fk + 1) != vkind) {
+    vm.error("generator type mismatch");
+  }
+  VM::TempRoot keep(vm, fk == K_R ? val.r : nullptr);
+  InstObj* rec = vm.newInstance(c);
+  rec->fields()[0] = val;
+  rec->fields()[1].i = done ? 1 : 0;
+  return rec;
+}
+
+PromiseObj* VM::agenRequest(CoroObj* co, uint32_t mode, Slot sent, uint8_t sentKind, ClassRT* cls, uint8_t elemVT,
+                            bool* resume) {
+  *resume = false;
+  uint8_t ff = co->fflags;
+  // the coroutine is an untyped reference: its kinds are checked against the request's
+  uint8_t expect = mode == 0 ? fflagsNext(ff) : mode == 2 ? fflagsReturn(ff) : 3;
+  if (E7_UNLIKELY((sentKind != 0 && sentKind != expect) || elemVT >= VT__COUNT ||
+                  (uint8_t)(kindOfVT(elemVT) + 1) != fflagsYield(ff)))
+    error("generator type mismatch");
+  Kind fk = kindOfVT(cls->fieldVT[0]);
+  if (E7_UNLIKELY(fk != K_R && fk != kindOfVT(elemVT))) error("generator type mismatch");
+  PromiseObj* p = newPromise(VT_REF);  // may collect: co and the sent value are in the caller's registers
+  TempRoot keepP(*this, p);            // (accountExternal below may collect too)
+  uint8_t st = co->state;
+  if (mode == 1 && st == CO_START) co->state = st = CO_DONE;  // throw() before the start: completed
+  if (st == CO_DONE && mode != 2) {
+    if (mode == 1) {
+      rejectPromise(p, sent.r);
+    } else {
+      Slot r;
+      r.r = iterResult(*this, cls, elemVT, Slot{}, 0, true);
+      fulfillPromise(p, r);
+    }
+    return p;
+  }
+  // AsyncGeneratorEnqueue
+  if (!co->queue) co->queue = new std::deque<AGenRequest>();
+  AGenRequest q;
+  q.promise = p;
+  q.cls = cls;
+  q.value = sent;
+  q.mode = (uint8_t)mode;
+  q.kind = sentKind;
+  q.elemVT = elemVT;
+  accountExternal((int64_t)sizeof(AGenRequest));  // the memory limit counts queued requests
+  try {
+    co->queue->push_back(q);
+  } catch (...) {
+    accountExternalUnchecked(-(int64_t)sizeof(AGenRequest));
+    throw;
+  }
+  if (mode == 2 && (st == CO_START || st == CO_DONE)) {
+    co->state = CO_AWAIT_RETURN;
+    agenAwaitReturn(co);
+  } else if ((st == CO_START && mode == 0) || (st == CO_SUSPENDED && insOp(co->fn->code[co->pc]) == OP_YIELD)) {
+    *resume = true;  // suspendedStart / suspendedYield: AsyncGeneratorResume
+  }
+  // otherwise it is running, awaiting, or awaiting a return value: the request waits its turn
+  return p;
+}
+
+void VM::agenCompleteStep(CoroObj* co, bool rejected, Slot v, uint8_t vkind, bool done) {
+  if (!co->queue || co->queue->empty()) return;
+  const AGenRequest& q = co->queue->front();
+  PromiseObj* p = q.promise;
+  Slot res;
+  // the record first, while the request (and its promise) is still in the queue
+  if (!rejected) res.r = iterResult(*this, q.cls, q.elemVT, v, vkind, done);
+  co->queue->pop_front();
+  accountExternalUnchecked(-(int64_t)sizeof(AGenRequest));
+  if (rejected) rejectPromise(p, v.r);
+  else fulfillPromise(p, res);
+}
+
+void VM::agenDrainQueue(CoroObj* co) {
+  TempRoot keep(*this, co);
+  while (co->queue && !co->queue->empty()) {
+    const AGenRequest& q = co->queue->front();
+    if (q.mode == 2) {
+      co->state = CO_AWAIT_RETURN;
+      agenAwaitReturn(co);
+      return;
+    }
+    if (q.mode == 1) {
+      Slot e = q.value;
+      agenCompleteStep(co, true, e, 3, true);
+    } else {
+      agenCompleteStep(co, false, Slot{}, 0, true);  // { value: undefined, done: true }
+    }
+  }
+}
+
+void VM::agenAwaitReturn(CoroObj* co) {
+  TempRoot keep(*this, co);
+  const AGenRequest& q = co->queue->front();
+  PromiseObj* pr;
+  if (q.kind == 3 && q.value.r && q.value.r->type == OT::Promise) {
+    pr = static_cast<PromiseObj*>(q.value.r);  // PromiseResolve of a promise: the promise itself
+  } else {
+    Slot v = q.value;
+    uint8_t vt;
+    if (q.kind == 0) {
+      // return() without a value: undefined (a primitive field of the record: NaN / 0)
+      vt = q.cls->fieldVT[0];
+      Kind k = kindOfVT(vt);
+      if (k == K_R) v.r = undef_;
+      else if (k == K_F) v.f = std::nan("");
+      else v.i = 0;
+    } else {
+      vt = q.kind == 3 ? (uint8_t)VT_REF : q.kind == 2 ? (uint8_t)VT_NUMBER : q.elemVT;
+    }
+    pr = newPromise(vt);  // may collect: a reference value is in the queue
+    fulfillPromise(pr, v);
+  }
+  TempRoot keepP(*this, pr);
+  Reaction r;
+  r.kind = RK_AGEN_RETURN;
+  r.a = co;
+  promiseThen(pr, r);
 }
 
 // Starts a job: pushes the frame of the script code it runs (an await continuation, a then / catch /

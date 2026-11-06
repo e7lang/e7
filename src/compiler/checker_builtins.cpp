@@ -1257,6 +1257,45 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       return noSuch();
     }
+    case TT::AsyncGenerator: {
+      // 0.3.1: g.next(v?) / g.return(v?) / g.throw(e): a promise of an IteratorResult record. Its class
+      // has a presence mask also when `value` is a reference T: a finished generator's value is
+      // undefined, a property that is there (printed `value: undefined`, as in JavaScript)
+      auto asyncIterResultClass = [&](Type* rt) {
+        Type* vt = rt->shape->props[0].type;
+        if (kindOf(vt) == K_R && vt->t != TT::Optional && vt->t != TT::Undefined) vt = T.optional(vt, false, true);
+        return recordFor({{"value", vt}, {"done", T.boolean()}})->cls;
+      };
+      if (meth("next") || meth("return")) {
+        bool isNext = name == "next";
+        Type* want = isNext ? bt->val : bt->ret;
+        if (args.size() > 1) return errT(l, "'" + name + "' takes at most one argument");
+        if (args.size() == 1) {
+          if (!want || want->t == TT::Void) {
+            Type* at = check(args[0], nullptr);
+            if (at->t != TT::Undefined)
+              return errT(args[0]->loc, std::string(isNext ? "this generator receives no value from next()" : "this generator returns no value") +
+                                             " (" + typeName(bt) + ")");
+            args.clear();
+          } else {
+            check(args[0], want);
+            coerce(args[0], want, isNext ? "next() value" : "return() value");
+          }
+        }
+        e->intrinsic = isNext ? IN_GEN_NEXT : IN_GEN_RETURN;
+        Type* rt = iterResultType(bt, l);
+        e->cls = asyncIterResultClass(rt);
+        return T.promise(rt);
+      }
+      if (meth("throw")) {
+        if (!argsMatch(e, args, {T.error()}, 1, "throw")) return T.unknown();
+        e->intrinsic = IN_GEN_THROW;
+        Type* rt = iterResultType(bt, l);
+        e->cls = asyncIterResultClass(rt);
+        return T.promise(rt);
+      }
+      return noSuch();
+    }
     case TT::Generator: {
       // g.next(v?) / g.return(v?) / g.throw(e): an IteratorResult record
       if (meth("next") || meth("return")) {

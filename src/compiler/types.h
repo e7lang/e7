@@ -18,7 +18,10 @@ enum class TT : uint8_t {
   Generator,  // 0.3: Generator<T, TReturn, TNext> / Iterator<T> / IterableIterator<T> (elem, ret, val; gk)
   Promise,    // 0.3: Promise<T> (elem)
   TypedArray, // 0.3: Int8Array ... Float64Array, BigInt64Array, BigUint64Array (vt: the element kind, TAKind)
-  RegExp      // 0.3: RegExp (reCaps / reNames: the groups of a literal; reCaps -1 for a pattern unknown until run time)
+  RegExp,     // 0.3: RegExp (reCaps / reNames: the groups of a literal; reCaps -1 for a pattern unknown until run time)
+  // 0.3.1: AsyncGenerator<T, TReturn, TNext> / AsyncIterator<T> / AsyncIterableIterator<T> / AsyncIterable<T>
+  // (elem, ret, val and gk as for Generator: all are async generators at run time)
+  AsyncGenerator
 };
 
 struct ObjShape;
@@ -337,6 +340,8 @@ class Types {
   Type* anonObject(const std::vector<ObjShape::Prop>& props);  // structural, interned
   Type* enumType(EnumSym* e);
   Type* generator(Type* yieldT, Type* ret, Type* next, uint8_t gk = 0);
+  // gk: 0 AsyncGenerator, 1 AsyncIterator, 2 AsyncIterableIterator, 3 AsyncIterable
+  Type* asyncGenerator(Type* yieldT, Type* ret, Type* next, uint8_t gk = 0);
   // literal types: the union of the given values (a full boolean set is `boolean`)
   Type* strLit(std::vector<std::u16string> vals);
   Type* numLit(std::vector<double> vals);

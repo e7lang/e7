@@ -278,8 +278,45 @@ main();
 promises of one type) and generators (`function*`, `yield`, `yield*`, `[Symbol.iterator]` generator methods)
 work as in Node.js, callbacks in the same order. There are no timers and no I/O: the host does networking
 and storage through async host functions (`declare function fetchKey(id: string): Promise<Uint8Array>`,
-settled by the host; see EMBEDDING.md) or passes data in as arguments. Async generators (`async function*`)
-are not supported yet.
+settled by the host; see EMBEDDING.md) or passes data in as arguments.
+
+Async generators (`async function*`, e7vm 0.3.1) produce values over time; `for await` consumes them and
+calls `return()` when the loop is left early, so `finally` blocks run:
+
+```ts
+async function* pages(n: number): AsyncGenerator<string[]> {
+  try {
+    for (let i = 0; i < n; i++) {
+      await null;  // e.g. an async host function fetching page i
+      yield [`item${2 * i}`, `item${2 * i + 1}`];
+    }
+  } finally {
+    console.log("closed");
+  }
+}
+
+async function* take<T>(src: AsyncIterable<T>, n: number): AsyncGenerator<T> {
+  if (n <= 0) return;
+  let k = 0;
+  for await (const x of src) {
+    yield x;
+    if (++k >= n) return;
+  }
+}
+
+async function main(): Promise<void> {
+  for await (const page of take(pages(10), 2)) console.log(page.join(","));
+  const g = pages(1);
+  console.log(await g.next(), await g.next());
+}
+main();
+```
+
+The types are `AsyncGenerator<T, TReturn, TNext>`, `AsyncIterator<T>`, `AsyncIterableIterator<T>` and
+`AsyncIterable<T>`; `next` / `return` / `throw` return a `Promise` of `{ value, done }` and may be called without
+awaiting (the requests are queued, as in JavaScript). A class is an async iterable through
+`async *[Symbol.asyncIterator]()`. `yield*` takes another async generator; to yield the values of an array, write
+`for (const x of xs) yield x;`.
 
 ### `for...in`, `in`, `delete`, `var`, `==`
 
@@ -401,7 +438,7 @@ const r = ({ a } = { a: 1 });
 ### Other rejected syntax
 
 `with`, `delete`, `in`, `new.target`, `eval`, `Symbol` values, `keyof`/`typeof` in type positions, conditional,
-mapped and template literal types, intersection types, async generators.
+mapped and template literal types, intersection types, `yield*` of a sync iterable in an async generator.
 Identifiers are ASCII only. (The comma operator, `void`, tagged templates, `String.raw`, `<T>x` assertions and
 all typed arrays are supported.)
 

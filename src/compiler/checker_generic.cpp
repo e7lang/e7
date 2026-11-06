@@ -351,6 +351,13 @@ void Checker::inferMatch(GenericSym* g, std::vector<Type*>& bound, TypeNode* n, 
         if (n->args.size() > 2 && t->val && t->val->t != TT::Void) rec(n->args[2], t->val);
         return;
       }
+      if ((nm == "AsyncGenerator" || nm == "AsyncIterator" || nm == "AsyncIterableIterator" || nm == "AsyncIterable") &&
+          t->t == TT::AsyncGenerator && !n->args.empty()) {
+        rec(n->args[0], t->elem);
+        if (n->args.size() > 1 && t->ret && t->ret->t != TT::Void) rec(n->args[1], t->ret);
+        if (n->args.size() > 2 && t->val && t->val->t != TT::Void) rec(n->args[2], t->val);
+        return;
+      }
       if (nm == "Promise" && n->args.size() == 1) {
         if (t->t == TT::Promise) rec(n->args[0], t->elem);
         return;

@@ -680,6 +680,7 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
         case TT::Class: return x->cls->isRecord ? nullptr : "a class instance (it would become a plain object)";
         case TT::Func: return "a function";
         case TT::Generator: return "a generator";
+        case TT::AsyncGenerator: return "an async generator";
         case TT::Promise: return "a promise";
         case TT::Handle: return "a KeyHandle";
         case TT::TextEncoder: case TT::TextDecoder: return "a TextEncoder / TextDecoder";
