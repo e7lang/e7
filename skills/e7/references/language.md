@@ -338,23 +338,24 @@ The text is validated against the type while parsing; a mismatch stops the call 
 (`JSON.parse: expected a number at $.amount`). Extra fields are ignored. For untrusted input write
 `tryParse(text) as Order | null` (from `e7:json`): same validation, but `null` instead of ending the call.
 
-### Recursive interfaces
+### Recursive types
+
+Interfaces and object type aliases may refer to themselves (also mutually, and generic ones):
+
+```ts
+interface TreeNode { label: string; children: TreeNode[] }
+interface List<T> { head: T; tail: List<T> | null }
+function size(t: TreeNode): number { return 1 + t.children.reduce((n, c) => n + size(c), 0); }
+const root: TreeNode = { label: "root", children: [{ label: "a", children: [] }] };
+const list: List<number> = { head: 1, tail: { head: 2, tail: null } };
+console.log(size(root), list.tail?.head);
+```
+
+`JSON.parse(text) as T` into a recursive type is not supported yet (planned for e7vm 0.3):
 
 ```ts e7-reject
 interface TreeNode { label: string; children: TreeNode[] }
-```
-
-Use a class for linked or tree-shaped data (classes may refer to themselves):
-
-```ts
-class TreeNode {
-  children: TreeNode[] = [];
-  constructor(public label: string) {}
-  add(child: TreeNode): TreeNode { this.children.push(child); return this; }
-  size(): number { return 1 + this.children.reduce((n, c) => n + c.size(), 0); }
-}
-const root = new TreeNode("root").add(new TreeNode("a")).add(new TreeNode("b").add(new TreeNode("c")));
-console.log(root.size());
+const t = JSON.parse('{"label":"x","children":[]}') as TreeNode;
 ```
 
 ### Defaults and rest in destructuring assignments

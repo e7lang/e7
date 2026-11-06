@@ -98,6 +98,9 @@ User-defined generics are supported (section 2.3).
   (`const [n, s] = [1, "x"]` binds a `number` and a `string`; nested patterns and literals likewise); with elements of
   compatible types it is an array. `as const` is not supported (annotate the type instead).
 - A recursive function that omits its return type is an error; an explicit annotation is required.
+- Interfaces and object type aliases may be recursive (`interface Tree { children: Tree[] }`, also mutually recursive
+  and generic ones); structural compatibility between recursive types is checked coinductively, as in tsc.
+  `JSON.parse(text) as T` into a recursive type is not supported yet.
 - A `switch` with a case for every member of an enum is exhaustive: a function may end with it without a `default`
   or a final `return` (the `default` branch of such a switch does not see the value as `never`).
 - Narrowing: `x === null`, `x !== undefined`, `x == null`, truthiness checks `if (x)`, `instanceof`, combinations with `&&`/`||`/`!`,

@@ -709,11 +709,32 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
       case SymK::Alias: {
         noArgs();
         auto* a = static_cast<AliasSym*>(s);
-        if (a->state == 1) return errT(l, "type alias '" + name + "' circularly references itself");
+        if (a->state == 1) {
+          if (a->type) return a->type;  // a recursive object type alias (below)
+          return errT(l, "type alias '" + name + "' circularly references itself");
+        }
         if (!a->type) {
           a->state = 1;
           std::string savedFile = curFile;
-          a->type = resolveType(a->decl->typeBody);
+          TypeNode* body = a->decl->typeBody;
+          bool hasMethods = false;
+          if (body->k == TNK::Object)
+            for (auto& m : body->members) hasMethods = hasMethods || m.method;
+          if (body->k == TNK::Object && !hasMethods && typeRefersTo(body, a->name)) {
+            // type Tree = { children: Tree[] }: a named shape (like an interface), created before its members
+            T.shapes.emplace_back(new ObjShape());
+            ObjShape* sh = T.shapes.back().get();
+            sh->name = a->name;
+            a->type = T.objectType(sh);
+            for (auto& m : body->members) {
+              Type* pt = resolveType(m.type);
+              bool uo = m.optional && hasUndefined(pt);
+              if (m.optional) pt = T.optional(pt, false, true);
+              sh->props.push_back({m.name, pt, m.optional, uo, m.readonly});
+            }
+          } else {
+            a->type = resolveType(body);
+          }
           // name anonymous object types after alias for messages
           if (a->type->t == TT::Object && a->type->shape->name.empty()) {
             // keep structural identity; just remember a display name when unique
@@ -779,14 +800,22 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   return errT(l, "unknown type '" + name + "'" + suggestName(name, true));
 }
 
+// whether a type expression mentions the type named `name` (a recursive type alias)
+bool Checker::typeRefersTo(TypeNode* n, const std::string& name) {
+  if (!n) return false;
+  if (n->k == TNK::Ref && n->name == name) return true;
+  for (TypeNode* a : n->args) if (typeRefersTo(a, name)) return true;
+  if (typeRefersTo(n->elem, name) || typeRefersTo(n->ret, name)) return true;
+  for (auto& p : n->params) if (typeRefersTo(p.type, name)) return true;
+  for (auto& m : n->members) if (typeRefersTo(m.type, name)) return true;
+  return false;
+}
+
 void Checker::resolveInterface(InterfaceSym* is) {
   if (is->state == 2) return;
   if (is->state == 1) {
+    // a member refers back to the interface (directly or through other types): its type exists already
     if (is->inExtends) err(is->loc, "interface '" + is->name + "' circularly extends itself");
-    else
-      err(is->loc, "interface '" + is->name + "' refers to itself; recursive interfaces are not supported yet. "
-                   "Use a class for linked or tree-shaped data, e.g. class " + is->name + " { next: " + is->name +
-                   " | null = null; ... }");
     return;
   }
   is->state = 1;

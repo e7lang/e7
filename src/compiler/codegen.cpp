@@ -450,6 +450,8 @@ struct Gen {
   }
   static std::string kindSuffixOf(Type* t) { return std::string(1, kindChar(K(t))); }
   std::string jsonDescriptor(Type* t);
+  std::string jsonDescriptorOf(Type* t);
+  std::vector<Type*> jsonStack_;  // object types being described (a recursive type is not supported yet)
   Loc jsonLoc_;  // the JSON.parse / tryParse expression whose descriptor is being built (errors)
   void loadInt(uint16_t dst, int64_t v) {
     if (v >= INT32_MIN && v <= INT32_MAX) emitBx(OP_LOADI, dst, (uint32_t)(int32_t)v);
@@ -4326,6 +4328,22 @@ void Gen::genIndex(Expr* e, uint16_t d) {
 // JSON.parse type descriptor:  n number  b boolean  s string  ?X nullable  [X array
 //   {<classIdx>:<n>:<name>=X;...}  record/class with fields   Mk,v  Map<string, X>
 std::string Gen::jsonDescriptor(Type* t) {
+  if (t->t == TT::Object) {
+    for (Type* x : jsonStack_)
+      if (x == t) {
+        err(jsonLoc_, "JSON.parse into the recursive type '" + t->shape->name +
+                          "' is not supported yet (planned for e7vm 0.3); parse into a non-recursive type");
+        return "s";
+      }
+    jsonStack_.push_back(t);
+    std::string d = jsonDescriptorOf(t);
+    jsonStack_.pop_back();
+    return d;
+  }
+  return jsonDescriptorOf(t);
+}
+
+std::string Gen::jsonDescriptorOf(Type* t) {
   switch (t->t) {
     case TT::Number: return "n";
     case TT::Bool: return "b";

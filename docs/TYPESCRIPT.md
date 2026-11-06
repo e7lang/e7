@@ -27,14 +27,14 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **117 supported**, **21 partial**, **112 unsupported** (271 sample programs).
+250 features: **118 supported**, **20 partial**, **112 unsupported** (270 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
 | [Everyday Types](#everyday-types) | 13 | 3 | 4 |
 | [Narrowing](#narrowing) | 7 | 3 | 4 |
 | [More on Functions](#more-on-functions) | 14 | 1 | 6 |
-| [Object Types](#object-types) | 11 | 1 | 6 |
+| [Object Types](#object-types) | 12 | 0 | 6 |
 | [Generics](#generics) | 9 | 1 | 5 |
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
 | [Classes](#classes) | 16 | 1 | 14 |
@@ -53,9 +53,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 16 | 3 | 12 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 9 | 6 | 11 |
-| **Total** | **117** | **21** | **112** |
+| **Total** | **118** | **20** | **112** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 73.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 72.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -142,9 +142,9 @@ Within each category, supported features come first, then partial and unsupporte
 | Property access, nested objects and arrays of objects | supported |  | [property-access.ts](../tests/ts-features/objects/property-access.ts) |
 | `readonly T[]` and `ReadonlyArray<T>` | supported | `ReadonlyMap` and `ReadonlySet` too; mutating methods, index and `length` writes are compile errors | [readonly-arrays.ts](../tests/ts-features/objects/readonly-arrays.ts) |
 | `readonly` properties | supported |  | [readonly-properties.ts](../tests/ts-features/objects/readonly-properties.ts) |
+| Recursive types | supported | Recursive interfaces (also mutually recursive and generic) and object type aliases; `JSON.parse(text) as T` into a recursive type comes with e7vm 0.3 | [recursive-types.ts](../tests/ts-features/objects/recursive-types.ts) |
 | Shorthand properties | supported |  | [shorthand-properties.ts](../tests/ts-features/objects/shorthand-properties.ts) |
 | Tuple types (including labeled and readonly tuples) | supported |  | [tuples.ts](../tests/ts-features/objects/tuples.ts) |
-| Recursive types | **partial** | **Works:** classes may refer to themselves (linked lists, trees). **Not supported:** recursive interfaces and type aliases (*not implemented yet*). **Instead:** a class for linked or tree-shaped data | [recursive-types.ok.ts](../tests/ts-features/objects/recursive-types.ok.ts), [recursive-types.no.ts](../tests/ts-features/objects/recursive-types.no.ts) |
 | Computed property names | **unsupported** | **Why:** property names must be known to fix the object layout (*types known at compile time*). **Instead:** `Map<string, V>` for dynamic keys, or literal property names | [computed-property-names.ts](../tests/ts-features/objects/computed-property-names.ts) |
 | Index signatures `{ [key: string]: T }` | **unsupported** | **Why:** properties are fixed fields with static types (*types known at compile time*). **Instead:** `Map<string, T>` (`JSON.parse(text) as Map<string, T>` reads a JSON object with arbitrary keys) | [index-signatures.ts](../tests/ts-features/objects/index-signatures.ts) |
 | Intersection types `A & B` | **unsupported** | **Why:** intersections are not resolved into an object type (*not implemented yet*). **Instead:** an interface that extends both: `interface ColorfulCircle extends Colorful, Circle {}` | [intersection-types.ts](../tests/ts-features/objects/intersection-types.ts) |

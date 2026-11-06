@@ -10,6 +10,16 @@ namespace e7 {
 // ------------------------------------------------------------------ relations
 bool Checker::structurallyAssignable(Type* src, Type* dst) {
   if (dst->t != TT::Object) return false;
+  // recursive types: assume the pair being compared is compatible while comparing its members
+  auto key = std::make_pair(src, dst);
+  if (assumedAssignable_.count(key)) return true;
+  assumedAssignable_.insert(key);
+  bool ok = structurallyAssignableImpl(src, dst);
+  assumedAssignable_.erase(key);
+  return ok;
+}
+
+bool Checker::structurallyAssignableImpl(Type* src, Type* dst) {
   ObjShape* ds = dst->shape;
   if (src->t == TT::Class) {
     ClassSym* c = src->cls;
