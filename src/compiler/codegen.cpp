@@ -2465,7 +2465,7 @@ void Gen::genAsyncYield(Expr* e, uint16_t dst) {
     emit(OP_AWAIT, res, req);
     emit(OP_GETF_I, done, res, 1);
     jump(OP_JF, done, yieldIt);
-    // (the value is not awaited again: V8 does not, see docs/DESIGN-0.3.md)
+    // (the value is not awaited again: the current specification and V8, see docs/DESIGN-0.3.md)
     if (rk != K_V && kindCode(gt->ret) && rk == ik) {
       emit(op3(ik, OP_GETF_I, OP_GETF_F, OP_GETF_R), iv, res, 0);
       boxIfNeeded(retReg, iv, gt->elem, g->ret);
