@@ -228,6 +228,10 @@ GCC 290 ms, switch fallback ~380 ms).
 
 ## 5. Known limitations (by design, not defects)
 
-See the "Not supported" list in SPEC.md: `try`/`catch` catches only errors that Node.js also throws (E7-specific checks such as out-of-bounds reads end the call), no `finally`, no user generics, no regular expressions, no `any`; out-of-bounds array reads are runtime
-errors; Date has UTC semantics; an object property set to `undefined` counts as a missing optional property (`Object.keys`,
-spread, `console.log`; SPEC section 9).
+Every TypeScript feature E7 does not support is listed with its reason and a replacement in
+[TYPESCRIPT.md](TYPESCRIPT.md) (0.3.1: 155 of 250 supported, 17 partial, 78 unsupported); the rules behind them are
+in SPEC.md section 0.1 (every type known at compile time: no `any`, general unions, index signatures, type-level
+computation). The run-time differences from JavaScript are in SPEC.md section 9: `try`/`catch` catches only errors
+that Node.js also throws (E7-specific checks such as out-of-bounds reads end the call), out-of-bounds array reads are
+runtime errors, machine integers wrap, Date has UTC semantics, and `next()` on a finished generator whose return type
+is a primitive gives `NaN` / `0` / `false`.
