@@ -239,23 +239,26 @@ void caseEquivalents(uint32_t c, bool unicode, Ranges& out) {
   for (uint32_t m : *cls) out.push_back({m, m});
 }
 
-void closeOverCase(Ranges& set, bool unicode) {
+uint64_t closeOverCase(Ranges& set, bool unicode) {
   const CaseClasses& cc = caseClasses(unicode);
   Ranges add;
-  uint64_t size = 0;
+  uint64_t size = 0, work = set.size();
   for (const Range& r : set) size += uint64_t(r.hi) - r.lo + 1;
   if (size <= 64) {
     // few characters: look each one up
     for (const Range& r : set)
       for (uint32_t c = r.lo; c <= r.hi; c++) caseEquivalents(c, unicode, add);
+    work += size * 8;
   } else {
     // many: test the members of every class against the set
     for (const auto& [member, cls] : cc.byMember)
       if (contains(set, member))
         for (uint32_t m : cc.members[cls]) add.push_back({m, m});
+    work += cc.byMember.size() * 4;
   }
   set.insert(set.end(), add.begin(), add.end());
   normalize(set);
+  return work + add.size();
 }
 
 bool isIdStart(uint32_t c) {

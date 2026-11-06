@@ -24,6 +24,30 @@ inline bool isBasicWordChar(uint32_t c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 }
 
+// The work of compile(): steps charged in batches, memory reserved as the parsed pattern and the program
+// grow (the callbacks may throw to stop the compilation)
+struct CompileWork {
+  const Limits* lim = nullptr;
+  uint64_t steps = 0;
+  size_t bytes = 0, reported = 0;
+  void charge(uint64_t n) {
+    steps += n;
+    if (steps >= kChargeBatch) flush();
+  }
+  void flush() {
+    uint64_t n = steps;
+    steps = 0;
+    if (n && lim && lim->charge) lim->charge(n);
+  }
+  void grow(size_t n) {
+    bytes += n;
+    if (bytes >= reported + 16384 && lim && lim->reserve) {
+      reported = bytes;
+      lim->reserve(bytes);
+    }
+  }
+};
+
 // ---------------------------------------------------------------- character sets
 struct Range {
   uint32_t lo, hi;  // inclusive
@@ -61,8 +85,9 @@ bool property(const std::string& name, const std::string* value, Ranges& out);
 uint32_t canonicalize(uint32_t c, bool unicode);
 // the code points that are case-insensitively equal to c (c included)
 void caseEquivalents(uint32_t c, bool unicode, Ranges& out);
-// adds every code point case-insensitively equal to a member (the closure CharacterClass matching uses)
-void closeOverCase(Ranges& set, bool unicode);
+// adds every code point case-insensitively equal to a member (the closure CharacterClass matching uses);
+// returns the work done (lookups)
+uint64_t closeOverCase(Ranges& set, bool unicode);
 bool isIdStart(uint32_t c);     // RegExpIdentifierStart: ID_Start, $ and _
 bool isIdContinue(uint32_t c);  // RegExpIdentifierPart: ID_Continue, $, ZWNJ and ZWJ
 const char* version();
@@ -114,7 +139,7 @@ struct Ast {
 
 // On a syntax error returns false and sets err to V8's message text (without the "Invalid regular
 // expression: /.../: " prefix).
-bool parse(const std::u16string& source, const Flags& flags, Ast& ast, std::string& err);
+bool parse(const std::u16string& source, const Flags& flags, Ast& ast, std::string& err, CompileWork& work);
 
 // ---------------------------------------------------------------- program (compiler.cpp)
 enum Op : uint8_t {
@@ -181,6 +206,6 @@ struct Program {
 };
 
 // Compiles the parsed pattern; false when the program would be too large.
-bool generate(const Ast& ast, Program& p);
+bool generate(const Ast& ast, Program& p, CompileWork& work);
 
 }  // namespace e7::re

@@ -286,6 +286,59 @@ void memory() {
     fail("memory: the match with no limit");
 }
 
+// compilation under limits: the work of a large pattern is charged and its memory reserved, so a
+// throwing callback stops it; repeated classes and properties are built once
+void compileLimits() {
+  std::u16string big;
+  for (int i = 0; i < 100000; i++) big += u"[^a]";
+  uint64_t charged = 0;
+  size_t reserved = 0;
+  e7::re::Limits lim;
+  lim.charge = [&](uint64_t n) { charged += n; };
+  lim.reserve = [&](size_t b) { reserved = b; };
+  std::string err;
+  e7::re::ProgramPtr p = e7::re::compile(big, "iu", err, &lim);
+  checks++;
+  if (!p || charged < 100000 || reserved < 1000000) fail("compile charges its work and reserves its memory");
+  lim.charge = [&](uint64_t n) {
+    charged += n;
+    if (charged > 50000) throw Budget();
+  };
+  charged = 0;
+  bool stopped = false;
+  try {
+    e7::re::compile(big, "iu", err, &lim);
+  } catch (const Budget&) {
+    stopped = true;
+  }
+  checks++;
+  if (!stopped) fail("a throwing charge stops the compilation");
+  lim.charge = nullptr;
+  lim.reserve = [](size_t b) {
+    if (b > (1u << 20)) throw OutOfMemory();
+  };
+  stopped = false;
+  try {
+    e7::re::compile(big, "", err, &lim);
+  } catch (const OutOfMemory&) {
+    stopped = true;
+  }
+  checks++;
+  if (!stopped) fail("a throwing reserve stops the compilation");
+  // a match's setup is charged by its registers: a pattern with many groups costs more per exec
+  std::u16string many = u"b";
+  for (int i = 0; i < 20000; i++) many += u"()";
+  e7::re::ProgramPtr groups = e7::re::compile(many, "", err);
+  charged = 0;
+  lim.charge = [&](uint64_t n) { charged += n; };
+  lim.reserve = nullptr;
+  std::u16string in = u"a";
+  std::vector<int32_t> caps;
+  checks++;
+  if (!groups || e7::re::exec(*groups, in.data(), in.size(), 0, true, caps, lim) || charged < 5000)
+    fail("the setup of a match with many registers is charged");
+}
+
 // one program, several threads
 void threads() {
   std::string err;
@@ -318,6 +371,7 @@ int main() {
   depth();
   redos();
   memory();
+  compileLimits();
   threads();
   if (failures) {
     std::printf("regexp_test: %d of %d checks FAILED\n", failures, checks);

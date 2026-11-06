@@ -464,8 +464,10 @@ std::string sourceUtf8(const std::u16string& s) {
 
 void destroy(Program* p) { delete p; }
 
-ProgramPtr compile(const std::u16string& source, const std::string& flags, std::string& err) {
+ProgramPtr compile(const std::u16string& source, const std::string& flags, std::string& err, const Limits* lim) {
   err.clear();
+  CompileWork work;
+  work.lim = lim;
   Flags f;
   for (char c : flags) {
     bool* slot = c == 'd' ? &f.hasIndices : c == 'g' ? &f.global : c == 'i' ? &f.ignoreCase
@@ -482,18 +484,19 @@ ProgramPtr compile(const std::u16string& source, const std::string& flags, std::
     if (flags.find(c) != std::string::npos) text += c;
   Ast ast;
   std::string msg;
-  bool ok = parse(source, f, ast, msg);
+  bool ok = parse(source, f, ast, msg, work);
   ProgramPtr p(new Program);
   if (ok) {
     p->flags = f;
     p->flagText = text;
     p->captureCount = ast.captureCount;
     p->names = ast.names;
-    if (!generate(ast, *p)) {
+    if (!generate(ast, *p, work)) {
       ok = false;
       msg = "Regular expression too large";
     }
   }
+  work.flush();
   if (!ok) {
     err = "Invalid regular expression: /" + sourceUtf8(source) + "/" + text + ": " + msg;
     return nullptr;
@@ -505,6 +508,7 @@ uint32_t captureCount(const Program& p) { return p.captureCount; }
 const std::vector<NamedGroup>& namedGroups(const Program& p) { return p.names; }
 bool hasFlag(const Program& p, char f) { return f != 0 && p.flagText.find(f) != std::string::npos; }
 const std::string& flagText(const Program& p) { return p.flagText; }
+uint32_t registerCount(const Program& p) { return uint32_t(p.registerCount); }
 size_t programSize(const Program& p) {
   size_t n = sizeof(Program) + p.code.size() * sizeof(Inst) + p.strings.size() * sizeof(char16_t) +
              p.first.ranges.size() * sizeof(Range);
@@ -528,6 +532,7 @@ bool exec(const Program& p, const char16_t* input, size_t len, size_t start, boo
     retryInside = sticky;
   }
   Matcher m(p, input, n, lim);
+  m.addSteps(uint64_t(p.registerCount) / 8 + 1);  // setting up the registers and the captures
   bool found = false;
   int32_t at = s;
   if (p.anchored) {

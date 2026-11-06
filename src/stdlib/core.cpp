@@ -1120,7 +1120,7 @@ struct Cloner {
       case OT::RegExp: {
         // the pattern and flags (lastIndex is not copied, as in JavaScript)
         auto* r = static_cast<RegExpObj*>(o);
-        return keep(o, vm.newRegExp(r->prog, static_cast<StrObj*>(r->source), 0));
+        return keep(o, vm.newRegExp(r->prog, static_cast<StrObj*>(r->source), r->progBytes, false));
       }
       case OT::Bytes: {
         auto* b = static_cast<BytesObj*>(o);

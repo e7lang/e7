@@ -1,5 +1,6 @@
 // C API integration tests.
 #include <cstddef>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1056,6 +1057,146 @@ int main() {
     }
     CHECK(st == E7_OK && r.type == E7_BOOL && r.v.boolean == 0 && slices >= 2);
     CHECK(e7_ticks_used(vm) - t1 > 500000);
+    e7_vm_free(vm);
+  }
+  // 0.3.0 security review of the regular expressions (docs/PRODUCTION.md 3.8): replacement strings, the
+  // results of replace, pattern compilation (new RegExp and module literals), programs shared by copies,
+  // group-name classes and per-match setup are all charged to the budget or counted against the memory
+  // limit, within bounded time
+  {
+    // bounded time: generous for sanitizer / Debug builds (the work is bounded; only its speed differs)
+    // E7_GC_STRESS (a collection at every allocation) skips the largest scripts and the time bounds
+#if defined(E7_GC_STRESS) && E7_GC_STRESS
+    const bool stress = true;
+    const double slow = 1000;
+#elif defined(NDEBUG)
+    const bool stress = false;
+    const double slow = 1;
+#else
+    const bool stress = false;
+    const double slow = 8;
+#endif
+    auto seconds = [slow](std::chrono::steady_clock::time_point t0) {
+      return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / slow;
+    };
+    const char* src =
+        "function rep(s: string, n: number): string { let r = s; for (let i = 0; i < n; i++) r = r + r; return r; }\n"
+        "export function dollarLt(): number { return \"x\".replace(/(?<a>x)/, rep(\"$<\", 19)).length; }\n"
+        "export function bigOut(): number { return rep(\"a\", 20).replace(/a+/, rep(\"$&\", 8)).length; }\n"
+        "export function manyGroups(): number { return rep(\"a\", 14).replace(new RegExp(rep(\"()\", 12), \"g\"), \"\").length; }\n"
+        "export function manyGroupsFn(): number { return rep(\"a\", 14).replace(new RegExp(rep(\"()\", 12), \"g\"), (m) => m).length; }\n"
+        "export function compileW(): number { return new RegExp(rep(\"\\\\W\", 18), \"iu\").source.length; }\n"
+        "export function compileDistinct(n: number, flags: string): number {\n"
+        "  const parts: string[] = [];\n"
+        "  for (let i = 0; i < n; i++) parts.push(\"[\\\\u0100-\\\\u\" + (0x1000 + i).toString(16) + \"]\");\n"
+        "  return new RegExp(parts.join(\"\"), flags).source.length;\n"
+        "}\n"
+        "export function names(): number {\n"
+        "  let parts: string[] = [];\n"
+        "  for (let i = 0; i < 32000; i++) parts.push(\"(?<n\" + i + \">)\");\n"
+        "  return \"x\".replace(new RegExp(parts.join(\"\")), rep(\"$<z>\", 14)).length;\n"
+        "}\n"
+        "const keep: RegExp[] = [];\n"
+        "export function copies(n: number): number {\n"
+        "  for (let i = 0; i < n; i++) {\n"
+        "    const parts: string[] = [];\n"
+        "    for (let k = 0; k < 400; k++) parts.push(\"[\\\\u0100-\\\\u\" + (0x1000 + k + i * 400).toString(16) + \"]\");\n"
+        "    keep.push(new RegExp(new RegExp(parts.join(\"\"), \"u\")));  // the original is garbage, the copy keeps its program\n"
+        "  }\n"
+        "  return keep.length;\n"
+        "}\n"
+        "export function groupNames(): number {\n"
+        "  const pad = rep(\"n\", 12);\n"
+        "  let t = 0;\n"
+        "  for (let i = 0; i < 20000; i++) if (new RegExp(\"(?<\" + pad + i + \">)\").exec(\"\") !== null) t++;\n"
+        "  return t;\n"
+        "}\n"
+        "export function splitGroups(): number { return rep(\"a\", 17).split(new RegExp(\"b\" + rep(\"()\", 15).substring(0, 64000))).length; }\n"
+        "export function longError(): string {\n"
+        "  try { new RegExp(rep(\"\\u00e9\", 10) + \"(\"); return \"\"; } catch (e) { return e instanceof SyntaxError ? e.message : \"\"; }\n"
+        "}\n";
+    std::vector<uint8_t> bc = compile(src);
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.memory_limit = 32u << 20;
+    e7_vm* vm = e7_vm_new(&cfg);
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_value r, n;
+    auto t0 = std::chrono::steady_clock::now();
+    uint64_t k0 = e7_ticks_used(vm);
+    CHECK(e7_call(vm, m, "dollarLt", nullptr, 0, &r) == E7_OK && r.v.num == 2 * 524288);  // linear, and charged
+    CHECK(seconds(t0) < 2 && e7_ticks_used(vm) - k0 > 100000);
+    CHECK(e7_call(vm, m, "bigOut", nullptr, 0, &r) == E7_ERR_MEMORY);
+    e7_set_budget(vm, 20000000);
+    t0 = std::chrono::steady_clock::now();
+    CHECK(e7_call(vm, m, "manyGroups", nullptr, 0, &r) == E7_ERR_BUDGET);
+    CHECK(e7_call(vm, m, "manyGroupsFn", nullptr, 0, &r) == E7_ERR_BUDGET);
+    CHECK(e7_call(vm, m, "splitGroups", nullptr, 0, &r) == E7_ERR_BUDGET);
+    CHECK(seconds(t0) < 10);
+    e7_set_budget(vm, 0);
+    t0 = std::chrono::steady_clock::now();
+    CHECK(e7_call(vm, m, "compileW", nullptr, 0, &r) == E7_ERR_MEMORY);
+    e7_value cd[2] = {num(150000), str("u")};
+    if (!stress) CHECK(e7_call(vm, m, "compileDistinct", cd, 2, &r) == E7_ERR_MEMORY);
+    if (!stress) CHECK(e7_call(vm, m, "names", nullptr, 0, &r) == E7_OK && r.v.num == 1);
+    CHECK(seconds(t0) < 10);
+    e7_set_budget(vm, 5000000);
+    e7_value cdi[2] = {num(3000), str("iu")};
+    CHECK(e7_call(vm, m, "compileDistinct", cdi, 2, &r) == E7_ERR_BUDGET);  // the compilation is charged
+    e7_set_budget(vm, 0);
+    // copies keep their program counted after the original is freed: the memory limit stops the loop
+    n = num(1000);
+    if (!stress) {
+      CHECK(e7_call(vm, m, "copies", &n, 1, &r) == E7_ERR_MEMORY);
+      e7_collect_garbage(vm);
+      CHECK(e7_memory_used(vm) > (8u << 20));  // the programs the kept copies hold
+    }
+    CHECK(e7_call(vm, m, "longError", nullptr, 0, &r) == E7_OK && r.type == E7_STRING);
+    if (r.type == E7_STRING) {
+      // cut at the message limit, at a character boundary (valid UTF-8)
+      std::string msg(r.v.str.ptr, r.v.str.len);
+      size_t i = 0;
+      bool valid = msg.size() > 400;
+      while (valid && i < msg.size()) {
+        unsigned char c = (unsigned char)msg[i];
+        size_t len = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 0;
+        valid = len && i + len <= msg.size();
+        for (size_t k = 1; valid && k < len; k++) valid = ((unsigned char)msg[i + k] & 0xC0) == 0x80;
+        i += len;
+      }
+      CHECK(valid);
+    }
+    // last: the group-name classes stay for the VM's lifetime
+    if (!stress) CHECK(e7_call(vm, m, "groupNames", nullptr, 0, &r) == E7_ERR_MEMORY);
+    e7_vm_free(vm);
+    // module literals: their compilation at load is bounded and the programs are counted
+    std::string big = "export function f(): boolean { return /";
+    for (int i = 0; i < 9000; i++) {
+      char cls[32];
+      snprintf(cls, sizeof cls, "[\\u0100-\\u%04x]", 0x1000 + i);
+      big += cls;
+    }
+    big += "/iu.test(\"x\"); }\n";
+    std::vector<uint8_t> bcBig = compile(big.c_str());
+    vm = e7_vm_new(nullptr);
+    t0 = std::chrono::steady_clock::now();
+    CHECK(e7_load(vm, bcBig.data(), bcBig.size(), &m) == E7_ERR_LOAD);
+    CHECK(seconds(t0) < 10);
+    e7_vm_free(vm);
+    std::string lit = "export function f(): boolean { return /";
+    for (int i = 0; i < 50; i++) {
+      char cls[32];
+      snprintf(cls, sizeof cls, "[\\u0100-\\u%04x]*", 0x2000 + i);
+      lit += cls;
+    }
+    lit += "x/iu.test(\"x\"); }\n";
+    std::vector<uint8_t> bcLit = compile(lit.c_str());
+    vm = e7_vm_new(nullptr);
+    size_t before = e7_memory_used(vm);
+    CHECK(e7_load(vm, bcLit.data(), bcLit.size(), &m) == E7_OK);
+    CHECK(e7_memory_used(vm) > before + 8000);  // the literal's program (50 classes)
+    CHECK(e7_call(vm, m, "f", nullptr, 0, &r) == E7_OK && r.v.boolean == 1);
     e7_vm_free(vm);
   }
   if (failures) {

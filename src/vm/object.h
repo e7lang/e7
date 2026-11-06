@@ -16,7 +16,7 @@ enum class OT : uint8_t {
   RegExp,   // 0.3: a regular expression (D4)
 };
 
-namespace re { struct Program; }
+namespace re { struct Program; struct Limits; }
 
 struct Obj {
   Obj* gcNext;
@@ -58,13 +58,15 @@ inline MatchExtra* matchExtra(ArrObj* a) { return reinterpret_cast<MatchExtra*>(
 inline const MatchExtra* matchExtra(const ArrObj* a) { return reinterpret_cast<const MatchExtra*>(a + 1); }
 inline bool hasMatchExtra(const Obj* o) { return o->flags & (kArrFlagMatch | kArrFlagIndices); }
 
-// A regular expression (D4): the compiled program (shared with the module for a literal, owned for
-// `new RegExp`), its source and lastIndex.
+// A regular expression (D4): the compiled program (shared with the module for a literal; for `new RegExp`
+// shared by the object and its copies), its source and lastIndex.
 struct RegExpObj : Obj {
   std::shared_ptr<const re::Program> prog;
   Obj* source;          // StrObj: the pattern text (as given; `source` escapes it)
   double lastIndex;
-  uint32_t extBytes;    // external bytes accounted for an owned program
+  // a program compiled at run time: its size, counted in the heap once while any object holds it (the
+  // last one to be freed releases it); 0 for a module's literal (the module counts it)
+  uint64_t progBytes;
 };
 
 struct BufObj : Obj {

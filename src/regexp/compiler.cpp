@@ -12,7 +12,8 @@ constexpr size_t kMaxProgramSize = size_t(1) << 24;
 
 class Generator {
  public:
-  Generator(const Ast& ast, Program& p) : ast_(ast), p_(p), classIndex_(ast.classes.size(), -1) {}
+  Generator(const Ast& ast, Program& p, CompileWork& work)
+      : ast_(ast), p_(p), work_(work), classIndex_(ast.classes.size(), -1) {}
   bool run();
 
  private:
@@ -23,6 +24,8 @@ class Generator {
   };
   int32_t pc() const { return int32_t(p_.code.size()); }
   int32_t emit(uint8_t op, int32_t a = 0, int32_t b = 0, int32_t c = 0, int32_t d = 0, uint8_t flags = 0) {
+    work_.charge(1);
+    work_.grow(2 * sizeof(Inst));
     Inst in;
     in.op = op;
     in.flags = flags;
@@ -44,6 +47,7 @@ class Generator {
 
   const Ast& ast_;
   Program& p_;
+  CompileWork& work_;
   std::vector<int32_t> classIndex_;
   std::vector<Info> info_;
 };
@@ -51,6 +55,8 @@ class Generator {
 int32_t Generator::classFor(uint32_t astClass) {
   if (classIndex_[astClass] < 0) {
     classIndex_[astClass] = int32_t(p_.classes.size());
+    work_.charge(ast_.classes[astClass].size() + 8);
+    work_.grow(sizeof(CharClass) + ast_.classes[astClass].size() * sizeof(Range));
     p_.classes.emplace_back(ast_.classes[astClass]);
   }
   return classIndex_[astClass];
@@ -58,6 +64,8 @@ int32_t Generator::classFor(uint32_t astClass) {
 
 // Children are created before their parents, so one pass in index order sees every child first.
 void Generator::analyze() {
+  work_.charge(ast_.nodes.size());
+  work_.grow(ast_.nodes.size() * sizeof(Info));
   info_.resize(ast_.nodes.size());
   for (size_t i = 0; i < ast_.nodes.size(); i++) {
     const Node& n = ast_.nodes[i];
@@ -310,6 +318,8 @@ bool Generator::firstSet(int32_t id, Ranges& acc, bool& any) const {
       return false;
     case NodeKind::Class: {
       const Ranges& r = ast_.classes[n.value];
+      work_.charge(r.size() + 1);
+      work_.grow(r.size() * sizeof(Range));
       acc.insert(acc.end(), r.begin(), r.end());
       return false;
     }
@@ -365,6 +375,7 @@ void Generator::setupSearch() {
   Ranges first;
   bool any = false;
   if (firstSet(ast_.root, first, any) || any) return;
+  work_.charge(first.size() * 8);
   // as code units: an astral code point starts with its lead surrogate
   Ranges units;
   for (const Range& r : first) {
@@ -393,8 +404,8 @@ bool Generator::run() {
 
 }  // namespace
 
-bool generate(const Ast& ast, Program& p) {
-  Generator g(ast, p);
+bool generate(const Ast& ast, Program& p, CompileWork& work) {
+  Generator g(ast, p, work);
   return g.run();
 }
 

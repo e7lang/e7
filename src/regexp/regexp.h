@@ -39,7 +39,12 @@ struct NamedGroup {
 //     second slash in V8's order ("dgimsuy") and the source in UTF-8 (lone surrogates as U+FFFD);
 //   - nesting deeper than kMaxNesting groups gives "...: Maximum call stack size exceeded" (V8 accepts
 //     deeper patterns; this bound keeps the compiler's recursion small).
-ProgramPtr compile(const std::u16string& source, const std::string& flags, std::string& err);
+// lim (optional, see Limits below): the parser and code generator charge their work (about one step per
+// pattern character, node, instruction, class range and case-folding lookup) and reserve the memory they
+// build up, so that a huge or pathological pattern is bounded by the caller's budget and memory limit.
+struct Limits;
+ProgramPtr compile(const std::u16string& source, const std::string& flags, std::string& err,
+                   const Limits* lim = nullptr);
 constexpr int kMaxNesting = 256;
 
 uint32_t captureCount(const Program& p);                       // capture groups, not counting group 0
@@ -47,10 +52,13 @@ const std::vector<NamedGroup>& namedGroups(const Program& p);  // in source orde
 bool hasFlag(const Program& p, char f);                         // one of "dgimsuy"
 const std::string& flagText(const Program& p);                  // the flags in V8's order ("dgimsuy")
 size_t programSize(const Program& p);                           // approximate bytes held by the program
+uint32_t registerCount(const Program& p);                       // registers of a match (work per exec)
 
 // Resource limits: charge(n) is called for every batch of n matcher steps and may throw to stop the
 // match (the VM throws its budget error); reserve(bytes) is called before the backtracking stacks grow
 // to `bytes` in total and may throw (the VM checks its memory limit). Both may be empty functions.
+// exec() also charges the setup of each match (proportional to the number of registers), and compile()
+// uses the same callbacks for its own work and memory.
 struct Limits {
   std::function<void(uint64_t)> charge;
   std::function<void(size_t)> reserve;

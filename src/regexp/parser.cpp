@@ -1,6 +1,7 @@
 // Pattern parser: source text to Ast. It follows the structure of V8's RegExpParser so that the same
 // patterns are accepted (the Annex B grammar without the u flag), the same error is reported first and
 // with the same message. Groups are parsed with an explicit stack of states, not recursion.
+#include <map>
 #include <utility>
 
 #include "regexp/regexp_impl.h"
@@ -63,8 +64,8 @@ std::string toUtf8(const Name& name) {
 
 class Parser {
  public:
-  Parser(const std::u16string& src, const Flags& flags, Ast& ast, std::string& err)
-      : src_(src), flags_(flags), ast_(ast), err_(err) {
+  Parser(const std::u16string& src, const Flags& flags, Ast& ast, std::string& err, CompileWork& work)
+      : src_(src), flags_(flags), ast_(ast), err_(err), work_(work) {
     maxChar_ = flags.unicode ? kMaxCodePoint : 0xFFFF;
   }
   bool run();
@@ -89,6 +90,7 @@ class Parser {
     return c;
   }
   void advance() {
+    work_.charge(1);
     curPos_ = nextPos_;
     if (nextPos_ >= src_.size()) {
       curPos_ = src_.size();
@@ -115,6 +117,8 @@ class Parser {
 
   // ---- building
   int32_t add(const Node& n) {
+    work_.charge(1 + n.kids.size());
+    work_.grow(2 * (sizeof(Node) + n.kids.size() * sizeof(int32_t)));  // with the vectors' spare capacity
     ast_.nodes.push_back(n);
     return int32_t(ast_.nodes.size() - 1);
   }
@@ -129,7 +133,7 @@ class Parser {
   void addChar(uint32_t c);
   int32_t makeSeq(std::vector<int32_t>& terms);
   int32_t finishDisjunction(State& s);
-  Ranges classEscape(uint32_t c) const;
+  Ranges classEscape(uint32_t c);
 
   // ---- grammar
   bool parseQuantifier();
@@ -166,16 +170,35 @@ class Parser {
   uint32_t captureCount_ = 0;  // all groups of the pattern, once scanned
   bool scanned_ = false;
   bool hasNamed_ = false;
-  std::vector<std::pair<Name, uint32_t>> names_;
+  std::vector<std::pair<Name, uint32_t>> names_;     // in source order
+  std::map<Name, uint32_t> nameIndex_;
   std::vector<std::pair<int32_t, Name>> namedRefs_;  // \k<name> nodes resolved at the end
+  CompileWork& work_;
+  // a pattern repeating a class or a property escape builds its set once
+  std::map<std::pair<bool, std::vector<uint32_t>>, int32_t> classMemo_;
+  std::map<std::string, Ranges> propertyMemo_;
+  Ranges wordIgnoreCase_;  // \w with u and i
 };
 
 int32_t Parser::classNode(Ranges r, bool negated) {
+  work_.charge(r.size() * 4 + 1);
   normalize(r);
-  if (flags_.ignoreCase) ucd::closeOverCase(r, flags_.unicode);
+  std::pair<bool, std::vector<uint32_t>> key{negated, {}};
+  key.second.reserve(r.size() * 2);
+  for (const Range& x : r) {
+    key.second.push_back(x.lo);
+    key.second.push_back(x.hi);
+  }
+  auto it = classMemo_.find(key);
+  if (it != classMemo_.end()) return add(NodeKind::Class, uint32_t(it->second));
+  if (flags_.ignoreCase) work_.charge(ucd::closeOverCase(r, flags_.unicode));
   if (negated) r = complement(r, maxChar_);
+  work_.charge(r.size());
+  work_.grow((r.size() + key.second.size()) * sizeof(Range) + 64);
   ast_.classes.push_back(std::move(r));
-  return add(NodeKind::Class, uint32_t(ast_.classes.size() - 1));
+  int32_t index = int32_t(ast_.classes.size() - 1);
+  classMemo_.emplace(std::move(key), index);
+  return add(NodeKind::Class, uint32_t(index));
 }
 
 void Parser::addChar(uint32_t c) {
@@ -214,7 +237,7 @@ int32_t Parser::finishDisjunction(State& s) {
   return add(n);
 }
 
-Ranges Parser::classEscape(uint32_t c) const {
+Ranges Parser::classEscape(uint32_t c) {
   Ranges r;
   switch (c | 0x20) {
     case 'd':
@@ -226,7 +249,13 @@ Ranges Parser::classEscape(uint32_t c) const {
       break;
     default:  // w: with u and i, WordCharacters adds the characters whose canonical form is a word character
       r = {{'0', '9'}, {'A', 'Z'}, {'_', '_'}, {'a', 'z'}};
-      if (flags_.unicode && flags_.ignoreCase) ucd::closeOverCase(r, true);
+      if (flags_.unicode && flags_.ignoreCase) {
+        if (wordIgnoreCase_.empty()) {
+          wordIgnoreCase_ = r;
+          work_.charge(ucd::closeOverCase(wordIgnoreCase_, true));
+        }
+        r = wordIgnoreCase_;
+      }
       break;
   }
   if (c == 'D' || c == 'S' || c == 'W') r = complement(r, maxChar_);
@@ -242,13 +271,9 @@ bool Parser::run() {
         if (states_.size() > 1) return fail("Unterminated group");
         ast_.root = finishDisjunction(states_.back());
         for (auto& [node, name] : namedRefs_) {
-          bool found = false;
-          for (auto& [n, index] : names_)
-            if (n == name) {
-              ast_.nodes[node].value = index;
-              found = true;
-            }
-          if (!found) return fail("Invalid named capture referenced");
+          auto it = nameIndex_.find(name);
+          if (it == nameIndex_.end()) return fail("Invalid named capture referenced");
+          ast_.nodes[node].value = it->second;
         }
         ast_.captureCount = capturesStarted_;
         for (auto& [name, index] : names_) ast_.names.push_back({toUtf8(name), index});  // source order
@@ -450,8 +475,10 @@ bool Parser::openGroup() {
     s.capture = ++capturesStarted_;
     if (named) {
       if (!parseGroupName(s.name)) return false;
-      for (auto& entry : names_)
-        if (entry.first == s.name) return fail("Duplicate capture group name");
+      if (nameIndex_.count(s.name)) return fail("Duplicate capture group name");
+      work_.charge(s.name.size());
+      work_.grow(s.name.size() * 8 + 64);
+      nameIndex_[s.name] = s.capture;
       names_.push_back({s.name, s.capture});
     }
   }
@@ -595,6 +622,7 @@ bool Parser::parseNamedBackref() {
     return true;
   }
   int32_t n = add(NodeKind::Backref);
+  work_.grow(name.size() * 4 + 32);
   namedRefs_.push_back({n, std::move(name)});
   addTerm(n);
   return true;
@@ -920,17 +948,27 @@ bool Parser::parseProperty(bool negate, bool inClass, Ranges& out) {
     }
   }
   advance();
-  if (!ucd::property(name, hasValue ? &value : nullptr, out)) return fail(err);
+  std::string key = name + (hasValue ? "=" + value : std::string());
+  auto memo = propertyMemo_.find(key);
+  if (memo != propertyMemo_.end()) {
+    out = memo->second;
+  } else {
+    if (!ucd::property(name, hasValue ? &value : nullptr, out)) return fail(err);
+    work_.charge(out.size() * 2 + 1);
+    work_.grow(out.size() * sizeof(Range) + 64);
+    propertyMemo_[key] = out;
+  }
+  work_.charge(out.size());
   if (negate) out = complement(out, kMaxCodePoint);
   return true;
 }
 
 }  // namespace
 
-bool parse(const std::u16string& source, const Flags& flags, Ast& ast, std::string& err) {
+bool parse(const std::u16string& source, const Flags& flags, Ast& ast, std::string& err, CompileWork& work) {
   ast = Ast();
   ast.flags = flags;
-  Parser parser(source, flags, ast, err);
+  Parser parser(source, flags, ast, err, work);
   return parser.run();
 }
 

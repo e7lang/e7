@@ -5,6 +5,7 @@
 // with E7_ERR_BUDGET or E7_ERR_MEMORY like any other script work.
 #include <cmath>
 #include <cstring>
+#include <unordered_map>
 
 #include "../regexp/regexp.h"
 #include "util.h"
@@ -18,12 +19,30 @@ RegExpObj* Re(VM& vm, Slot s) {
   return static_cast<RegExpObj*>(s.r);
 }
 
-re::Limits limits(VM& vm) {
-  re::Limits lim;
-  lim.charge = [&vm](uint64_t n) { vm.chargeWork(n); };
-  lim.reserve = [&vm](size_t bytes) { vm.checkTemp(bytes); };
-  return lim;
-}
+re::Limits limits(VM& vm) { return vm.regexpLimits(); }
+
+// A result string built in C++: its size counts against the memory limit (and the string length limit) as
+// it grows, and the copying against the budget
+struct Builder {
+  VM& vm;
+  std::u16string out;
+  size_t checked = 0;
+  explicit Builder(VM& v) : vm(v) {}
+  void grew(size_t n) {
+    vm.chargeWork(n / 16 + 1);
+    if (out.size() > 0x3FFFFFFF) vm.error("string too long");
+    if (out.size() >= checked + 4096) {
+      checked = out.size();
+      vm.checkTemp(out.capacity() * sizeof(char16_t));
+    }
+  }
+  void append(const char16_t* p, size_t n) {
+    if (out.size() + n > 0x3FFFFFFF) vm.error("string too long");
+    vm.checkTemp((out.size() + n) * sizeof(char16_t));
+    out.append(p, n);
+    grew(n);
+  }
+};
 
 // ToLength
 double toLength(double d) {
@@ -147,84 +166,131 @@ std::u16string escapeSource(const StrObj* src) {
   return out;
 }
 
+// new RegExp: the compilation is charged to the budget and its memory checked against the limit
 RegExpObj* compileNew(VM& vm, StrObj* src, const std::string& flags) {
   std::string err;
-  re::ProgramPtr p = re::compile(strU16(src), flags, err);
+  re::Limits lim = limits(vm);
+  vm.checkTemp((size_t)src->len * 4);  // the UTF-16 copy and the parser's position data
+  re::ProgramPtr p = re::compile(strU16(src), flags, err, &lim);
   if (!p) vm.error("SyntaxError: %s", err.c_str());
-  uint32_t bytes = (uint32_t)re::programSize(*p);
-  return vm.newRegExp(std::shared_ptr<const re::Program>(std::move(p)), src, bytes);
+  uint64_t bytes = re::programSize(*p);
+  return vm.newRegExp(std::shared_ptr<const re::Program>(std::move(p)), src, bytes, true);
 }
 
-// GetSubstitution: the replacement text for one match ($$, $&, $`, $', $n, $nn, $<name>)
-void substitute(std::u16string& out, const StrObj* s, const re::Program& p, const std::vector<int32_t>& caps,
-                const StrObj* rep) {
+// GetSubstitution: a replacement string ($$, $&, $`, $', $n, $nn, $<name>) parsed once per call into
+// literal pieces and references, then applied to each match (linear in its length and the output)
+struct Template {
+  enum Kind : uint8_t { kLit, kGroup, kBefore, kAfter };
+  struct Part {
+    Kind kind;
+    uint32_t a, b;  // kLit: rep[a, b); kGroup: group a
+  };
+  std::vector<Part> parts;
+};
+
+Template parseTemplate(VM& vm, const StrObj* rep, const re::Program& p) {
+  vm.chargeWork(rep->len / 4 + 1);
   const char16_t* r = rep->chars();
   uint32_t n = rep->len;
-  uint32_t m = (uint32_t)caps.size() / 2 - 1;
-  auto cap = [&](uint32_t k) {
-    if (caps[2 * k] >= 0) out.append(s->chars() + caps[2 * k], (size_t)(caps[2 * k + 1] - caps[2 * k]));
-  };
+  uint32_t m = re::captureCount(p);
   const auto& names = re::namedGroups(p);
-  for (uint32_t i = 0; i < n; i++) {
-    char16_t c = r[i];
-    if (c != '$' || i + 1 >= n) {
-      out += c;
-      continue;
-    }
+  std::unordered_map<std::u16string, uint32_t> byName;  // built at the first $<
+  Template t;
+  uint32_t lit = 0;  // start of the pending literal
+  auto flush = [&](uint32_t end) {
+    if (end > lit) t.parts.push_back({Template::kLit, lit, end});
+  };
+  auto ref = [&](Template::Kind k, uint32_t group, uint32_t i, uint32_t len) {
+    flush(i);
+    t.parts.push_back({k, group, 0});
+    lit = i + len;
+  };
+  uint32_t gt = 0;  // the next '>' at or after the current position (n: none to the end)
+  for (uint32_t i = 0; i + 1 < n; i++) {
+    if (r[i] != '$') continue;
     char16_t d = r[i + 1];
     if (d == '$') {
-      out += u'$';
+      flush(i + 1);  // the first '$' stays, the second is dropped
+      lit = i + 2;
       i++;
     } else if (d == '&') {
-      cap(0);
+      ref(Template::kGroup, 0, i, 2);
       i++;
     } else if (d == '`') {
-      out.append(s->chars(), (size_t)caps[0]);
+      ref(Template::kBefore, 0, i, 2);
       i++;
     } else if (d == '\'') {
-      out.append(s->chars() + caps[1], (size_t)(s->len - (uint32_t)caps[1]));
+      ref(Template::kAfter, 0, i, 2);
       i++;
     } else if (d >= '0' && d <= '9') {
       uint32_t one = d - '0';
       bool two = i + 2 < n && r[i + 2] >= '0' && r[i + 2] <= '9';
       uint32_t both = two ? one * 10 + (r[i + 2] - '0') : 0;
       if (two && both >= 1 && both <= m) {
-        cap(both);
+        ref(Template::kGroup, both, i, 3);
         i += 2;
       } else if (one >= 1 && one <= m) {
-        cap(one);
+        ref(Template::kGroup, one, i, 2);
         i++;
-      } else {
-        out += c;
       }
     } else if (d == '<' && !names.empty()) {
-      uint32_t close = i + 2;
-      while (close < n && r[close] != '>') close++;
-      if (close >= n) {
-        out += c;
-        continue;
+      if (gt < i + 2) {
+        gt = i + 2;
+        while (gt < n && r[gt] != '>') gt++;
       }
-      std::u16string name(r + i + 2, r + close);
-      for (auto& g : names)
-        if (utf8ToUtf16(g.name) == name) cap(g.index);
-      i = close;
-    } else {
-      out += c;
+      if (gt >= n) continue;  // no '>' to the end: a literal "$<"
+      if (byName.empty()) {
+        vm.chargeWork(names.size() * 4);
+        vm.checkTemp(names.size() * 64);
+        for (auto& g : names) byName.emplace(utf8ToUtf16(g.name), g.index);
+      }
+      auto it = byName.find(std::u16string(r + i + 2, r + gt));
+      if (it != byName.end()) ref(Template::kGroup, it->second, i, gt + 1 - i);
+      else {
+        flush(i);
+        lit = gt + 1;  // an unknown name: nothing
+      }
+      i = gt;
+    }
+  }
+  flush(n);
+  vm.checkTemp(t.parts.size() * sizeof(Template::Part));
+  return t;
+}
+
+void substitute(Builder& out, const StrObj* s, const std::vector<int32_t>& caps, const StrObj* rep, const Template& t) {
+  out.vm.chargeWork(t.parts.size() / 4 + 1);
+  for (const Template::Part& part : t.parts) {
+    switch (part.kind) {
+      case Template::kLit:
+        out.append(rep->chars() + part.a, part.b - part.a);
+        break;
+      case Template::kGroup:
+        if (caps[2 * part.a] >= 0)
+          out.append(s->chars() + caps[2 * part.a], (size_t)(caps[2 * part.a + 1] - caps[2 * part.a]));
+        break;
+      case Template::kBefore:
+        out.append(s->chars(), (size_t)caps[0]);
+        break;
+      case Template::kAfter:
+        out.append(s->chars() + caps[1], (size_t)(s->len - (uint32_t)caps[1]));
+        break;
     }
   }
 }
 
-// the matches @@replace works on: all of them (g, from 0) or the one RegExpExec gives
-void replaceMatches(VM& vm, RegExpObj* re, const StrObj* s, std::vector<std::vector<int32_t>>& results) {
+// the matches @@replace works on: all of them (g, from 0) or the one RegExpExec gives, to `each`
+template <class F>
+void replaceMatches(VM& vm, RegExpObj* re, const StrObj* s, F each) {
   std::vector<int32_t> caps;
   if (!flag(re, 'g')) {
-    if (builtinExec(vm, re, s, caps)) results.push_back(caps);
+    if (builtinExec(vm, re, s, caps)) each(caps);
     return;
   }
   bool unicode = flag(re, 'u');
   re->lastIndex = 0;
   while (builtinExec(vm, re, s, caps)) {
-    results.push_back(caps);
+    each(caps);
     if (caps[0] == caps[1]) re->lastIndex = advance(s, toLength(re->lastIndex), unicode);
   }
 }
@@ -240,7 +306,7 @@ E7_NATIVE(re_lit) {
   int64_t i = a[0].i;
   if (!mod || i < 0 || (uint64_t)i >= mod->regexps.size()) vm.error("invalid regular expression index");
   StrObj* src = vm.newStringUtf8(mod->m.regexps[(size_t)i].source);
-  r->r = vm.newRegExp(mod->regexps[(size_t)i], src, 0);
+  r->r = vm.newRegExp(mod->regexps[(size_t)i], src, 0, false);  // counted by the module
 }
 // new RegExp(source, flags)
 E7_NATIVE(re_new) {
@@ -251,7 +317,7 @@ E7_NATIVE(re_new) {
 E7_NATIVE(re_copy) {
   E7_UNUSED;
   RegExpObj* re = Re(vm, a[0]);
-  r->r = vm.newRegExp(re->prog, static_cast<StrObj*>(re->source), 0);
+  r->r = vm.newRegExp(re->prog, static_cast<StrObj*>(re->source), re->progBytes, false);
 }
 // new RegExp(re, flags)
 E7_NATIVE(re_newRe) {
@@ -362,7 +428,7 @@ E7_NATIVE(s_matchAll) {
   StrObj* s = S(vm, a[0]);
   RegExpObj* re = Re(vm, a[1]);
   if (!flag(re, 'g')) vm.error("TypeError: String.prototype.matchAll called with a non-global RegExp argument");
-  RegExpObj* copy = vm.newRegExp(re->prog, static_cast<StrObj*>(re->source), 0);
+  RegExpObj* copy = vm.newRegExp(re->prog, static_cast<StrObj*>(re->source), re->progBytes, false);
   copy->lastIndex = toLength(re->lastIndex);
   bool unicode = flag(re, 'u');
   ArrObj* items = vm.newArray(VT_REF, 4);
@@ -379,18 +445,18 @@ static void replaceWith(VM& vm, Slot* a, Slot* r, bool all) {
   RegExpObj* re = Re(vm, a[1]);
   StrObj* rep = S(vm, a[2]);
   if (all && !flag(re, 'g')) vm.error("TypeError: String.prototype.replaceAll called with a non-global RegExp argument");
-  std::vector<std::vector<int32_t>> results;
-  replaceMatches(vm, re, s, results);
-  std::u16string out;
+  Template t = parseTemplate(vm, rep, *re->prog);
+  // nothing can observe the matches between them: each is substituted as it is found
+  Builder out(vm);
   int32_t next = 0;
-  for (auto& caps : results) {
-    if (caps[0] < next) continue;
+  replaceMatches(vm, re, s, [&](const std::vector<int32_t>& caps) {
+    if (caps[0] < next) return;
     out.append(s->chars() + next, (size_t)(caps[0] - next));
-    substitute(out, s, *re->prog, caps, rep);
+    substitute(out, s, caps, rep, t);
     next = caps[1];
-  }
+  });
   out.append(s->chars() + next, (size_t)((int32_t)s->len - next));
-  r->r = vm.newString(out);
+  r->r = vm.newString(out.out);
 }
 E7_NATIVE(s_replace) {
   E7_UNUSED;
@@ -419,12 +485,20 @@ E7_NATIVE(s_replaceFn) {
   uint32_t np = fn->fn->nparams;
   const std::string& sig = vm.sigString(fn->fn->sigId);
   if (np > want.size() || sig != want.substr(0, np) + ">R") vm.error("the replacement function has the wrong signature");
-  std::vector<std::vector<int32_t>> results;
-  replaceMatches(vm, re, s, results);
-  std::u16string out;
+  // all the matches first (the callbacks run after them): their captures count against the memory limit
+  std::vector<int32_t> results;
+  size_t width = 2 * ((size_t)ncap + 1);
+  replaceMatches(vm, re, s, [&](const std::vector<int32_t>& caps) {
+    vm.checkTemp((results.size() + width) * sizeof(int32_t) * 2);
+    vm.chargeWork(width / 16 + 1);
+    results.insert(results.end(), caps.begin(), caps.end());
+  });
+  Builder out(vm);
   int32_t next = 0;
   std::vector<Slot> args(np);
-  for (auto& caps : results) {
+  std::vector<int32_t> caps(width);
+  for (size_t at = 0; at < results.size(); at += width) {
+    caps.assign(results.begin() + (std::ptrdiff_t)at, results.begin() + (std::ptrdiff_t)(at + width));
     for (uint32_t k = 0; k < np; k++) {
       if (k <= ncap) args[k].r = substr(vm, s, caps[2 * k], caps[2 * k + 1]);
       else if (k == ncap + 1) args[k].f = caps[0];
@@ -440,7 +514,7 @@ E7_NATIVE(s_replaceFn) {
     next = caps[1];
   }
   out.append(s->chars() + next, (size_t)((int32_t)s->len - next));
-  r->r = vm.newString(out);
+  r->r = vm.newString(out.out);
 }
 
 // s.split(re, limit): @@split with a sticky copy of re
