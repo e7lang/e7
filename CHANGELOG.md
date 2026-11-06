@@ -13,8 +13,8 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 The language complete for its domain (docs/ROADMAP.md, section 0.3; design decisions in docs/DESIGN-0.3.md).
 Bytecode format 3 (docs/BYTECODE.md, section 6) for modules that use generators, `async`, regular expressions or
 records with a presence mask; every other module is still format 2 and runs on 0.2.x VMs. 0.2 modules run on this
-VM unchanged (the backward-compatibility CI job checks the suite compiled by 0.2.6). docs/TYPESCRIPT.md: 152 of 250
-features supported (129 in 0.2.7), 17 partial, 81 unsupported.
+VM unchanged (the backward-compatibility CI job checks the suite compiled by 0.2.6). docs/TYPESCRIPT.md: 153 of 250
+features supported (129 in 0.2.7), 18 partial, 79 unsupported.
 
 ### Added
 - Generators: `function*`, `yield`, `yield*`, generator methods, `Generator<T, TReturn, TNext>` / `Iterator<T>` /
@@ -38,6 +38,13 @@ features supported (129 in 0.2.7), 17 partial, 81 unsupported.
   `selfTest`, last-known-good with rollback after consecutive failures, as the Java and Swift managers
   (docs/DEPLOYMENT.md); `ActiveModule.Call` / `CallAsync` / `CallAwait`. `E7VM.CallAwait` / `LoadAwait` block
   until an async call finishes (the manager uses them for top-level code and `selfTest`).
+- Regular expressions: literals (checked at compile time, stored in the module's table and compiled when it is
+  loaded), `new RegExp(source, flags)`, flags `dgimsuy`, named groups, lookbehind, Unicode property escapes;
+  `test` / `exec` / `lastIndex`, `String` `match` / `matchAll` / `replace` / `replaceAll` (replacement patterns
+  and callbacks) / `split` / `search`; match results print as in Node.js. An own backtracking engine
+  (`src/regexp/`, ECMAScript semantics, V8's error messages) whose every step is charged to the instruction budget
+  and whose backtracking memory to the memory limit: a catastrophic pattern ends with `E7_ERR_BUDGET` instead of
+  blocking the host.
 - Literal types: string, numeric and boolean literal types and unions of literals of one base type, narrowing by
   `===` / `!==` / `switch`, exhaustive switches whose `default` sees `never`, `as const`, `const` declarations with
   literal types; `Awaited`, `NonNullable`, `NoInfer`, `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize`.

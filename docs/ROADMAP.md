@@ -116,7 +116,7 @@ rejected (about 17 of them are compiler-only work, listed under P1).
   functions and named function expressions, defaults that refer to earlier parameters, exhaustive enum switches,
   narrowing after an assignment in an `if` branch, clearer errors for unsupported features.
 
-## 0.3: the language complete for its domain (planned)
+## 0.3: the language complete for its domain (done)
 
 **Goal.** Everything E7's target scripts (signing and verification, protocol parsing, business rules) write in
 everyday TypeScript compiles and behaves as on Node.js, including iteration, `async` / `await` against host
@@ -126,12 +126,19 @@ during 0.3, that is the beta stage; 1.0 then needs pilot data, a third-party aud
 
 **Measurable targets** (checked by CI, docs/TYPESCRIPT.md is generated from the samples):
 
-| Measure | 0.2.6 | 0.3 target |
-|---|---|---|
-| Features supported / partial / unsupported (of 250) | 117 / 21 / 112 | about 150 / 20 / 80 |
-| Unsupported rows whose reason is "not implemented yet" | 73 | at most 25, each with a decision |
-| Differences from Node.js in SPEC section 9 | 16 rows | the `undefined`-property row removed; every remaining row is an E7 check, an E7 extension or a stated output detail |
-| Production pilot | none | running in shadow mode |
+| Measure | 0.2.6 | 0.3 target | 0.3 result |
+|---|---|---|---|
+| Features supported / partial / unsupported (of 250) | 117 / 21 / 112 | about 150 / 20 / 80 | 153 / 18 / 79 |
+| Unsupported rows whose reason is "not implemented yet" | 73 | at most 25, each with a decision | 15 (async generators, object literal accessors and the "waiting with a reason" list below) |
+| Differences from Node.js in SPEC section 9 | 16 rows | the `undefined`-property row removed; every remaining row is an E7 check, an E7 extension or a stated output detail | the `undefined` row removed; new rows state generator, async and regular expression details |
+| Production pilot | none | running in shadow mode | the release makes it possible; it runs in an app (see *Later*) |
+
+**What shipped** (each item below; details in CHANGELOG.md 0.3.0 and DESIGN-0.3.md's implementation notes):
+generators and iterators (A), `async` / `await` with host tickets in the C API and every binding (B), regular
+expressions (C), the compiler gaps of D except object literal accessors, the standard library of E, properties
+that hold `undefined` (F), the quality gates of G (the seventh and eighth security reviews in PRODUCTION.md), and
+the C# `E7ModuleManager` (H). Not shipped: async generators and object literal accessors (rarely needed by the
+target scripts; they wait for a later release).
 
 Candidates must satisfy the rules of SPEC section 0.1; features that need run-time type information (`any`,
 `unknown`, general unions, index signatures, `keyof` / conditional / mapped types) stay out.
