@@ -352,6 +352,38 @@ try {
   literal with methods cannot contain spreads.
 - Uninitialized fields start as `0` / `false` / `null`; optional fields start as `undefined`.
 
+### 5.1 Generators and iterators (0.3)
+
+- `function*` declarations and expressions, generator methods (`*m()`, also `*[Symbol.iterator]()`), `yield`,
+  `yield*` (of a generator, an array or an iterable class: values, `next(v)` arguments, `return(v)` and `throw(e)`
+  are forwarded), `next(v)` / `return(v)` / `throw(e)` (`throw` takes an `Error`).
+- Types: `Generator<T, TReturn = void, TNext = (none)>`, `Iterator<T>` and `IterableIterator<T>` (a generator is all
+  three at run time). `TReturn` must be `void` or `T` (otherwise `IteratorResult` would be a general union); a return
+  type left out is inferred (`Generator<yielded types, returned types>`).
+- A generator, or an instance of a class with a `*[Symbol.iterator]()` method, works with `for...of`, spread,
+  `Array.from` and array destructuring. Leaving a `for...of` early (`break`, `return`, a `throw` from the body) calls
+  the iterator's `return()`, so its `finally` blocks run, as in JavaScript.
+- `next()` on a finished generator whose return type is a primitive gives `NaN` / `0` / `false` for `value`
+  (section 9); default parameter values of a generator are evaluated by the first `next()`.
+
+### 5.2 `async` functions and promises (0.3)
+
+- `async` functions, methods and arrow functions, `await` (also top-level in the entry module; an imported module
+  with top-level `await` is a compile error), `for await (const x of xs)` over arrays (each element awaited) and
+  generators.
+- `Promise<T>`: `then` (callbacks returning `U` or `Promise<U>`), `catch` (a handler returning `T`, or nothing),
+  `finally`, `new Promise<T>((resolve, reject) => ...)` (`reject` takes an `Error`; an error thrown by the executor
+  rejects), `Promise.resolve` / `reject` / `all` / `allSettled` / `any` / `race` over arrays of promises of one type
+  (`allSettled` gives records `{ status, value?, reason? }`, `any` rejects with an `AggregateError`).
+- The VM runs the promise jobs of the ECMAScript specification in its order, so callbacks run in the order of
+  Node.js. A call runs its frames, then the jobs they queued, until none is left. An `async` function returns its
+  promise at its first `await`; an exported `async` function gives the host the promise's value. A rejection that
+  no handler takes by the end of the call fails the call with its error (Node.js ends the process).
+- There are no timers. Host operations are `declare function f(...): Promise<T>` functions the host registers with
+  `e7_register_async_native`; their promises are settled by the host through tickets, and a call returns
+  `E7_PENDING` while tickets are open (see EMBEDDING.md). For tests, `later(v)` / `laterReject(e)` of `e7:test`
+  settle in a later turn (section 7.1).
+
 ## 6. Standard library
 
 The following behave the same as JavaScript (verified by differential testing against Node.js):
@@ -475,6 +507,10 @@ Assertion helpers used by the `e7 test` runner; they work in any program. A fail
 | `assertClose(actual: number, expected: number, tolerance = 1e-9, message?)` | `|actual - expected| > tolerance` |
 | `assertThrows(fn: () => void, expectedMessage?)` | calling `fn` does not raise a runtime error, or its message does not contain `expectedMessage` |
 | `fail(message?): never` | always |
+
+Also (0.3) `later<T>(value: T): Promise<T>` and `laterReject<T>(error: Error): Promise<T>`: a promise settled in a
+later turn, each one after the previous (as `setImmediate` in Node.js, which the shim of the differential tests
+uses), for tests of asynchronous ordering. They do not fail.
 
 `assertEqual` / `assertNotEqual` accept any one type for both operands (the checker treats them as a builtin
 generic `<T>(actual: T, expected: T)`). The second operand is checked
