@@ -268,6 +268,9 @@ class VM {
   // settles an open ticket (false: unknown or already settled ticket)
   bool settleTicket(int64_t ticket, bool ok, Slot value, Obj* reason);
   size_t openTickets() const { return tickets_.size(); }
+  // a ticket the VM settles itself, in creation order, once nothing else is left to run (each in its own
+  // turn, like setImmediate in Node.js): e7:test's later() / laterReject()
+  void newAutoTicket(PromiseObj* p, bool ok, Slot v, uint8_t vt);
   bool pending() const { return pending_; }
   // the reason of a rejected promise as a host error message ("TypeError: x" / "x")
   std::string rejectionMessage(Obj* reason) const;
@@ -404,6 +407,9 @@ class VM {
   Obj* errorValue(E7Error& e);
   std::deque<Job> microtasks_;
   std::unordered_map<int64_t, std::pair<PromiseObj*, void*>> tickets_;
+  struct AutoTicket { int64_t ticket; bool ok; Slot v; uint8_t vt; };
+  std::deque<AutoTicket> autoTickets_;
+  bool settleNextAutoTicket();
   int64_t nextTicket_ = 1;
   std::vector<PromiseObj*> unhandled_;  // rejected without a handler (checked when the queue is drained)
   JobKind curJob_ = JOB_NONE;

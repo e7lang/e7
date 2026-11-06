@@ -1052,6 +1052,8 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
     if (y->t == TT::Void || y->t == TT::Undefined) y = T.undef();
     return T.generator(y, r, n, gk);
   }
+  if (name == "AsyncGenerator" || name == "AsyncIterator" || name == "AsyncIterable" || name == "AsyncIterableIterator")
+    return errT(l, "async generators are not supported yet (" + name + ")");
   if (name == "IteratorResult" || name == "IteratorYieldResult" || name == "IteratorReturnResult") {
     if (args.empty() || args.size() > 2) return errT(l, "type '" + name + "' requires 1 or 2 type argument(s)");
     Type* y = resolveType(args[0]);

@@ -1017,6 +1017,18 @@ void Checker::checkStmt(Stmt* s) {
         Type* it = check(s->expr, nullptr);
         et = elemTypeForIter(s->expr, it, s->expr->loc);
       }
+      if (s->isAwait) {
+        // for await: each element is awaited (a promise gives its value)
+        if (!curFn || (!curFn->isAsync && !curFn->isInit))
+          err(s->loc, "'for await' is only allowed in async functions and at the top level of the entry module");
+        else if (curFn->isInit && !curFn->isAsync) {
+          curFn->isAsync = true;
+          curFn->type = T.func({}, T.promise(T.voidT()));
+        }
+        if (s->declareKind) err(s->loc, "'for await' over keys / values / entries is not supported; iterate the array");
+        if (et->t == TT::Promise) et = et->elem;
+        if (et->t == TT::Void) et = T.undef();
+      }
       pushScope();
       VarDecl& d = s->decls[0];
       // [k, v] of map: bind directly without allocating tuples

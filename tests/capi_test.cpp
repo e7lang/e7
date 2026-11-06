@@ -909,6 +909,89 @@ int main() {
       e7_vm_free(vm);
     }
   }
+  // ---- async host functions: tickets, E7_PENDING, e7_settle / e7_settle_error, e7_resume
+  {
+    e7_vm* vm = e7_vm_new(nullptr);
+    e7_set_print(vm, capturePrint, nullptr);
+    static std::vector<int64_t> tickets;
+    static std::vector<std::string> keys;
+    tickets.clear();
+    keys.clear();
+    CHECK(e7_register_async_native(vm, "fetchKey", "s>y",
+                                   [](e7_vm*, const e7_value* a, size_t n, int64_t ticket, void*) -> e7_status {
+                                     if (n != 1 || a[0].type != E7_STRING) return E7_ERR_ARGS;
+                                     keys.push_back(std::string(a[0].v.str.ptr, a[0].v.str.len));
+                                     tickets.push_back(ticket);
+                                     return E7_OK;
+                                   },
+                                   nullptr) == E7_OK);
+    CHECK(e7_register_async_native(vm, "now", ">n",
+                                   [](e7_vm* v, const e7_value*, size_t, int64_t ticket, void*) -> e7_status {
+                                     e7_value x;
+                                     memset(&x, 0, sizeof x);
+                                     x.type = E7_NUMBER;
+                                     x.v.num = 5;
+                                     return e7_settle(v, ticket, &x);  // settled at once
+                                   },
+                                   nullptr) == E7_OK);
+    auto bc = compile(R"(
+      declare function fetchKey(id: string): Promise<Uint8Array>;
+      declare function now(): Promise<number>;
+      export async function keyLength(id: string): Promise<number> {
+        const k = await fetchKey(id);
+        return k.length + (await now());
+      }
+      export async function both(): Promise<string> {
+        const [a, b] = await Promise.all([fetchKey("a"), fetchKey("b")]);
+        return `${a.length},${b.length}`;
+      }
+      export async function failing(): Promise<number> {
+        try {
+          await fetchKey("x");
+          return 1;
+        } catch (e) {
+          if (e instanceof Error) console.log("caught " + e.message);
+          return -1;
+        }
+      }
+      export function syncCall(): number { return 3; }
+    )");
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_value ret;
+    e7_value id = str("k1");
+    CHECK(e7_call(vm, m, "keyLength", &id, 1, &ret) == E7_PENDING);
+    CHECK(e7_open_tickets(vm) == 1 && tickets.size() == 1 && keys[0] == "k1");
+    CHECK(e7_call(vm, m, "syncCall", nullptr, 0, &ret) == E7_ERR_STATE);  // busy while pending
+    CHECK(e7_resume(vm, &ret) == E7_PENDING);                             // nothing settled yet
+    uint8_t key[4] = {1, 2, 3, 4};
+    e7_value kv = bytes(key, 4);
+    e7_value wrong = num(1);
+    CHECK(e7_settle(vm, tickets[0], &wrong) == E7_ERR_ARGS);
+    CHECK(e7_settle(vm, tickets[0], &kv) == E7_OK);
+    CHECK(e7_settle(vm, tickets[0], &kv) == E7_ERR_STATE);  // already settled
+    CHECK(e7_resume(vm, &ret) == E7_OK && ret.type == E7_NUMBER && ret.v.num == 9);
+    tickets.clear();
+    CHECK(e7_call(vm, m, "both", nullptr, 0, &ret) == E7_PENDING && tickets.size() == 2);
+    uint8_t one[1] = {9};
+    e7_value v1 = bytes(one, 1);
+    CHECK(e7_settle(vm, tickets[1], &kv) == E7_OK);
+    CHECK(e7_resume(vm, &ret) == E7_PENDING);
+    CHECK(e7_settle(vm, tickets[0], &v1) == E7_OK);
+    CHECK(e7_resume(vm, &ret) == E7_OK && ret.type == E7_STRING && std::string(ret.v.str.ptr, ret.v.str.len) == "1,4");
+    tickets.clear();
+    printed.clear();
+    CHECK(e7_call(vm, m, "failing", nullptr, 0, &ret) == E7_PENDING && tickets.size() == 1);
+    CHECK(e7_settle_error(vm, tickets[0], "no such key") == E7_OK);
+    CHECK(e7_resume(vm, &ret) == E7_OK && ret.v.num == -1 && printed == "caught no such key\n");
+    // abandoning a pending call: its tickets can no longer be settled
+    tickets.clear();
+    CHECK(e7_call(vm, m, "keyLength", &id, 1, &ret) == E7_PENDING);
+    e7_abort_suspended(vm);
+    CHECK(e7_settle(vm, tickets[0], &kv) == E7_ERR_STATE);
+    CHECK(e7_call(vm, m, "syncCall", nullptr, 0, &ret) == E7_OK && ret.v.num == 3);
+    e7_vm_free(vm);
+  }
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

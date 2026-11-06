@@ -105,6 +105,20 @@ bool VM::ticketHostData(int64_t ticket, void** data) const {
   return true;
 }
 
+void VM::newAutoTicket(PromiseObj* p, bool ok, Slot v, uint8_t vt) {
+  int64_t t = newTicket(p);
+  autoTickets_.push_back(AutoTicket{t, ok, v, vt});
+}
+
+bool VM::settleNextAutoTicket() {
+  while (!autoTickets_.empty()) {
+    AutoTicket a = autoTickets_.front();
+    autoTickets_.pop_front();
+    if (settleTicket(a.ticket, a.ok, a.v, a.ok ? nullptr : a.v.r)) return true;
+  }
+  return false;
+}
+
 bool VM::settleTicket(int64_t ticket, bool ok, Slot value, Obj* reason) {
   auto it = tickets_.find(ticket);
   if (it == tickets_.end()) return false;
@@ -363,6 +377,11 @@ int VM::finishTurn() {
     raise(ERR_RUNTIME, msg, false);
   }
   unhandled_.clear();
+  // host operations still open: the call waits for them (it is not finished until they are)
+  if (!tickets_.empty()) {
+    pending_ = true;
+    return ERR_PENDING;
+  }
   result_ = entryResult_;
   resultKind_ = entryKind_;
   if (entryFn_ && entryFn_->d && fflagsKind(entryFn_->d->fflags) == FK_ASYNC && entryKind_ == 'R' && isPromise(entryResult_.r)) {
@@ -373,9 +392,6 @@ int VM::finishTurn() {
     } else if (p->state == PS_REJECTED) {
       std::string msg = rejectionMessage(p->value.r);
       raise(ERR_RUNTIME, msg, false);
-    } else if (!tickets_.empty()) {
-      pending_ = true;
-      return ERR_PENDING;
     } else {
       raise(ERR_RUNTIME, "the async function never finishes: it awaits a promise that is never settled", false);
     }
@@ -513,7 +529,28 @@ E7_NATIVE(n_promiseAllSettled) {
   combinator(vm, a, r, RK_ALL_SETTLED, (int32_t)a[2].i);
 }
 
+// e7:test later(v) / laterReject(e): a promise settled in a later turn (setImmediate in Node.js)
+static void later(VM& vm, Slot* a, Slot* r, Kind k) {
+  uint8_t vt = vtKindCheck(vm, a[1], k);
+  PromiseObj* p = vm.newPromise(vt);
+  vm.newAutoTicket(p, true, a[0], vt);
+  r->r = p;
+}
+E7_NATIVE(n_testLaterI) { (void)n; (void)ud; later(vm, a, r, K_I); }
+E7_NATIVE(n_testLaterF) { (void)n; (void)ud; later(vm, a, r, K_F); }
+E7_NATIVE(n_testLaterR) { (void)n; (void)ud; later(vm, a, r, K_R); }
+E7_NATIVE(n_testLaterReject) {
+  (void)n; (void)ud;
+  PromiseObj* p = vm.newPromise(vtArg(vm, a[1]));
+  vm.newAutoTicket(p, false, a[0], VT_REF);
+  r->r = p;
+}
+
 void registerPromiseNatives(VM& vm) {
+  vm.registerNative("test.laterI", "II>R", n_testLaterI);
+  vm.registerNative("test.laterF", "FI>R", n_testLaterF);
+  vm.registerNative("test.laterR", "RI>R", n_testLaterR);
+  vm.registerNative("test.laterReject", "RI>R", n_testLaterReject);
   vm.registerNative("Promise.resolveI", "II>R", n_promiseResolveI);
   vm.registerNative("Promise.resolveF", "FI>R", n_promiseResolveF);
   vm.registerNative("Promise.resolveR", "RI>R", n_promiseResolveR);

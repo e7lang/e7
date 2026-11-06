@@ -856,6 +856,8 @@ void VM::markRoots() {
     if (j.argVT == VT_REF || j.rejected) mark(j.arg.r);
   }
   for (auto& kv : tickets_) mark(kv.second.first);
+  for (auto& at : autoTickets_)
+    if (at.vt == VT_REF || !at.ok) mark(at.v.r);
   for (PromiseObj* p : unhandled_) mark(p);
   mark(curDerived_);
   markReaction(curReaction_);
@@ -1119,7 +1121,11 @@ int VM::runFrames() {
         }
         dropFrames(0);
       }
-      if (microtasks_.empty()) break;
+      if (microtasks_.empty()) {
+        // the next turn: a ticket the VM settles itself (e7:test's later())
+        if (settleNextAutoTicket()) continue;
+        break;
+      }
       // a job is charged like a call
       if (--budget_ < 0 && budgetStart_ != INT64_MAX) {
         if (cfg_.suspendOnBudget) {
@@ -1183,6 +1189,7 @@ void VM::resetExecution() {
   dropFrames(0);
   microtasks_.clear();
   tickets_.clear();
+  autoTickets_.clear();
   unhandled_.clear();
   curJob_ = JOB_NONE;
   curDerived_ = nullptr;

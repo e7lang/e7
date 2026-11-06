@@ -699,6 +699,34 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
       nat("test.fail");
       return T.never();
     }
+    if (n == "later") {
+      // later(v): a promise of v settled in a later turn (each one after the previous, as
+      // setImmediate does in Node.js): tests of async ordering
+      if (args.size() != 1) return errT(l, "'later' expects one argument");
+      Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : nullptr;
+      Type* t = check(args[0], expElem);
+      if (expElem && t != expElem) { coerce(args[0], expElem, "later"); t = expElem; }
+      if (t->t == TT::Void || t->t == TT::Promise) return errT(args[0]->loc, "'later' needs a value");
+      Type* vt = t->t == TT::Undefined ? T.voidT() : t;
+      args.push_back(N((double)(t->t == TT::Undefined ? VT_REF : vtOf(t))));
+      args.back()->type = T.intT(VT_I64);
+      args.back()->k = EK::Num;
+      args.back()->isIntLit = true;
+      args.back()->ival = t->t == TT::Undefined ? VT_REF : vtOf(t);
+      nat(std::string("test.later") + kindChar(kindOf(t)));
+      return T.promise(vt);
+    }
+    if (n == "laterReject") {
+      if (args.size() != 1) return errT(l, "'laterReject' expects one argument (an Error)");
+      Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : T.voidT();
+      if (!argsMatch(e, args, {T.error()}, 1, "laterReject")) return T.unknown();
+      args.push_back(N((double)(expElem->t == TT::Void ? VT_REF : vtOf(expElem))));
+      args.back()->type = T.intT(VT_I64);
+      args.back()->isIntLit = true;
+      args.back()->ival = expElem->t == TT::Void ? VT_REF : vtOf(expElem);
+      nat("test.laterReject");
+      return T.promise(expElem);
+    }
     if (n == "assertClose") {
       if (args.size() < 2 || args.size() > 4)
         return errT(l, "'assertClose' expects 2-4 argument(s), got " + std::to_string(args.size()));

@@ -52,7 +52,9 @@ typedef enum e7_status {
   E7_ERR_COMPILE = 11,   /* compilation error */
   E7_ERR_STATE = 12,     /* VM busy (suspended) or invalid state */
   E7_PAUSED = 13,        /* stopped by an attached debugger (pause-to-host mode); see e7_debug_resume() */
-  E7_ERR_VERSION = 14    /* module format or required e7vm version not supported by this VM */
+  E7_ERR_VERSION = 14,   /* module format or required e7vm version not supported by this VM */
+  E7_PENDING = 15        /* the call waits for host operations (async natives): settle their tickets with
+                            e7_settle / e7_settle_error, then call e7_resume() */
 } e7_status;
 
 typedef enum e7_type {
@@ -151,7 +153,9 @@ E7_API void e7_free(void* p);
 /* ---- calls ---- */
 E7_API e7_status e7_call(e7_vm* vm, e7_module* mod, const char* function, const e7_value* args, size_t nargs,
                          e7_value* ret);
+/* Continues a call that returned E7_SUSPENDED (budget) or E7_PENDING (after settling tickets). */
 E7_API e7_status e7_resume(e7_vm* vm, e7_value* ret);
+/* Abandons a suspended or pending call (its open tickets can no longer be settled). */
 E7_API void e7_abort_suspended(e7_vm* vm);
 /* Instruction budget for subsequent execution (<= 0: unlimited). */
 E7_API void e7_set_budget(e7_vm* vm, int64_t ticks);
@@ -174,6 +178,24 @@ typedef e7_status (*e7_native_fn)(e7_vm* vm, const e7_value* args, size_t nargs,
 E7_API e7_status e7_register_native(e7_vm* vm, const char* name, const char* signature, e7_native_fn fn, void* user);
 /* From inside a native: set the error message reported when the native returns E7_ERR_RUNTIME. */
 E7_API void e7_native_error(e7_vm* vm, const char* message);
+
+/* ---- async host functions (0.3) ----
+ * `declare function fetchKey(id: string): Promise<Uint8Array>` is an async native: the signature is
+ * written as for e7_register_native with the promise's value type as the return type ("s>y"). When the
+ * script calls it, the VM creates a pending promise and calls `fn` with the arguments and a ticket. The
+ * host settles the ticket, at once or later, on the VM's thread, with e7_settle / e7_settle_error. A
+ * call whose script still waits for open tickets returns E7_PENDING; settle them and call e7_resume().
+ * Returning an error status from `fn` throws in the script (no ticket is open then). */
+typedef e7_status (*e7_async_native_fn)(e7_vm* vm, const e7_value* args, size_t nargs, int64_t ticket, void* user);
+E7_API e7_status e7_register_async_native(e7_vm* vm, const char* name, const char* signature, e7_async_native_fn fn,
+                                          void* user);
+/* Fulfills the ticket's promise with `value` (of the native's return type; NULL for void).
+ * E7_ERR_STATE: unknown or already settled ticket; E7_ERR_ARGS: wrong value type. */
+E7_API e7_status e7_settle(e7_vm* vm, int64_t ticket, const e7_value* value);
+/* Rejects the ticket's promise with an Error (message). */
+E7_API e7_status e7_settle_error(e7_vm* vm, int64_t ticket, const char* message);
+/* Number of open tickets. */
+E7_API size_t e7_open_tickets(e7_vm* vm);
 
 /* ---- host services ---- */
 E7_API void e7_set_print(e7_vm* vm, void (*fn)(void* user, const char* text, size_t len), void* user);

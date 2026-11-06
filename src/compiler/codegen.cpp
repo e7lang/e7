@@ -531,6 +531,9 @@ struct Gen {
   void destructure(VarDecl& d, uint16_t src, Type* t);
   void genForOf(Stmt* s);
   void genForOfIter(Stmt* s, const std::string& label, uint16_t it, Type* gt);
+  // for await: the awaited element (a value is awaited as Promise.resolve(value)); two promise ticks as
+  // for the AsyncFromSyncIterator of the specification
+  uint16_t forAwaitValue(uint16_t v, Type* et, Type** outT);
   // generators (0.3)
   static uint8_t kindCode(Type* t) { return !t || t->t == TT::Void ? 0 : (uint8_t)(kindOf(t) + 1); }
   Type* bodyRet(FuncSym* f) {
@@ -1831,6 +1834,7 @@ void Gen::genForOf(Stmt* s) {
   for (VarSym* v : vars) declareLocal(v);
   auto bindElem = [&](uint16_t elem, Type* et) {
     size_t m1 = mark();
+    if (s->isAwait) elem = forAwaitValue(elem, et, &et);
     destructure(d, elem, et);
     release(m1);
   };
@@ -2008,7 +2012,9 @@ void Gen::genForOfIter(Stmt* s, const std::string& label, uint16_t it, Type* gt)
   openSeg(r);
   {
     size_t m1 = mark();
-    destructure(d, v, et);
+    Type* bt = et;
+    uint16_t bv = s->isAwait ? forAwaitValue(v, et, &bt) : v;
+    destructure(d, bv, bt);
     release(m1);
   }
   pushLoop({label, brk, top, true});
@@ -2264,6 +2270,25 @@ void Gen::emitSynthFns() {
     M.funcs.push_back(fd);
   }
   D = nullptr;
+}
+
+uint16_t Gen::forAwaitValue(uint16_t v, Type* et, Type** outT) {
+  uint16_t p = temp(K_R);
+  Type* vt = et;
+  if (et->t == TT::Promise) {
+    mov(p, v, K_R);
+    vt = et->elem;
+  } else {
+    callNative(std::string("Promise.resolve") + kindChar(kindOf(et)), {v, vtReg(et)}, p, 'R');
+  }
+  uint16_t nul = temp(K_R), p2 = temp(K_R);
+  emit(OP_LOADNULL, nul);
+  callNative("Promise.then", {p, nul, nul, vtReg(vt)}, p2, 'R');
+  if (vt->t == TT::Void) vt = T.undef();
+  uint16_t out = temp(kindOf(vt));
+  emit(OP_AWAIT, out, p2);
+  *outT = vt;
+  return out;
 }
 
 void Gen::genAwait(Expr* e, uint16_t dst) {

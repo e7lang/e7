@@ -21,6 +21,7 @@ struct NativeThunk {
   e7_native_fn fn;
   void* user;
   std::string hostSig;
+  e7_async_native_fn asyncFn = nullptr;  // an async native (returns a promise settled through a ticket)
 };
 
 struct e7_module {
@@ -196,6 +197,11 @@ static e7_status loadBytes(e7_vm* v, const uint8_t* data, size_t len, e7_module*
       v->pendingInit = rt;
       v->pendingRet = 'v';
       return E7_PAUSED;
+    }
+    if (st == ERR_PENDING) {  // top-level await of a host operation: finished by e7_resume()
+      v->pendingInit = rt;
+      v->pendingRet = 'v';
+      return E7_PENDING;
     }
     return E7_OK;
   } catch (E7Error& e) {
@@ -394,6 +400,7 @@ static void fromSlot(e7_vm* v, char code, Slot s, e7_value* out) {
 
 static e7_status finishCall(e7_vm* v, int st, e7_value* ret) {
   if (st == ERR_SUSPENDED) return E7_SUSPENDED;
+  if (st == ERR_PENDING) return E7_PENDING;
   if (st == ERR_PAUSED) return E7_PAUSED;
   if (v->pendingInit) {  // a paused module initializer has finished
     v->pendingInit->initialized = true;
@@ -408,6 +415,8 @@ e7_status e7_call(e7_vm* v, e7_module* mod, const char* function, const e7_value
   if (!v || !mod || !function) return E7_ERR_ARGS;
   if (v->active) return fail(v, E7_ERR_STATE, kReentry);
   if (v->vm->suspended()) return fail(v, E7_ERR_STATE, "VM is suspended; call e7_resume() or e7_abort_suspended()");
+  if (v->vm->pending())
+    return fail(v, E7_ERR_STATE, "VM waits for host operations; settle their tickets and call e7_resume(), or e7_abort_suspended()");
   const ExportDesc* ex = findExport(mod, function);
   if (!ex) return fail(v, E7_ERR_NOT_FOUND, std::string("no exported function '") + function + "'");
   const std::string& hs = ex->hostSig;
@@ -553,6 +562,127 @@ e7_status e7_register_native(e7_vm* v, const char* name, const char* signature, 
 }
 
 void e7_native_error(e7_vm* v, const char* message) { v->nativeError = message ? message : ""; }
+
+static uint8_t vtOfHost(char c) {
+  switch (c) {
+    case 'n': return VT_NUMBER;
+    case 'b': return VT_BOOL;
+    case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': return (uint8_t)(VT_I8 + (c - '1'));
+    default: return VT_REF;  // s, y, h, v (undefined)
+  }
+}
+
+// An async native: converts the arguments, creates the pending promise and its ticket, calls the host
+static void asyncNativeThunk(VM& vm, Slot* a, uint32_t n, Slot* r, void* ud) {
+  auto* t = static_cast<NativeThunk*>(ud);
+  e7_vm* v = t->owner;
+  size_t gt = t->hostSig.find('>');
+  std::string ps = t->hostSig.substr(0, gt);
+  std::vector<e7_value> args(n);
+  std::vector<std::string> strs(n);
+  for (uint32_t i = 0; i < n; i++) {
+    e7_value& ev = args[i];
+    memset(&ev, 0, sizeof ev);
+    switch (ps[i]) {
+      case 'n': ev.type = E7_NUMBER; ev.v.num = a[i].f; break;
+      case 'b': ev.type = E7_BOOL; ev.v.boolean = a[i].i != 0; break;
+      case '1': case '3': case '5': case '7': ev.type = E7_INT; ev.v.i = a[i].i; break;
+      case '2': case '4': case '6': case '8': ev.type = E7_UINT; ev.v.u = a[i].u; break;
+      case 's': strs[i] = strUtf8(asStr(vm, a[i])); ev.type = E7_STRING; ev.v.str.ptr = strs[i].c_str(); ev.v.str.len = strs[i].size(); break;
+      case 'y': { BytesObj* b = B(vm, a[i]); ev.type = E7_BYTES; ev.v.bytes.ptr = b->ptr(); ev.v.bytes.len = b->len; break; }
+      case 'h': {
+        Obj* o = a[i].r;
+        if (!o || o->type != OT::Handle) vm.error("expected a KeyHandle");
+        ev.type = E7_HANDLE;
+        ev.v.handle = static_cast<HandleObj*>(o)->id;
+        break;
+      }
+    }
+  }
+  PromiseObj* p = vm.newPromise(vtOfHost(t->hostSig.back()));
+  int64_t ticket = vm.newTicket(p, t);
+  v->nativeError.clear();
+  e7_status st = t->asyncFn(v, args.data(), n, ticket, t->user);
+  if (st != E7_OK) {
+    Slot none;
+    none.u = 0;
+    vm.settleTicket(ticket, true, none, nullptr);  // no ticket stays open (the promise is dropped)
+    std::string msg = v->nativeError.empty() ? "native function failed" : v->nativeError;
+    vm.error("%s", msg.c_str());
+  }
+  r->r = p;
+}
+
+e7_status e7_register_async_native(e7_vm* v, const char* name, const char* signature, e7_async_native_fn fn, void* user) {
+  if (!v || !name || !signature || !fn) return E7_ERR_ARGS;
+  std::string hs = signature;
+  size_t gt = hs.find('>');
+  if (gt == std::string::npos || gt + 2 != hs.size()) return fail(v, E7_ERR_ARGS, "invalid native signature");
+  std::string vmSig;
+  for (size_t i = 0; i < gt; i++) {
+    char k = kindOfHost(hs[i]);
+    if (!k || k == 'V') return fail(v, E7_ERR_ARGS, "invalid native parameter type code");
+    vmSig += k;
+  }
+  char rk = kindOfHost(hs.back());
+  if (!rk || hs.back() == 'h') return fail(v, E7_ERR_ARGS, "invalid native return type code");
+  vmSig += ">R";  // the promise
+  auto t = std::make_unique<NativeThunk>();
+  t->owner = v;
+  t->fn = nullptr;
+  t->asyncFn = fn;
+  t->user = user;
+  t->hostSig = hs;
+  v->vm->registerNative(name, vmSig, asyncNativeThunk, t.get());
+  v->natives.push_back(std::move(t));
+  return E7_OK;
+}
+
+e7_status e7_settle(e7_vm* v, int64_t ticket, const e7_value* value) {
+  if (!v) return E7_ERR_ARGS;
+  void* hd = nullptr;
+  if (!v->vm->ticketHostData(ticket, &hd) || !hd) return fail(v, E7_ERR_STATE, "unknown or already settled ticket");
+  auto* t = static_cast<NativeThunk*>(hd);
+  char rc = t->hostSig.back();
+  Slot s;
+  s.u = 0;
+  try {
+    VM::GCPause pause(*v->vm);
+    if (rc == 'v') {
+      s.r = v->vm->undef();
+    } else {
+      std::string err;
+      if (!value) return fail(v, E7_ERR_ARGS, "e7_settle: a value is required");
+      if (!toSlot(v, rc, *value, s, err)) return fail(v, E7_ERR_ARGS, "e7_settle: " + err);
+    }
+    v->vm->settleTicket(ticket, true, s, nullptr);
+  } catch (E7Error& e) {
+    return fail(v, (e7_status)e.code, e.msg);
+  } catch (std::bad_alloc&) {
+    return fail(v, E7_ERR_MEMORY, "out of memory");
+  }
+  return E7_OK;
+}
+
+e7_status e7_settle_error(e7_vm* v, int64_t ticket, const char* message) {
+  if (!v) return E7_ERR_ARGS;
+  void* hd = nullptr;
+  if (!v->vm->ticketHostData(ticket, &hd) || !hd) return fail(v, E7_ERR_STATE, "unknown or already settled ticket");
+  try {
+    ArrObj* err = v->vm->newErrorObject("Error", message ? message : "");
+    VM::TempRoot keep(*v->vm, err);
+    Slot none;
+    none.u = 0;
+    v->vm->settleTicket(ticket, false, none, err);
+  } catch (E7Error& e) {
+    return fail(v, (e7_status)e.code, e.msg);
+  } catch (std::bad_alloc&) {
+    return fail(v, E7_ERR_MEMORY, "out of memory");
+  }
+  return E7_OK;
+}
+
+size_t e7_open_tickets(e7_vm* v) { return v ? v->vm->openTickets() : 0; }
 
 static void printTrampoline(void* ud, const char* s, size_t n) {
   auto* v = static_cast<e7_vm*>(ud);

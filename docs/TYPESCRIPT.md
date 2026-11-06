@@ -27,7 +27,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **129 supported**, **16 partial**, **105 unsupported** (266 sample programs).
+250 features: **133 supported**, **18 partial**, **99 unsupported** (268 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -38,12 +38,12 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Generics](#generics) | 9 | 1 | 5 |
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
 | [Classes](#classes) | 17 | 0 | 14 |
-| [Modules](#modules) | 8 | 0 | 5 |
+| [Modules](#modules) | 9 | 0 | 4 |
 | [Enums](#enums) | 4 | 1 | 4 |
 | [Utility Types](#utility-types) | 0 | 0 | 13 |
 | [Decorators](#decorators) | 0 | 0 | 3 |
 | [Declaration Merging](#declaration-merging) | 0 | 0 | 4 |
-| [Iterators and Generators](#iterators-and-generators) | 4 | 0 | 3 |
+| [Iterators and Generators](#iterators-and-generators) | 5 | 2 | 0 |
 | [Symbols](#symbols) | 0 | 0 | 3 |
 | [Mixins](#mixins) | 0 | 0 | 1 |
 | [Triple-Slash Directives](#triple-slash-directives) | 2 | 0 | 0 |
@@ -51,11 +51,11 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Namespaces](#namespaces) | 0 | 0 | 2 |
 | [Type Compatibility and Inference](#type-compatibility-and-inference) | 5 | 1 | 0 |
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
-| [JavaScript: Syntax](#javascript-syntax) | 21 | 1 | 9 |
-| [JavaScript: Standard Library](#javascript-standard-library) | 9 | 6 | 11 |
-| **Total** | **129** | **16** | **105** |
+| [JavaScript: Syntax](#javascript-syntax) | 22 | 1 | 8 |
+| [JavaScript: Standard Library](#javascript-standard-library) | 10 | 6 | 10 |
+| **Total** | **133** | **18** | **99** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 61.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 57.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -230,12 +230,12 @@ Within each category, supported features come first, then partial and unsupporte
 | Namespace imports (`import * as ns`) | supported | Functions, constants, classes (`new ns.C()`, static members, `instanceof`, `extends`), enums and types (`ns.T`, `ns.Box<number>`) through the namespace; its members cannot be assigned, as in JavaScript | [namespace-imports.ts](../tests/ts-features/modules/namespace-imports.ts) |
 | Re-exports (`export { x } from`, `export * from`, `export * as ns from`) | supported | A module's own exports win over `export *`; a name that two `export *` provide with different bindings is an error, as in TypeScript (JavaScript leaves it out) | [re-exports.ts](../tests/ts-features/modules/re-exports.ts) |
 | Side-effect imports (`import "./x"`) | supported | The module runs once, in JavaScript's order (dependencies first, in source order) | [side-effect-imports.ts](../tests/ts-features/modules/side-effect-imports.ts) |
+| Top-level `await` | supported | In the entry module (an imported module with top-level await is a compile error) | [top-level-await.ts](../tests/ts-features/modules/top-level-await.ts) |
 | Type-only imports (`import type`, inline `type` modifiers) | supported |  | [type-only-imports.ts](../tests/ts-features/modules/type-only-imports.ts) |
 | Ambient variable and class declarations (`declare const`, `declare class`) | **unsupported** | **Why:** only functions can be provided by the host, with a signature the VM checks when the module is loaded (*verifiable bytecode*). **Instead:** a host function that returns the value: `declare function appVersion(): string` (host functions are E7's form of `declare`, docs/SPEC.md section 7; they need a host that registers them, so they have no sample here) | [ambient-declarations.ts](../tests/ts-features/modules/ambient-declarations.ts) |
 | Circular imports | **unsupported** | **Why:** modules are initialized in dependency order, so every import is initialized before it is used (*verifiable bytecode*). **Instead:** move the shared declarations into a third module | [circular-imports.ts](../tests/ts-features/modules/circular-imports.ts) |
 | Dynamic `import()` | **unsupported** | **Why:** every module is compiled and verified ahead of time; `import()` also returns a Promise (*verifiable bytecode*). **Instead:** static imports; the host loads modules | [dynamic-import.ts](../tests/ts-features/modules/dynamic-import.ts) |
 | `import.meta` | **unsupported** | **Why:** the host, not the script, knows where modules come from (*not implemented yet*). **Instead:** pass the information in from the host (a host function or an argument) | [import-meta.ts](../tests/ts-features/modules/import-meta.ts) |
-| Top-level `await` | **unsupported** | **Why:** no Promises or coroutines (reserved for a later version) (*not implemented yet*). **Instead:** synchronous code; the host does asynchronous work and passes the results in | [top-level-await.ts](../tests/ts-features/modules/top-level-await.ts) |
 
 ## Enums
 
@@ -293,10 +293,10 @@ Within each category, supported features come first, then partial and unsupporte
 | `for...of` over arrays, `entries()`, `keys()`, `values()` | supported | An array's `entries()` / `keys()` / `values()` are used directly in `for...of` (they are not iterator objects) | [for-of-arrays.ts](../tests/ts-features/iterators/for-of-arrays.ts) |
 | Iterating `Map` and `Set` | supported |  | [for-of-map-set.ts](../tests/ts-features/iterators/for-of-map-set.ts) |
 | `for...of` over strings (by code point) | supported |  | [for-of-strings.ts](../tests/ts-features/iterators/for-of-strings.ts) |
+| Generator functions (`function*`, `yield`, `yield*`) | supported | `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (the value's representation is fixed) | [generators.ts](../tests/ts-features/iterators/generators.ts) |
 | Spreading iterables and `Array.from` | supported |  | [spread-iterables.ts](../tests/ts-features/iterators/spread-iterables.ts) |
-| Async iteration (`for await`, async generators) | **unsupported** | **Why:** no Promises or coroutines (*not implemented yet*). **Instead:** synchronous iteration over the data the host passes in | [async-iteration.ts](../tests/ts-features/iterators/async-iteration.ts) |
-| Generator functions (`function*`, `yield`, `yield*`) | **unsupported** | **Why:** reserved for coroutines (*not implemented yet*). **Instead:** return an array, or a class with a `next()` method | [generators.ts](../tests/ts-features/iterators/generators.ts) |
-| Custom iterables (`[Symbol.iterator]()`) | **unsupported** | **Why:** `for...of` and spread take arrays, strings, `Map`, `Set` and `Uint8Array` (*not implemented yet*). **Instead:** a method that returns an array (`toArray()`), or a `forEach`-style method | [iterator-protocol.ts](../tests/ts-features/iterators/iterator-protocol.ts) |
+| Async iteration (`for await`, async generators) | **partial** | **Works:** `for await` over arrays of promises or values (each one awaited, in the order of Node.js). **Not supported:** async generators (`async function*`) (*not implemented yet*). **Instead:** an async function that returns an array, or a generator of promises | [async-iteration.ok.ts](../tests/ts-features/iterators/async-iteration.ok.ts), [async-iteration.no.ts](../tests/ts-features/iterators/async-iteration.no.ts) |
+| Custom iterables (`[Symbol.iterator]()`) | **partial** | **Works:** a class whose `[Symbol.iterator]()` method returns a generator works with `for...of`, spread, `Array.from` and destructuring. **Not supported:** an iterator written by hand (an object with a `next()` method); iterators are generators at run time (*not implemented yet*). **Instead:** a generator: `*[Symbol.iterator]() { ... yield v; }` | [iterator-protocol.ok.ts](../tests/ts-features/iterators/iterator-protocol.ok.ts), [iterator-protocol.no.ts](../tests/ts-features/iterators/iterator-protocol.no.ts) |
 
 ## Symbols
 
@@ -358,6 +358,7 @@ Within each category, supported features come first, then partial and unsupporte
 |---|---|---|---|
 | Array destructuring (defaults, holes, rest, nested) | supported |  | [array-destructuring.ts](../tests/ts-features/js-syntax/array-destructuring.ts) |
 | Array spread | supported |  | [array-spread.ts](../tests/ts-features/js-syntax/array-spread.ts) |
+| `async` functions and `await` | supported | Async functions, methods and arrow functions; host functions return promises the host settles later (`declare function f(): Promise<T>`, see EMBEDDING.md) | [async-await.ts](../tests/ts-features/js-syntax/async-await.ts) |
 | The comma operator | supported |  | [comma-operator.ts](../tests/ts-features/js-syntax/comma-operator.ts) |
 | `if`, `while`, `do...while`, `for` loops | supported |  | [control-flow.ts](../tests/ts-features/js-syntax/control-flow.ts) |
 | `debugger` statement | supported | Stops when a debugger is attached | [debugger-statement.ts](../tests/ts-features/js-syntax/debugger-statement.ts) |
@@ -378,7 +379,6 @@ Within each category, supported features come first, then partial and unsupporte
 | `try` / `catch` / `finally`, optional catch binding | supported | Catches the errors Node.js also throws; E7's own checks (out-of-bounds reads, failed `as`) are not catchable | [try-catch-finally.ts](../tests/ts-features/js-syntax/try-catch-finally.ts) |
 | The `void` operator | supported | The value is `undefined`; as for `undefined` itself, a variable holding it needs a type annotation | [void-operator.ts](../tests/ts-features/js-syntax/void-operator.ts) |
 | Loose equality `==` / `!=` | **partial** | **Works:** only `== null` / `!= null` (null or undefined). **Not supported:** with static types, `==` is either `===` or a hidden type conversion (*types known at compile time*). **Instead:** `===` / `!==` | [loose-equality.ok.ts](../tests/ts-features/js-syntax/loose-equality.ok.ts), [loose-equality.no.ts](../tests/ts-features/js-syntax/loose-equality.no.ts) |
-| `async` functions and `await` | **unsupported** | **Why:** reserved for coroutines (*not implemented yet*). **Instead:** synchronous functions; the host does asynchronous work (and can run long computations in slices with an instruction budget) | [async-await.ts](../tests/ts-features/js-syntax/async-await.ts) |
 | The `delete` operator | **unsupported** | **Why:** object layouts are fixed (*types known at compile time*). **Instead:** an optional property set to `undefined`, or `Map.delete` | [delete-operator.ts](../tests/ts-features/js-syntax/delete-operator.ts) |
 | `eval` and `new Function` | **unsupported** | **Why:** all code is compiled and verified ahead of time (*verifiable bytecode*). **Instead:** ship the code as a module; the host can compile and load modules | [eval.ts](../tests/ts-features/js-syntax/eval.ts) |
 | `for...in` | **unsupported** | **Why:** it enumerates property names as untyped strings, including inherited ones (*types known at compile time*). **Instead:** `for (const k of Object.keys(obj))` or a `Map` | [for-in.ts](../tests/ts-features/js-syntax/for-in.ts) |
@@ -398,6 +398,7 @@ Within each category, supported features come first, then partial and unsupporte
 | `Map` and `Set` | supported |  | [map-set.ts](../tests/ts-features/js-stdlib/map-set.ts) |
 | `Math` | supported | Transcendental functions give the same doubles as Node.js 22 on x64 (fdlibm) | [math.ts](../tests/ts-features/js-stdlib/math.ts) |
 | `Number` methods, constants and formatting | supported |  | [number.ts](../tests/ts-features/js-stdlib/number.ts) |
+| `Promise` | supported | `then` / `catch` / `finally`, `new Promise`, `Promise.resolve` / `reject` / `all` / `allSettled` / `any` / `race` over promises of one type; callbacks run in the order of Node.js (the VM implements the promise jobs); the host is the event loop (no timers) | [promise.ts](../tests/ts-features/js-stdlib/promise.ts) |
 | `String` methods | supported | `split` / `replace` take string patterns; `localeCompare` compares code units | [string.ts](../tests/ts-features/js-stdlib/string.ts) |
 | `TextEncoder` / `TextDecoder` | supported |  | [text-encoding.ts](../tests/ts-features/js-stdlib/text-encoding.ts) |
 | URI functions (`encodeURIComponent`, `decodeURI`, ...) | supported |  | [uri-functions.ts](../tests/ts-features/js-stdlib/uri-functions.ts) |
@@ -410,7 +411,6 @@ Within each category, supported features come first, then partial and unsupporte
 | `Array.isArray` | **unsupported** | **Why:** whether a value is an array is known statically (*types known at compile time*). **Instead:** nothing (the static type says it) | [array-isarray.ts](../tests/ts-features/js-stdlib/array-isarray.ts) |
 | `globalThis` and global object properties | **unsupported** | **Why:** there is no global object; names are resolved at compile time (*verifiable bytecode*). **Instead:** module-level variables | [global-this.ts](../tests/ts-features/js-stdlib/global-this.ts) |
 | `Intl` and `toLocaleString` | **unsupported** | **Why:** locale data differs between platforms (*JavaScript-identical behaviour*). **Instead:** format with `toFixed`, `padStart` and your own tables, or let the host format | [intl.ts](../tests/ts-features/js-stdlib/intl.ts) |
-| `Promise` | **unsupported** | **Why:** no event loop; reserved for coroutines (*not implemented yet*). **Instead:** synchronous code; the host does asynchronous work and calls exported functions with the results | [promise.ts](../tests/ts-features/js-stdlib/promise.ts) |
 | `Proxy` and `Reflect` | **unsupported** | **Why:** property access is compiled for a fixed layout and cannot be intercepted (*verifiable bytecode*). **Instead:** explicit wrapper classes or methods | [proxy-reflect.ts](../tests/ts-features/js-stdlib/proxy-reflect.ts) |
 | `RegExp` | **unsupported** | **Why:** *not implemented yet*. **Instead:** string methods and character code tests | [regexp.ts](../tests/ts-features/js-stdlib/regexp.ts) |
 | `String.prototype.normalize`, `localeCompare` with locales, `toLocaleUpperCase` | **unsupported** | **Why:** no Unicode normalization tables or locale data (*not implemented yet*). **Instead:** compare normalized input prepared by the host; `toUpperCase()` / `toLowerCase()` | [string-unsupported.ts](../tests/ts-features/js-stdlib/string-unsupported.ts) |

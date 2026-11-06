@@ -65,7 +65,7 @@ inline const std::vector<std::string>& builtinModuleExports(const std::string& m
       "aesCbcEncrypt", "aesCbcDecrypt", "aesCtr", "ed25519PublicKey", "ed25519Sign", "ed25519Verify", "x25519",
       "ecdsaSign", "ecdsaVerify", "ecdsaPublicKey", "rsaVerify", "rsaSign"};
   static const std::vector<std::string> test = {"assert", "assertEqual", "assertNotEqual", "assertClose",
-                                                "assertThrows", "fail"};
+                                                "assertThrows", "fail", "later", "laterReject"};
   static const std::vector<std::string> json = {"tryParse", "lastError"};
   static const std::vector<std::string> none;
   if (module == "e7:encoding") return encoding;

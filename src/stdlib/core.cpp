@@ -100,6 +100,8 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Closure: return u"function " + utf8ToUtf16(static_cast<CloObj*>(o)->fn->name) + u"() { [native code] }";
     case OT::Buffer: return u"[object ArrayBuffer]";
     case OT::Handle: return u"[object KeyHandle]";
+    case OT::Promise: return u"[object Promise]";
+    case OT::Coro: return u"[object Generator]";
     default: return u"[object Object]";
   }
 }
@@ -333,6 +335,19 @@ struct Inspector {
       case OT::BigInt: return bigDecimal(vm, static_cast<BigObj*>(o), charge) + "n";
       case OT::Closure: return functionBase(static_cast<CloObj*>(o));
       case OT::Handle: return "KeyHandle {}";
+      case OT::Coro: return "Object [Generator] {}";
+      case OT::Promise: {
+        auto* p = static_cast<PromiseObj*>(o);
+        if (p->state == PS_PENDING) return "Promise { <pending> }";
+        if (p->state == PS_REJECTED) {
+          StrObj *n, *m;
+          std::string e = vm.errorParts(p->value.r, &n, &m)
+                              ? (strUtf8(n) + (m->len ? ": " + strUtf8(m) : std::string()))
+                              : value(p->value, VT_REF, rt, false);
+          return "Promise { <rejected> " + e + " }";
+        }
+        return "Promise { " + value(p->value, p->vt, rt, false) + " }";
+      }
       default: break;
     }
     for (Obj* s : seen)

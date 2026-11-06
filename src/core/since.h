@@ -72,6 +72,8 @@ inline const NativeSince* nativeSinceTable(size_t& n) {
       {"Promise.finally", makeVersion(0, 3, 0)}, {"Promise.all", makeVersion(0, 3, 0)},
       {"Promise.allSettled", makeVersion(0, 3, 0)}, {"Promise.any", makeVersion(0, 3, 0)},
       {"Promise.race", makeVersion(0, 3, 0)},
+      {"test.laterI", makeVersion(0, 3, 0)}, {"test.laterF", makeVersion(0, 3, 0)},
+      {"test.laterR", makeVersion(0, 3, 0)}, {"test.laterReject", makeVersion(0, 3, 0)},
   };
   n = sizeof kTable / sizeof kTable[0];
   return kTable;
