@@ -186,6 +186,7 @@ class Checker {
   void checkClassBodies(ClassSym* c);
   bool exits(Stmt* s);
   bool switchCoversEnum(Stmt* s);
+  bool nonNullValue(Expr* x);
   Type* branchEndNarrow(Stmt* b, std::string& key);
   bool assignsPath(Stmt* b, const std::string& key);
   void collectAssigned(Stmt* s, std::set<std::string>& out);

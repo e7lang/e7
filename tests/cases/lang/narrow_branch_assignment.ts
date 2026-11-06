@@ -32,3 +32,26 @@ function coalesce(x: number[] | null, add: boolean): number {
 }
 console.log(ensure(null), ensure([0]), ensureBlock(undefined), ensureBlock(["a", "b"]), both(undefined, true), both("q", false));
 console.log(viaElse(null), viaElse(4), coalesce(null, true), coalesce([1, 2], false));
+
+// a conditional expression whose branches are both non-null narrows the target; so does an assignment to a
+// static field path (also #private)
+function viaTernary(list: number[] | null): number[] {
+  list = list === null ? [] : list;
+  list.push(2);
+  return list;
+}
+class Registry {
+  static #instance: Registry | null = null;
+  static last: string | undefined;
+  count = 0;
+  static get(): Registry {
+    if (Registry.#instance === null) Registry.#instance = new Registry();
+    Registry.#instance.count++;
+    return Registry.#instance;
+  }
+  static label(): string {
+    Registry.last ??= "none";
+    return Registry.last.toUpperCase();
+  }
+}
+console.log(viaTernary(null), viaTernary([1]), Registry.get().count, Registry.get().count, Registry.label());

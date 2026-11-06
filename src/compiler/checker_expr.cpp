@@ -1161,7 +1161,7 @@ Type* Checker::checkAssign(Expr* e) {
       return errT(e->loc, exactOptionalError(on, lt, rt));
     coerce(e->b, lt);
     invalidatePath(key);
-    if (lt->t == TT::Optional && rt->t != TT::Optional && !isNullish(rt) && rt->t != TT::Unknown) setNarrow(key, rt == lt->elem ? lt->elem : baseOf(lt));
+    if (lt->t == TT::Optional && rt->t != TT::Unknown && nonNullValue(e->b)) setNarrow(key, rt == lt->elem ? lt->elem : baseOf(lt));
     return lt;
   }
   if (op == "||=" || op == "&&=") {
@@ -1208,6 +1208,22 @@ Type* Checker::checkAssign(Expr* e) {
   }
   invalidatePath(key);
   return lt;
+}
+
+// a value that is never null or undefined: a literal, `new`, a function, a conditional whose branches both are,
+// or an expression whose own (narrowed) type is not nullable; conversions to the target type are looked through
+bool Checker::nonNullValue(Expr* x) {
+  while (x && (x->k == EK::Paren || x->k == EK::Conv)) x = x->a;
+  if (!x) return false;
+  switch (x->k) {
+    case EK::Array: case EK::Object: case EK::Num: case EK::Str: case EK::Template: case EK::New: case EK::Arrow:
+    case EK::Bool: case EK::BigLit:
+      return true;
+    case EK::Cond: return nonNullValue(x->b) && nonNullValue(x->c);
+    default: break;
+  }
+  Type* t = x->type;
+  return t && t->t != TT::Optional && !isNullish(t) && t->t != TT::Unknown && t->t != TT::Never && t->t != TT::Void;
 }
 
 Type* Checker::checkCondExpr(Expr* e, Type* expected) {
@@ -1524,6 +1540,9 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
             // inherited: read through the classes in between, which may have their own copy
             e->cls = c;
             if (e == lvalueTarget && lvalueMode >= 1 && !it->second->isConst) staticShadow(c, name, it->second);
+          } else if (!(e == lvalueTarget && lvalueMode >= 1)) {
+            // a static field read as a path: narrowed like a variable (if (C.#x === null) C.#x = ...; C.#x.f)
+            if (Type* n = narrowed(pathKey(e), false)) return n;
           }
           return t;
         }

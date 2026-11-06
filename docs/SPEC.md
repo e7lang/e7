@@ -105,7 +105,8 @@ User-defined generics are supported (section 2.3).
   or a final `return` (the `default` branch of such a switch does not see the value as `never`).
 - Narrowing: `x === null`, `x !== undefined`, `x == null`, truthiness checks `if (x)`, `instanceof`, combinations with `&&`/`||`/`!`,
   early `return/throw/break/continue`, `x ??= v`, and assignment (also an assignment that ends an `if` branch, when the
-  other path is narrowed to the same type: `if (x === null) x = [];`). Property paths are supported (after `this.head !== null`, `this.head.next` can be used directly).
+  other path is narrowed to the same type: `if (x === null) x = [];`, and a conditional expression whose branches are
+  both non-null: `x = x === null ? [] : x`). Property paths, including static fields (`C.#instance`), are supported (after `this.head !== null`, `this.head.next` can be used directly).
   Variables reassigned inside a loop are re-checked at the loop condition; inside closures, narrowing is kept only for `const` variables (same as TS).
 
 ### 2.3 Generics

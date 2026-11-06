@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "checker.h"
+#include "intrinsics.h"
 #include "suggest.h"
 
 #include <cmath>
@@ -184,6 +185,8 @@ std::string Checker::pathKey(Expr* e, bool* plainConst) {
     if (plainConst) *plainConst = v->isConst;
     return varKey(v);
   }
+  if (e->k == EK::Member && !e->optional && e->intrinsic == IN_STATIC_FIELD && e->var && !e->cls)
+    return varKey(e->var);  // an own static field: a global variable
   if (e->k == EK::Member && !e->optional) {
     std::string base = pathKey(e->a, nullptr);
     if (base.empty()) return "";

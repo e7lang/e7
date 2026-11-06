@@ -27,12 +27,12 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **123 supported**, **19 partial**, **108 unsupported** (269 sample programs).
+250 features: **124 supported**, **18 partial**, **108 unsupported** (268 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
 | [Everyday Types](#everyday-types) | 13 | 3 | 4 |
-| [Narrowing](#narrowing) | 7 | 3 | 4 |
+| [Narrowing](#narrowing) | 8 | 2 | 4 |
 | [More on Functions](#more-on-functions) | 14 | 1 | 6 |
 | [Object Types](#object-types) | 12 | 0 | 6 |
 | [Generics](#generics) | 9 | 1 | 5 |
@@ -53,9 +53,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 21 | 1 | 9 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 9 | 6 | 11 |
-| **Total** | **123** | **19** | **108** |
+| **Total** | **124** | **18** | **108** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 67.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 66.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -90,12 +90,12 @@ Within each category, supported features come first, then partial and unsupporte
 |---|---|---|---|
 | Narrowing by assignment | supported |  | [assignments.ts](../tests/ts-features/narrowing/assignments.ts) |
 | Narrowing inside closures (`const` variables) | supported |  | [closures.ts](../tests/ts-features/narrowing/closures.ts) |
+| Narrowing after a conditional assignment (`if (x === null) x = v; use(x)`) | supported | An `if` branch (or both) ending in an assignment of a non-null value, a conditional expression with non-null branches, and static field paths | [conditional-assignment.ts](../tests/ts-features/narrowing/conditional-assignment.ts) |
 | Control-flow analysis (early return, `throw`, loops) | supported |  | [control-flow.ts](../tests/ts-features/narrowing/control-flow.ts) |
 | Equality narrowing (`===`, `!==`, `== null`) | supported |  | [equality.ts](../tests/ts-features/narrowing/equality.ts) |
 | `instanceof` narrowing | supported |  | [instanceof.ts](../tests/ts-features/narrowing/instanceof.ts) |
 | Narrowing of property paths | supported |  | [property-paths.ts](../tests/ts-features/narrowing/property-paths.ts) |
 | Truthiness narrowing | supported |  | [truthiness.ts](../tests/ts-features/narrowing/truthiness.ts) |
-| Narrowing after a conditional assignment (`if (x === null) x = v; use(x)`) | **partial** | **Works:** an `if` branch (or both branches) ending in an assignment of a non-null value. **Not supported:** a conditional expression `x = x === null ? v : x` does not narrow `x` (*not implemented yet*). **Instead:** `x ??= v`, or `if (x === null) x = v;` | [conditional-assignment.ok.ts](../tests/ts-features/narrowing/conditional-assignment.ok.ts), [conditional-assignment.no.ts](../tests/ts-features/narrowing/conditional-assignment.no.ts) |
 | Exhaustiveness checking (`never`, exhaustive `switch`) | **partial** | **Works:** a `switch` with a case for every enum member is exhaustive: no `default` or final `return` is needed. **Not supported:** the `default` branch of a `switch` over every enum member does not see the value as `never` (*not implemented yet*). **Instead:** leave out the `default` branch (the `switch` is exhaustive), or make it throw | [exhaustive-switch.ok.ts](../tests/ts-features/narrowing/exhaustive-switch.ok.ts), [exhaustive-switch.no.ts](../tests/ts-features/narrowing/exhaustive-switch.no.ts) |
 | `typeof` type guards | **partial** | **Works:** `typeof x` is a compile-time constant: the static type name, also in each instantiation of a generic function. **Not supported:** narrowing by `typeof` needs a union type or a run-time type tag; in generic code each instantiation is type-checked as a whole, so the branch for other types must also compile (*types known at compile time*). **Instead:** separate functions per type, or a field that tells the cases apart | [typeof-guards.ok.ts](../tests/ts-features/narrowing/typeof-guards.ok.ts), [typeof-guards.no.ts](../tests/ts-features/narrowing/typeof-guards.no.ts) |
 | Assertion functions (`asserts x is T`) | **unsupported** | **Why:** assertion signatures are not parsed (*not implemented yet*). **Instead:** an explicit check that throws, followed by the narrowed use (`if (x === null) throw ...`) | [assertion-functions.ts](../tests/ts-features/narrowing/assertion-functions.ts) |

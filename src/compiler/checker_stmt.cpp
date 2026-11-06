@@ -460,7 +460,7 @@ Type* Checker::branchEndNarrow(Stmt* b, std::string& key) {
   key = pathKey(a->a);
   if (key.empty()) return nullptr;
   if (a->raw == "??=") return lt->elem;
-  if (rt->t == TT::Optional || isNullish(rt) || rt->t == TT::Unknown || rt->t == TT::Never) return nullptr;
+  if (!nonNullValue(a->b)) return nullptr;
   return lt->elem;
 }
 
