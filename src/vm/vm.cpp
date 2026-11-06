@@ -718,15 +718,15 @@ ArrObj* VM::newMatchArray(uint8_t vt, uint32_t cap, uint16_t flag) {
   return a;
 }
 
-ClassRT* VM::groupsClass(const std::vector<std::string>& names) {
-  std::string key;
+ClassRT* VM::groupsClass(const std::vector<std::string>& names, bool nullProto) {
+  std::string key = nullProto ? "n:" : "o:";
   for (auto& n : names) key += n + ",";
   auto it = groupsClasses_.find(key);
   if (it != groupsClasses_.end()) return it->second.get();
   auto c = std::make_unique<ClassRT>();
   c->isRecord = true;
   c->presence = true;  // every group is an own property, also when it did not participate
-  c->nullProto = true;
+  c->nullProto = nullProto;
   c->nfields = (uint32_t)names.size();
   for (size_t k = 0; k < names.size(); k++) {
     c->fieldVT.push_back(VT_REF);

@@ -73,3 +73,9 @@ console.log("camelCaseString".replace(/(?<!^)([A-Z])/g, "_$1").toLowerCase(), " 
 // indices (d flag)
 const di = /(?<w>o)(x)?/d.exec("foo");
 console.log(di?.indices, di?.indices?.[1]);
+
+// structuredClone keeps the pattern (not lastIndex) and a match's index, input and groups
+const sticky = /a/g;
+sticky.lastIndex = 2;
+const cloned = structuredClone({ re: sticky, m: /(?<v>b)/.exec("ab") });
+console.log(cloned, cloned.re.lastIndex, cloned.re === sticky, cloned.m?.groups?.v);

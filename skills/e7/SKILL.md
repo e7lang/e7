@@ -1,6 +1,6 @@
 ---
 name: e7
-description: Write, fix and review code in E7, the strict TypeScript subset that runs on the e7vm bytecode VM (github.com/e7lang/e7). Use this skill whenever the user works on E7 scripts, .e7 files, .ts files that import "e7:crypto", "e7:encoding", "e7:json" or "e7:test", code compiled with e7c or run with e7 / e7vm / @e7lang/e7, scripts embedded in Android/iOS/Windows/macOS/Linux apps through e7vm, or asks for signing / verification / algorithm scripts "for E7" — even if they just say "TypeScript". E7 looks like TypeScript but rejects many TypeScript features (any, regex, union types, index signatures...), so code written as ordinary TypeScript usually fails to compile; this skill explains what to write instead and how to check it.
+description: Write, fix and review code in E7, the strict TypeScript subset that runs on the e7vm bytecode VM (github.com/e7lang/e7). Use this skill whenever the user works on E7 scripts, .e7 files, .ts files that import "e7:crypto", "e7:encoding", "e7:json" or "e7:test", code compiled with e7c or run with e7 / e7vm / @e7lang/e7, scripts embedded in Android/iOS/Windows/macOS/Linux apps through e7vm, or asks for signing / verification / algorithm scripts "for E7" — even if they just say "TypeScript". E7 looks like TypeScript but rejects many TypeScript features (any, union types, index signatures...), so code written as ordinary TypeScript usually fails to compile; this skill explains what to write instead and how to check it.
 ---
 
 # Writing E7
@@ -8,7 +8,7 @@ description: Write, fix and review code in E7, the strict TypeScript subset that
 E7 is a **strict subset of TypeScript** compiled to bytecode and run inside apps by e7vm. Every valid E7
 program is also valid TypeScript, but most TypeScript is *not* valid E7. Write code for E7 deliberately:
 the compiler resolves every name and type statically, so anything dynamic (`any`, runtime type tests,
-exceptions, regex, promises, dynamic keys) is rejected.
+exceptions, promises, dynamic keys) is rejected.
 
 Typical E7 code is an algorithm a host app calls: request signing, signature/webhook verification, license
 checks, price or rule calculations, data transforms. Scripts are compiled on a server (`e7c`), shipped as
@@ -25,7 +25,7 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | generic methods in interfaces, `<K extends keyof T>`, `x instanceof Box` (generic class) | generic functions, classes, interfaces and aliases work (compiled per type argument list); use a generic class or function instead |
 | `string \| number`, discriminated unions | one interface with a `kind` field (string or enum) and optional fields |
 | `{ [key: string]: V }`, `Record<K, V>`, `Partial`, `Pick` | `Map<string, V>`, or write the interface out |
-| regex `/.../`, `RegExp` | string methods: `split`, `indexOf`, `startsWith`, `slice`, `charCodeAt`, `replaceAll` (string patterns) |
+| regex `/.../`, `RegExp` | supported (0.3): literals are checked when compiling; named groups of a literal are typed (`m.groups?.year`); a pattern from `new RegExp(s)` has only indexed groups (`m[1]`); no `v` flag |
 | `setTimeout`, `fetch`, `fs` | no timers or I/O: an async host function (`declare function f(): Promise<T>`, settled by the host) or data passed in (`async`/`await`, `Promise` and generators work as in Node.js) |
 | `for (k in obj)`, `delete`, `in` | `Object.keys(obj)`, or use a `Map` |
 | `class A { get x() }` implementing `interface I { x: number }` | declare the accessor in the interface: `get x(): number` (interfaces read properties as fields) |

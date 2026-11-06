@@ -662,6 +662,17 @@ dispatch:
       StrObj* u = newStringAscii("undefined");
       if (x == undef_) x = u;
       if (y == undef_) y = u;
+      STR_CHECK(x);
+      STR_CHECK(y);
+      auto* ux = static_cast<StrObj*>(x);
+      auto* uy = static_cast<StrObj*>(y);
+      tempRoots_.push_back(u);  // the allocation below may collect (an error resets the temporary roots)
+      StrObj* us = allocString((size_t)ux->len + uy->len);
+      tempRoots_.pop_back();
+      memcpy(us->chars(), ux->chars(), (size_t)ux->len * 2);
+      memcpy(us->chars() + ux->len, uy->chars(), (size_t)uy->len * 2);
+      R[A].r = us;
+      DISPATCH();
     }
     STR_CHECK(x);
     STR_CHECK(y);

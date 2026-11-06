@@ -261,7 +261,8 @@ class VM {
   // a native iterator (CoroObj without a function) over the elements of items (an array of references)
   CoroObj* newNativeIterator(ArrObj* items);
   // the record class of a groups object with these property names (VM-owned, shared by all modules)
-  ClassRT* groupsClass(const std::vector<std::string>& names);
+  // (nullProto false: the same record as a plain object, for structuredClone)
+  ClassRT* groupsClass(const std::vector<std::string>& names, bool nullProto = true);
 
   // ---- promises and the microtask queue (promise.cpp, DESIGN-0.3.md D2)
   // Resolves p with v (of p's value type); a promise value (a thenable) is adopted through a job.

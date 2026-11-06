@@ -229,25 +229,27 @@ console.log(JSON.stringify(patch({ name: "Ann", age: 30 }, { age: 31 })));
 
 `JSON.parse(text) as Map<string, V>` reads a JSON object with arbitrary keys.
 
-### Regular expressions
+### Regular expressions (0.3)
 
-```ts e7-reject
-const digitsOnly = /^[0-9]+$/.test("123");
-```
-
-Use string methods (`split`, `replace`/`replaceAll` with string patterns, `indexOf`, `startsWith`,
-`endsWith`, `trim`, `charCodeAt`):
+ES2024 regular expressions work as in Node.js (no `v` flag): literals are checked when compiling, the named
+groups of a literal are typed, and matching counts against the instruction budget.
 
 ```ts
-function isDigits(s: string): boolean {
-  if (s.length === 0) return false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c < 48 || c > 57) return false;
-  }
-  return true;
-}
-console.log(isDigits("123"), isDigits("12a"), "a-b-c".replaceAll("-", "+"), "k=v".split("="));
+const date = /(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})/;
+const m = date.exec("released 2024-11-06");
+if (m) console.log(m[0], m.index, m.groups?.year);
+console.log("a1b22c".replace(/\d+/g, (d) => `<${d}>`), "a, b ,c".split(/\s*,\s*/));
+for (const x of "k=v; a=b".matchAll(/(\w)=(\w)/g)) console.log(x[1], x[2]);
+const dyn = new RegExp("(\\w+)@(\\w+)", "i");
+console.log(dyn.exec("Mail: Bob@Example")?.[2], /^\p{Lu}/u.test("Émile"));
+```
+
+A pattern built at run time (`new RegExp(s)`) has no typed `groups`: read its indexed groups (`m[1]`), and its
+`replace` callback is `(match) => string`. A `/` right after `)` is a division: parenthesize a pattern there.
+
+```ts e7-reject
+const m = new RegExp("(?<year>\\d{4})").exec("2024");
+console.log(m?.groups);
 ```
 
 ### `async`, `await`, `Promise`, generators (0.3)

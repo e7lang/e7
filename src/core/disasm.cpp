@@ -17,6 +17,8 @@ std::string disassemble(const Module& m) {
   for (size_t i = 0; i < m.natives.size(); i++)
     add("  native #%zu %s %s\n", i, m.natives[i].name.c_str(), m.sigs[m.natives[i].sig].c_str());
   for (size_t i = 0; i < m.globals.size(); i++) add("  global #%zu %s vt=%u\n", i, m.globals[i].name.c_str(), m.globals[i].vt);
+  for (size_t i = 0; i < m.regexps.size(); i++)
+    add("  regexp #%zu /%s/%s\n", i, m.regexps[i].source.c_str(), m.regexps[i].flags.c_str());
   for (size_t i = 0; i < m.classes.size(); i++) {
     auto& c = m.classes[i];
     add("  class #%zu %s parent=%d fields=%zu methods=%zu\n", i, c.name.c_str(), c.parent, c.fields.size(), c.vtable.size());

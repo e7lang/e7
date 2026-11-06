@@ -1082,21 +1082,32 @@ struct Cloner {
       }
       case OT::Array: {
         auto* a = static_cast<ArrObj*>(o);
-        ArrObj* c = vm.newArray(a->vt, a->len);
+        // a regular expression match keeps its index, input, groups and indices (own properties in JavaScript)
+        ArrObj* c = hasMatchExtra(a) ? vm.newMatchArray(a->vt, a->len, a->flags & (kArrFlagMatch | kArrFlagIndices))
+                                     : vm.newArray(a->vt, a->len);
         keep(o, c);
-        c->flags = a->flags;  // an Error
+        c->flags = a->flags;  // an Error, a match
         for (uint32_t i = 0; i < a->len; i++) {
           Slot v = a->data[i];
           if (a->vt == VT_REF) v.r = copy(v.r);
           c->data[i] = v;
           c->len = i + 1;
         }
+        if (hasMatchExtra(a)) {
+          const MatchExtra* x = matchExtra(a);
+          MatchExtra* y = matchExtra(c);
+          y->index = x->index;
+          y->input = x->input;
+          y->groups = copy(x->groups);
+          y->indices = x->indices ? copy(x->indices) : nullptr;
+        }
         return c;
       }
       case OT::Instance: {
         auto* in = static_cast<InstObj*>(o);
         if (!in->cls->isRecord) vm.error("DataCloneError: a class instance cannot be cloned");
-        InstObj* c = vm.newInstance(in->cls);
+        // the groups of a match become a plain object (the clone has Object.prototype)
+        InstObj* c = vm.newInstance(in->cls->nullProto ? vm.groupsClass(in->cls->fieldNames, false) : in->cls);
         keep(o, c);
         if (in->cls->presence) memcpy(c->mask(), in->mask(), presenceWords(in->cls->nfields) * 8);
         for (uint32_t i = 0; i < in->cls->nfields; i++) {
@@ -1105,6 +1116,11 @@ struct Cloner {
           c->fields()[i] = v;
         }
         return c;
+      }
+      case OT::RegExp: {
+        // the pattern and flags (lastIndex is not copied, as in JavaScript)
+        auto* r = static_cast<RegExpObj*>(o);
+        return keep(o, vm.newRegExp(r->prog, static_cast<StrObj*>(r->source), 0));
       }
       case OT::Bytes: {
         auto* b = static_cast<BytesObj*>(o);

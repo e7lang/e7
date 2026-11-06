@@ -27,7 +27,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **152 supported**, **17 partial**, **81 unsupported** (267 sample programs).
+250 features: **153 supported**, **18 partial**, **79 unsupported** (268 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -51,11 +51,11 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Namespaces](#namespaces) | 0 | 0 | 2 |
 | [Type Compatibility and Inference](#type-compatibility-and-inference) | 5 | 1 | 0 |
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
-| [JavaScript: Syntax](#javascript-syntax) | 24 | 1 | 6 |
-| [JavaScript: Standard Library](#javascript-standard-library) | 11 | 6 | 9 |
-| **Total** | **152** | **17** | **81** |
+| [JavaScript: Syntax](#javascript-syntax) | 25 | 1 | 5 |
+| [JavaScript: Standard Library](#javascript-standard-library) | 11 | 7 | 8 |
+| **Total** | **153** | **18** | **79** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 54, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 23.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 55, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 21.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -374,6 +374,7 @@ Within each category, supported features come first, then partial and unsupporte
 | Object spread | supported |  | [object-spread.ts](../tests/ts-features/js-syntax/object-spread.ts) |
 | Arithmetic, comparison, bitwise, exponent and conditional operators | supported |  | [operators.ts](../tests/ts-features/js-syntax/operators.ts) |
 | Optional chaining (`a?.b`, `a?.[i]`, `f?.()`) | supported |  | [optional-chaining.ts](../tests/ts-features/js-syntax/optional-chaining.ts) |
+| Regular expression literals | supported | Checked when compiling, with V8's error messages; flags `dgimsuy` (the `v` flag is not supported) | [regex-literals.ts](../tests/ts-features/js-syntax/regex-literals.ts) |
 | String literals and escapes (`\n`, `\x41`, `\u{1F600}`) | supported |  | [string-escapes.ts](../tests/ts-features/js-syntax/string-escapes.ts) |
 | `switch` with fall-through | supported |  | [switch.ts](../tests/ts-features/js-syntax/switch.ts) |
 | Tagged templates and `String.raw` | supported | The tag gets the parts as a `readonly string[]` (TypeScript's `TemplateStringsArray`; its `raw` property is not available) and the values | [tagged-templates.ts](../tests/ts-features/js-syntax/tagged-templates.ts) |
@@ -384,7 +385,6 @@ Within each category, supported features come first, then partial and unsupporte
 | The `delete` operator | **unsupported** | **Why:** object layouts are fixed (*types known at compile time*). **Instead:** an optional property set to `undefined`, or `Map.delete` | [delete-operator.ts](../tests/ts-features/js-syntax/delete-operator.ts) |
 | `eval` and `new Function` | **unsupported** | **Why:** all code is compiled and verified ahead of time (*verifiable bytecode*). **Instead:** ship the code as a module; the host can compile and load modules | [eval.ts](../tests/ts-features/js-syntax/eval.ts) |
 | `for...in` | **unsupported** | **Why:** it enumerates property names as untyped strings, including inherited ones (*types known at compile time*). **Instead:** `for (const k of Object.keys(obj))` or a `Map` | [for-in.ts](../tests/ts-features/js-syntax/for-in.ts) |
-| Regular expression literals | **unsupported** | **Why:** *not implemented yet*. **Instead:** string methods (`indexOf`, `includes`, `startsWith`, `split`, `replaceAll`) and character code tests | [regex-literals.ts](../tests/ts-features/js-syntax/regex-literals.ts) |
 | Throwing values other than `Error` objects | **unsupported** | **Why:** a caught value must have a known type (*types known at compile time*). **Instead:** `throw new Error(message)` (or `TypeError`, `RangeError`, ...) | [throw-non-errors.ts](../tests/ts-features/js-syntax/throw-non-errors.ts) |
 | Non-ASCII identifiers | **unsupported** | **Why:** identifiers are ASCII (string contents may be any Unicode) (*not implemented yet*). **Instead:** ASCII names | [unicode-identifiers.ts](../tests/ts-features/js-syntax/unicode-identifiers.ts) |
 
@@ -407,13 +407,13 @@ Within each category, supported features come first, then partial and unsupporte
 | Error types (`Error`, `TypeError`, `RangeError`, `SyntaxError`, `URIError`) | **partial** | **Works:** construction (also with `{ cause }`), `name` / `message` / `cause`, `AggregateError` and its `errors`, `instanceof`, catching errors raised by the standard library. **Not supported:** `stack` (stack traces differ between engines) (*JavaScript-identical behaviour*). **Instead:** log `e.message` (the host gets the e7 stack trace of an uncaught error) | [errors.ok.ts](../tests/ts-features/js-stdlib/errors.ok.ts), [errors.no.ts](../tests/ts-features/js-stdlib/errors.no.ts) |
 | `JSON.stringify` / `JSON.parse` | **partial** | **Works:** `JSON.parse(text) as T` validates the text against `T` while parsing. **Not supported:** `JSON.parse` returns `any`; reviver functions see untyped values (*types known at compile time*). **Instead:** `JSON.parse(text) as T` (or `tryParse(text) as T \| null` from `e7:json`) | [json.ok.ts](../tests/ts-features/js-stdlib/json.ok.ts), [json.no.ts](../tests/ts-features/js-stdlib/json.no.ts) |
 | `Object` static methods | **partial** | **Works:** `Object.keys`, `values`, `entries`, `assign`, `freeze`. **Not supported:** methods that create, inspect or change object layouts and prototypes at run time (`create`, `defineProperty`, `getPrototypeOf`, `setPrototypeOf`, `fromEntries`, `groupBy`) (*verifiable bytecode*). **Instead:** classes, object literals and `Map` | [object-static.ok.ts](../tests/ts-features/js-stdlib/object-static.ok.ts), [object-static.no.ts](../tests/ts-features/js-stdlib/object-static.no.ts) |
+| `RegExp` | **partial** | **Works:** ES2024 regular expressions without the `v` flag (an own backtracking engine whose steps count against the budget): `test` / `exec` / `lastIndex`, `match` / `matchAll` / `replace` / `replaceAll` / `split` / `search`; the named groups of a literal are typed. **Not supported:** the named groups of a pattern built at run time are not known, so its `groups` object has no properties to read (*types known at compile time*). **Instead:** a regular expression literal (its groups are typed), or the indexed groups `m[1]`, `m[2]` | [regexp.ok.ts](../tests/ts-features/js-stdlib/regexp.ok.ts), [regexp.no.ts](../tests/ts-features/js-stdlib/regexp.no.ts) |
 | `structuredClone` | **partial** | **Works:** deep copies of arrays, object literals, `Map`, `Set`, `Date`, typed arrays and errors (shared and cyclic references kept). **Not supported:** a clone of a class instance is a plain object in JavaScript, which its static type would not describe (*types known at compile time*). **Instead:** a `clone()` method on the class | [structured-clone.ok.ts](../tests/ts-features/js-stdlib/structured-clone.ok.ts), [structured-clone.no.ts](../tests/ts-features/js-stdlib/structured-clone.no.ts) |
 | Typed arrays, `ArrayBuffer`, `DataView` | **partial** | **Works:** `Uint8Array`, `Int8Array` ... `Float64Array`, `BigInt64Array`, `BigUint64Array` (elements little-endian), `ArrayBuffer` and `DataView` (all getters and setters, both byte orders). **Not supported:** `SharedArrayBuffer` and `Atomics` (no threads in a script) (*not implemented yet*). **Instead:** an `ArrayBuffer`; the host shares data through calls | [typed-arrays.ok.ts](../tests/ts-features/js-stdlib/typed-arrays.ok.ts), [typed-arrays.no.ts](../tests/ts-features/js-stdlib/typed-arrays.no.ts) |
 | `Array.isArray` | **unsupported** | **Why:** whether a value is an array is known statically (*types known at compile time*). **Instead:** nothing (the static type says it) | [array-isarray.ts](../tests/ts-features/js-stdlib/array-isarray.ts) |
 | `globalThis` and global object properties | **unsupported** | **Why:** there is no global object; names are resolved at compile time (*verifiable bytecode*). **Instead:** module-level variables | [global-this.ts](../tests/ts-features/js-stdlib/global-this.ts) |
 | `Intl` and `toLocaleString` | **unsupported** | **Why:** locale data differs between platforms (*JavaScript-identical behaviour*). **Instead:** format with `toFixed`, `padStart` and your own tables, or let the host format | [intl.ts](../tests/ts-features/js-stdlib/intl.ts) |
 | `Proxy` and `Reflect` | **unsupported** | **Why:** property access is compiled for a fixed layout and cannot be intercepted (*verifiable bytecode*). **Instead:** explicit wrapper classes or methods | [proxy-reflect.ts](../tests/ts-features/js-stdlib/proxy-reflect.ts) |
-| `RegExp` | **unsupported** | **Why:** *not implemented yet*. **Instead:** string methods and character code tests | [regexp.ts](../tests/ts-features/js-stdlib/regexp.ts) |
 | `String.prototype.normalize`, `localeCompare` with locales, `toLocaleUpperCase` | **unsupported** | **Why:** no Unicode normalization tables or locale data (*not implemented yet*). **Instead:** compare normalized input prepared by the host; `toUpperCase()` / `toLowerCase()` | [string-unsupported.ts](../tests/ts-features/js-stdlib/string-unsupported.ts) |
 | Timers (`setTimeout`, `setInterval`, `queueMicrotask`) | **unsupported** | **Why:** no event loop (*not implemented yet*). **Instead:** the host schedules calls to exported functions | [timers.ts](../tests/ts-features/js-stdlib/timers.ts) |
 | `WeakMap` and `WeakSet` | **unsupported** | **Why:** the collector has no weak (ephemeron) tables (*not implemented yet*). **Instead:** `Map` / `Set` with explicit removal, or a field on the key object | [weak-collections.ts](../tests/ts-features/js-stdlib/weak-collections.ts) |
