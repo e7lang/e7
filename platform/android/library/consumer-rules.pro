@@ -1,5 +1,6 @@
 # e7vm: the JNI library looks up these classes, constructors, fields and interface methods by name
-# (E7Exception(int,String), KeyHandle.id, NativeFunction.invoke, KeyProvider.key, PrintHandler.print).
+# (E7Exception(int,String), KeyHandle.id, NativeFunction.invoke, KeyProvider.key, PrintHandler.print,
+# E7VM$AsyncBridge.start).
 -keep class org.e7vm.** { *; }
 -keep interface org.e7vm.** { *; }
 -keepclasseswithmembernames,includedescriptorclasses class org.e7vm.** {

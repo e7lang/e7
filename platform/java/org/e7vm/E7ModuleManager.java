@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * Delivers E7 modules over the air with a signed manifest, staged rollout, kill switch and rollback
@@ -38,6 +40,7 @@ import java.util.Set;
  * E7ModuleManager.Active a = mm.start();     // at launch: last-known-good from disk, or the fallback
  * a = mm.update();                            // in the background: manifest, download, verify, activate
  * Object price = mm.active().call("price", order);
+ * Object quote = mm.active().callAwait("quote", order);   // an async export (see E7VM#callAwait / callAsync)
  * mm.reportSuccess();                         // or mm.reportFailure(status, message)
  * </pre>
  *
@@ -91,6 +94,16 @@ public final class E7ModuleManager {
 
     /** Calls an exported function of the active module. */
     public Object call(String function, Object... args) { return vm.call(module, function, args); }
+
+    /** {@link E7VM#callAsync} on the active module (for exports that await async host functions). */
+    public CompletableFuture<Object> callAsync(Executor vmThread, String function, Object... args) {
+      return vm.callAsync(vmThread, module, function, args);
+    }
+
+    /** {@link E7VM#callAwait} on the active module (for exports that await async host functions). */
+    public Object callAwait(String function, Object... args) throws InterruptedException {
+      return vm.callAwait(module, function, args);
+    }
   }
 
   public static final class Builder {
@@ -346,10 +359,11 @@ public final class E7ModuleManager {
     E7VM vm = null;
     try {
       vm = newVm(false);
-      E7VM.Module m = vm.load(fallbackModule);
+      E7VM.Module m = vm.loadAwait(fallbackModule);  // top-level code may await async host functions
       switchTo(new Active(vm, m, fallbackVersion, null, true));
     } catch (Exception e) {
       if (vm != null) vm.close();
+      if (e instanceof InterruptedException) Thread.currentThread().interrupt();
       int st = e instanceof E7Exception ? ((E7Exception) e).status : E7Exception.STATE;
       report(fallbackVersion, st, "the fallback module does not load: " + describe(e));
       throw e instanceof E7Exception ? (E7Exception) e : new E7Exception(st, describe(e));
@@ -368,14 +382,15 @@ public final class E7ModuleManager {
     E7VM vm = null;
     try {
       vm = newVm(true);
-      E7VM.Module m = vm.load(code);
+      E7VM.Module m = vm.loadAwait(code);  // top-level code and selfTest may await async host functions
       if (selfTestFunction != null && vm.hasFunction(m, selfTestFunction)) {
-        Object r = vm.call(m, selfTestFunction);
+        Object r = vm.callAwait(m, selfTestFunction);
         if (!Boolean.TRUE.equals(r)) throw new E7Exception(E7Exception.RUNTIME, selfTestFunction + "() returned " + r);
       }
       return new Active(vm, m, version, sha, false);
     } catch (Exception e) {
       if (vm != null) vm.close();
+      if (e instanceof InterruptedException) Thread.currentThread().interrupt();
       report(version, e instanceof E7Exception ? ((E7Exception) e).status : E7Exception.RUNTIME, describe(e));
       return null;
     }
