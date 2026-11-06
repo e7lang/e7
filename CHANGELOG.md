@@ -10,6 +10,8 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-06
+
 ### Added
 - Getters and setters in object literals (`{ get x() { ... }, set x(v) { ... } }`, docs/SPEC.md section 5): `this`
   is the object; the accessors are part of the literal's type, so the literal is assignable to interfaces that
@@ -34,6 +36,10 @@ and a VM rejects a module it cannot run at load time rather than running it inco
   Bytecode: function kind 3 in fflags and an "async request" bit in the extra word of `RESUME_R`
   (docs/BYTECODE.md, section 6.2); a module that uses them requires e7vm 0.3.1 (a 0.3.0 VM rejects it with
   `E7_ERR_VERSION`, `e7c --target 0.3` refuses it). Modules without async generators compile as before.
+
+### Changed
+- `console.log` names generator and `async` functions as Node.js does: `[GeneratorFunction: g]`,
+  `[AsyncFunction: f]`, `[AsyncGeneratorFunction: ag]` (was `[Function: g]`).
 
 ## [0.3.0] - 2026-11-06
 
@@ -371,7 +377,9 @@ tested and hardened but has not yet run in production, so it is versioned 0.x un
   on an Android emulator, the iOS simulator, JVMs and .NET; libFuzzer targets for the loader and compiler with
   ClusterFuzzLite (ASan + UBSan) on pull requests and nightly. See [docs/PRODUCTION.md](docs/PRODUCTION.md).
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/e7lang/e7/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/e7lang/e7/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/e7lang/e7/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/e7lang/e7/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/e7lang/e7/compare/v0.2.1...v0.2.5
