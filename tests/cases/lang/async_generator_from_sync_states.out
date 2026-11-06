@@ -1,0 +1,105 @@
+ta 1
+ta 2
+a0 start false
+ta 3
+ta 4
+ta 5
+ta 6
+a1 p1 false
+ta 7
+ta 8
+overArray finally
+a2 rejected Error: array-bad
+a3 undefined true
+b0 start false
+b1 b1 false
+tb 1
+overArray finally
+tb 2
+b-throw rejected TypeError: The iterator does not provide a 'throw' method.
+tb 3
+tb 4
+b-next undefined true
+tb 5
+tb 6
+c0 start false
+c1 c1 false
+tc 1
+tc 2
+overArray finally
+tc 3
+c-return undefined true
+tc 4
+tc 5
+c-next undefined true
+tc 6
+tp 1
+tp 2
+tp 3
+p0 pr-ok false
+tp 4
+tp 5
+pr promising finally
+tp 6
+wrapP finally
+tp 7
+p1 rejected Error: pr-bad
+tp 8
+p2 undefined true
+d0 c0 false
+catching caught one
+td 1
+td 2
+td 3
+d-throw recovered0 false
+td 4
+td 5
+td 6
+d1 c1 false
+e0 s1 false
+te 1
+te 2
+te 3
+te 4
+e-return from-finally false
+te 5
+stubborn finally done
+te 6
+te 7
+te 8
+e1 wrap-end false
+wrap finally
+e2 undefined true
+e3 undefined true
+f0 e1 false
+wrap finally
+f1 rejected RangeError: sync failure
+f2 undefined true
+tq 1
+q letters finally
+tq 2
+q-next q1 false
+wrap finally
+tq 3
+q-throw rejected Error: queued
+q-next2 undefined true
+tq 4
+q-return undefined true
+q-next3 undefined true
+tq 5
+tq 6
+tq 7
+tq 8
+h-return undefined true
+tq 9
+tq 10
+k-throw rejected Error: early
+loop lb1
+loop lb2
+lb letters finally
+wrap finally
+loop lt1
+lt letters finally
+wrap finally
+caught body
+done

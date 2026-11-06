@@ -406,7 +406,8 @@ try {
   `return(v)` and `throw(e)` are forwarded), or a sync iterable: an array, a generator or an iterable class, through
   JavaScript's async-from-sync iterator (values that are promises are awaited, a rejected one closes the iterator;
   `throw(e)` into an array rejects with a `TypeError`, `return(v)` gives `v`; a generator of promises must return
-  `void`). `next(v)` / `return(v)` / `throw(e)` return
+  `void`). These two closing rules are ECMAScript 2025, as in Node.js 24; Node.js 22 implements the earlier rules
+  (`throw(e)` rejects with `e`, a rejected promise does not close the sync iterator). `next(v)` / `return(v)` / `throw(e)` return
   `Promise<IteratorResult<T, TReturn>>`; requests made while the generator runs or awaits are queued and answered in
   order, and `return` / `throw` on a generator that has not started or has finished behave as in JavaScript (the
   request queue of the specification). `for await (const x of it)` over an async iterable awaits each `next()`;
@@ -646,6 +647,7 @@ or host function that was running (or that called back into the script, like `Ar
 | Fixed-width integer arithmetic | Floating point | Machine integers that wrap around |
 | `console.log` of functions | `[Function: f]` (name inferred from the variable or property) | `[Function (anonymous)]` for arrow functions and function expressions; `%o` does not list their hidden properties |
 | `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null` |
+| `yield*` of a sync iterable in an async generator | Node.js 22: `throw(e)` into an array rejects with `e`; a sync generator that yields a rejected promise is not closed | ECMAScript 2025 (Node.js 24): a `TypeError`, and the generator is closed (its `finally` runs) |
 | Key order of optional properties added later | A property added to an object goes last | The property order of an object is its layout, fixed when it is created: an object literal puts the optional properties of its type that it does not set last, in declaration order, so properties added later appear in JavaScript's order unless several are added in another order |
 | `next()` on a finished generator whose return type is a primitive (`Generator<number, number>`, also `AsyncGenerator`) | `{ value: undefined, done: true }` | `value` is `NaN` (number), `0` / `false` (integers, booleans): the value's representation is fixed |
 | Default parameter values of a generator function (also `async function*`) | Evaluated at the call | Evaluated when the body first runs (the first `next()`) |

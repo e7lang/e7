@@ -1,4 +1,6 @@
 // @requires-vm: 0.3.1
+// The expected output (.out) is ECMAScript 2025 as in Node.js 24: Node.js 22 implements the earlier closing rules
+// (SPEC section 5.2), so this case is not compared with the Node.js that runs the tests.
 // yield* of sync iterables in async generators: throw() and return() in every state, rejected promises
 // among the values (an array is not closed, a sync generator is: its finally block runs), a sync
 // generator that throws, catches a throw() or yields from its finally block, requests queued at once
