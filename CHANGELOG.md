@@ -29,6 +29,11 @@ features supported (129 in 0.2.7), 17 partial, 81 unsupported.
   `e7_register_async_native`; the host settles tickets with `e7_settle` / `e7_settle_error`; a call returns the new
   status `E7_PENDING` while tickets are open and continues with `e7_resume`; `e7_open_tickets`. An exported async
   function gives the host its promise's value.
+- Async host functions in every binding (docs/EMBEDDING.md §2.6): Java `registerAsyncNative` with `callAsync`
+  (a `CompletableFuture`, completions settled on a serial executor) and the blocking `callAwait` / `loadAwait`
+  (Kotlin: `callAsync(...).await()`); Swift `registerAsyncNative` with `callAsync` / `loadAsync` (`async`, on the
+  caller's actor); C# `RegisterAsyncNative` with `CallAsync` / `LoadAsync` (`Task`); the JavaScript package reports
+  the `pending` status. The module managers run async exports (Java also awaits top-level code and `selfTest`).
 - Literal types: string, numeric and boolean literal types and unions of literals of one base type, narrowing by
   `===` / `!==` / `switch`, exhaustive switches whose `default` sees `never`, `as const`, `const` declarations with
   literal types; `Awaited`, `NonNullable`, `NoInfer`, `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize`.
