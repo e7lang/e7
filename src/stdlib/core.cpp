@@ -286,8 +286,11 @@ std::string functionBase(const CloObj* c) {
   std::string nm = c->fn->name;
   size_t dot = nm.find_last_of('.');
   if (dot != std::string::npos) nm = nm.substr(dot + 1);
-  if (nm.empty() || nm[0] == '<') return "[Function (anonymous)]";
-  return "[Function: " + nm + "]";
+  // Node.js names the kind of a generator or async function: [GeneratorFunction: g], [AsyncFunction: f], ...
+  static const char* const kKind[] = {"Function", "GeneratorFunction", "AsyncFunction", "AsyncGeneratorFunction"};
+  const char* kind = kKind[c->fn->d ? fflagsKind(c->fn->d->fflags) : 0];
+  if (nm.empty() || nm[0] == '<') return std::string("[") + kind + " (anonymous)]";
+  return std::string("[") + kind + ": " + nm + "]";
 }
 
 constexpr uint32_t kMaxArrayLength = 100;
