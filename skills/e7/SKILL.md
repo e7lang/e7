@@ -34,7 +34,6 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | `arr.map(obj.method)` | `arr.map(x => obj.method(x))` (methods are not values) |
 | `Buffer`, `crypto.subtle`, `require("crypto")`, `fs`, `process` | `Uint8Array`, `e7:crypto`, `e7:encoding`, or a host function |
 | an object literal `{ get x() { ... } }` passed as `interface I { x: number }` | declare the accessor in the interface: `get x(): number` (object literal accessors need e7vm 0.3.1) |
-| `yield* array` in an `async function*` | `for (const x of array) yield x;` |
 
 Behaviour that differs from JavaScript at run time:
 
@@ -62,9 +61,8 @@ re-exports), and E7's machine integers and `e7:crypto` / `e7:encoding` / `e7:jso
 (`string | number`, discriminated unions of objects), intersections, index signatures / `Record` / mapped,
 conditional, `keyof`, `typeof` and template literal types, `Symbol` values, `Proxy` / `Reflect` / `eval`,
 `for...in` / `delete` / `in`, `var`, class expressions and mixins, decorators, namespaces, JSX, `WeakMap` /
-`WeakSet`, `Intl` and locale formatting, timers and I/O (`setTimeout`, `fetch`: the host does them), `yield*` of
-an array in an async generator, methods used as values. The full table with a reason and a replacement
-for each of 250 TypeScript features: [docs/TYPESCRIPT.md](https://github.com/e7lang/e7/blob/main/docs/TYPESCRIPT.md).
+`WeakSet`, `Intl` and locale formatting, timers and I/O (`setTimeout`, `fetch`: the host does them), methods used
+as values. The full table with a reason and a replacement for each of 250 TypeScript features: [docs/TYPESCRIPT.md](https://github.com/e7lang/e7/blob/main/docs/TYPESCRIPT.md).
 
 For the complete list (destructuring limits, class rules, operators, every standard-library method) read
 [references/language.md](references/language.md). For the built-in modules read

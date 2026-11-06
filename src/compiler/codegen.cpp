@@ -565,6 +565,9 @@ struct Gen {
   // unused and undefined is awaited) into dst of type dstT (kNoReg: the value is dropped)
   void awaitValue(uint16_t v, Type* t, uint16_t dst, Type* dstT);
   void genAsyncYield(Expr* e, uint16_t dst);
+  // yield* of a sync iterable (an array, a generator, an iterable class) in an async generator: the
+  // specification's async-from-sync iterator, step by step (mode / recv / retReg: the yield's registers)
+  void genAsyncYieldFromSync(Expr* e, uint16_t dst, uint16_t mode, uint16_t recv, uint16_t retReg);
   uint16_t asyncIteratorOf(uint16_t coll, Type* t, Type** gt);  // an async generator / [Symbol.asyncIterator]()
   // the { value: T, done } record the requests of a loop or a yield* are answered with
   ClassSym* iterRecord(Type* gt) { return C.recordFor({{"value", gt->elem}, {"done", T.boolean()}})->cls; }
@@ -597,7 +600,7 @@ struct Gen {
   }
   // functions the compiler adds (the resolve / reject functions of new Promise): created after the
   // others, at fixed indices
-  std::vector<int> synthKinds;  // 0..2 resolve I/F/R, 3 resolve void, 4 reject
+  std::vector<int> synthKinds;  // 0..2 resolve I/F/R, 3 resolve void, 4 reject, 5..7 closeIterator I/F/R
   uint32_t synthBase = 0;
   uint32_t synthFn(int kind) {
     for (size_t i = 0; i < synthKinds.size(); i++)
@@ -2447,6 +2450,12 @@ void Gen::genAsyncYield(Expr* e, uint16_t dst) {
     release(m0);
     return;
   }
+  Type* srcT = e->a->type;
+  if (!(srcT->t == TT::AsyncGenerator || (srcT->t == TT::Class && srcT->cls->methodIdx.count("[Symbol.asyncIterator]")))) {
+    genAsyncYieldFromSync(e, dst, mode, recv, retReg);
+    release(m0);
+    return;
+  }
   // yield* asyncIterable
   uint16_t coll = temp(K_R);
   genInto(e->a, coll);
@@ -2527,6 +2536,176 @@ void Gen::genAsyncYield(Expr* e, uint16_t dst) {
   release(m0);
 }
 
+// yield* of a sync iterable in an async generator: CreateAsyncFromSyncIterator. Each step calls the sync
+// iterator at once, then awaits its value as the specification's continuation does (PromiseResolve,
+// then, the outer await: two jobs); a rejected value closes the iterator (a sync generator's return());
+// throw() into an iterator without a throw method (an array) rejects with a TypeError, return(v)
+// without a return method gives { value: v, done: true }
+void Gen::genAsyncYieldFromSync(Expr* e, uint16_t dst, uint16_t mode, uint16_t recv, uint16_t retReg) {
+  Type* g = fn->type->ret;
+  Kind yk = kindOf(g->elem);
+  Kind rk = kindCode(g->ret) ? kindOf(g->ret) : K_V;
+  Type* srcT = e->a->type;
+  uint16_t coll = temp(K_R);
+  genInto(e->a, coll);
+  bool isArr = srcT->t == TT::Array;
+  Type* gt = nullptr;
+  uint16_t it = coll;
+  if (!isArr) {
+    it = iteratorOf(coll, srcT, &gt);
+    if (!gt) return;
+  }
+  Type* raw = isArr ? srcT->elem : gt->elem;
+  bool isP = raw->t == TT::Promise;
+  Type* vt = isP ? (raw->elem->t == TT::Void ? T.undef() : raw->elem) : raw;
+  Kind sk = kindOf(raw), vk = kindOf(vt);
+  bool hasRet = gt && kindCode(gt->ret) && !isP;  // the generator returns a value (of the yielded kind)
+  uint16_t sv = temp(sk), done = temp(K_I), p = temp(K_R), p2 = temp(K_R), av = temp(vk), er = temp(K_R), er2 = temp(K_R);
+  uint16_t nul = temp(K_R), one = temp(K_I), two = temp(K_I), cmp = temp(K_I), u = temp(K_R);
+  uint16_t idx = isArr ? temp(K_I) : kNoReg, n = isArr ? temp(K_I) : kNoReg, closeFn = isArr ? kNoReg : temp(K_R);
+  uint16_t out = yk == vk && isBoxedOptional(g->elem) == isBoxedOptional(vt) ? av : temp(yk);
+  emit(OP_LOADNULL, nul);
+  emit(OP_LOADUNDEF, u);
+  emit(OP_LOADUNDEF, er);
+  loadInt(one, 1);
+  loadInt(two, 2);
+  loadInt(mode, 0);
+  if (isArr) {
+    loadInt(idx, 0);
+  } else {
+    // the closeIterator closure of the continuation (onRejected), over a cell holding the iterator
+    uint16_t cell = temp(K_R);
+    emit(OP_NEWCELL, cell, VT_REF);
+    emit(OP_CSET_R, cell, it);
+    emit(OP_CLOSURE, closeFn, (uint16_t)synthFn(5 + (int)kindOf(gt->elem)), 1);
+    emitRegList({cell});
+  }
+  Label* loop = newLabel();
+  Label* pThrow = newLabel();
+  Label* pReturn = newLabel();
+  Label* nextDone = newLabel();
+  Label* yieldIt = newLabel();
+  Label* fin = newLabel();
+  std::vector<std::pair<uint32_t, uint32_t>> syncRanges;  // calls into the sync iterator: a throw rejects
+  auto syncResume = [&](uint32_t m, uint16_t sent, uint8_t skind) {
+    uint32_t a = (uint32_t)pc();
+    emitResume(gt, it, sv, done, sent, skind, m);
+    syncRanges.push_back({a, (uint32_t)pc()});
+  };
+  // AsyncFromSyncIteratorContinuation + the outer await: v (type t) awaited into dst (type dstT, or
+  // kNoReg) after two jobs; a rejection closes the iterator first when closeOnRej
+  auto continuation = [&](uint16_t v, Type* t, bool closeOnRej, uint16_t d, Type* dstT) {
+    Type* pt = t;
+    if (t->t == TT::Promise) {
+      mov(p, v, K_R);
+      pt = t->elem->t == TT::Void ? T.undef() : t->elem;
+    } else {
+      callNative(std::string("Promise.resolve") + kindChar(kindOf(t)), {v, vtReg(t)}, p, 'R');
+    }
+    callNative("Promise.then", {p, nul, closeOnRej && !isArr ? closeFn : nul, vtReg(pt)}, p2, 'R');
+    if (d == kNoReg) {
+      emit(OP_AWAIT, kNoReg, p2);
+    } else if (K(pt) == K(dstT) && isBoxedOptional(pt) == isBoxedOptional(dstT)) {
+      emit(OP_AWAIT, d, p2);
+    } else {
+      uint16_t x = temp(K(pt));
+      emit(OP_AWAIT, x, p2);
+      boxIfNeeded(d, x, pt, dstT);
+    }
+  };
+  place(loop);
+  emit(OP_EQ_I, cmp, mode, one);
+  jump(OP_JT, cmp, pThrow);
+  emit(OP_EQ_I, cmp, mode, two);
+  jump(OP_JT, cmp, pReturn);
+  // received a value: the sync iterator's next(v)
+  if (isArr) {
+    emit(OP_ALENI, n, coll);
+    emit(OP_LT_I, cmp, idx, n);
+    jump(OP_JF, cmp, nextDone);
+    emit(op3(sk, OP_AGETI_I, OP_AGETI_F, OP_AGETI_R), sv, coll, idx);
+    emit(OP_ADDI_I, idx, idx, 1);
+  } else {
+    uint8_t innerNext = kindCode(gt->val);
+    syncResume(0, innerNext ? recv : kNoReg, innerNext ? kindCode(g->val) : 0);
+    jump(OP_JT, done, nextDone);
+  }
+  continuation(sv, raw, true, av, vt);
+  jump(OP_JMP, 0, yieldIt);
+  // done: the value of the yield* expression (the generator's return value, or undefined)
+  place(nextDone);
+  if (hasRet) continuation(sv, raw, false, av, vt);
+  else continuation(u, T.undef(), false, kNoReg, T.undef());
+  jump(OP_JMP, 0, fin);
+  // received an error: the sync iterator's throw(e); an array has none: it is closed (nothing to do)
+  // and the request rejects with a TypeError
+  place(pThrow);
+  if (isArr) {
+    uint16_t nm = temp(K_R), msg = temp(K_R), te = temp(K_R);
+    loadStr(nm, u"TypeError");
+    loadStr(msg, u"The iterator does not provide a 'throw' method.");
+    callNative("Error.new", {nm, msg}, te, 'R');
+    callNative("Promise.reject", {te, vtReg(T.undef())}, p, 'R');
+    emit(OP_AWAIT, kNoReg, p);  // raises the TypeError a job later
+    emit(OP_THROW, te);
+  } else {
+    syncResume(1, er, 3);
+    jump(OP_JT, done, nextDone);
+    continuation(sv, raw, true, av, vt);
+    jump(OP_JMP, 0, yieldIt);
+  }
+  // received return(v) (already awaited at the yield): the sync iterator's return(v); an array has none:
+  // { value: v, done: true } at once
+  place(pReturn);
+  if (isArr) {
+    callNative("Promise.resolveR", {u, vtReg(T.undef())}, p, 'R');
+    emit(OP_AWAIT, kNoReg, p);
+    emitReturnValue(retReg, rk);
+  } else {
+    bool sendRet = kindCode(gt->ret) && retReg != kNoReg && kindCode(gt->ret) == kindCode(g->ret);
+    syncResume(2, sendRet ? retReg : kNoReg, sendRet ? kindCode(g->ret) : 0);
+    Label* notDone = newLabel();
+    jump(OP_JF, done, notDone);
+    if (hasRet && rk != K_V && rk == sk) continuation(sv, raw, false, retReg, g->ret);
+    else if (rk != K_V) continuation(retReg, g->ret, false, retReg, g->ret);
+    else continuation(u, T.undef(), false, kNoReg, T.undef());
+    emitReturnValue(retReg, rk);
+    place(notDone);
+    continuation(sv, raw, false, av, vt);
+    jump(OP_JMP, 0, yieldIt);
+  }
+  // a call into the sync iterator threw: the request rejects (the error is raised a job later)
+  if (!syncRanges.empty()) {
+    uint32_t h = (uint32_t)pc();
+    for (auto& r : syncRanges) D->handlers.push_back(HandlerDesc{r.first, r.second, h, er2});
+    callNative("Promise.reject", {er2, vtReg(T.undef())}, p, 'R');
+    emit(OP_AWAIT, kNoReg, p);
+    emit(OP_THROW, er2);
+  }
+  // the value is yielded as it is (AsyncGeneratorYield); a throw() into the yield, or a rejected return(v)
+  // value, goes to the sync iterator's throw()
+  place(yieldIt);
+  if (out != av) boxIfNeeded(out, av, vt, g->elem);
+  uint32_t ya = (uint32_t)pc();
+  emit(OP_YIELD, out, recv, mode);
+  emitWord(retReg);
+  Label* notRet = newLabel();
+  emit(OP_EQ_I, cmp, mode, two);
+  jump(OP_JF, cmp, notRet);
+  awaitValue(retReg, rk == K_V ? T.voidT() : g->ret, retReg, rk == K_V ? T.voidT() : g->ret);
+  place(notRet);
+  uint32_t yb = (uint32_t)pc();
+  jump(OP_JMP, 0, loop);
+  D->handlers.push_back(HandlerDesc{ya, yb, (uint32_t)pc(), er});
+  loadInt(mode, 1);
+  jump(OP_JMP, 0, loop);
+  place(fin);
+  if (dst != kNoReg) {
+    if (hasRet && e->type && e->type->t != TT::Void) mov(dst, av, vk);
+    else emit(OP_LOADUNDEF, dst);
+  }
+}
+
 // g.next(v?) / g.return(v?) / g.throw(e): resumes the generator and builds the IteratorResult record
 void Gen::genGenMethod(Expr* e, uint16_t dst) {
   Expr* m = strip(e->a);
@@ -2586,6 +2765,25 @@ void Gen::emitSynthFns() {
   for (int kind : synthKinds) {
     FuncDesc fd;
     D = &fd;
+    if (kind >= 5) {
+      // (reason) => { iterator.return() (its errors dropped); throw reason }: the async-from-sync
+      // iterator's closeIterator (0.3.1); the sync generator is upvalue 0, kind - 5 its yielded kind
+      Kind k = (Kind)(kind - 5);
+      fd.name = "closeIterator";
+      fd.upvalKinds = {(uint8_t)K_R};
+      fd.sig = sig("R>V");
+      fd.nparams = 1;
+      fd.regKinds = {(uint8_t)K_R, (uint8_t)K_R, (uint8_t)k, (uint8_t)K_I, (uint8_t)K_R};
+      emit(OP_UGET_R, 1, 0);
+      uint32_t a = (uint32_t)pc();
+      emit(op3(k, OP_RESUME_I, OP_RESUME_F, OP_RESUME_R), 1, 2, 3);
+      emitWord((uint64_t)kNoReg | (2ull << 16));
+      uint32_t b = (uint32_t)pc();
+      fd.handlers.push_back(HandlerDesc{a, b, b, 4});
+      emit(OP_THROW, 0);
+      M.funcs.push_back(fd);
+      continue;
+    }
     // (value) => resolveFn(promise, value) / (reason) => rejectFn(promise, reason): the promise is
     // the closure's upvalue 0
     static const char* const names[5] = {"resolve", "resolve", "resolve", "resolve", "reject"};

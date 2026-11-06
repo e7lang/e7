@@ -19,7 +19,7 @@ and a VM rejects a module it cannot run at load time rather than running it inco
   `JSON.stringify`, spread, rest, destructuring and `Object.values` / `entries` / `assign` call the getters, and
   `console.log` prints `[Getter]` / `[Setter]` / `[Getter/Setter]`. Records with accessors carry a new class flag
   (docs/BYTECODE.md section 6.5): such a module requires e7vm 0.3.1, other modules compile to the same bytes as
-  before. docs/TYPESCRIPT.md: 154 of 250 features supported, 18 partial, 78 unsupported.
+  before. docs/TYPESCRIPT.md: 155 of 250 features supported, 17 partial, 78 unsupported.
 - Async generators: `async function*` declarations and expressions, async generator methods (also
   `async *[Symbol.asyncIterator]()` and in object literals), `AsyncGenerator<T, TReturn, TNext>` /
   `AsyncIterator<T>` / `AsyncIterableIterator<T>` / `AsyncIterable<T>`. `yield v` and `return v` await `v`; `yield*`
@@ -28,7 +28,9 @@ and a VM rejects a module it cannot run at load time rather than running it inco
   while the generator runs or awaits wait their turn). `for await` over async generators and classes with
   `[Symbol.asyncIterator]()`: leaving the loop early (`break`, `return`, a `throw`) awaits the iterator's
   `return()`. Callbacks run in the order of Node.js; a generator prints as `Object [AsyncGenerator] {}`.
-  `yield*` of a sync iterable in an async generator is a compile error (docs/SPEC.md, section 5.2).
+  `yield*` in an async generator also takes a sync iterable (an array, a generator, an iterable class) with
+  JavaScript's async-from-sync iterator semantics: values that are promises are awaited, a rejected one closes the
+  iterator, `throw()` into an array rejects with a `TypeError`, in the order of Node.js (docs/SPEC.md, section 5.2).
   Bytecode: function kind 3 in fflags and an "async request" bit in the extra word of `RESUME_R`
   (docs/BYTECODE.md, section 6.2); a module that uses them requires e7vm 0.3.1 (a 0.3.0 VM rejects it with
   `E7_ERR_VERSION`, `e7c --target 0.3` refuses it). Modules without async generators compile as before.

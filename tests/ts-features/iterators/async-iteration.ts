@@ -1,7 +1,7 @@
 // @feature: Async iteration (`for await`, async generators)
 // @category: Iterators and Generators
-// @status: partial
-// @note: `async function*` (also methods and `async *[Symbol.asyncIterator]()`), `AsyncGenerator<T>` / `AsyncIterator<T>` / `AsyncIterable<T>`, `next` / `return` / `throw` with the request queue of the specification, `yield*` of an async iterable, and `for await` over async iterables (leaving the loop early awaits `return()`) or arrays of promises or values, in the order of Node.js (e7vm 0.3.1)
+// @status: supported
+// @note: async generators need e7vm 0.3.1; `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (as for generators)
 async function sum(xs: Promise<number>[]): Promise<number> {
   let t = 0;
   for await (const x of xs) t += x;
@@ -30,9 +30,16 @@ class Feed {
   }
 }
 
+function* evens(): Generator<number> {
+  yield 10;
+  yield 20;
+}
+
 async function* both(): AsyncGenerator<number> {
   yield* numbers(2);
   yield* squares(numbers(3));
+  yield* [Promise.resolve(7), Promise.resolve(8)];
+  yield* evens();
 }
 
 async function main(): Promise<void> {

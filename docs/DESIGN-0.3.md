@@ -357,8 +357,12 @@ What 0.3 implements differs from the decisions above in these points:
   the order of callbacks is Node's. The IteratorResult records are built by the VM, of the record class the request
   names (the caller's view of `{ value, done }`). `yield*` returns the inner iterator's value after `return(v)`
   without awaiting it again (the current specification and V8; older editions had one more await). `yield*` of a
-  sync iterable is not supported (its async-from-sync iterator's `throw()` changed in recent editions and differs
-  between Node.js versions), so it is a compile error.
+  sync iterable (an array, a generator, an iterable class) is compiled as the specification's async-from-sync
+  iterator, step by step: the sync iterator is called at once, its value goes through `Promise.resolve` and a
+  `then` (whose rejection handler is a compiler-made closure that calls the generator's `return()`, as
+  `closeIterator` does) and the outer await, so a step takes the same two jobs as in Node.js; `throw(e)` into an
+  array (no `throw` method) rejects with a `TypeError` a job later, `return(v)` on it gives `{ value: v, done: true }`
+  (the ES2025 text, also what Node.js 22 and 24 do).
 - **D3.** As decided. Records get the presence class flag only when the module may need format 3: `e7c --target 0.2`
   compiles them without masks (the 0.2 behaviour).
 - **D4.** As decided; the engine is `src/regexp/` (a parser following V8's, a compiled program, a matcher with two

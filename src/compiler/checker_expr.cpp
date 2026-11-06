@@ -521,9 +521,35 @@ Type* Checker::checkYield(Expr* e) {
     Type* ag = it->t == TT::AsyncGenerator ? it : asyncIteratorMethodType(it, e->a->loc);
     if (!ag) {
       if (it->t == TT::Unknown) return T.unknown();
-      return errT(e->a->loc, "yield* in an async generator needs an async iterable (an async generator, or a class with an "
-                             "async *[Symbol.asyncIterator]() method), not '" + typeName(it) +
-                             "'; yield the values of a sync iterable with for...of");
+      // a sync iterable (0.3.1): an array, a generator or an iterable class, through the specification's
+      // async-from-sync iterator (a value that is a promise is awaited)
+      Type* st = it->t == TT::Generator ? it : it->t == TT::Array ? nullptr : iteratorMethodType(it, e->a->loc);
+      if (!st && it->t != TT::Array)
+        return errT(e->a->loc, "yield* in an async generator needs an async iterable (an async generator, or a class with an "
+                               "async *[Symbol.asyncIterator]() method), an array, a generator or an iterable class, not '" +
+                                   typeName(it) + "'");
+      Type* raw = st ? st->elem : it->elem;
+      Type* et = raw->t == TT::Promise ? (raw->elem->t == TT::Void ? T.undef() : raw->elem) : raw;
+      Type* res = T.voidT();
+      if (st) {
+        if (st->ret && st->ret->t != TT::Void) {
+          if (raw->t == TT::Promise)
+            return errT(e->loc, "yield* of '" + typeName(st) + "' in an async generator: a generator of promises must return void");
+          res = st->ret;
+        }
+        Type* outerNext = g && g->val ? g->val : T.voidT();
+        Type* innerNext = st->val ? st->val : T.voidT();
+        if (innerNext->t != TT::Void && innerNext != outerNext)
+          err(e->loc, "yield* of '" + typeName(st) + "': its next() values must have the type of this generator's ('" +
+                          typeName(outerNext) + "')");
+      }
+      if (g) {
+        if (!assignable(et, g->elem)) err(e->loc, "type '" + typeName(et) + "' is not assignable to the yielded type '" + typeName(g->elem) + "'");
+      } else {
+        f->yieldTypes.push_back(et);
+      }
+      e->innerType = et;
+      return res;
     }
     Type* et = ag->elem;
     Type* res = ag->ret && ag->ret->t != TT::Void ? ag->ret : T.voidT();

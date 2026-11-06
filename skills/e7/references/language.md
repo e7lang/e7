@@ -315,8 +315,8 @@ main();
 The types are `AsyncGenerator<T, TReturn, TNext>`, `AsyncIterator<T>`, `AsyncIterableIterator<T>` and
 `AsyncIterable<T>`; `next` / `return` / `throw` return a `Promise` of `{ value, done }` and may be called without
 awaiting (the requests are queued, as in JavaScript). A class is an async iterable through
-`async *[Symbol.asyncIterator]()`. `yield*` takes another async generator; to yield the values of an array, write
-`for (const x of xs) yield x;`.
+`async *[Symbol.asyncIterator]()`. `yield*` takes another async generator, or an array, a generator or an
+iterable class (values that are promises are awaited, as in JavaScript).
 
 ### `for...in`, `in`, `delete`, `var`, `==`
 
@@ -438,7 +438,7 @@ const r = ({ a } = { a: 1 });
 ### Other rejected syntax
 
 `with`, `delete`, `in`, `new.target`, `eval`, `Symbol` values, `keyof`/`typeof` in type positions, conditional,
-mapped and template literal types, intersection types, `yield*` of a sync iterable in an async generator.
+mapped and template literal types, intersection types.
 Identifiers are ASCII only. (The comma operator, `void`, tagged templates, `String.raw`, `<T>x` assertions and
 all typed arrays are supported.)
 

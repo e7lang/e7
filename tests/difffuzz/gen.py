@@ -1329,9 +1329,13 @@ class Gen:
             sends = ", ".join(str(r.randrange(-3, 9)) for _ in range(r.randrange(0, 5)))
             self.emit(ind, f"agQueue(\"{self.fresh('aq')}\", [{sends}], {r.randrange(0, 3)});")
         else:
-            # yield* of an async generator
+            # yield* of an async generator, or of sync iterables (arrays of values and of promises, a sync
+            # generator), left early or not
             self.long_jobs = True
-            self.emit(ind, f"agPrintAll({n}, \"{self.fresh('ao')}\");")
+            if r.random() < 0.5:
+                self.emit(ind, f"agPrintAll({n}, \"{self.fresh('ao')}\");")
+            else:
+                self.emit(ind, f"agMixedLoop({n}, {r.randrange(0, 8)}, \"{self.fresh('am')}\");")
 
     # ---------------------------------------------------------------- declarations
     def gen_classes(self):
@@ -1464,6 +1468,20 @@ class Gen:
             "}",
             "async function agPrintAll(n: number, tag: string): Promise<void> {",
             "  for await (const x of agOuter(n, tag)) console.log(tag, \"outer\", x);",
+            "}",
+            "function* sgRange(n: number, tag: string): Generator<number> {",
+            "  try { for (let i = 0; i < n; i++) yield i * 3; } finally { console.log(\"sclosed\", tag); }",
+            "}",
+            "async function* agMixed(n: number, tag: string): AsyncGenerator<number> {",
+            "  try {",
+            "    yield* [n, n + 1];",
+            "    yield* [Promise.resolve(n * 2), new Promise<number>(res => res(n * 2 + 1))];",
+            "    yield* sgRange(n, tag);",
+            "  } finally { console.log(\"mclosed\", tag); }",
+            "}",
+            "async function agMixedLoop(n: number, stop: number, tag: string): Promise<void> {",
+            "  let k = 0;",
+            "  for await (const x of agMixed(n, tag)) { if (k++ >= stop) break; console.log(tag, \"mixed\", x); }",
             "}",
             "type Size = \"s\" | \"m\" | \"l\";",
             "function sizeName(z: Size): string {",

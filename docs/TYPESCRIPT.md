@@ -27,7 +27,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **154 supported**, **18 partial**, **78 unsupported** (268 sample programs).
+250 features: **155 supported**, **17 partial**, **78 unsupported** (267 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -43,7 +43,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Utility Types](#utility-types) | 4 | 0 | 9 |
 | [Decorators](#decorators) | 0 | 0 | 3 |
 | [Declaration Merging](#declaration-merging) | 1 | 0 | 3 |
-| [Iterators and Generators](#iterators-and-generators) | 5 | 2 | 0 |
+| [Iterators and Generators](#iterators-and-generators) | 6 | 1 | 0 |
 | [Symbols](#symbols) | 0 | 0 | 3 |
 | [Mixins](#mixins) | 0 | 0 | 1 |
 | [Triple-Slash Directives](#triple-slash-directives) | 2 | 0 | 0 |
@@ -53,9 +53,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 25 | 1 | 5 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 11 | 7 | 8 |
-| **Total** | **154** | **18** | **78** |
+| **Total** | **155** | **17** | **78** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 55, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 20.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 55, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 19.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -290,12 +290,12 @@ Within each category, supported features come first, then partial and unsupporte
 
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
+| Async iteration (`for await`, async generators) | supported | Async generators need e7vm 0.3.1; `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (as for generators) | [async-iteration.ts](../tests/ts-features/iterators/async-iteration.ts) |
 | `for...of` over arrays, `entries()`, `keys()`, `values()` | supported | An array's `entries()` / `keys()` / `values()` are used directly in `for...of` (they are not iterator objects) | [for-of-arrays.ts](../tests/ts-features/iterators/for-of-arrays.ts) |
 | Iterating `Map` and `Set` | supported |  | [for-of-map-set.ts](../tests/ts-features/iterators/for-of-map-set.ts) |
 | `for...of` over strings (by code point) | supported |  | [for-of-strings.ts](../tests/ts-features/iterators/for-of-strings.ts) |
 | Generator functions (`function*`, `yield`, `yield*`) | supported | `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (the value's representation is fixed) | [generators.ts](../tests/ts-features/iterators/generators.ts) |
 | Spreading iterables and `Array.from` | supported |  | [spread-iterables.ts](../tests/ts-features/iterators/spread-iterables.ts) |
-| Async iteration (`for await`, async generators) | **partial** | **Works:** `async function*` (also methods and `async *[Symbol.asyncIterator]()`), `AsyncGenerator<T>` / `AsyncIterator<T>` / `AsyncIterable<T>`, `next` / `return` / `throw` with the request queue of the specification, `yield*` of an async iterable, and `for await` over async iterables (leaving the loop early awaits `return()`) or arrays of promises or values, in the order of Node.js (e7vm 0.3.1). **Not supported:** `yield*` of a sync iterable (an array, a generator) in an async generator (its async-from-sync iterator) (*not implemented yet*). **Instead:** `for (const x of xs) yield x;`, or `yield*` of an async generator | [async-iteration.ok.ts](../tests/ts-features/iterators/async-iteration.ok.ts), [async-iteration.no.ts](../tests/ts-features/iterators/async-iteration.no.ts) |
 | Custom iterables (`[Symbol.iterator]()`) | **partial** | **Works:** a class whose `[Symbol.iterator]()` method returns a generator works with `for...of`, spread, `Array.from` and destructuring. **Not supported:** an iterator written by hand (an object with a `next()` method); iterators are generators at run time (*not implemented yet*). **Instead:** a generator: `*[Symbol.iterator]() { ... yield v; }` | [iterator-protocol.ok.ts](../tests/ts-features/iterators/iterator-protocol.ok.ts), [iterator-protocol.no.ts](../tests/ts-features/iterators/iterator-protocol.no.ts) |
 
 ## Symbols
