@@ -374,6 +374,26 @@ Type* Checker::iteratorMethodType(Type* t, Loc l) {
   return r;
 }
 
+// The async iterator a class instance's [Symbol.asyncIterator]() method returns (an AsyncGenerator
+// type), or null (0.3.1).
+Type* Checker::asyncIteratorMethodType(Type* t, Loc l) {
+  if (t->t != TT::Class) return nullptr;
+  ClassSym* c = t->cls;
+  resolveClass(c);
+  auto it = c->methodIdx.find("[Symbol.asyncIterator]");
+  if (it == c->methodIdx.end()) return nullptr;
+  FuncSym* f = c->vtable[it->second].fn;
+  resolveSig(f);
+  if (f->inferRet) checkFunction(f);
+  Type* r = f->type->ret;
+  if (r->t != TT::AsyncGenerator || !f->type->params.empty()) {
+    err(l, "the [Symbol.asyncIterator]() method of '" + c->name +
+               "' must take no arguments and return an AsyncGenerator, AsyncIterator or AsyncIterableIterator");
+    return nullptr;
+  }
+  return r;
+}
+
 // await p: the value of a Promise<T> (another value is awaited as Promise.resolve(value))
 Type* Checker::checkAwait(Expr* e) {
   FuncSym* f = curFn;
@@ -461,8 +481,55 @@ Type* Checker::etaExpand(Expr* e, Type* expected, int arity) {
 Type* Checker::checkYield(Expr* e) {
   FuncSym* f = curFn;
   if (!f || !f->isGenerator) return errT(e->loc, "'yield' is only allowed in the body of a generator function (function*)");
+  const bool async = f->isAsync;  // an async generator (0.3.1)
   Type* g = f->inferRet ? nullptr : f->type->ret;
-  if (g && g->t != TT::Generator) g = nullptr;
+  if (g && g->t != (async ? TT::AsyncGenerator : TT::Generator)) g = nullptr;
+  if (e->delegate && async) {
+    // yield* of an async iterable: an async generator, or a class with [Symbol.asyncIterator]()
+    Type* it = check(e->a, nullptr);
+    Type* ag = it->t == TT::AsyncGenerator ? it : asyncIteratorMethodType(it, e->a->loc);
+    if (!ag) {
+      if (it->t == TT::Unknown) return T.unknown();
+      return errT(e->a->loc, "yield* in an async generator needs an async iterable (an async generator, or a class with an "
+                             "async *[Symbol.asyncIterator]() method), not '" + typeName(it) +
+                             "'; yield the values of a sync iterable with for...of");
+    }
+    Type* et = ag->elem;
+    Type* res = ag->ret && ag->ret->t != TT::Void ? ag->ret : T.voidT();
+    Type* outerNext = g && g->val ? g->val : T.voidT();
+    Type* innerNext = ag->val ? ag->val : T.voidT();
+    if (innerNext->t != TT::Void && innerNext != outerNext)
+      err(e->loc, "yield* of '" + typeName(ag) + "': its next() values must have the type of this generator's ('" +
+                      typeName(outerNext) + "')");
+    if (g) {
+      if (!assignable(et, g->elem)) err(e->loc, "type '" + typeName(et) + "' is not assignable to the yielded type '" + typeName(g->elem) + "'");
+    } else {
+      f->yieldTypes.push_back(et);
+    }
+    e->innerType = et;
+    return res;
+  }
+  if (async && e->a) {
+    // yield v awaits v: a Promise<T> yields T. Promise.reject(e) / Promise.resolve(v) / new Promise(...)
+    // take their value type from the yielded type
+    Expr* x = strip(e->a);
+    Expr* callee = x->k == EK::Call || x->k == EK::New ? strip(x->a) : nullptr;
+    bool promiseCtor = callee && ((x->k == EK::New && callee->k == EK::Ident && callee->raw == "Promise") ||
+                                  (x->k == EK::Call && callee->k == EK::Member && callee->a && strip(callee->a)->k == EK::Ident &&
+                                   strip(callee->a)->raw == "Promise"));
+    Type* t = check(e->a, g ? (promiseCtor ? T.promise(g->elem) : g->elem) : nullptr);
+    if (t->t == TT::Promise) {
+      Type* vt = t->elem->t == TT::Void ? T.undef() : t->elem;
+      if (g && !assignable(vt, g->elem)) err(e->loc, "type '" + typeName(vt) + "' is not assignable to the yielded type '" + typeName(g->elem) + "'");
+      if (!g) f->yieldTypes.push_back(vt);
+    } else if (g) {
+      coerce(e->a, g->elem, "yield");
+    } else {
+      f->yieldTypes.push_back(t);
+    }
+    Type* next = g && g->val ? g->val : T.voidT();
+    return next->t == TT::Void ? T.undef() : next;
+  }
   if (e->delegate) {
     Type* it = check(e->a, nullptr);
     Type* et;

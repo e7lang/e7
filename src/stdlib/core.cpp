@@ -104,7 +104,10 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Buffer: return u"[object ArrayBuffer]";
     case OT::Handle: return u"[object KeyHandle]";
     case OT::Promise: return u"[object Promise]";
-    case OT::Coro: return static_cast<CoroObj*>(o)->fn ? u"[object Generator]" : u"[object RegExp String Iterator]";
+    case OT::Coro: {
+      auto* c = static_cast<CoroObj*>(o);
+      return !c->fn ? u"[object RegExp String Iterator]" : isAsyncGen(c) ? u"[object AsyncGenerator]" : u"[object Generator]";
+    }
     case OT::RegExp: return regexpToString(static_cast<RegExpObj*>(o));
     default: return u"[object Object]";
   }
@@ -339,7 +342,10 @@ struct Inspector {
       case OT::BigInt: return bigDecimal(vm, static_cast<BigObj*>(o), charge) + "n";
       case OT::Closure: return functionBase(static_cast<CloObj*>(o));
       case OT::Handle: return "KeyHandle {}";
-      case OT::Coro: return static_cast<CoroObj*>(o)->fn ? "Object [Generator] {}" : "Object [RegExp String Iterator] {}";
+      case OT::Coro: {
+        auto* c = static_cast<CoroObj*>(o);
+        return !c->fn ? "Object [RegExp String Iterator] {}" : isAsyncGen(c) ? "Object [AsyncGenerator] {}" : "Object [Generator] {}";
+      }
       case OT::RegExp: return utf16ToUtf8(regexpToString(static_cast<RegExpObj*>(o)));
       case OT::Promise: {
         auto* p = static_cast<PromiseObj*>(o);

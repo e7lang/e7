@@ -993,6 +993,100 @@ int main() {
     CHECK(e7_call(vm, m, "syncCall", nullptr, 0, &ret) == E7_OK && ret.v.num == 3);
     e7_vm_free(vm);
   }
+  // ---- 0.3.1: async generators over host tickets (E7_PENDING between their awaits), the budget
+  // suspending inside their bodies, and an async generator returned to the host
+  {
+    e7_vm* vm = e7_vm_new(nullptr);
+    e7_set_print(vm, capturePrint, nullptr);
+    static std::vector<int64_t> agTickets;
+    agTickets.clear();
+    auto fetchPage = [](e7_vm*, const e7_value* a, size_t n, int64_t ticket, void*) -> e7_status {
+      if (n != 1 || a[0].type != E7_NUMBER) return E7_ERR_ARGS;
+      agTickets.push_back(ticket);
+      return E7_OK;
+    };
+    CHECK(e7_register_async_native(vm, "fetchPage", "n>n", fetchPage, nullptr) == E7_OK);
+    auto bc = compile(R"(
+      declare function fetchPage(i: number): Promise<number>;
+      async function* pages(n: number): AsyncGenerator<number> {
+        try {
+          for (let i = 0; i < n; i++) yield await fetchPage(i);
+        } finally {
+          console.log("closed");
+        }
+      }
+      export async function total(n: number): Promise<number> {
+        let t = 0;
+        for await (const p of pages(n)) {
+          t += p;
+          if (t > 100) break;
+        }
+        return t;
+      }
+      async function* busy(n: number): AsyncGenerator<number> {
+        for (let i = 0; i < n; i++) {
+          let s = 0;
+          for (let k = 0; k < 2000; k++) s += k % 7;
+          yield s;
+        }
+      }
+      export async function spin(n: number): Promise<number> {
+        let t = 0;
+        for await (const s of busy(n)) t += s;
+        return t;
+      }
+    )");
+    e7_module* m = nullptr;
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_value ret;
+    e7_value three = num(3);
+    printed.clear();
+    CHECK(e7_call(vm, m, "total", &three, 1, &ret) == E7_PENDING && agTickets.size() == 1);
+    for (int i = 0; i < 3; i++) {
+      e7_value v = num(10 * (i + 1));
+      CHECK(e7_settle(vm, agTickets[(size_t)i], &v) == E7_OK);
+      e7_status st = e7_resume(vm, &ret);
+      if (i < 2) CHECK(st == E7_PENDING && agTickets.size() == (size_t)i + 2);
+      else CHECK(st == E7_OK && ret.type == E7_NUMBER && ret.v.num == 60 && printed == "closed\n");
+    }
+    // a break after the first page: the generator is closed while no ticket is open
+    agTickets.clear();
+    printed.clear();
+    CHECK(e7_call(vm, m, "total", &three, 1, &ret) == E7_PENDING && agTickets.size() == 1);
+    e7_value big = num(500);
+    CHECK(e7_settle(vm, agTickets[0], &big) == E7_OK);
+    CHECK(e7_resume(vm, &ret) == E7_OK && ret.v.num == 500 && printed == "closed\n");
+    // an abandoned call: its generator never resumes
+    agTickets.clear();
+    CHECK(e7_call(vm, m, "total", &three, 1, &ret) == E7_PENDING);
+    e7_abort_suspended(vm);
+    CHECK(e7_settle(vm, agTickets[0], &big) == E7_ERR_STATE);
+    // without suspend_on_budget the budget ends the call
+    e7_value n20 = num(20);
+    e7_set_budget(vm, 5000);
+    CHECK(e7_call(vm, m, "spin", &n20, 1, &ret) == E7_ERR_BUDGET);
+    e7_set_budget(vm, 0);
+    e7_vm_free(vm);
+    // budget suspension inside the generator's body (resumed by for await's requests and by jobs)
+    e7_config cfg;
+    e7_config_init(&cfg);
+    cfg.suspend_on_budget = 1;
+    vm = e7_vm_new(&cfg);
+    CHECK(e7_register_async_native(vm, "fetchPage", "n>n", fetchPage, nullptr) == E7_OK);
+    CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
+    e7_set_budget(vm, 3000);
+    e7_status st = e7_call(vm, m, "spin", &n20, 1, &ret);
+    int slices = 1;
+    while (st == E7_SUSPENDED && slices < 100000) {
+      e7_set_budget(vm, 3000);
+      st = e7_resume(vm, &ret);
+      slices++;
+    }
+    double want = 0;
+    for (int i = 0; i < 2000; i++) want += i % 7;
+    CHECK(st == E7_OK && slices > 10 && ret.v.num == want * 20);
+    e7_vm_free(vm);
+  }
   // 0.3 (D4): regular expressions are bounded like any other script work. A catastrophic pattern
   // (/(a+)+$/ on "aaa...!", 2^n steps) ends with E7_ERR_BUDGET, also with suspension (the matcher runs in a
   // native, which cannot suspend halfway: it may run past the slice by VM::kNativeOverrun, then fails);

@@ -158,6 +158,23 @@ inline uint32_t moduleRequires(const Module& m, std::string* why = nullptr) {
       if (f.fflags && req < v030) { req = v030; if (why) *why = fflagsKind(f.fflags) == FK_GENERATOR ? "generators" : "async functions"; }
     if (!m.regexps.empty() && req < v030) { req = v030; if (why) *why = "regular expressions"; }
   }
+  // 0.3.1: async generators (function kind 3, requests to them: RESUME_R with kResumeAsync)
+  constexpr uint32_t v031 = makeVersion(0, 3, 1);
+  if (req < v031) {
+    for (const FuncDesc& f : m.funcs) {
+      if (req >= v031) break;
+      if (fflagsKind(f.fflags) == FK_ASYNC_GENERATOR) { req = v031; if (why) *why = "async generators"; break; }
+      for (size_t pc = 0; pc < f.code.size(); pc += instructionWords(f.code[pc])) {
+        uint16_t op = insOp(f.code[pc]);
+        if (op >= OP__COUNT) break;
+        if (op == OP_RESUME_R && pc + 1 < f.code.size() && (f.code[pc + 1] & kResumeAsync)) {
+          req = v031;
+          if (why) *why = "async generators";
+          break;
+        }
+      }
+    }
+  }
   for (const NativeImport& n : m.natives) {
     uint32_t s = nativeSince(n.name);
     if (s > req) { req = s; if (why) *why = "native function " + n.name; }

@@ -1,5 +1,6 @@
 // Heap object layouts.
 #pragma once
+#include <deque>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -142,8 +143,24 @@ struct HandleObj : Obj {
 // A coroutine: the frame of a generator or async function while it is not running (DESIGN-0.3.md D1).
 // While it runs, its registers are in an ordinary frame on the VM stack (Frame::coro points here) and
 // the saved copy below is stale (not traced by the collector).
-enum CoroState : uint8_t { CO_START, CO_SUSPENDED, CO_RUNNING, CO_DONE };
+// CO_AWAIT_RETURN (async generators, 0.3.1): the specification's awaiting-return state (return(v) waits
+// for v before it completes). An async generator suspended at an AWAIT is CO_SUSPENDED (the
+// specification's executing state): the instruction at pc tells a YIELD from an AWAIT.
+enum CoroState : uint8_t { CO_START, CO_SUSPENDED, CO_RUNNING, CO_DONE, CO_AWAIT_RETURN };
 struct PromiseObj;
+struct ClassRT;
+// A request to an async generator (0.3.1): next(v) / throw(e) / return(v), queued until the generator
+// answers it (the AsyncGeneratorRequest of the specification). Its promise is resolved with an
+// IteratorResult record of class `cls` ({ value, done }); a primitive value in a `T | undefined` field
+// is boxed with elemVT.
+struct AGenRequest {
+  PromiseObj* promise;
+  ClassRT* cls;
+  Slot value;      // the sent value (next / return) or the error (throw)
+  uint8_t mode;    // 0 next, 1 throw, 2 return
+  uint8_t kind;    // the sent value's kind: 0 none, 1 I, 2 F, 3 R
+  uint8_t elemVT;  // the value type of T
+};
 struct CoroObj : Obj {
   FuncRT* fn;
   CloObj* closure;
@@ -152,11 +169,17 @@ struct CoroObj : Obj {
   uint32_t nregs;
   uint8_t fflags;       // the function's flags (kind and value kinds)
   uint8_t state;        // CoroState
-  // fn == nullptr: a native iterator (D4, String.prototype.matchAll): RESUME gives the elements of the
-  // array `items` in order (pc is the next index)
-  Obj* items;
+  union {
+    // fn == nullptr: a native iterator (D4, String.prototype.matchAll): RESUME gives the elements of the
+    // array `items` in order (pc is the next index)
+    Obj* items;
+    // an async generator (fflags kind 3, 0.3.1): its request queue, null until the first request (its
+    // entries are counted in the heap)
+    std::deque<AGenRequest>* queue;
+  };
   Slot* regs() { return reinterpret_cast<Slot*>(this + 1); }
 };
+inline bool isAsyncGen(const CoroObj* c) { return c->fn && (c->fflags & 3) == 3; }
 
 // Runtime class info
 struct ClassRT {
@@ -190,6 +213,7 @@ enum ReactionKind : uint8_t {
   RK_ALL_SETTLED,    // Promise.allSettled element: a { status, value } / { status, reason } record
   RK_ANY,            // Promise.any element: fulfill derived with the first value; collect the reasons
   RK_RACE,           // Promise.race: settle derived like the first one to settle
+  RK_AGEN_RETURN,    // 0.3.1: AsyncGeneratorAwaitReturn: async generator `a` completes its return(v) request
 };
 struct PromiseObj;
 struct Reaction {
