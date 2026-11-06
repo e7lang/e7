@@ -663,24 +663,50 @@ class Parser {
       if (w == "export") {
         if (!topLevel) fail("export is only allowed at top level");
         i++;
-        if (isKw("default")) fail("default exports are not supported; use named exports");
+        if (isKw("default")) return parseExportDefault(l);
+        if (isKw("type") && peek().k == TK::Punct && (peek().text == "{" || peek().text == "*")) i++;  // export type { ... }
         if (isP("{")) {
-          // export { a, b }
+          // export { a, b as c } / export { a, b as c } from "./x"
           Stmt* s = A.stmt(SK::Export, l);
           i++;
+          std::vector<bool> plain;  // per name: written as an identifier (not a keyword or a string)
           while (!isP("}")) {
+            if (isKw("type") && peek().k == TK::Ident && !(peek(1).text == "," || peek(1).text == "}" || peek(1).text == "as")) i++;
             ImportSpec sp;
-            sp.name = ident();
+            sp.loc = loc();
+            plain.push_back(cur().k == TK::Ident && !isReserved(cur().text));
+            sp.name = propName();
             if (eatKw("as")) sp.alias = propName();
             s->imports.push_back(sp);
             if (!eatP(",")) break;
           }
           expectP("}");
-          if (isKw("from")) fail("re-exports are not supported");
+          if (eatKw("from")) {
+            if (cur().k != TK::Str) fail("expected module path string");
+            s->from = utf16ToUtf8(t[i++].str);
+          } else {
+            // a local export list names local bindings
+            for (size_t k = 0; k < s->imports.size(); k++) {
+              const ImportSpec& sp = s->imports[k];
+              if (plain[k]) continue;
+              failAt(sp.loc, isReserved(sp.name) ? "'" + sp.name + "' is a reserved word"
+                                                 : "expected identifier but found '" + sp.name + "'");
+            }
+          }
           semi();
           return s;
         }
-        if (isP("*")) fail("re-exports are not supported");
+        if (eatP("*")) {
+          // export * from "./x" / export * as ns from "./x"
+          Stmt* s = A.stmt(SK::Export, l);
+          if (eatKw("as")) s->nsAlias = ident();
+          else s->starExport = true;
+          expectKw("from");
+          if (cur().k != TK::Str) fail("expected module path string");
+          s->from = utf16ToUtf8(t[i++].str);
+          semi();
+          return s;
+        }
         Stmt* s = parseStatement(true);
         switch (s->k) {
           case SK::Var: case SK::Func: case SK::Class: case SK::Interface: case SK::TypeAlias: case SK::Enum: case SK::Declare:
@@ -811,11 +837,31 @@ class Parser {
     Loc l = loc();
     expectKw("import");
     Stmt* s = A.stmt(SK::Import, l);
-    if (isKw("type")) i++;
+    // `import type X from`, `import type { ... }`, `import type * as ns` (but `import type from "./x"` and
+    // `import type, { a } from "./x"` import a default export named 'type')
+    if (isKw("type") && !(peek().k == TK::Punct && peek().text == ",") &&
+        !(peek().k == TK::Ident && peek().text == "from" && peek(2).k == TK::Str))
+      i++;
     if (cur().k == TK::Str) {
-      fail("side-effect imports are not supported");
+      // import "./x": runs the module (in the normal module order), binds nothing
+      s->from = utf16ToUtf8(t[i++].str);
+      semi();
+      return s;
     }
-    if (eatP("*")) {
+    bool defaultOnly = false;
+    if (cur().k == TK::Ident) {
+      // default import: import f from "./x" / import f, { a } from "./x" / import f, * as ns from "./x"
+      ImportSpec sp;
+      sp.loc = loc();
+      sp.name = "default";
+      sp.alias = ident();
+      s->imports.push_back(sp);
+      defaultOnly = !eatP(",");
+      if (!defaultOnly && !isP("*") && !isP("{")) fail("expected '{' or '*' after the default import");
+    }
+    if (defaultOnly) {
+      // nothing else to bind
+    } else if (eatP("*")) {
       expectKw("as");
       s->nsAlias = ident();
     } else if (isP("{")) {
@@ -823,20 +869,57 @@ class Parser {
       while (!isP("}")) {
         if (isKw("type") && peek().k == TK::Ident && !(peek(1).text == "," || peek(1).text == "}" || peek(1).text == "as")) i++;
         ImportSpec sp;
+        sp.loc = loc();
+        bool word = cur().k == TK::Ident;
         sp.name = propName();
         if (eatKw("as")) sp.alias = ident();
+        else if (!word || isReserved(sp.name))
+          failAt(sp.loc, (word ? "'" + sp.name + "' is a reserved word" : std::string("a string import name")) +
+                             "; rename it: import { " + (word ? sp.name : "\"" + sp.name + "\"") + " as name }");
         else sp.alias = sp.name;
         s->imports.push_back(sp);
         if (!eatP(",")) break;
       }
       expectP("}");
     } else {
-      fail("default imports are not supported; use import { name } from \"...\"");
+      fail("expected an import clause or a module path string");
     }
     expectKw("from");
     if (cur().k != TK::Str) fail("expected module path string");
     s->from = utf16ToUtf8(t[i++].str);
     semi();
+    return s;
+  }
+
+  // export default function / class / interface, or export default <expression>
+  Stmt* parseExportDefault(Loc l) {
+    expectKw("default");
+    Stmt* s = nullptr;
+    if (isKw("function")) {
+      s = parseFunction(true);
+    } else if (isKw("class")) {
+      s = parseClass(true);
+    } else if (isKw("abstract") && peek().k == TK::Ident && peek().text == "class" && !peek().nl) {
+      i++;
+      s = parseClass(true);
+      s->isAbstract = true;
+    } else if (isKw("interface") && peek().k == TK::Ident) {
+      s = parseInterface();
+    } else {
+      if (isKw("async") && peek().k == TK::Ident && peek().text == "function" && !peek().nl)
+        fail("async functions are not supported yet (reserved for coroutines); use a synchronous function (the host can run long work in slices with an instruction budget)");
+      // export default <expression>: evaluated once, at this point, into a hidden const named "default"
+      // ('default' is a reserved word, so no other declaration can have that name)
+      s = A.stmt(SK::Var, l);
+      s->isConst = true;
+      VarDecl d;
+      d.name = "default";
+      d.loc = loc();
+      d.init = parseAssign();
+      s->decls.push_back(d);
+      semi();
+    }
+    s->isDefault = true;
     return s;
   }
 
@@ -895,12 +978,13 @@ class Parser {
     expectP(">");
   }
 
-  Stmt* parseFunction() {
+  // anonymous: `export default function (...) {...}`, named "default" as in JavaScript
+  Stmt* parseFunction(bool anonymous = false) {
     Loc l = loc();
     expectKw("function");
     if (isP("*")) fail("generator functions are not supported yet (reserved for coroutines)");
     Stmt* s = A.stmt(SK::Func, l);
-    s->name = ident();
+    s->name = anonymous && (isP("(") || isP("<")) ? "default" : ident();
     parseTypeParams(s->typeParams);
     parseParams(s->params, false);
     if (eatP(":")) s->retType = parseRetType();
@@ -931,11 +1015,12 @@ class Parser {
     fail("unsupported declare statement");
   }
 
-  Stmt* parseClass() {
+  // anonymous: `export default class {...}`, named "default" as in JavaScript
+  Stmt* parseClass(bool anonymous = false) {
     Loc l = loc();
     expectKw("class");
     Stmt* s = A.stmt(SK::Class, l);
-    s->name = ident();
+    s->name = anonymous && (isP("{") || isP("<") || isKw("extends") || isKw("implements")) ? "default" : ident();
     parseTypeParams(s->typeParams);
     if (eatKw("extends")) s->extends = parsePrimaryType();
     if (eatKw("implements")) {

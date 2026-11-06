@@ -183,7 +183,8 @@ struct SwitchCase {
 };
 
 struct ImportSpec {
-  std::string name, alias;
+  std::string name, alias;  // import: alias is the local name; export: alias is the exported name ("" = name)
+  Loc loc;
 };
 
 struct EnumMember {
@@ -195,6 +196,8 @@ struct Stmt {
   SK k;
   Loc loc;
   bool exported = false;
+  bool isDefault = false;          // `export default`: Func / Class / Interface (exported as "default"), or
+                                   // Var: `export default <expression>` (a hidden const named "default")
   bool isConst = false;            // Var
   std::vector<VarDecl> decls;      // Var
   std::string name;                // Func / Class / Interface / TypeAlias / Enum / labels
@@ -221,10 +224,11 @@ struct Stmt {
   // enum
   std::vector<EnumMember> enumMembers;
   bool isConstEnum = false;
-  // import
+  // import / export list / re-export
   std::vector<ImportSpec> imports;
-  std::string from;
-  std::string nsAlias;  // import * as X
+  std::string from;     // Import: the module; Export: `export ... from` (a re-export) when not empty
+  std::string nsAlias;  // import * as X / export * as X from
+  bool starExport = false;  // export * from
   // resolution
   FuncSym* fn = nullptr;
   ClassSym* cls = nullptr;

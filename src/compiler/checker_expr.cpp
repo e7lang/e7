@@ -169,6 +169,13 @@ Type* Checker::checkTemplate(Expr* e) {
 // ------------------------------------------------------------------ identifiers
 Type* Checker::checkIdent(Expr* e, Type* expected) {
   Sym* s = lookup(e->raw);
+  if (!s && e->a && e->raw.find('.') != std::string::npos) {
+    // `ns.C` rewritten by resolveNamespaceRefs, but here `ns` is not the module namespace (a local shadows
+    // it): a member access again
+    e->k = EK::Member;
+    e->raw = e->raw.substr(e->raw.rfind('.') + 1);
+    return checkMember(e, expected);
+  }
   if (!s) return errT(e->loc, "cannot find name '" + e->raw + "'" + suggestName(e->raw, false));
   switch (s->k) {
     case SymK::Var: {

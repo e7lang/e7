@@ -112,11 +112,11 @@ Stmt* Checker::cloneStmt(Stmt* s) {
 
 // ------------------------------------------------------------------ templates and instances
 Sym* Checker::lookupFrom(Scope* s, const std::string& name) {
-  for (; s; s = s->parent) {
-    auto it = s->names.find(name);
-    if (it != s->names.end()) return it->second;
+  for (Scope* x = s; x; x = x->parent) {
+    auto it = x->names.find(name);
+    if (it != x->names.end()) return it->second;
   }
-  return nullptr;
+  return name.find('.') != std::string::npos ? lookupQualified(s, name) : nullptr;
 }
 
 GenericSym* Checker::newGeneric(GenericSym::Kind k, const std::string& name, std::vector<TypeParam>* params, Loc l) {
