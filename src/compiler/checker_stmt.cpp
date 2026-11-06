@@ -88,6 +88,8 @@ std::string Checker::accessorHint(Type* src, Type* dst) {
   Type* s = baseOf(src);
   Type* d = baseOf(dst);
   if (s->t == TT::Array && d->t == TT::Array) return accessorHint(s->elem, d->elem);
+  if (d->t == TT::Object && d->shape->ownAccessors && !(s->t == TT::Object && s->shape->ownAccessors))
+    return ": the type of an object literal with accessors only holds such object literals";
   if (s->t != TT::Object || d->t != TT::Object) return "";
   ObjShape* ss = s->shape;
   ObjShape* ds = d->shape;
@@ -98,8 +100,6 @@ std::string Checker::accessorHint(Type* src, Type* dst) {
   for (auto& m : ds->methods)
     if ((m.name.compare(0, 4, "get ") == 0 || m.name.compare(0, 4, "set ") == 0) && !ss->findMethod(m.name))
       return std::string(": '") + typeName(s) + "' has no " + (m.name[0] == 'g' ? "getter" : "setter") + " for '" + m.name.substr(4) + "'";
-  if (ds->ownAccessors && !ss->ownAccessors)
-    return ": the type of an object literal with accessors only holds such object literals";
   return "";
 }
 

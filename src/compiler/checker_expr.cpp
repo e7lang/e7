@@ -354,8 +354,8 @@ bool Checker::readableProps(Type* t, Loc l, const char* what, std::vector<std::p
   if (b->t == TT::Object && b->shape->ownAccessors)
     for (auto& n : b->shape->order)
       if (!b->shape->findProp(n) && !b->shape->findMethod("get " + n)) {
-        err(l, std::string(what) + " of an object with the setter-only accessor '" + n +
-                   "' is not supported (its value would be undefined); add a getter");
+        err(l, std::string(what) + " is not supported for an object with the setter-only accessor '" + n +
+                   "' (its value would be undefined); add a getter");
         return false;
       }
   out = enumerableProps(b);
@@ -804,7 +804,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
         } else if (t->t == TT::Object && t->shape->ownAccessors) {
           // an object literal with accessors: its properties and the values of its getters, in its order
           std::vector<std::pair<std::string, Type*>> own;
-          if (!readableProps(t, p.loc, "spreading", own)) return T.unknown();
+          if (!readableProps(t, p.loc, "spread", own)) return T.unknown();
           for (auto& pr : own) {
             const ObjShape::Prop* sp = t->shape->findProp(pr.first);
             if (!spreadExact(pr.first, pr.second, sp && sp->optional && !sp->undefOk, exp, p.loc)) return T.unknown();
