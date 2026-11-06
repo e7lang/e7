@@ -116,7 +116,7 @@ rejected (about 17 of them are compiler-only work, listed under P1).
   functions and named function expressions, defaults that refer to earlier parameters, exhaustive enum switches,
   narrowing after an assignment in an `if` branch, clearer errors for unsupported features.
 
-## 0.3: the language complete for its domain (done)
+## 0.3: the language complete for its domain (released 2026-11-06 as 0.3.0)
 
 **Goal.** Everything E7's target scripts (signing and verification, protocol parsing, business rules) write in
 everyday TypeScript compiles and behaves as on Node.js, including iteration, `async` / `await` against host
@@ -137,8 +137,8 @@ during 0.3, that is the beta stage; 1.0 then needs pilot data, a third-party aud
 generators and iterators (A), `async` / `await` with host tickets in the C API and every binding (B), regular
 expressions (C), the compiler gaps of D except object literal accessors, the standard library of E, properties
 that hold `undefined` (F), the quality gates of G (the seventh and eighth security reviews in PRODUCTION.md), and
-the C# `E7ModuleManager` (H). Not shipped: async generators and object literal accessors (rarely needed by the
-target scripts; they wait for a later release).
+the C# `E7ModuleManager` (H). Taken out of the 0.3 scope when 0.3.0 was released (see *Not in 0.3*): async
+generators, object literal accessors and the production pilot.
 
 Candidates must satisfy the rules of SPEC section 0.1; features that need run-time type information (`any`,
 `unknown`, general unions, index signatures, `keyof` / conditional / mapped types) stay out.
@@ -247,7 +247,8 @@ Objects of interface / object types tell a missing property from one holding `un
 
 ### H. Pilot and ecosystem
 - Production pilot: one app runs E7 scripts in shadow mode (E7 computes, the existing code decides, results are
-  compared) during 0.3, then a small rollout.
+  compared), then a small rollout. Moved after 0.3.0 (see *Not in 0.3*): 0.3.0 has everything a pilot needs; the
+  pilot itself runs in an app.
 - A C# `E7ModuleManager` (Kotlin/Java and Swift have one).
 - SPEC, TYPESCRIPT.md, the language tour, the playground and the AI skill updated with each feature.
 
@@ -267,6 +268,16 @@ Objects of interface / object types tell a missing property from one holding `un
 - Waiting with a reason: `Intl` and locale formatting (locale data differs between platforms), `normalize` (Unicode
   tables), `WeakMap` / `WeakSet` (ephemeron tables in the collector), class expressions and mixins (classes are not
   values), namespaces, decorators, JSX, `var`, non-ASCII identifiers, timers.
+- Taken out of the 0.3 scope when 0.3.0 was released (decided 2026-11-06):
+  - Async generators (`async function*`, `for await` over them): the target scripts await host operations one at a
+    time and iterate synchronous generators; an async generator adds a request queue on top of the coroutine and
+    promise machinery. Candidate for a later 0.3.x or 0.4 if a script needs it.
+  - Getters and setters in object literals: object literals are records with fixed field slots that every reader
+    accesses directly, so an accessor needs either a class (classes already have getters and setters) or a
+    run-time check on every property read. Waiting with that reason; classes are the way to write it.
+  - The production pilot: 0.3.0 provides everything it needs (async host operations in every binding, shadow-mode
+    friendly budgets and errors); running it needs an app, and it is the condition for the beta stage and 1.0
+    (see *Later*).
 
 ## Later
 
