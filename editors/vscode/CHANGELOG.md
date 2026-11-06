@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.6
+
+- Bundles `@e7lang/e7` 0.2.6: `readonly` arrays / properties and `exactOptionalPropertyTypes` checked as tsc does,
+  optional interface methods, recursive local functions, exhaustive enum switches, clearer errors for unsupported
+  TypeScript features, and the security fixes of e7vm 0.2.6.
+
 ## 0.2.5
 
 - Bundles `@e7lang/e7` 0.2.5: generics, `finally`, class accessors / `abstract` / `#private`, destructuring

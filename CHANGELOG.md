@@ -10,7 +10,24 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-06
+
+The subset defined (docs/ROADMAP.md, section 0.2.6). Compatible with 0.2.5: the bytecode format and the C API are
+unchanged, modules built by 0.2.5 run on this VM and modules this compiler builds run on 0.2.5 VMs (the
+forward-compatibility CI job checks it). The compiler is stricter where it used to accept programs that tsc rejects
+(`readonly`, `exactOptionalPropertyTypes`): see *Changed*.
+
 ### Added
+- [docs/TYPESCRIPT.md](docs/TYPESCRIPT.md): 250 TypeScript features (the TypeScript Handbook's chapters plus the
+  JavaScript syntax and standard library) with their status in E7, the reason for each restriction and what to write
+  instead. Every row is a sample program in `tests/ts-features` that CI compiles with E7, runs against Node.js when
+  supported, and type-checks with tsc 5.6; the table is generated from the samples (`scripts/gen-ts-features.py`).
+- Optional interface methods (`m?(): T`), called with `o.m?.()` or after a check; optional function-typed properties
+  and fields can be called after a check (`if (o.f) o.f(x)`).
+- A local function value may call itself (`const f = (n: number): number => ... f(n - 1)`), and a named function
+  expression may call itself through its name.
+- A `switch` with a case for every enum member is exhaustive (no `default` or final `return` needed).
+- Narrowing by an assignment that ends an `if` branch survives the `if` (`if (x === null) x = []; return x;`).
 - SPEC section 0.1 defines the subset: TypeScript 5.6 `tsc` with `strict` and `exactOptionalPropertyTypes`
   (`tests/tsc/tsconfig.json`) is the upper bound, ECMAScript as implemented by Node.js 22 is the run-time behaviour,
   and three rules select the features, with **types known at compile time** as the fixed rule that is never relaxed.
@@ -21,6 +38,13 @@ and a VM rejects a module it cannot run at load time rather than running it inco
   that did so are now compile errors, as they are for tsc with that option; declare `x?: T | undefined` to keep them.
 - `scripts/macos.sh release` runs the full macOS test first (unless it already passed at the same commit with
   nothing skipped).
+- `readonly` is checked as in TypeScript beyond class fields: a `readonly` property of an interface or object type
+  cannot be assigned, and `readonly T[]` / `ReadonlyArray<T>`, `readonly [A, B]`, `ReadonlyMap` and `ReadonlySet`
+  have no mutating methods or element writes and are not assignable to the mutable types. Programs that relied on
+  E7 ignoring `readonly` are now compile errors, as they are for tsc.
+- Clearer errors for unsupported TypeScript: type predicates, assertion functions, decorators on members,
+  auto-accessors, call and construct signatures, constructor types, conditional and indexed access types, rest and
+  optional tuple elements, hashbang lines, `Symbol`, `Intl`, and `new` through a namespace import.
 
 ### Security
 Fixes from an independent review of the 0.2.5 VM changes (docs/PRODUCTION.md section 3.6); none is a memory-safety issue.
@@ -37,6 +61,9 @@ Fixes from an independent review of the 0.2.5 VM changes (docs/PRODUCTION.md sec
   behaviour without memory access.
 
 ### Fixed
+- Default parameters of function declarations, methods and constructors may refer to earlier parameters and `this`
+  (SPEC section 5 said so; only arrow functions and function expressions accepted it).
+- A method signature mismatch in an override was reported without a location.
 - A generic instantiated with `void` (for example `run(() => { ... })` with `run<T>(f: () => T)`) could store or pass
   the void result and crash the compiler with an internal error; storing it in a property or passing it as an
   argument is now a compile error, since E7 has no void values.
@@ -216,7 +243,8 @@ tested and hardened but has not yet run in production, so it is versioned 0.x un
   on an Android emulator, the iOS simulator, JVMs and .NET; libFuzzer targets for the loader and compiler with
   ClusterFuzzLite (ASan + UBSan) on pull requests and nightly. See [docs/PRODUCTION.md](docs/PRODUCTION.md).
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/e7lang/e7/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/e7lang/e7/compare/v0.2.1...v0.2.5
 [0.2.1]: https://github.com/e7lang/e7/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/e7lang/e7/compare/v0.1.0...v0.2.0

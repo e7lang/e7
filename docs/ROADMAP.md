@@ -112,6 +112,9 @@ rejected (about 17 of them are compiler-only work, listed under P1).
   to properties whose declared type includes `undefined`.
 - Fixes from an independent security review of the 0.2.5 VM changes.
 - `scripts/macos.sh release` runs the full macOS test first, so a release cannot skip it.
+- The compiler gaps the table found: `readonly` checked as in tsc, optional interface methods, recursive local
+  functions and named function expressions, defaults that refer to earlier parameters, exhaustive enum switches,
+  narrowing after an assignment in an `if` branch, clearer errors for unsupported features.
 
 ## 0.3 (planned)
 
@@ -119,6 +122,9 @@ Candidates must satisfy the rules of SPEC section 0.1; features that need run-ti
 `unknown`, general unions, index signatures, `keyof` / conditional / mapped types) stay out.
 
 - Generators and iterators, `async` / `await` (coroutines in the VM).
+- From docs/TYPESCRIPT.md (not implemented yet, within the rules): object destructuring assignment, `||=` / `&&=`,
+  object-literal accessors, computed property names, `never` in the `default` of an exhaustive switch, classes and
+  enums through `import * as ns`, function overloads, numeric and boolean literal types.
 - Objects of interface / object types keep a property that holds `undefined` as an own property (a presence bit
   per optional property, a bytecode change), removing the last `Object.keys` / spread / `console.log` difference
   for `undefined` in SPEC section 9.

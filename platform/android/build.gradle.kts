@@ -1,7 +1,7 @@
 // Shared configuration for the published e7vm artifacts (group, version, POM, repositories, signing).
 //
 // Properties (all optional):
-//   -Pe7.version=0.2.5 (or env E7_VERSION)   version to publish (default: CMake project version + "-SNAPSHOT")
+//   -Pe7.version=0.2.6 (or env E7_VERSION)   version to publish (default: CMake project version + "-SNAPSHOT")
 //   -Pe7.signingKey / -Pe7.signingPassword   ASCII-armored PGP key; or env SIGNING_KEY / SIGNING_PASSWORD
 //   env GITHUB_ACTOR / GITHUB_TOKEN          credentials for the GitHubPackages repository
 // Every module also publishes to the file repository build/staging-repo ("Staging"), which is what the

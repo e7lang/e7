@@ -36,7 +36,7 @@ files too). To debug another exported function, with arguments, add a configurat
 
 ```jsonc
 {
-  "version": "0.2.5",
+  "version": "0.2.6",
   "configurations": [
     {
       "type": "e7",
@@ -93,7 +93,7 @@ npx vsce package --no-dependencies
 ```
 
 Prebuilt `.vsix` files are attached to every [GitHub release](https://github.com/e7lang/e7/releases):
-install with *Extensions: Install from VSIX...* or `code --install-extension e7-0.2.5.vsix`.
+install with *Extensions: Install from VSIX...* or `code --install-extension e7-0.2.6.vsix`.
 
 ## License
 
