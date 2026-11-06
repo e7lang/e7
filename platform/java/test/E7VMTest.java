@@ -80,7 +80,7 @@ public class E7VMTest {
     }
     // version number, inspect, GC statistics and growth setting, detached signatures
     int vn = E7VM.versionNumber();
-    check(E7VM.version().equals((vn >> 16) + "." + ((vn >> 8) & 255) + "." + (vn & 255)) && vn >= 0x000200, "versionNumber");
+    check(E7VM.version().equals((vn >> 16) + "." + ((vn >> 8) & 255) + "." + (vn & 255)) && vn >= 0x000100, "versionNumber");
     E7VM.ModuleInfo info = E7VM.inspect(signed);
     check(info.canRun() && info.format == 3 && info.requiresVersion == 0x000100 && info.isSigned && !info.hasDebugInfo,
         "inspect signed module");

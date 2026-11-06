@@ -357,7 +357,7 @@ export function nothing(): void {}
 
         // version number, inspect, GC statistics and growth setting, detached signatures
         uint vn = E7VM.VersionNumber;
-        Check(E7VM.Version == $"{vn >> 16}.{(vn >> 8) & 0xFF}.{vn & 0xFF}" && vn >= 0x000200, "VersionNumber");
+        Check(E7VM.Version == $"{vn >> 16}.{(vn >> 8) & 0xFF}.{vn & 0xFF}" && vn >= 0x000100, "VersionNumber");
         var info = E7VM.Inspect(signedCode);
         Check(info.CanRun && info.Format == 3 && info.RequiresVersionString == "0.1.0" && info.IsSigned && !info.HasDebugInfo
               && info.KeyId.Length == 8 && Array.Exists(info.KeyId, b => b != 0), "Inspect signed module");

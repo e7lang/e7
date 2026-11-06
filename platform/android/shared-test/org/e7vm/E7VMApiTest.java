@@ -223,7 +223,7 @@ public class E7VMApiTest {
     byte[] code = E7VM.compile(APP, "app.ts");
     E7VM.ModuleInfo info = E7VM.inspect(E7VM.sign(code, seed()));
     assertTrue(info.canRun());
-    assertEquals(2, info.format);
+    assertEquals(3, info.format);
     assertEquals("0.1.0", info.requiresVersionString());
     assertTrue(info.isSigned);
     assertEquals(8, info.keyId.length);
