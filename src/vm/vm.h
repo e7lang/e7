@@ -1,6 +1,7 @@
 // e7vm core virtual machine.
 #pragma once
 #include <atomic>
+#include <deque>
 #include <exception>
 #include <memory>
 #include <string>
@@ -114,7 +115,9 @@ enum ErrCode {
   ERR_OK = 0, ERR_SUSPENDED = 1, ERR_RUNTIME = 2, ERR_BUDGET = 3, ERR_MEMORY = 4,
   ERR_STACK = 5, ERR_LOAD = 6, ERR_VERIFY = 7, ERR_SIGNATURE = 8, ERR_NOT_FOUND = 9,
   ERR_ARGS = 10, ERR_COMPILE = 11, ERR_STATE = 12,
-  ERR_PAUSED = 13  // stopped by the debugger (pause-to-host mode): frames are kept, resume() continues
+  ERR_PAUSED = 13,  // stopped by the debugger (pause-to-host mode): frames are kept, resume() continues
+  ERR_VERSION = 14,
+  ERR_PENDING = 15  // an async call waits for host tickets: settle them, then resume()
 };
 
 // A source position (file name as shown in stack traces, 1-based line, column 0 = unknown).
@@ -249,6 +252,25 @@ class VM {
   BigObj* newBig();
   HandleObj* newHandle(int64_t id);
   CoroObj* newCoro(FuncRT* fn, CloObj* closure);
+  PromiseObj* newPromise(uint8_t vt);
+
+  // ---- promises and the microtask queue (promise.cpp, DESIGN-0.3.md D2)
+  // Resolves p with v (of p's value type); a promise value (a thenable) is adopted through a job.
+  void resolvePromise(PromiseObj* p, Slot v);
+  void adoptPromise(PromiseObj* p, PromiseObj* thenable);  // resolve p with a promise (ResolveThenableJob)
+  void fulfillPromise(PromiseObj* p, Slot v);
+  void rejectPromise(PromiseObj* p, Obj* reason);
+  // PerformPromiseThen: adds the reaction, or queues its job when p is already settled
+  void promiseThen(PromiseObj* p, const Reaction& r);
+  // a host ticket: a pending promise of value type vt settled later by settleTicket
+  int64_t newTicket(PromiseObj* p, void* hostData = nullptr);
+  bool ticketHostData(int64_t ticket, void** data) const;
+  // settles an open ticket (false: unknown or already settled ticket)
+  bool settleTicket(int64_t ticket, bool ok, Slot value, Obj* reason);
+  size_t openTickets() const { return tickets_.size(); }
+  bool pending() const { return pending_; }
+  // the reason of a rejected promise as a host error message ("TypeError: x" / "x")
+  std::string rejectionMessage(Obj* reason) const;
   Obj* undef() const { return undef_; }
 
   // External buffer accounting
@@ -366,6 +388,35 @@ class VM {
   friend class Debugger;
   int execute(size_t entryDepth);
   int runFrames();
+  // the microtask driver (promise.cpp): what the job on the stack does when it returns or throws
+  enum JobKind : uint8_t { JOB_NONE, JOB_ENTRY, JOB_CALLBACK, JOB_AWAIT };
+  struct Job {
+    Reaction r;
+    Slot arg{};
+    uint8_t argVT = 0;
+    bool rejected = false;
+  };
+  bool startJob(Job& j);              // false: the job finished without running script code
+  void finishCallbackJob(Slot v, char kind);
+  bool failCallbackJob(E7Error& e);   // a then-callback threw: rejects its promise (true)
+  int finishTurn();                   // after the queue is drained: the entry call's result
+  void settleReaction(const Reaction& r, bool rejected, Slot v, uint8_t vt);
+  Obj* errorValue(E7Error& e);
+  std::deque<Job> microtasks_;
+  std::unordered_map<int64_t, std::pair<PromiseObj*, void*>> tickets_;
+  int64_t nextTicket_ = 1;
+  std::vector<PromiseObj*> unhandled_;  // rejected without a handler (checked when the queue is drained)
+  JobKind curJob_ = JOB_NONE;
+  PromiseObj* curDerived_ = nullptr;    // JOB_CALLBACK: the promise the callback's result resolves
+  Reaction curReaction_{};              // JOB_CALLBACK: the reaction (finally needs the source outcome)
+  bool curRejected_ = false;
+  Slot curArg_{};
+  uint8_t curArgVT_ = 0;
+  FuncRT* entryFn_ = nullptr;
+  Slot entryResult_{};
+  char entryKind_ = 'V';
+  bool pending_ = false;
+  Obj* pendingThrow_ = nullptr;         // raised at the AWAIT when a resumed async function continues
   int runNormal();  // the interpreter (interp_loop.inc)
   int runDebug();   // the same loop with debugger checks, used only while a debugger is attached
   Slot invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32_t argc);
@@ -489,6 +540,7 @@ void registerJsonNatives(VM& vm);
 void registerCryptoNatives(VM& vm);
 void registerDateNatives(VM& vm);
 void registerTestNatives(VM& vm);
+void registerPromiseNatives(VM& vm);  // promise.cpp
 void applyNativeCosts(VM& vm);  // core.cpp
 
 }  // namespace e7

@@ -67,6 +67,7 @@ VM::VM(const VMConfig& cfg) : cfg_(cfg) {
   registerCryptoNatives(*this);
   registerDateNatives(*this);
   registerTestNatives(*this);
+  registerPromiseNatives(*this);
   applyNativeCosts(*this);
 }
 
@@ -257,8 +258,11 @@ const HandlerDesc* VM::handlerAt(size_t k) const {
 
 bool VM::willBeCaught() const {
   if (catchDepth_ > 0) return true;
-  for (size_t k = frames_.size(); k-- > 0;)
+  for (size_t k = frames_.size(); k-- > 0;) {
     if (handlerAt(k)) return true;
+    // an async function turns an error into the rejection of its promise
+    if (frames_[k].coro && fflagsKind(frames_[k].coro->fflags) == FK_ASYNC && frames_[k].coro->promise) return true;
+  }
   return false;
 }
 
@@ -269,7 +273,33 @@ bool VM::willBeCaught() const {
 int VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
   for (size_t k = frames_.size(); k-- > entryDepth;) {
     const HandlerDesc* h = handlerAt(k);
-    if (!h) continue;
+    if (!h) {
+      CoroObj* co = frames_[k].coro;
+      if (!co || fflagsKind(co->fflags) != FK_ASYNC || !co->promise) continue;
+      // the error leaves an async function: its promise is rejected and the function returns it
+      budget_ -= (int64_t)(frames_.size() - k);
+      nativeDepth_ = st.nativeDepth;
+      gcBlockers_ = st.gcBlockers;
+      curNative_ = st.curNative;
+      callbackNatives_.resize(st.callbacks);
+      tempRoots_.resize(st.tempRoots);
+      gcInhibit_ = st.gcInhibit;
+      Obj* v = errorValue(e);  // may collect: the frames are still in place
+      TempRoot keep(*this, v);
+      PromiseObj* p = co->promise;
+      bool ent = frames_[k].entry;
+      uint16_t dst = frames_[k].retDst;
+      dropFrames(k);
+      rejectPromise(p, v);
+      if (ent) {
+        result_.r = p;
+        resultKind_ = 'R';
+        return 3;
+      }
+      Frame& c = frames_.back();
+      if (dst != kNoReg) stack_[c.base + dst].r = p;
+      return 1;
+    }
     // a debugger in pause-to-host mode that stops on caught errors: stop before the handler runs,
     // with the frames of the throw still in place; resume() completes the catch (only from the
     // top level: the C++ frames of a native cannot be kept for a pause)
@@ -669,6 +699,7 @@ void VM::freeObj(Obj* o) {
     case OT::Buffer: free(static_cast<BufObj*>(o)->data); break;
     case OT::Map: static_cast<MapObj*>(o)->~MapObj(); break;
     case OT::BigInt: static_cast<BigObj*>(o)->~BigObj(); break;
+    case OT::Promise: static_cast<PromiseObj*>(o)->reactions.~vector(); break;
     default: break;
   }
   free(o);
@@ -736,9 +767,20 @@ bool VM::checkHeap(std::string* why) const {
         if (b->vt == VT_REF && !ref(b->v.r, "a box")) return false;
         break;
       }
+      case OT::Promise: {
+        auto* p = static_cast<const PromiseObj*>(o);
+        if ((p->state == PS_REJECTED || (p->state == PS_FULFILLED && p->vt == VT_REF)) && !ref(p->value.r, "a promise's value"))
+          return false;
+        for (auto& r : p->reactions)
+          if (!ref(r.a, "a promise reaction") || !ref(r.b, "a promise reaction") || !ref(r.derived, "a promise reaction") ||
+              !ref(r.agg, "a promise reaction") || (r.capturedVT == VT_REF && !ref(r.captured.r, "a promise reaction")))
+            return false;
+        break;
+      }
       case OT::Coro: {
         auto* c = static_cast<const CoroObj*>(o);
         if (!ref(c->closure, "a coroutine's closure")) return false;
+        if (!ref(c->promise, "a coroutine's promise")) return false;
         if (c->state == CO_START || c->state == CO_SUSPENDED) {
           const Slot* rs = reinterpret_cast<const Slot*>(c + 1);
           for (uint16_t r : c->fn->refRegs)
@@ -801,6 +843,25 @@ void VM::markRoots() {
     mark(fr.coro);
   }
   if (resultKind_ == 'R') mark(result_.r);
+  // promises: queued jobs, host tickets, rejections to report, the running job, the entry call's result
+  auto markReaction = [&](const Reaction& r) {
+    mark(r.a);
+    mark(r.b);
+    mark(r.derived);
+    mark(r.agg);
+    if (r.capturedVT == VT_REF || r.capturedRejected) mark(r.captured.r);
+  };
+  for (const Job& j : microtasks_) {
+    markReaction(j.r);
+    if (j.argVT == VT_REF || j.rejected) mark(j.arg.r);
+  }
+  for (auto& kv : tickets_) mark(kv.second.first);
+  for (PromiseObj* p : unhandled_) mark(p);
+  mark(curDerived_);
+  markReaction(curReaction_);
+  if (curArgVT_ == VT_REF || curRejected_) mark(curArg_.r);
+  if (entryKind_ == 'R') mark(entryResult_.r);
+  mark(pendingThrow_);
   for (Obj* o : tempRoots_) mark(o);
   for (auto& kv : pins_) mark(kv.first);
 }
@@ -835,6 +896,18 @@ void VM::traceAll() {
       case OT::Box: {
         auto* b = static_cast<BoxObj*>(o);
         if (b->vt == VT_REF) mark(b->v.r);
+        break;
+      }
+      case OT::Promise: {
+        auto* p = static_cast<PromiseObj*>(o);
+        if (p->state == PS_REJECTED || (p->state == PS_FULFILLED && p->vt == VT_REF)) mark(p->value.r);
+        for (auto& r : p->reactions) {
+          mark(r.a);
+          mark(r.b);
+          mark(r.derived);
+          mark(r.agg);
+          if (r.capturedVT == VT_REF || r.capturedRejected) mark(r.captured.r);
+        }
         break;
       }
       case OT::Coro: {
@@ -1002,7 +1075,7 @@ void VM::unloadModule(ModuleRT* mod) {
 
 // ------------------------------------------------------------------ entry
 int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
-  if (suspended_ || !frames_.empty()) errorCode(ERR_STATE, "VM is busy (suspended or running)");
+  if (suspended_ || pending_ || !frames_.empty()) errorCode(ERR_STATE, "VM is busy (suspended, waiting for host operations, or running)");
   if (nargs != f->nparams) errorCode(ERR_ARGS, "function '%s' expects %u arguments, got %u", f->name.c_str(), f->nparams, nargs);
   if (f->nregs > cfg_.stackSlots) errorCode(ERR_STACK, "stack overflow");
   Slot* R = stack_;
@@ -1010,6 +1083,9 @@ int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
   for (uint16_t r : f->refInit) R[r].r = nullptr;
   frames_.push_back(Frame{f, f->code, nullptr, 0, kNoReg, true});
   resultKind_ = 'V';
+  curJob_ = JOB_ENTRY;
+  entryFn_ = f;
+  entryKind_ = 'V';
   if (gcRequested_ || kGCStress) collectGarbage();
   return runFrames();
 }
@@ -1018,10 +1094,50 @@ int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
 // debugger pauses it (ERR_PAUSED: the frames are kept for inspection).
 int VM::runFrames() {
   try {
-    int st = execute(0);
-    if (st == ERR_SUSPENDED || st == ERR_PAUSED) suspended_ = true;
-    else dropFrames(0);
-    return st;
+    // the call's frames, then the microtasks they queued (each one a short call), until none is left
+    for (;;) {
+      if (!frames_.empty()) {
+        int st;
+        try {
+          st = execute(0);
+        } catch (E7Error& e) {
+          if (failCallbackJob(e)) continue;  // a then-callback threw: its promise is rejected
+          throw;
+        }
+        if (st == ERR_SUSPENDED || st == ERR_PAUSED) {
+          suspended_ = true;
+          return st;
+        }
+        JobKind jk = curJob_;
+        curJob_ = JOB_NONE;
+        if (jk == JOB_ENTRY) {
+          entryResult_ = result_;
+          entryKind_ = resultKind_;
+        } else if (jk == JOB_CALLBACK) {
+          curJob_ = JOB_CALLBACK;
+          finishCallbackJob(result_, resultKind_);
+        }
+        dropFrames(0);
+      }
+      if (microtasks_.empty()) break;
+      // a job is charged like a call
+      if (--budget_ < 0 && budgetStart_ != INT64_MAX) {
+        if (cfg_.suspendOnBudget) {
+          suspended_ = true;
+          return ERR_SUSPENDED;
+        }
+        budget_ = 0;
+        errorCode(ERR_BUDGET, "instruction budget exhausted");
+      }
+      Job j = microtasks_.front();
+      microtasks_.pop_front();
+      // the job's objects are only here now: keep them while it starts
+      TempRoot k1(*this, j.r.a), k2(*this, j.r.b), k3(*this, j.r.derived), k4(*this, j.r.agg),
+          k5(*this, (j.argVT == VT_REF || j.rejected) ? j.arg.r : nullptr),
+          k6(*this, (j.r.capturedVT == VT_REF || j.r.capturedRejected) ? j.r.captured.r : nullptr);
+      startJob(j);
+    }
+    return finishTurn();
   } catch (E7Error&) {
     if (dbg_ && dbg_->takeErrorPause()) {
       // a debugger in pause-to-host mode reports the error first: keep the frames for inspection,
@@ -1044,6 +1160,11 @@ int VM::runFrames() {
 }
 
 int VM::resume() {
+  if (pending_ && !suspended_) {
+    // host tickets were settled: run what they queued
+    pending_ = false;
+    return runFrames();
+  }
   if (!suspended_) errorCode(ERR_STATE, "VM is not suspended");
   if (dbg_ && dbg_->errorPending()) {
     // the error reported to the debugger now terminates the call
@@ -1060,6 +1181,19 @@ int VM::resume() {
 void VM::resetExecution() {
   pendingCatch_ = PendingCatch{};
   dropFrames(0);
+  microtasks_.clear();
+  tickets_.clear();
+  unhandled_.clear();
+  curJob_ = JOB_NONE;
+  curDerived_ = nullptr;
+  curReaction_ = Reaction{};
+  curArg_.u = 0;
+  curArgVT_ = 0;
+  curRejected_ = false;
+  entryFn_ = nullptr;
+  entryKind_ = 'V';
+  pending_ = false;
+  pendingThrow_ = nullptr;
   gcInhibit_ = 0;
   suspended_ = false;
   nativeDepth_ = 0;

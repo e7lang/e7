@@ -106,7 +106,7 @@ namespace e7 {
   /* throw R[A] (an Error object); try/catch handlers are in the function's handler table */ \
   X(THROW, "R__", '-') \
   /* 0.3: coroutines (generators, async functions; see BYTECODE.md section 6) */ \
-  X(GEN_START, "___", '-') X(ASYNC_START, "___", '-') \
+  X(GEN_START, "___", '-') X(ASYNC_START, "v__", '-') \
   X(YIELD, "***", '-') X(RESUME_I, "***", '-') X(RESUME_F, "***", '-') X(RESUME_R, "***", '-') \
   X(AWAIT, "***", '-') \
   /* 0.3: records with a presence mask (D7) */ \

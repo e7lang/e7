@@ -111,7 +111,7 @@ endif()
 set(E7_CORE_SRC src/core/utf.cpp src/core/numfmt.cpp src/core/serialize.cpp src/core/verify.cpp src/core/disasm.cpp
   third_party/fdlibm/ieee754.cpp)
 set(E7_VM_SRC
-  src/vm/vm.cpp src/vm/interp.cpp src/vm/debug.cpp
+  src/vm/vm.cpp src/vm/interp.cpp src/vm/debug.cpp src/vm/promise.cpp
   src/stdlib/core.cpp src/stdlib/string.cpp src/stdlib/array.cpp src/stdlib/map.cpp src/stdlib/math.cpp
   src/stdlib/bytes.cpp src/stdlib/bigint.cpp src/stdlib/json.cpp src/stdlib/encoding.cpp src/stdlib/date.cpp
   src/stdlib/test.cpp

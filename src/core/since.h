@@ -64,6 +64,14 @@ struct NativeSince { const char* name; uint32_t since; };
 inline const NativeSince* nativeSinceTable(size_t& n) {
   static const NativeSince kTable[] = {
       {"Object.has", makeVersion(0, 3, 0)},
+      {"Promise.resolveI", makeVersion(0, 3, 0)}, {"Promise.resolveF", makeVersion(0, 3, 0)},
+      {"Promise.resolveR", makeVersion(0, 3, 0)}, {"Promise.reject", makeVersion(0, 3, 0)},
+      {"Promise.new", makeVersion(0, 3, 0)}, {"Promise.resolveFnI", makeVersion(0, 3, 0)},
+      {"Promise.resolveFnF", makeVersion(0, 3, 0)}, {"Promise.resolveFnR", makeVersion(0, 3, 0)},
+      {"Promise.rejectFn", makeVersion(0, 3, 0)}, {"Promise.then", makeVersion(0, 3, 0)},
+      {"Promise.finally", makeVersion(0, 3, 0)}, {"Promise.all", makeVersion(0, 3, 0)},
+      {"Promise.allSettled", makeVersion(0, 3, 0)}, {"Promise.any", makeVersion(0, 3, 0)},
+      {"Promise.race", makeVersion(0, 3, 0)},
   };
   n = sizeof kTable / sizeof kTable[0];
   return kTable;

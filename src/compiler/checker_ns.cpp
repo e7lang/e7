@@ -271,6 +271,65 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
     }
     return bad();
   }
+  if (M == "Promise") {
+    Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : nullptr;
+    e->intrinsic = IN_PROMISE_STATIC;
+    e->raw = name;
+    if (isCall && name == "resolve") {
+      if (args.empty()) return T.promise(T.voidT());
+      if (args.size() != 1) return errT(l, "Promise.resolve takes one argument");
+      Type* t = check(args[0], expElem);
+      if (t->t == TT::Promise) return t;  // the promise itself
+      if (t->t == TT::Void) return errT(args[0]->loc, "cannot resolve a promise with a void value");
+      if (expElem && t != expElem) {
+        coerce(args[0], expElem, "Promise.resolve");
+        t = expElem;
+      }
+      if (t->t == TT::Undefined) t = T.voidT();
+      return T.promise(t);
+    }
+    if (isCall && name == "reject") {
+      if (args.size() != 1) return errT(l, "Promise.reject takes one argument (an Error)");
+      if (!argsMatch(e, args, {T.error()}, 1, "Promise.reject")) return T.unknown();
+      e->intrinsic = IN_PROMISE_STATIC;
+      e->raw = name;
+      return T.promise(expElem ? expElem : T.voidT());
+    }
+    if (isCall && (name == "all" || name == "allSettled" || name == "any" || name == "race")) {
+      if (args.size() != 1) return errT(l, "Promise." + name + " takes one array of promises");
+      Type* want = nullptr;
+      if (expElem && name == "all" && expElem->t == TT::Array) want = T.array(T.promise(expElem->elem));
+      if (expElem && (name == "any" || name == "race")) want = T.array(T.promise(expElem));
+      Type* t = check(args[0], want);
+      if (t->t == TT::Tuple) {
+        // [p1, p2]: promises of one type
+        Type* et = nullptr;
+        for (Type* x : t->elems) et = !et || et == x ? x : nullptr;
+        if (!et && !t->elems.empty()) return errT(args[0]->loc, "Promise." + name + " over promises of different types is not supported (E7 types are static); give them one type");
+        t = T.array(et ? et : T.promise(T.voidT()));
+        Expr* arr = P.arena.expr(EK::Array, args[0]->loc);
+        arr->list = strip(args[0])->k == EK::Array ? strip(args[0])->list : std::vector<Expr*>{};
+        if (strip(args[0])->k != EK::Array) return errT(args[0]->loc, "Promise." + name + " expects an array of promises");
+        args[0] = arr;
+        check(arr, t);
+      }
+      if (t->t != TT::Array || t->elem->t != TT::Promise) return errT(args[0]->loc, "Promise." + name + " expects an array of promises, not '" + typeName(t) + "'");
+      e->intrinsic = IN_PROMISE_STATIC;
+      e->raw = name;
+      Type* vt = t->elem->elem;
+      if (name == "all") return T.promise(T.array(vt->t == TT::Void ? T.undef() : vt));
+      if (name == "allSettled") {
+        Type* vopt = T.optional(vt->t == TT::Void ? T.undef() : vt, false, true);
+        Type* ropt = T.optional(T.error(), false, true);
+        e->cls = recordFor({{"status", T.string()}, {"value", vopt}, {"reason", ropt}})->cls;
+        Type* rec = T.anonObject({{"status", T.string(), false}, {"value", vopt, true}, {"reason", ropt, true}});
+        return T.promise(T.array(rec));
+      }
+      return T.promise(vt);
+    }
+    e->intrinsic = 0;
+    return bad();
+  }
   if (M == "Object") {
     if (isCall && name == "keys") {
       if (args.size() != 1) return errT(l, "Object.keys expects one argument");
@@ -1112,7 +1171,25 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     nat("Date.fromParts");
     return T.date();
   }
-  if (name == "RegExp" || name == "Promise" || name == "WeakMap" || name == "WeakSet" || name == "Proxy")
+  if (name == "Promise") {
+    // new Promise<T>((resolve, reject) => { ... })
+    Type* vt = nullptr;
+    if (!e->typeArgs.empty()) vt = resolveType(e->typeArgs[0]);
+    else if (exp && exp->t == TT::Promise) vt = exp->elem;
+    if (!vt) return errT(l, "write the promise's value type: new Promise<T>((resolve, reject) => ...)");
+    if (vt->t == TT::Undefined) vt = T.voidT();
+    if (args.size() != 1) return errT(l, "new Promise takes one executor function");
+    std::vector<Type*> rp;
+    if (vt->t != TT::Void) rp.push_back(vt);
+    Type* resolveT = T.func(rp, T.voidT());
+    Type* rejectT = T.func({T.error()}, T.voidT());
+    Type* ft = check(args[0], T.func({resolveT, rejectT}, T.voidT()));
+    if (ft->t != TT::Func) return errT(args[0]->loc, "new Promise expects an executor function");
+    coerce(args[0], T.func({resolveT, rejectT}, T.voidT()), "executor");
+    e->intrinsic = IN_NEW_PROMISE;
+    return T.promise(vt);
+  }
+  if (name == "RegExp" || name == "WeakMap" || name == "WeakSet" || name == "Proxy")
     return errT(l, "'" + name + "' is not supported in E7");
   return errT(l, "cannot find class '" + name + "'");
 }

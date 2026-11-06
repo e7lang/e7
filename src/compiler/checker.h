@@ -169,6 +169,8 @@ class Checker {
   Type* bodyRet(FuncSym* f);
   void checkCoroutineRet(FuncSym* f, Type* ret, Loc l);
   Type* checkYield(Expr* e);
+  Type* checkAwait(Expr* e);
+  Type* promiseCallbackRet(Expr* cb, Type* ret, Loc l);
   Type* iteratorMethodType(Type* t, Loc l);
   Type* genTypeArg(TypeNode* n);
   Type* iterResultType(Type* g, Loc l);

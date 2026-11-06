@@ -398,7 +398,7 @@ struct Gen {
     code.insert(code.begin(), prefix.begin(), prefix.end());
     // a generator's GEN_START stays the first instruction (no jump targets it); the constants are
     // loaded when the body first runs and are saved with its registers
-    if (code.size() > k && insOp(code[k]) == OP_GEN_START) std::rotate(code.begin(), code.begin() + (std::ptrdiff_t)k, code.begin() + (std::ptrdiff_t)k + 1);
+    if (code.size() > k && (insOp(code[k]) == OP_GEN_START || insOp(code[k]) == OP_ASYNC_START)) std::rotate(code.begin(), code.begin() + (std::ptrdiff_t)k, code.begin() + (std::ptrdiff_t)k + 1);
     for (size_t i = 0; i + 1 < D->lines.size(); i += 2) D->lines[i] += (uint32_t)k;
     for (auto& fs : fileSegs) fs.first += (uint32_t)k;
     for (auto& h : D->handlers) { h.start += (uint32_t)k; h.end += (uint32_t)k; h.handler += (uint32_t)k; }
@@ -554,6 +554,26 @@ struct Gen {
   // run to its end is closed (return())
   uint16_t iterToArray(uint16_t coll, Type* t, int maxN, Type* elemT);
   void genGenMethod(Expr* e, uint16_t dst);
+  // promises (0.3)
+  void genAwait(Expr* e, uint16_t dst);
+  void genPromiseCall(Expr* e, uint16_t dst);
+  void genNewPromise(Expr* e, uint16_t dst);
+  uint16_t vtReg(Type* t) {  // an integer register holding the value type of a promise of t
+    uint16_t r = temp(K_I);
+    loadInt(r, t->t == TT::Void || t->t == TT::Undefined ? (int64_t)VT_REF : (int64_t)vtOf(t));
+    return r;
+  }
+  // functions the compiler adds (the resolve / reject functions of new Promise): created after the
+  // others, at fixed indices
+  std::vector<int> synthKinds;  // 0..2 resolve I/F/R, 3 resolve void, 4 reject
+  uint32_t synthBase = 0;
+  uint32_t synthFn(int kind) {
+    for (size_t i = 0; i < synthKinds.size(); i++)
+      if (synthKinds[i] == kind) return synthBase + (uint32_t)i;
+    synthKinds.push_back(kind);
+    return synthBase + (uint32_t)synthKinds.size() - 1;
+  }
+  void emitSynthFns();
   void genSwitch(Stmt* s);
 
   // expressions
@@ -726,6 +746,7 @@ bool Gen::run(const std::string& name) {
     f->funcIdx = (int)idx++;
   }
   M.funcs.resize(idx);
+  synthBase = idx;
   // globals
   for (VarSym* g : P.globals) {
     GlobalDesc gd;
@@ -740,6 +761,7 @@ bool Gen::run(const std::string& name) {
     else genFunction(f);
   }
   M.initFunc = (uint32_t)P.init->funcIdx;
+  emitSynthFns();
   // classes (after functions so that records created during codegen are included)
   for (ClassSym* c : P.classes) {
     ClassDesc cd;
@@ -775,7 +797,8 @@ bool Gen::run(const std::string& name) {
     for (Type* p : ft->params) ed.hostSig += code(p);
     if (ex.second->hasDefaults) ed.hostSig += 'x';
     ed.hostSig += '>';
-    ed.hostSig += code(ft->ret);
+    // an async function: the host gets the promise's value (the call waits for it)
+    ed.hostSig += ex.second->isAsync && ft->ret->t == TT::Promise ? code(ft->ret->elem) : code(ft->ret);
     M.exports.push_back(ed);
   }
   return P.errors.empty();
@@ -815,8 +838,16 @@ void Gen::genInitOnce() {
   D->name = "<init>";
   resetFileSegs();
   dbgBegin(nullptr);
-  D->sig = sig(">V");
   D->nparams = 0;
+  D->fflags = 0;
+  if (f->isAsync) {
+    // top-level await: the initializer is an async function (its promise is the module's evaluation)
+    D->sig = sig(">R");
+    D->fflags = makeFflags(FK_ASYNC, 0, 0, 0);
+    emit(OP_ASYNC_START, VT_REF);
+  } else {
+    D->sig = sig(">V");
+  }
   for (auto& fl : freeRegs) fl.clear();
   temps.clear();
   varReg.clear();
@@ -996,6 +1027,11 @@ void Gen::genFunctionOnce(FuncSym* f) {
     D->fflags = makeFflags(FK_GENERATOR, yk, nk, rk);
     emit(OP_GEN_START);
   }
+  if (f->isAsync && !f->isGenerator && f->type->ret->t == TT::Promise) {
+    Type* pt = f->type->ret->elem;
+    D->fflags = makeFflags(FK_ASYNC, 0, 0, kindCode(pt));
+    emit(OP_ASYNC_START, pt->t == TT::Void ? (uint16_t)VT_REF : (uint16_t)vtOf(pt));
+  }
   D->upvalKinds.assign(f->captures.size(), (uint8_t)K_R);
   // upvalue kinds describe the *content* of the captured cells
   for (size_t i = 0; i < f->captures.size(); i++) D->upvalKinds[i] = (uint8_t)K(f->captures[i]->type);
@@ -1039,7 +1075,12 @@ void Gen::genFunctionOnce(FuncSym* f) {
   if (f->isCtor && (!f->cls->parent)) genCtorFieldInits();
   if (f->exprBody) {
     stmtBoundary(f->exprBody->loc);
-    Kind rk = kindOf(f->type->ret);
+    Kind rk = kindOf(bodyRet(f));
+    if (f->isAsync && f->exprBody->type && f->exprBody->type->t == TT::Promise) {
+      uint16_t r = gen(f->exprBody);  // its promise adopts this one
+      emit(OP_RET_R, r);
+      return;
+    }
     if (rk == K_V) {
       genDiscard(f->exprBody);
       emit(OP_RET_V);
@@ -1560,6 +1601,11 @@ void Gen::genStmt(Stmt* s) {
           r = temp(K_R);
           emit(OP_LOADUNDEF, r);
         }
+      } else if (fn->isAsync && s->expr->type && s->expr->type->t == TT::Promise) {
+        // `return p` in an async function: its promise adopts p
+        rk = K_R;
+        r = temp(K_R);
+        genInto(s->expr, r);
       } else if (rk == K_V) {
         genDiscard(s->expr);
       } else if (fin) {
@@ -2182,6 +2228,153 @@ void Gen::genGenMethod(Expr* e, uint16_t dst) {
   }
   emit(OP_SETF_I, obj, (uint16_t)fd, done);
   mov(dst, obj, K_R);
+  release(m0);
+}
+
+// ======================================================================= promises (0.3)
+void Gen::emitSynthFns() {
+  for (int kind : synthKinds) {
+    FuncDesc fd;
+    D = &fd;
+    // (value) => resolveFn(promise, value) / (reason) => rejectFn(promise, reason): the promise is
+    // the closure's upvalue 0
+    static const char* const names[5] = {"resolve", "resolve", "resolve", "resolve", "reject"};
+    fd.name = names[kind];
+    fd.upvalKinds = {(uint8_t)K_R};
+    if (kind == 3) {
+      fd.sig = sig(">V");
+      fd.nparams = 0;
+      fd.regKinds = {(uint8_t)K_R, (uint8_t)K_R};
+      emit(OP_UGET_R, 0, 0);
+      emit(OP_LOADUNDEF, 1);
+      emit(OP_CALLN, kNoReg, (uint16_t)native("Promise.resolveFnR", "RR>V"), 2);
+      emitWord(encode(0, 0) | (1ull << 16));
+    } else {
+      Kind k = kind == 4 ? K_R : (Kind)kind;
+      std::string ks(1, kindChar(k));
+      fd.sig = sig(ks + ">V");
+      fd.nparams = 1;
+      fd.regKinds = {(uint8_t)k, (uint8_t)K_R};
+      emit(OP_UGET_R, 1, 0);
+      std::string nm = kind == 4 ? "Promise.rejectFn" : std::string("Promise.resolveFn") + kindChar(k);
+      emit(OP_CALLN, kNoReg, (uint16_t)native(nm, "R" + ks + ">V"), 2);
+      emitWord((uint64_t)1 | ((uint64_t)0 << 16));
+    }
+    emit(OP_RET_V);
+    M.funcs.push_back(fd);
+  }
+  D = nullptr;
+}
+
+void Gen::genAwait(Expr* e, uint16_t dst) {
+  size_t m0 = mark();
+  Type* t = e->a->type;
+  uint16_t p = temp(K_R);
+  Type* vt = t;
+  if (t->t == TT::Promise) {
+    genInto(e->a, p);
+    vt = t->elem;
+  } else {
+    // await v: await Promise.resolve(v)
+    uint16_t v = gen(e->a);
+    Kind k = kindOf(t);
+    callNative(std::string("Promise.resolve") + kindChar(k), {v, vtReg(t)}, p, 'R');
+  }
+  if (vt->t == TT::Void || dst == kNoReg) {
+    emit(OP_AWAIT, kNoReg, p);
+    if (dst != kNoReg) emit(OP_LOADUNDEF, dst);
+  } else {
+    emit(OP_AWAIT, dst, p);
+  }
+  release(m0);
+}
+
+void Gen::genPromiseCall(Expr* e, uint16_t dst) {
+  size_t m0 = mark();
+  uint16_t out = dst == kNoReg ? temp(K_R) : dst;
+  if (e->intrinsic == IN_PROMISE_THEN) {
+    Expr* m = strip(e->a);
+    uint16_t p = temp(K_R);
+    genInto(m->a, p);
+    if (e->raw == "finally") {
+      uint16_t f = temp(K_R);
+      genInto(e->list[0], f);
+      callNative("Promise.finally", {p, f}, out, 'R');
+    } else {
+      uint16_t onF = temp(K_R), onR = temp(K_R);
+      if (e->raw == "catch") {
+        emit(OP_LOADNULL, onF);
+        genInto(e->list[0], onR);
+      } else {
+        genInto(e->list[0], onF);
+        if (e->list.size() > 1) genInto(e->list[1], onR);
+        else emit(OP_LOADNULL, onR);
+      }
+      callNative("Promise.then", {p, onF, onR, vtReg(e->type->elem)}, out, 'R');
+    }
+  } else {
+    const std::string& nm = e->raw;
+    if (nm == "resolve") {
+      if (e->list.empty()) {
+        uint16_t u = temp(K_R);
+        emit(OP_LOADUNDEF, u);
+        callNative("Promise.resolveR", {u, vtReg(T.voidT())}, out, 'R');
+      } else if (e->list[0]->type->t == TT::Promise) {
+        genInto(e->list[0], out);
+      } else {
+        uint16_t v = gen(e->list[0]);
+        Type* vt = e->type->elem;
+        callNative(std::string("Promise.resolve") + kindChar(K(vt->t == TT::Void ? T.undef() : vt)), {v, vtReg(vt)}, out, 'R');
+      }
+    } else if (nm == "reject") {
+      uint16_t er = gen(e->list[0]);
+      callNative("Promise.reject", {er, vtReg(e->type->elem)}, out, 'R');
+    } else {
+      uint16_t arr = gen(e->list[0]);
+      Type* vt = e->list[0]->type->elem->elem;
+      if (nm == "allSettled") {
+        uint16_t ci = temp(K_I);
+        loadInt(ci, e->cls->classIdx);
+        callNative("Promise.allSettled", {arr, vtReg(vt), ci}, out, 'R');
+      } else {
+        callNative("Promise." + nm, {arr, vtReg(vt)}, out, 'R');
+      }
+    }
+  }
+  release(m0);
+}
+
+// new Promise<T>(executor): the executor gets the promise's resolve and reject functions; an error it
+// throws rejects the promise
+void Gen::genNewPromise(Expr* e, uint16_t dst) {
+  size_t m0 = mark();
+  Type* vt = e->type->elem;
+  uint16_t p = temp(K_R);
+  callNative("Promise.new", {vtReg(vt)}, p, 'R');
+  uint16_t cell = temp(K_R);
+  emit(OP_NEWCELL, cell, VT_REF);
+  emit(OP_CSET_R, cell, p);
+  uint16_t res = temp(K_R), rej = temp(K_R);
+  int rk = vt->t == TT::Void ? 3 : (int)K(vt);
+  emit(OP_CLOSURE, res, (uint16_t)synthFn(rk), 1);
+  emitRegList({cell});
+  emit(OP_CLOSURE, rej, (uint16_t)synthFn(4), 1);
+  emitRegList({cell});
+  uint16_t ex = temp(K_R);
+  genInto(e->list[0], ex);
+  Type* ft = e->list[0]->type;
+  uint32_t a = (uint32_t)pc();
+  std::vector<uint16_t> args = {res, rej};
+  args.resize(std::min<size_t>(args.size(), ft->params.size()));
+  callClosure(ex, ft, args, kNoReg);
+  uint32_t b = (uint32_t)pc();
+  Label* after = newLabel();
+  jump(OP_JMP, 0, after);
+  uint16_t er = temp(K_R);
+  D->handlers.push_back(HandlerDesc{a, b, (uint32_t)pc(), er});
+  callNative("Promise.rejectFn", {p, er}, kNoReg, 'V');
+  place(after);
+  if (dst != kNoReg) mov(dst, p, K_R);
   release(m0);
 }
 
@@ -2926,7 +3119,7 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
       genYield(e, dst);
       return;
     case EK::Await:
-      err(e->loc, "await is not supported yet");
+      genAwait(e, dst);
       return;
     case EK::Super:
     case EK::Spread:
@@ -3520,6 +3713,9 @@ void Gen::genCall(Expr* e, uint16_t dst) {
   switch (e->intrinsic) {
     case IN_GEN_NEXT: case IN_GEN_RETURN: case IN_GEN_THROW:
       genGenMethod(e, dst);
+      return;
+    case IN_PROMISE_THEN: case IN_PROMISE_STATIC:
+      genPromiseCall(e, dst);
       return;
     case IN_DIRECT: {
       FuncSym* f = e->callee;
@@ -4583,6 +4779,10 @@ void Gen::genReplaceFn(Expr* e, uint16_t dst) {
 }
 
 void Gen::genNew(Expr* e, uint16_t d) {
+  if (e->intrinsic == IN_NEW_PROMISE) {
+    genNewPromise(e, d);
+    return;
+  }
   if (e->cls && e->callee) {
     FuncSym* ctor = e->callee;
     uint16_t obj = temp(K_R);

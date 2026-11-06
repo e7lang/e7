@@ -298,6 +298,7 @@ void Checker::checkBody(FuncSym* f) {
     if (r->t != TT::Void && f->body && !exits(f->body)) {
       err(f->loc, "not all code paths of '" + f->name + "' return a value");
     }
+    if (f->isAsync && !f->isGenerator) r = T.promise(r->t == TT::Undefined ? T.voidT() : r);
     if (f->isGenerator) {
       Type* y = nullptr;
       for (Type* t : f->yieldTypes) y = y ? unify(y, t, f->loc, "yield expressions") : t;
@@ -1035,7 +1036,12 @@ void Checker::checkStmt(Stmt* s) {
       Type* declared = f->inferRet ? nullptr : bodyRet(f);
       if (s->expr) {
         Type* t = check(s->expr, declared);
-        if (declared) {
+        if (f->isAsync && t->t == TT::Promise) {
+          // `return p` in an async function: its promise adopts p (codegen: RET_R of the promise)
+          if (declared && t->elem != declared && !(declared->t == TT::Void && t->elem->t == TT::Void))
+            err(s->loc, "type '" + typeName(t) + "' is not assignable to the return type 'Promise<" + typeName(declared) + ">'");
+          if (!declared) f->returnTypes.push_back(t->elem);
+        } else if (declared) {
           if (declared->t == TT::Void) err(s->loc, "a void function cannot return a value");
           else coerce(s->expr, declared, "return");
         } else {

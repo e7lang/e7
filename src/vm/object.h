@@ -142,6 +142,45 @@ struct ClassRT {
   std::unordered_map<std::string, uint32_t> methodIndex;
 };
 
+// ---- promises (DESIGN-0.3.md D2)
+enum PromiseState : uint8_t { PS_PENDING, PS_FULFILLED, PS_REJECTED };
+// What happens when a promise settles (a PromiseReaction of the specification, plus the internal
+// steps of await, finally and the combinators)
+enum ReactionKind : uint8_t {
+  RK_AWAIT,          // resume the async function `a` (a coroutine) with the value, or throw the reason into it
+  RK_THEN,           // call closure a (fulfilled) / b (rejected), resolve `derived` with the result; no handler: pass through
+  RK_THENABLE,       // ResolveThenableJob: `a` is the promise `derived` was resolved with
+  RK_FINALLY,        // call closure a(); then settle `derived` like the source promise (after the result settles)
+  RK_FINALLY_VALUE,  // the value thunk of finally: fulfill derived with `captured` or reject with it
+  RK_ALL,            // Promise.all element `index`: store it in `agg`, fulfill derived when all are in
+  RK_ALL_SETTLED,    // Promise.allSettled element: a { status, value } / { status, reason } record
+  RK_ANY,            // Promise.any element: fulfill derived with the first value; collect the reasons
+  RK_RACE,           // Promise.race: settle derived like the first one to settle
+};
+struct PromiseObj;
+struct Reaction {
+  uint8_t kind = RK_THEN;
+  uint8_t capturedRejected = 0;
+  uint32_t index = 0;
+  Obj* a = nullptr;
+  Obj* b = nullptr;
+  PromiseObj* derived = nullptr;
+  Obj* agg = nullptr;  // combinators: the array of results
+  Slot captured{};     // RK_FINALLY_VALUE: the source's value / reason
+  uint8_t capturedVT = 0;
+};
+struct PromiseObj : Obj {
+  uint8_t state;
+  uint8_t vt;               // value type of the fulfilled value
+  bool handled;             // a reaction was ever added (rejection tracking)
+  bool alreadyResolved;     // resolve / reject functions of `new Promise` were used
+  uint32_t remaining;       // combinators: elements still pending (+1 while being set up)
+  int32_t classIdx;         // allSettled: record class (module classes of `mod`) for the results
+  void* mod;                // allSettled: ModuleRT of the record class
+  Slot value;               // fulfilled value (vt) or rejection reason (an Error object)
+  std::vector<Reaction> reactions;  // while pending
+};
+
 inline uint64_t* InstObj::mask() { return reinterpret_cast<uint64_t*>(fields() + cls->nfields); }
 inline const uint64_t* InstObj::mask() const { return reinterpret_cast<const uint64_t*>(fields() + cls->nfields); }
 inline size_t presenceWords(uint32_t nfields) { return (nfields + 63) / 64; }

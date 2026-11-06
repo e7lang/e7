@@ -1058,7 +1058,13 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
     Type* r = args.size() > 1 ? genTypeArg(args[1]) : T.voidT();
     return iterResultType(T.generator(y, r, T.voidT()), l);
   }
-  if (name == "Promise") return errT(l, "Promise is not supported (no async in E7 v1)");
+  if (name == "Promise" || name == "PromiseLike") {
+    if (!nargs(1)) return T.unknown();
+    Type* e = resolveType(args[0]);
+    if (e->t == TT::Undefined) e = T.voidT();
+    if (e->t == TT::Promise) e = e->elem;  // Promise<Promise<T>> is Promise<T>
+    return T.promise(e);
+  }
   if (name == "Int32Array" || name == "Uint32Array" || name == "Float64Array" || name == "Uint16Array" ||
       name == "Int8Array" || name == "Int16Array" || name == "Float32Array" || name == "Uint8ClampedArray")
     return errT(l, "'" + name + "' is not supported; use Uint8Array, DataView or typed arrays like u32[]");
@@ -1672,6 +1678,9 @@ void Checker::resolveSig(FuncSym* f) {
   Type* ret = f->retNode ? resolveType(f->retNode) : nullptr;
   if (f->isCtor || f->accessor == 2) ret = T.voidT();
   if (ret && (f->isGenerator || f->isAsync)) checkCoroutineRet(f, ret, f->retNode ? f->retNode->loc : f->loc);
+  // an async host function: declare function f(...): Promise<T> (the host settles a ticket)
+  bool asyncNative = f->isNative && ret && ret->t == TT::Promise;
+  if (asyncNative) ret = ret->elem;
   if (f->isNative) {
     if (!ret) ret = T.voidT();
     for (Type* t : ps)
@@ -1680,8 +1689,9 @@ void Checker::resolveSig(FuncSym* f) {
         err(f->loc, "native function parameters must be number, boolean, string, integer, Uint8Array or KeyHandle");
     if (ret->t != TT::Void && ret->t != TT::Number && ret->t != TT::Bool && ret->t != TT::String && ret->t != TT::Int &&
         ret->t != TT::Bytes)
-      err(f->loc, "native function return type must be void, number, boolean, string, integer or Uint8Array");
+      err(f->loc, "native function return type must be void, number, boolean, string, integer or Uint8Array (or a Promise of one)");
   }
+  if (asyncNative) ret = T.promise(ret);
   std::vector<Type*> pp;
   for (Type* t : ps) pp.push_back(t ? t : T.unknown());
   if (!ret) { f->inferRet = true; ret = T.unknown(); }

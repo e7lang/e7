@@ -271,6 +271,7 @@ dispatch:
 #define CORO_RET(rv, kc)                                                     \
   do {                                                                       \
     CoroObj* co_ = fr->coro;                                                 \
+    if (fflagsKind(co_->fflags) == FK_ASYNC) ASYNC_RET(rv, kc);              \
     co_->state = CO_DONE;                                                    \
     bool ent_ = fr->entry;                                                   \
     uint16_t dst_ = fr->retDst, dd_ = fr->doneDst;                           \
@@ -280,6 +281,29 @@ dispatch:
     LOAD_FRAME();                                                            \
     if (dst_ != kNoReg && kc != 'V') R[dst_] = rv;                           \
     if (dd_ != kNoReg) R[dd_].i = 1;                                         \
+    DISPATCH();                                                              \
+  } while (0)
+
+// returning from an async function's frame: its promise is resolved with the value; the caller (the
+// first part of the call) or the job loop (a continuation after an await) gets the promise
+#define ASYNC_RET(rv, kc)                                                    \
+  do {                                                                       \
+    CoroObj* co_ = fr->coro;                                                 \
+    PromiseObj* p_ = co_->promise;                                           \
+    Slot v_ = (rv);                                                          \
+    if (kc == 'V') v_.r = undef_;                                            \
+    fr->ip = ip;                                                             \
+    co_->state = CO_DONE;                                                    \
+    if (kc == 'R' && v_.r && v_.r->type == OT::Promise) adoptPromise(p_, static_cast<PromiseObj*>(v_.r)); \
+    else if (kc != 'V' && kindChar(kindOfVT(p_->vt)) != kc) THROW("async function returned a value of the wrong type"); \
+    else resolvePromise(p_, v_); /* before the frame is popped: its registers keep the value alive */ \
+    bool ent_ = fr->entry;                                                   \
+    uint16_t dst_ = fr->retDst;                                              \
+    frames_.pop_back();                                                      \
+    if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS); \
+    if (ent_) { result_.r = p_; resultKind_ = 'R'; return ERR_OK; }         \
+    LOAD_FRAME();                                                            \
+    if (dst_ != kNoReg) R[dst_].r = p_;                                      \
     DISPATCH();                                                              \
   } while (0)
 
@@ -795,7 +819,44 @@ dispatch:
     setFieldPresent(in, B, false);
     DISPATCH();
   }
-  CASE(ASYNC_START) CASE(AWAIT) THROW("instruction not implemented yet");
+  // first instruction of an async function: its coroutine (owning this frame) and its promise, of
+  // value type A; the body runs on until the first await
+  CASE(ASYNC_START) {
+    fr->ip = ip;
+    CoroObj* co = newCoro(fn, fr->closure);
+    co->state = CO_RUNNING;
+    fr->coro = co;  // rooted by the frame
+    co->promise = newPromise((uint8_t)A);
+    DISPATCH();
+  }
+  // await the promise in B; the value goes to A (or the rejection is raised here) when a job resumes
+  // the function. Leaving the frame gives the caller the function's promise (first await) or ends
+  // the job.
+  CASE(AWAIT) {
+    CoroObj* co = fr->coro;
+    if (E7_UNLIKELY(!co || fflagsKind(co->fflags) != FK_ASYNC || !co->promise)) THROW("await outside a running async function");
+    Obj* po = R[B].r;
+    if (E7_UNLIKELY(!po || po->type != OT::Promise)) THROW("await: the value is not a promise");
+    auto* awaited = static_cast<PromiseObj*>(po);
+    if (E7_UNLIKELY(A != kNoReg && kindOfVT(awaited->vt) != fn->d->regKinds[A])) THROW("await: promise value type mismatch");
+    fr->ip = ip;
+    co->pc = (uint32_t)(ip - 1 - fn->code);
+    memcpy(co->regs(), R, (size_t)fn->nregs * sizeof(Slot));
+    co->state = CO_SUSPENDED;
+    Reaction rr;
+    rr.kind = RK_AWAIT;
+    rr.a = co;
+    promiseThen(awaited, rr);
+    PromiseObj* pr = co->promise;
+    bool ent = fr->entry;
+    uint16_t dst = fr->retDst;
+    frames_.pop_back();
+    if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS);
+    if (ent) { result_.r = pr; resultKind_ = 'R'; return ERR_OK; }
+    LOAD_FRAME();
+    if (dst != kNoReg) R[dst].r = pr;
+    DISPATCH();
+  }
 
 #if !E7_COMPUTED_GOTO
   default:

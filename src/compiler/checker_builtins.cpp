@@ -976,6 +976,49 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       return noSuch();
     }
+    case TT::Promise: {
+      Type* vt = bt->elem;
+      std::vector<Type*> valueParams;
+      if (vt->t != TT::Void) valueParams.push_back(vt);
+      Type* errFn = nullptr;
+      if (meth("then")) {
+        if (args.empty() || args.size() > 2) return errT(l, "then takes one or two callbacks");
+        Type* f1 = check(args[0], T.func(valueParams, T.unknown()));
+        if (f1->t != TT::Func) return errT(args[0]->loc, "then expects a function");
+        Type* u = promiseCallbackRet(args[0], f1->ret, args[0]->loc);
+        if (args.size() == 2) {
+          errFn = check(args[1], T.func({T.error()}, u->t == TT::Void ? T.voidT() : u));
+          if (errFn->t != TT::Func) return errT(args[1]->loc, "then expects a function");
+          Type* u2 = promiseCallbackRet(args[1], errFn->ret, args[1]->loc);
+          if (u2 != u && !(u2->t == TT::Void && u->t == TT::Void))
+            return errT(args[1]->loc, "the callbacks of then must return the same type ('" + typeName(u) + "' and '" + typeName(u2) + "')");
+        }
+        e->intrinsic = IN_PROMISE_THEN;
+        e->raw = "then";
+        return T.promise(u);
+      }
+      if (meth("catch")) {
+        if (args.size() != 1) return errT(l, "catch takes one callback");
+        Type* f2 = check(args[0], T.func({T.error()}, vt));
+        if (f2->t != TT::Func) return errT(args[0]->loc, "catch expects a function");
+        Type* u = promiseCallbackRet(args[0], f2->ret, args[0]->loc);
+        // a handler that returns nothing: the promise keeps the type (an e7 limit: undefined is not a T)
+        if (u != vt && u->t != TT::Void)
+          return errT(args[0]->loc, "the catch callback must return '" + typeName(vt) + "' (the promise's type), not '" + typeName(u) + "'");
+        e->intrinsic = IN_PROMISE_THEN;
+        e->raw = "catch";
+        return T.promise(vt);
+      }
+      if (meth("finally")) {
+        if (args.size() != 1) return errT(l, "finally takes one callback");
+        Type* f3 = check(args[0], T.func({}, T.voidT()));
+        if (f3->t != TT::Func || !f3->params.empty()) return errT(args[0]->loc, "finally expects a function without parameters");
+        e->intrinsic = IN_PROMISE_THEN;
+        e->raw = "finally";
+        return T.promise(vt);
+      }
+      return noSuch();
+    }
     case TT::Generator: {
       // g.next(v?) / g.return(v?) / g.throw(e): an IteratorResult record
       if (meth("next") || meth("return")) {
@@ -1159,4 +1202,15 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
   }
 }
 
+}  // namespace e7
+
+namespace e7 {
+// The value type a promise callback produces: U for a callback returning U or Promise<U>
+Type* Checker::promiseCallbackRet(Expr* cb, Type* ret, Loc l) {
+  (void)cb;
+  (void)l;
+  if (ret->t == TT::Promise) return ret->elem;
+  if (ret->t == TT::Undefined) return T.voidT();
+  return ret;
+}
 }  // namespace e7

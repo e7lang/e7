@@ -68,7 +68,7 @@ Type* Checker::checkInner(Expr* e, Type* expected) {
     case EK::Arrow: return checkArrow(e, expected);
     case EK::Spread: return errT(e->loc, "spread is not allowed here");
     case EK::Yield: return checkYield(e);
-    case EK::Await: return errT(e->loc, "'await' is not supported yet");
+    case EK::Await: return checkAwait(e);
     case EK::Paren: return check(e->a, expected);
     case EK::Conv: return e->type;
     case EK::TypeOf: {
@@ -331,6 +331,24 @@ Type* Checker::iteratorMethodType(Type* t, Loc l) {
     return nullptr;
   }
   return r;
+}
+
+// await p: the value of a Promise<T> (another value is awaited as Promise.resolve(value))
+Type* Checker::checkAwait(Expr* e) {
+  FuncSym* f = curFn;
+  if (!f || (!f->isAsync && !f->isInit)) return errT(e->loc, "'await' is only allowed in async functions and at the top level of the entry module");
+  if (f->isInit) {
+    if (P.files.empty() || curFile != P.files.back()->path)
+      return errT(e->loc, "top-level 'await' is only supported in the entry module (this module is imported)");
+    if (!f->isAsync) {
+      f->isAsync = true;
+      f->type = T.func({}, T.promise(T.voidT()));
+    }
+  }
+  Type* t = check(e->a, nullptr);
+  if (t->t == TT::Promise) return t->elem;
+  if (t->t == TT::Void) return errT(e->a->loc, "cannot await a void value");
+  return t;
 }
 
 // yield v / yield* iterable (in the body of a generator)

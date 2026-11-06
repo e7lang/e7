@@ -84,6 +84,8 @@ bool verifyModule(const Module& m, std::string& err) {
     for (size_t i = 0; i <= gt; i++) {
       char hk = i < gt ? hostKind(hs[i]) : hostKind(hs[gt + 1]);
       char fk = i < gt ? fp[i] : sigRet(fs);
+      // an async function returns a promise; the host gets its value (the kind of fflags' return)
+      if (i == gt && fflagsKind(m.funcs[e.func].fflags) == FK_ASYNC) fk = "VIFR"[fflagsReturn(m.funcs[e.func].fflags)];
       if (!hk || (hk == 'V') != (fk == 'V') || (hk != '*' && hk != fk))
         return F("export '%s' host signature does not match the function", e.name.c_str());
     }
@@ -117,7 +119,9 @@ bool verifyModule(const Module& m, std::string& err) {
         (fflagsYield(f.fflags) == 0 || (fflagsReturn(f.fflags) != 0 && fflagsReturn(f.fflags) != fflagsYield(f.fflags))))
       return F("function %zu: bad generator flags", fi);
   }
-  if (m.sigs[m.funcs[m.initFunc].sig] != ">V") return F("init function must take no arguments");
+  if (m.sigs[m.funcs[m.initFunc].sig] != ">V" &&
+      !(m.sigs[m.funcs[m.initFunc].sig] == ">R" && fflagsKind(m.funcs[m.initFunc].fflags) == FK_ASYNC))
+    return F("init function must take no arguments");
 
   // classes
   for (size_t ci = 0; ci < m.classes.size(); ci++) {
@@ -369,11 +373,14 @@ bool verifyModule(const Module& m, std::string& err) {
         // opcode-specific extra rules
         if ((op == OP_GEN_START || op == OP_ASYNC_START) && (pc != 0 || op != startOp))
           return F("function %zu pc %zu: misplaced coroutine start", fi, pc);
+        if (op == OP_ASYNC_START && kindOfVT((uint8_t)a) != (fflagsReturn(f.fflags) ? (Kind)(fflagsReturn(f.fflags) - 1) : K_R))
+          return F("function %zu pc %zu: promise value type does not match the function", fi, pc);
         if (op == OP_BOX_I && kindOfVT((uint8_t)c) != K_I) return F("function %zu pc %zu: BOX_I with non-int type", fi, pc);
         if (op == OP_INT2STR && kindOfVT((uint8_t)c) != K_I) return F("function %zu pc %zu: INT2STR with non-int type", fi, pc);
         if (op == OP_RET_I || op == OP_RET_F || op == OP_RET_R || op == OP_RET_V) {
           char rk = op == OP_RET_I ? 'I' : op == OP_RET_F ? 'F' : op == OP_RET_R ? 'R' : 'V';
-          if (rk != retKind) return F("function %zu pc %zu: return kind mismatch", fi, pc);
+          // an async function may also return a promise (adopted at run time, which checks it)
+          if (rk != retKind && !(fkind == FK_ASYNC && rk == 'R')) return F("function %zu pc %zu: return kind mismatch", fi, pc);
         }
       }
       pc = next;

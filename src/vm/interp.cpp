@@ -155,12 +155,19 @@ int VM::execute(size_t entryDepth) {
   const ExecState st{nativeDepth_, gcBlockers_, curNative_, callbackNatives_.size(), tempRoots_.size(), gcInhibit_};
   for (;;) {
     try {
+      if (E7_UNLIKELY(pendingThrow_ != nullptr)) {
+        // an awaited promise was rejected: the error is raised at the AWAIT of the resumed function
+        Obj* t = pendingThrow_;
+        pendingThrow_ = nullptr;
+        raiseThrown(t);
+      }
       return E7_UNLIKELY(dbg_ != nullptr) ? runDebug() : runNormal();
     } catch (E7Error& e) {
       if (e.jsName.empty()) throw;
       int c = catchError(e, entryDepth, st);
       if (c == 0) throw;
       if (c == 2) return ERR_PAUSED;  // a debugger stop before the handler (pause-to-host)
+      if (c == 3) return ERR_OK;      // an async entry frame rejected its promise and returned it
     }
   }
 }
