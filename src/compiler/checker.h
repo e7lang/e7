@@ -178,6 +178,9 @@ class Checker {
   Type* litMinus(Type* a, Type* b);
   bool switchCoversLits(Stmt* s);
   Type* asConstType(Expr* e);
+  int builtinArity(const std::string& id);
+  bool isNamespaceConstant(const std::string& ns, const std::string& name);
+  Type* etaExpand(Expr* e, Type* expected, int arity);
   Type* genTypeArg(TypeNode* n);
   Type* iterResultType(Type* g, Loc l);
   Type* resolveNamedType(const std::string& name, const std::vector<TypeNode*>& args, Loc l);

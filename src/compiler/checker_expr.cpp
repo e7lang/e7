@@ -202,7 +202,11 @@ Type* Checker::checkIdent(Expr* e, Type* expected) {
         if (f->checking) return errT(e->loc, "'" + f->name + "' is referenced recursively; add an explicit return type");
         checkFunction(f);
       }
-      if (f->hasDefaults) return errT(e->loc, "functions with default parameters cannot be used as values; wrap it in an arrow function");
+      if (f->hasDefaults) {
+        // a function with default values as a value: an arrow function that calls it
+        if (Type* t = etaExpand(e, expected, (int)f->type->params.size())) return t;
+        return errT(e->loc, "functions with default parameters can be used as values only where a function type is expected; wrap it in an arrow function");
+      }
       e->callee = f;
       if (f->selfVar) markCapture(f->selfVar);
       return f->type;
@@ -222,8 +226,14 @@ Type* Checker::checkIdent(Expr* e, Type* expected) {
     }
     case SymK::Class: return errT(e->loc, "class '" + e->raw + "' cannot be used as a value");
     case SymK::Enum: return errT(e->loc, "enum '" + e->raw + "' cannot be used as a value");
-    case SymK::Namespace: return errT(e->loc, "'" + e->raw + "' cannot be used as a value");
-    case SymK::Builtin: return errT(e->loc, "builtin function '" + e->raw + "' cannot be used as a value; wrap it in an arrow function");
+    case SymK::Namespace:
+      // String / Number / Boolean / BigInt as conversion functions: arr.map(String), arr.filter(Boolean)
+      if (static_cast<NamespaceSym*>(s)->builtin && (e->raw == "String" || e->raw == "Number" || e->raw == "Boolean" || e->raw == "BigInt"))
+        if (Type* t = etaExpand(e, expected, 1)) return t;
+      return errT(e->loc, "'" + e->raw + "' cannot be used as a value");
+    case SymK::Builtin:
+      if (Type* t = etaExpand(e, expected, builtinArity(static_cast<BuiltinSym*>(s)->id))) return t;
+      return errT(e->loc, "builtin function '" + e->raw + "' can be used as a value only where a function type is expected; wrap it in an arrow function");
     default:
       if (s->k == SymK::Alias && static_cast<AliasSym*>(s)->typeOnlyImport)
         return errT(e->loc, "'" + e->raw + "' cannot be used as a value because it was imported using 'import type'");
@@ -349,6 +359,62 @@ Type* Checker::checkAwait(Expr* e) {
   if (t->t == TT::Promise) return t->elem;
   if (t->t == TT::Void) return errT(e->a->loc, "cannot await a void value");
   return t;
+}
+
+// The number of arguments a builtin function takes (-1: any number)
+int Checker::builtinArity(const std::string& id) {
+  static const char* const one[] = {
+      "parseFloat", "isNaN", "isFinite", "encodeURIComponent", "decodeURIComponent", "encodeURI", "decodeURI",
+      "Math.abs", "Math.acos", "Math.acosh", "Math.asin", "Math.asinh", "Math.atan", "Math.atanh", "Math.cbrt",
+      "Math.ceil", "Math.clz32", "Math.cos", "Math.cosh", "Math.exp", "Math.expm1", "Math.floor", "Math.fround",
+      "Math.log", "Math.log10", "Math.log1p", "Math.log2", "Math.round", "Math.sign", "Math.sin", "Math.sinh",
+      "Math.sqrt", "Math.tan", "Math.tanh", "Math.trunc", "Number.isInteger", "Number.isFinite", "Number.isNaN",
+      "Number.isSafeInteger", "Number.parseFloat", "Array.isArray", "i8", "u8", "i16", "u16", "i32", "u32", "i64",
+      "u64", "int", "clz32", "clz64", "ctz32", "ctz64", "popcnt", "bswap16", "bswap32", "bswap64"};
+  static const char* const two[] = {"parseInt", "Number.parseInt", "Math.atan2", "Math.pow", "Math.imul", "rotl32",
+                                    "rotr32", "rotl64", "rotr64", "mulhi64", "imulhi64", "idiv", "imod"};
+  for (const char* n : one)
+    if (id == n) return 1;
+  for (const char* n : two)
+    if (id == n) return 2;
+  return -1;
+}
+
+bool Checker::isNamespaceConstant(const std::string& ns, const std::string& name) {
+  if (ns == "Math") return name == "PI" || name == "E" || name == "LN2" || name == "LN10" || name == "LOG2E" || name == "LOG10E" || name == "SQRT2" || name == "SQRT1_2";
+  if (ns == "Number") return name == "MAX_SAFE_INTEGER" || name == "MIN_SAFE_INTEGER" || name == "EPSILON" || name == "MAX_VALUE" || name == "MIN_VALUE" || name == "NaN" || name == "POSITIVE_INFINITY" || name == "NEGATIVE_INFINITY";
+  return false;
+}
+
+// A function used as a value where a function type is expected, when it is not a closure itself (a
+// builtin, a function with default values): rewritten to the arrow function (a, b) => f(a, b) with
+// the expected function's parameters (at most `arity` of them; -1: all), then checked as one
+Type* Checker::etaExpand(Expr* e, Type* expected, int arity) {
+  Type* ft = expected ? baseOf(expected) : nullptr;
+  if (!ft || ft->t != TT::Func) return nullptr;
+  size_t n = ft->params.size();
+  if (arity >= 0 && (size_t)arity < n) n = (size_t)arity;
+  Expr* callee = P.arena.expr(e->k, e->loc);
+  *callee = *e;
+  Expr* call = P.arena.expr(EK::Call, e->loc);
+  call->a = callee;
+  std::vector<Param> ps;
+  for (size_t i = 0; i < n; i++) {
+    Param p;
+    p.name = "$arg" + std::to_string(i);
+    p.loc = e->loc;
+    ps.push_back(p);
+    Expr* id = P.arena.expr(EK::Ident, e->loc);
+    id->raw = p.name;
+    call->list.push_back(id);
+  }
+  Loc l = e->loc;
+  *e = Expr();
+  e->k = EK::Arrow;
+  e->loc = l;
+  e->params = ps;
+  e->exprBody = call;
+  return checkArrow(e, expected);
 }
 
 // yield v / yield* iterable (in the body of a generator)
@@ -1455,6 +1521,32 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
     }
     return;
   }
+  // a call of a type predicate `x is T`: true means the argument is a T (false: for a nullable
+  // argument and its base type, null / undefined)
+  if (c->k == EK::Call && c->callee && c->callee->predParam == -2 && c->callee->predType && !c->callee->asserts &&
+      strip(c->a)->k == EK::Member) {
+    // `this is T`: the receiver
+    if (!whenTrue) return;
+    std::string key = pathKey(strip(c->a)->a);
+    if (!key.empty()) out.push_back({key, c->callee->predType});
+    return;
+  }
+  if (c->k == EK::Call && c->callee && c->callee->predParam >= 0 && c->callee->predType && !c->callee->asserts &&
+      (size_t)c->callee->predParam < c->list.size()) {
+    Expr* arg = c->list[(size_t)c->callee->predParam];
+    while (arg->k == EK::Conv || arg->k == EK::Paren) arg = arg->a;
+    std::string key = pathKey(arg);
+    Type* at = arg->type;
+    Type* pt = c->callee->predType;
+    if (key.empty() || !at) return;
+    if (whenTrue) out.push_back({key, pt});
+    else if (at->t == TT::Optional && baseOf(pt) == at->elem && pt->t != TT::Optional)
+      out.push_back({key, at->hasNull && at->hasUndef ? T.optional(T.nullT(), true, true) : at->hasNull ? T.nullT() : T.undef()});
+    else if (at->lit && pt->lit && baseLit(at) == baseLit(pt)) {
+      if (Type* rest = litMinus(at, pt)) out.push_back({key, rest});
+    }
+    return;
+  }
   // truthiness of a nullable reference
   if (whenTrue && c->type && c->type->t == TT::Optional) {
     std::string key = pathKey(c);
@@ -1669,7 +1761,13 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
   // static / namespace access
   if (obj->k == EK::Ident) {
     Sym* s = lookup(obj->raw);
-    if (s && s->k == SymK::Namespace) return checkNamespaceMember(e, static_cast<NamespaceSym*>(s), name, false, expected);
+    if (s && s->k == SymK::Namespace) {
+      // Math.sqrt, Number.isInteger, ... as a value where a function is expected: an arrow function
+      NamespaceSym* ns = static_cast<NamespaceSym*>(s);
+      if (ns->builtin && expected && baseOf(expected)->t == TT::Func && !isNamespaceConstant(ns->module, name))
+        if (Type* t = etaExpand(e, expected, builtinArity(ns->module + "." + name))) return t;
+      return checkNamespaceMember(e, ns, name, false, expected);
+    }
     if (s && s->k == SymK::Enum) {
       EnumSym* en = static_cast<EnumSym*>(s);
       resolveEnum(en);

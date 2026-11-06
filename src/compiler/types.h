@@ -110,6 +110,11 @@ struct FuncSym : Sym {
   // Promise type); yieldTypes collects the yielded types when the return type is inferred
   bool isGenerator = false, isAsync = false;
   std::vector<Type*> yieldTypes;
+  // type predicate `x is T` / assertion function `asserts x [is T]`: the parameter (-2: this), the
+  // type (null: `asserts x`, narrowed by truthiness)
+  int predParam = -1;
+  Type* predType = nullptr;
+  bool asserts = false;
   std::vector<Param>* params = nullptr;
   TypeNode* retNode = nullptr;
   Stmt* body = nullptr;

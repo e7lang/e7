@@ -461,10 +461,26 @@ class Parser {
   }
   // a return type: type predicates and assertion signatures are reported by name
   TypeNode* parseRetType() {
-    if (isKw("asserts") && peek().k == TK::Ident)
-      fail("assertion functions ('asserts x is T') are not supported; throw if the check fails and narrow at the call site");
-    if (cur().k == TK::Ident && peek().k == TK::Ident && peek().text == "is")
-      fail("type predicates ('x is T') are not supported; return boolean and narrow at the call site (typeof, instanceof, comparisons)");
+    Loc l = loc();
+    // type predicates `x is T` (a boolean) and assertion functions `asserts x is T` / `asserts x` (void)
+    bool asserts = isKw("asserts") && peek().k == TK::Ident && !peek().nl;
+    if (asserts) i++;
+    if (cur().k == TK::Ident && peek().k == TK::Ident && peek().text == "is" && !peek().nl) {
+      TypeNode* r = A.type(TNK::Ref, l);
+      r->name = asserts ? "void" : "boolean";
+      r->predParam = t[i].text;
+      r->asserts = asserts;
+      i += 2;
+      r->predType = parseType();
+      return r;
+    }
+    if (asserts) {
+      TypeNode* r = A.type(TNK::Ref, l);
+      r->name = "void";
+      r->predParam = ident();
+      r->asserts = true;
+      return r;
+    }
     return parseType();
   }
   bool looksLikeFunctionType() {

@@ -34,6 +34,11 @@ struct TypeNode {
   struct Member { std::string name; TypeNode* type; bool optional = false; bool method = false; bool readonly = false; int accessor = 0; };
   std::vector<Member> members;       // Object
   std::string literal;               // Literal (string literal type / null / undefined handled as Ref)
+  // a return type `x is T` (Ref "boolean") / `asserts x is T` / `asserts x` (Ref "void"): the parameter
+  // and the type it is narrowed to (null for `asserts x`)
+  std::string predParam;
+  TypeNode* predType = nullptr;
+  bool asserts = false;
   bool numLiteral = false;           // Literal: a numeric literal type (value in `num`)
   double num = 0;
 };

@@ -1688,6 +1688,23 @@ void Checker::resolveSig(FuncSym* f) {
   }
   Type* ret = f->retNode ? resolveType(f->retNode) : nullptr;
   if (f->isCtor || f->accessor == 2) ret = T.voidT();
+  if (f->retNode && !f->retNode->predParam.empty()) {
+    TypeNode* rn = f->retNode;
+    f->asserts = rn->asserts;
+    f->predParam = -1;
+    if (rn->predParam == "this" && f->thisVar) f->predParam = -2;
+    if (params)
+      for (size_t k = 0; k < params->size(); k++)
+        if ((*params)[k].name == rn->predParam) f->predParam = (int)k;
+    if (f->predParam == -1) err(rn->loc, "cannot find parameter '" + rn->predParam + "'");
+    if (rn->predType) {
+      f->predType = resolveType(rn->predType);
+      Type* pt = f->predParam >= 0 && (size_t)f->predParam < ps.size() ? ps[(size_t)f->predParam] : nullptr;
+      if (pt && !assignable(f->predType, pt))
+        err(rn->predType->loc, "a type predicate's type must be assignable to its parameter's type ('" + typeName(f->predType) +
+                                   "' is not a '" + typeName(pt) + "')");
+    }
+  }
   if (ret && (f->isGenerator || f->isAsync)) checkCoroutineRet(f, ret, f->retNode ? f->retNode->loc : f->loc);
   // an async host function: declare function f(...): Promise<T> (the host settles a ticket)
   bool asyncNative = f->isNative && ret && ret->t == TT::Promise;

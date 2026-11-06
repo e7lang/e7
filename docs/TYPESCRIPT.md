@@ -27,17 +27,17 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **137 supported**, **15 partial**, **98 unsupported** (265 sample programs).
+250 features: **141 supported**, **14 partial**, **95 unsupported** (264 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
 | [Everyday Types](#everyday-types) | 15 | 2 | 3 |
-| [Narrowing](#narrowing) | 9 | 1 | 4 |
-| [More on Functions](#more-on-functions) | 14 | 1 | 6 |
+| [Narrowing](#narrowing) | 11 | 1 | 2 |
+| [More on Functions](#more-on-functions) | 15 | 0 | 6 |
 | [Object Types](#object-types) | 12 | 0 | 6 |
 | [Generics](#generics) | 9 | 1 | 5 |
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
-| [Classes](#classes) | 17 | 0 | 14 |
+| [Classes](#classes) | 18 | 0 | 13 |
 | [Modules](#modules) | 9 | 0 | 4 |
 | [Enums](#enums) | 4 | 1 | 4 |
 | [Utility Types](#utility-types) | 0 | 0 | 13 |
@@ -53,9 +53,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 22 | 1 | 8 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 11 | 5 | 10 |
-| **Total** | **137** | **15** | **98** |
+| **Total** | **141** | **14** | **95** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 51.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 47.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -88,6 +88,7 @@ Within each category, supported features come first, then partial and unsupporte
 
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
+| Assertion functions (`asserts x is T`) | supported | `asserts x is T` and `asserts x`: after the call, the rest of the block sees the narrowed type (for nullable values, literal types and classes) | [assertion-functions.ts](../tests/ts-features/narrowing/assertion-functions.ts) |
 | Narrowing by assignment | supported |  | [assignments.ts](../tests/ts-features/narrowing/assignments.ts) |
 | Narrowing inside closures (`const` variables) | supported |  | [closures.ts](../tests/ts-features/narrowing/closures.ts) |
 | Narrowing after a conditional assignment (`if (x === null) x = v; use(x)`) | supported | An `if` branch (or both) ending in an assignment of a non-null value, a conditional expression with non-null branches, and static field paths | [conditional-assignment.ts](../tests/ts-features/narrowing/conditional-assignment.ts) |
@@ -97,11 +98,10 @@ Within each category, supported features come first, then partial and unsupporte
 | `instanceof` narrowing | supported |  | [instanceof.ts](../tests/ts-features/narrowing/instanceof.ts) |
 | Narrowing of property paths | supported |  | [property-paths.ts](../tests/ts-features/narrowing/property-paths.ts) |
 | Truthiness narrowing | supported |  | [truthiness.ts](../tests/ts-features/narrowing/truthiness.ts) |
+| Type predicates (`x is T`) | supported | User-defined type guards narrow nullable values, literal types and class types (as `instanceof` does); the function's check is trusted, as in TypeScript | [type-predicates.ts](../tests/ts-features/narrowing/type-predicates.ts) |
 | `typeof` type guards | **partial** | **Works:** `typeof x` is a compile-time constant: the static type name, also in each instantiation of a generic function. **Not supported:** narrowing by `typeof` needs a union type or a run-time type tag; in generic code each instantiation is type-checked as a whole, so the branch for other types must also compile (*types known at compile time*). **Instead:** separate functions per type, or a field that tells the cases apart | [typeof-guards.ok.ts](../tests/ts-features/narrowing/typeof-guards.ok.ts), [typeof-guards.no.ts](../tests/ts-features/narrowing/typeof-guards.no.ts) |
-| Assertion functions (`asserts x is T`) | **unsupported** | **Why:** assertion signatures are not parsed (*not implemented yet*). **Instead:** an explicit check that throws, followed by the narrowed use (`if (x === null) throw ...`) | [assertion-functions.ts](../tests/ts-features/narrowing/assertion-functions.ts) |
 | Discriminated unions | **unsupported** | **Why:** union types other than with `null` / `undefined` need run-time type tags (*types known at compile time*). **Instead:** one interface with a discriminating field (string or enum) and optional properties | [discriminated-unions.ts](../tests/ts-features/narrowing/discriminated-unions.ts) |
 | `in` operator narrowing | **unsupported** | **Why:** object layouts are fixed by the static type, so the presence of a property is known (*types known at compile time*). **Instead:** a discriminating field, optional properties compared with `undefined`, or `instanceof` | [in-operator.ts](../tests/ts-features/narrowing/in-operator.ts) |
-| Type predicates (`x is T`) | **unsupported** | **Why:** user-defined type guards are not parsed (*not implemented yet*). **Instead:** `instanceof`, `=== null` checks, or a function that returns the narrowed value or `null` | [type-predicates.ts](../tests/ts-features/narrowing/type-predicates.ts) |
 
 ## More on Functions
 
@@ -111,6 +111,7 @@ Within each category, supported features come first, then partial and unsupporte
 | Default parameters | supported | A default may refer to earlier parameters (in declarations, methods, constructors and arrow functions) | [default-parameters.ts](../tests/ts-features/functions/default-parameters.ts) |
 | Function expressions | supported | A named function expression's name is in scope in its body (recursion) | [function-expressions.ts](../tests/ts-features/functions/function-expressions.ts) |
 | Function type expressions `(a: A) => R` | supported |  | [function-type-expressions.ts](../tests/ts-features/functions/function-type-expressions.ts) |
+| Functions as values | supported | Function declarations, arrows and function expressions are first-class values; built-in functions (`Math.sqrt`, `parseInt`, `String`, `Boolean`, ...) and functions with default parameters become values where a function type is expected (TypeScript's contextual typing) | [functions-as-values.ts](../tests/ts-features/functions/functions-as-values.ts) |
 | Higher-order functions and callbacks with fewer parameters | supported |  | [higher-order.ts](../tests/ts-features/functions/higher-order.ts) |
 | Function declaration hoisting | supported |  | [hoisting.ts](../tests/ts-features/functions/hoisting.ts) |
 | Immediately invoked function expressions | supported |  | [iife.ts](../tests/ts-features/functions/iife.ts) |
@@ -121,7 +122,6 @@ Within each category, supported features come first, then partial and unsupporte
 | Rest parameters | supported |  | [rest-parameters.ts](../tests/ts-features/functions/rest-parameters.ts) |
 | Spread arguments (arrays into rest parameters, tuples into parameters) | supported |  | [spread-arguments.ts](../tests/ts-features/functions/spread-arguments.ts) |
 | `void` return type and contextual `void` | supported | A `void`-returning function type accepts functions that return a value | [void-return.ts](../tests/ts-features/functions/void-return.ts) |
-| Functions as values | **partial** | **Works:** function declarations, arrows and function expressions are first-class values. **Not supported:** function declarations with default parameters, and built-in functions such as `Math.sqrt`, have no closure form (*not implemented yet*). **Instead:** wrap it in an arrow function: `xs.map(x => scale(x))`, `xs.map(x => Math.sqrt(x))` | [functions-as-values.ok.ts](../tests/ts-features/functions/functions-as-values.ok.ts), [functions-as-values.no.ts](../tests/ts-features/functions/functions-as-values.no.ts) |
 | The `arguments` object | **unsupported** | **Why:** `arguments` is untyped (*types known at compile time*). **Instead:** rest parameters `...args: T[]` | [arguments-object.ts](../tests/ts-features/functions/arguments-object.ts) |
 | Call signatures in object types | **unsupported** | **Why:** functions are closures without properties (*types known at compile time*). **Instead:** an interface with a function-typed property, or a class with a method | [call-signatures.ts](../tests/ts-features/functions/call-signatures.ts) |
 | Construct signatures (`new (...) => T`) | **unsupported** | **Why:** classes are not values that can be passed around (*not implemented yet*). **Instead:** pass a factory function: `(s: string) => new SomeObject(s)` | [construct-signatures.ts](../tests/ts-features/functions/construct-signatures.ts) |
@@ -203,6 +203,7 @@ Within each category, supported features come first, then partial and unsupporte
 | `private` / `protected` constructors | supported |  | [singleton-private-constructor.ts](../tests/ts-features/classes/singleton-private-constructor.ts) |
 | `static` initialization blocks | supported |  | [static-blocks.ts](../tests/ts-features/classes/static-blocks.ts) |
 | Static fields and methods (inherited by subclasses) | supported |  | [static-members.ts](../tests/ts-features/classes/static-members.ts) |
+| `this`-based type guards (`this is T`) | supported |  | [this-based-guards.ts](../tests/ts-features/classes/this-based-guards.ts) |
 | Overriding `toString()` | supported | Called by `String(x)`, template literals and `+` | [to-string.ts](../tests/ts-features/classes/to-string.ts) |
 | Implementing an interface property with an accessor | **unsupported** | **Why:** interface properties are read as fields, so the class must have a field (*types known at compile time*). **Instead:** declare the accessor in the interface: `interface HasArea { get area(): number }` | [accessor-implements-property.ts](../tests/ts-features/classes/accessor-implements-property.ts) |
 | Auto-accessors (`accessor x = 1`) | **unsupported** | **Why:** *not implemented yet*. **Instead:** a field, or a private field with `get` / `set` accessors | [auto-accessors.ts](../tests/ts-features/classes/auto-accessors.ts) |
@@ -216,7 +217,6 @@ Within each category, supported features come first, then partial and unsupporte
 | `new.target` | **unsupported** | **Why:** *not implemented yet*. **Instead:** an explicit constructor parameter | [new-target.ts](../tests/ts-features/classes/new-target.ts) |
 | Overriding with a compatible signature (covariant return type, fewer parameters) | **unsupported** | **Why:** an override must have the same signature as the overridden method (*not implemented yet*). **Instead:** keep the base signature (and downcast with `as` at the call site where needed) | [override-signatures.ts](../tests/ts-features/classes/override-signatures.ts) |
 | Ergonomic brand checks (`#x in obj`) | **unsupported** | **Why:** private fields always exist on instances of their class (*types known at compile time*). **Instead:** `instanceof` | [private-in.ts](../tests/ts-features/classes/private-in.ts) |
-| `this`-based type guards (`this is T`) | **unsupported** | **Why:** user-defined type guards are not parsed (*not implemented yet*). **Instead:** `instanceof` | [this-based-guards.ts](../tests/ts-features/classes/this-based-guards.ts) |
 | Polymorphic `this` types | **unsupported** | **Why:** *not implemented yet*. **Instead:** return the class type (and override in subclasses where needed) | [this-types.ts](../tests/ts-features/classes/this-types.ts) |
 
 ## Modules

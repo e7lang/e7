@@ -1,12 +1,15 @@
 // @feature: Assertion functions (`asserts x is T`)
 // @category: Narrowing
-// @status: unsupported
-// @why: not implemented yet: assertion signatures are not parsed
-// @instead: an explicit check that throws, followed by the narrowed use (`if (x === null) throw ...`)
-// @error: assertion functions ('asserts x is T') are not supported
+// @status: supported
+// @note: `asserts x is T` and `asserts x`: after the call, the rest of the block sees the narrowed type (for nullable values, literal types and classes)
 function assertDefined(x: number | undefined): asserts x is number {
   if (x === undefined) throw new Error("undefined");
 }
+function check(cond: boolean): asserts cond {
+  if (!cond) throw new Error("check failed");
+}
 const n: number | undefined = 1;
 assertDefined(n);
-console.log(n + 1);
+const s: string | null = "a";
+check(s !== null);
+console.log(n + 1, s.length);

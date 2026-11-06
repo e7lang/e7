@@ -1010,6 +1010,22 @@ void Checker::checkStmt(Stmt* s) {
     case SK::Expr: {
       Type* t = check(s->expr, nullptr);
       (void)t;
+      // an assertion function: the rest of the block sees what it asserts
+      Expr* c = s->expr;
+      while (c->k == EK::Paren) c = c->a;
+      if (c->k == EK::Call && c->callee && c->callee->asserts && c->callee->predParam >= 0 &&
+          (size_t)c->callee->predParam < c->list.size()) {
+        Expr* arg = c->list[(size_t)c->callee->predParam];
+        while (arg->k == EK::Conv || arg->k == EK::Paren) arg = arg->a;
+        std::vector<Fact> facts;
+        if (c->callee->predType) {
+          std::string key = pathKey(arg);
+          if (!key.empty()) facts.push_back({key, c->callee->predType});
+        } else {
+          factsFrom(arg, true, facts);
+        }
+        applyFacts(facts);
+      }
       break;
     }
     case SK::Block:
