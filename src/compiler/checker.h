@@ -185,6 +185,7 @@ class Checker {
   void hoistFunctions(std::vector<Stmt*>& stmts);
   void checkClassBodies(ClassSym* c);
   bool exits(Stmt* s);
+  bool switchCoversEnum(Stmt* s);
   void collectAssigned(Stmt* s, std::set<std::string>& out);
   void collectAssignedExpr(Expr* e, std::set<std::string>& out);
   void invalidateAssigned(Stmt* body, Expr* extra = nullptr);

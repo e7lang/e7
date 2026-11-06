@@ -27,12 +27,12 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **117 supported**, **19 partial**, **114 unsupported** (269 sample programs).
+250 features: **117 supported**, **20 partial**, **113 unsupported** (270 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
 | [Everyday Types](#everyday-types) | 13 | 3 | 4 |
-| [Narrowing](#narrowing) | 7 | 1 | 6 |
+| [Narrowing](#narrowing) | 7 | 2 | 5 |
 | [More on Functions](#more-on-functions) | 14 | 1 | 6 |
 | [Object Types](#object-types) | 11 | 1 | 6 |
 | [Generics](#generics) | 9 | 1 | 5 |
@@ -53,7 +53,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 16 | 3 | 12 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 9 | 6 | 11 |
-| **Total** | **117** | **19** | **114** |
+| **Total** | **117** | **20** | **113** |
 
 Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 73.
 
@@ -95,11 +95,11 @@ Within each category, supported features come first, then partial and unsupporte
 | `instanceof` narrowing | supported |  | [instanceof.ts](../tests/ts-features/narrowing/instanceof.ts) |
 | Narrowing of property paths | supported |  | [property-paths.ts](../tests/ts-features/narrowing/property-paths.ts) |
 | Truthiness narrowing | supported |  | [truthiness.ts](../tests/ts-features/narrowing/truthiness.ts) |
+| Exhaustiveness checking (`never`, exhaustive `switch`) | **partial** | **Works:** a `switch` with a case for every enum member is exhaustive: no `default` or final `return` is needed. **Not supported:** the `default` branch of a `switch` over every enum member does not see the value as `never` (*not implemented yet*). **Instead:** leave out the `default` branch (the `switch` is exhaustive), or make it throw | [exhaustive-switch.ok.ts](../tests/ts-features/narrowing/exhaustive-switch.ok.ts), [exhaustive-switch.no.ts](../tests/ts-features/narrowing/exhaustive-switch.no.ts) |
 | `typeof` type guards | **partial** | **Works:** `typeof x` is a compile-time constant: the static type name, also in each instantiation of a generic function. **Not supported:** narrowing by `typeof` needs a union type or a run-time type tag; in generic code each instantiation is type-checked as a whole, so the branch for other types must also compile (*types known at compile time*). **Instead:** separate functions per type, or a field that tells the cases apart | [typeof-guards.ok.ts](../tests/ts-features/narrowing/typeof-guards.ok.ts), [typeof-guards.no.ts](../tests/ts-features/narrowing/typeof-guards.no.ts) |
 | Assertion functions (`asserts x is T`) | **unsupported** | **Why:** assertion signatures are not parsed (*not implemented yet*). **Instead:** an explicit check that throws, followed by the narrowed use (`if (x === null) throw ...`) | [assertion-functions.ts](../tests/ts-features/narrowing/assertion-functions.ts) |
 | Narrowing after a conditional assignment (`if (x === null) x = v; use(x)`) | **unsupported** | **Why:** narrowing by assignment does not survive the end of an `if` branch (nor a conditional expression `x = x === null ? v : x`) (*not implemented yet*). **Instead:** `x ??= v`, or a new `const` (`const y = x === null ? v : x`), or return early | [conditional-assignment.ts](../tests/ts-features/narrowing/conditional-assignment.ts) |
 | Discriminated unions | **unsupported** | **Why:** union types other than with `null` / `undefined` need run-time type tags (*types known at compile time*). **Instead:** one interface with a discriminating field (string or enum) and optional properties | [discriminated-unions.ts](../tests/ts-features/narrowing/discriminated-unions.ts) |
-| Exhaustiveness checking (`never`, exhaustive `switch`) | **unsupported** | **Why:** a `switch` does not narrow an enum value to the remaining members (so the `default` branch does not see `never`, and a `switch` over every member is not known to be exhaustive) (*not implemented yet*). **Instead:** a `default` branch that throws, or a final `return` / `throw` after the `switch` | [exhaustive-switch.ts](../tests/ts-features/narrowing/exhaustive-switch.ts) |
 | `in` operator narrowing | **unsupported** | **Why:** object layouts are fixed by the static type, so the presence of a property is known (*types known at compile time*). **Instead:** a discriminating field, optional properties compared with `undefined`, or `instanceof` | [in-operator.ts](../tests/ts-features/narrowing/in-operator.ts) |
 | Type predicates (`x is T`) | **unsupported** | **Why:** user-defined type guards are not parsed (*not implemented yet*). **Instead:** `instanceof`, `=== null` checks, or a function that returns the narrowed value or `null` | [type-predicates.ts](../tests/ts-features/narrowing/type-predicates.ts) |
 

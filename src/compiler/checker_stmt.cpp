@@ -3,6 +3,7 @@
 #include <functional>
 
 #include "checker.h"
+#include "intrinsics.h"
 
 namespace e7 {
 
@@ -303,6 +304,28 @@ void Checker::checkBlockStmts(std::vector<Stmt*>& stmts) {
   for (Stmt* s : stmts) checkStmt(s);
 }
 
+// a switch over an enum value whose cases name every member of the enum (as tsc, exhaustive)
+bool Checker::switchCoversEnum(Stmt* s) {
+  Type* dt = s->expr ? s->expr->type : nullptr;
+  if (!dt || dt->t != TT::Enum || !dt->en) return false;
+  std::vector<double> nums;
+  std::vector<std::u16string> strs;
+  for (auto& c : s->cases) {
+    if (!c.test) continue;
+    Expr* x = c.test;
+    while (x->k == EK::Paren) x = x->a;
+    if (x->type != dt) continue;
+    if (x->intrinsic == IN_CONST_NUM) nums.push_back(x->num);
+    else if (x->intrinsic == IN_CONST_STR) strs.push_back(x->str);
+  }
+  for (auto& m : dt->en->members) {
+    bool found = dt->en->isString ? std::find(strs.begin(), strs.end(), m.str) != strs.end()
+                                  : std::find(nums.begin(), nums.end(), m.num) != nums.end();
+    if (!found) return false;
+  }
+  return true;
+}
+
 bool Checker::exits(Stmt* s) {
   if (!s) return false;
   switch (s->k) {
@@ -335,7 +358,7 @@ bool Checker::exits(Stmt* s) {
       // exits if there is a default and every case ends by exiting (no breaks)
       bool hasDefault = false;
       for (auto& c : s->cases) if (!c.test) hasDefault = true;
-      if (!hasDefault) return false;
+      if (!hasDefault && !switchCoversEnum(s)) return false;  // an enum switch with every member is exhaustive
       for (size_t i = 0; i < s->cases.size(); i++) {
         auto& c = s->cases[i];
         for (Stmt* x : c.body) if (containsBreakFor(x, "", 0)) return false;
