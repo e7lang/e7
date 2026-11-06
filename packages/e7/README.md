@@ -64,7 +64,7 @@ synchronous API, `const e7 = await init()` and call the same methods on `e7` (`e
 - **async**: `call` may name an `async function f(): Promise<T>`; `result` is the promise's value (a
   rejection gives `runtime_error`). Top-level `await` works too: `run` drains the promise jobs before it
   returns. This package registers no async host functions (the embedding APIs do: see
-  [Async host functions](https://github.com/e7lang/e7/blob/main/docs/EMBEDDING.md#async-host-functions)),
+  [Async host functions](https://github.com/e7lang/e7/blob/main/docs/EMBEDDING.md#26-async-host-functions)),
   so the C API's `pending` status (15) does not occur here; `e7:test`'s `later(value)` / `laterReject(message)`
   stand in for host operations in tests.
 - **Values**: `number`, `boolean`, `string`, `Uint8Array` and `null` map directly. Integer parameters

@@ -165,6 +165,13 @@ What `update()` does, in order (any failure leaves the current module active and
 The manager owns its VMs: a replaced VM is closed. Use the module through `active()` each time, and do not run
 `update()` while another thread is inside a call of the same manager's module.
 
+Async exports ([EMBEDDING.md §2.6](EMBEDDING.md#26-async-host-functions)): call them with
+`active().callAsync(vmExecutor, "quote", order)` / `callAwait("quote", order)` (Java, Kotlin) or
+`try await mm.active!.callAsync("quote", .string(order))` (Swift). The Java manager also waits for async host
+functions registered in `vmSetup` while it runs a module's top-level code and `selfTest()` (on the thread that calls
+`start()` / `update()`); the Swift manager runs them synchronously, so a module whose top level or `selfTest()`
+waits for a host operation is reported with `E7_PENDING` and not activated.
+
 ## 5. Staged rollout
 
 A client takes a version when `bucket < rolloutPercent × 100`, where

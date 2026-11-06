@@ -24,8 +24,23 @@ vm.SetBudget(10_000_000);                           // instruction budget per ca
 Console.WriteLine((string?)vm.Call(module, "greet", "e7"));
 ```
 
+Async host functions (E7 0.3): a script that declares
+`declare function fetchKey(id: string): Promise<Uint8Array>;` awaits a `Task` of the host, and `CallAsync`
+returns an async export's value:
+
+```csharp
+vm.RegisterAsyncNative("fetchKey", "s>y", async args => await keyStore.FetchAsync((string)args[0]!));
+var module = await vm.LoadAsync(code);              // top-level code may await too
+var sig = (string?)await vm.CallAsync(module, "sign", "k1", body);
+```
+
+Completions are settled on the caller's context (e.g. the UI thread) in the order they finish; a synchronous
+`Call` that would wait throws `E7Exception` with `E7Status.Pending`. Cancel with the
+`CallAsync(module, fn, args, cancellationToken)` overload or `AbortSuspended()`.
+
 Host functions, key providers, print handlers, suspend/resume and module signing are described in the
-[embedding guide](https://github.com/e7lang/e7/blob/main/docs/EMBEDDING.md).
+[embedding guide](https://github.com/e7lang/e7/blob/main/docs/EMBEDDING.md) (async host functions:
+[§2.6](https://github.com/e7lang/e7/blob/main/docs/EMBEDDING.md#26-async-host-functions)).
 
 Values: `double` → number, signed integers → i64, unsigned integers → u64, `bool`, `string`,
 `byte[]` (Uint8Array), `KeyHandle`, `null`. One `E7VM` must be used by one thread at a time.
