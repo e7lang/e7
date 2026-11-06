@@ -36,7 +36,7 @@ three references that can each be checked mechanically:
    - **Behaviour equals JavaScript.** If E7 cannot reproduce JavaScript's behaviour exactly, the construct is a
      compile error rather than something that runs differently (section 9 lists the exceptions that remain).
 
-   Features that satisfy the rules but are not implemented yet (async generators, object literal accessors, ...)
+   Features that satisfy the rules but are not implemented yet (async generators, ...)
    are listed as such. [TYPESCRIPT.md](TYPESCRIPT.md) lists every TypeScript feature with its status, the reason and
    what to write instead; each row is a sample program that CI compiles (and, for supported features, compares with
    Node.js), so the table always matches the compiler.
@@ -336,7 +336,7 @@ try {
   getter's. Accessors are not own properties (not in `Object.keys`, `JSON.stringify`, spread). Interfaces and
   object types may declare accessors (`get size(): number; set size(v: number)`), implemented by class accessors;
   interface *properties* are read as fields, so a class cannot implement one with an accessor (compile error).
-  Destructuring a class value calls its getters.
+  Destructuring a class value calls its getters. Object literals can have accessors too (below).
 - **Abstract classes** cannot be instantiated; abstract methods and accessors need a return type and are
   overridden by every concrete subclass. An abstract property (`abstract kind: string`) is declared as a field
   (of the same type) by the concrete subclasses and read or written by name through the abstract class type.
@@ -353,6 +353,29 @@ try {
   JavaScript. The literal's type has methods, so it can be passed as an interface with methods; such an
   interface can also be implemented by arrow function properties. Methods cannot be used as values, and a
   literal with methods cannot contain spreads.
+- Object literals can have **getters and setters** (`{ n: 2, get twice(): number { return this.n * 2; },
+  set twice(v: number) { this.n = v / 2; } }`, e7vm 0.3.1). `this` is the object, as in methods; the
+  accessors can use the object's fields, other accessors and methods, and capture variables. They are part of
+  the literal's type, as accessors (`get twice(): number; set twice(v: number)`), never as fields, so every
+  read or write of the property calls the getter or the setter (by name, like an interface's accessors):
+  - the literal is assignable to an interface (or an object type) that declares the accessors (`get x(): T` /
+    `set x(v: T)`), and is then used like a class implementing them; an interface that declares `x` as a
+    *property* reads it as a field, so assigning the literal to it is a compile error that says to declare
+    `get x(): T` there (the rule for classes, section 5 above). A getter without a setter is read-only (writing
+    it is a compile error, as in tsc); a setter without a getter cannot be read. A getter and its setter have
+    one type (a setter without a parameter type takes the getter's).
+  - The type of a literal with accessors holds only such literals (whose accessors are own properties): a
+    class instance or a value of a declared interface type is not assignable to it.
+  - The accessors are own enumerable properties, in the literal's order: `Object.keys` lists them;
+    `JSON.stringify`, spread, rest, `Object.values` / `entries` / `assign` (as a source) and destructuring call
+    the getters; `console.log` prints `x: [Getter]`, `[Setter]` or `[Getter/Setter]` without calling them, as
+    Node.js does. Through an interface type that declares accessors, `Object.keys`, `JSON.stringify`,
+    `console.log` and `Object.values` / `entries` see the run-time object (a literal's accessors are listed, a
+    class's are not); spread, rest and `Object.assign` copy the properties of the static type (section 9).
+  - Compile errors: a property and an accessor with the same name, two getters (or setters) of one name, a
+    literal with accessors and spreads, a plain property implementing an interface's accessor, `structuredClone`
+    of a type with accessors (the copy would have data properties), and spread / rest / `Object.values` /
+    `entries` / `assign` of a literal with a setter-only accessor (its value would be `undefined`).
 - Uninitialized fields start as `0` / `false` / `null`; optional fields start as `undefined`.
 
 ### 5.1 Generators and iterators (0.3)
@@ -621,6 +644,8 @@ or host function that was running (or that called back into the script, like `Ar
 | E7's own runtime checks (out of bounds, failed `as`, limits) | — | Not catchable; `finally` blocks do not run |
 | `Object.values` / `entries` of an object with more properties than its type | All own properties | E7 error (the extra property's type is unknown) |
 | `Object.assign` with an object having more properties than its type | Copies them all | Copies the properties of the static type (like spread) |
+| Spread, rest and `Object.assign` of an object literal with accessors typed as an interface that declares them | The getters' values are copied (own properties) | The properties of the static type are copied: an interface's accessors are not (a class instance's are not own properties); spread the literal's own type to copy them |
+| `structuredClone` of an object literal with accessors behind a type that does not show them | A copy with data properties | An E7 error (a value of a type with accessors is a compile error) |
 | Instances of a generic class with different type arguments | Structurally compatible | Different classes (`Box<Circle>` is not a `Box<Shape>`) |
 | Regular expressions | ES2025 adds the `v` flag, duplicate group names and `(?i:...)` | Not supported (syntax errors, as in Node.js 22); `groups` of a pattern built at run time cannot be read; a `/` after `)` is a division (`if (x) /re/.test(s)` needs a parenthesized pattern) |
 | `console.log` of an instantiated generic function value | `[Function: f]` | `[Function: f<number>]` |
