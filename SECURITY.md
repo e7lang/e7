@@ -26,8 +26,8 @@ signed through Sigstore with the identity of the release workflow). Verify a dow
 [GitHub CLI](https://cli.github.com/):
 
 ```bash
-gh attestation verify e7-0.2.0-linux-x64.tar.gz --repo e7lang/e7
-gh attestation verify E7VM.0.2.0.nupkg --repo e7lang/e7
+gh attestation verify e7-0.1.0-linux-x64.tar.gz --repo e7lang/e7
+gh attestation verify E7VM.0.1.0.nupkg --repo e7lang/e7
 ```
 
 The command fails unless the file was built by a workflow of `e7lang/e7`; its output names the workflow

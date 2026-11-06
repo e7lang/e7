@@ -285,6 +285,8 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
   - 类型：接口、类型别名、枚举、元组，以及**泛型**（函数、类、接口、类型别名；按类型参数分别编译）。
   - 语法：带默认值和剩余元素的解构、对象展开、`?.`（整条链短路）、`??`/`??=`、模板字符串、`for...of`、`switch`、标签语句。
   - 错误处理：`try`/`catch`/`finally`，捕获 Node.js 也会抛出的错误。
+  - 生成器、`async`/`await`、`Promise`（宿主充当事件循环；宿主函数可以是异步的）、异步生成器与 `for await`。
+  - 正则表达式（字面量在编译期检查，命名分组有类型；匹配受指令预算约束）、对象字面量的 getter/setter、字面量类型、递归接口。
   - 多文件 `import`/`export`，以及类型收窄。
 - **输出与 Node.js 一致。** 每个测试程序的输出都与 Node.js 逐字节比对；`console.log` 的格式与 Node 的 `util.inspect`
   相同，Math 函数在所有平台上逐位一致（采用 V8 的 fdlibm）。
@@ -298,7 +300,8 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 - **标准库。**
   - `Math`、`Number`、`String`、`Array`（`map`/`filter`/`reduce`/`sort` …）、`Map`、`Set`、`bigint`、`Date`（UTC）。
   - `JSON`：`JSON.parse(text) as T` 会按类型 `T` **校验**结果。
-  - `Uint8Array`/`ArrayBuffer`/`DataView`、`TextEncoder`/`TextDecoder`、`encodeURIComponent`。
+  - 类型化数组（`Uint8Array` … `Float64Array`、`BigInt64Array`）/`ArrayBuffer`/`DataView`、`TextEncoder`/`TextDecoder`、
+    `structuredClone`、`encodeURIComponent`。
 - **`e7:crypto`。**
   - 哈希：MD5、SHA-1、SHA-2、SHA-3、Keccak。
   - 密钥派生与消息认证：HMAC、HKDF、PBKDF2。
@@ -342,10 +345,10 @@ CMake 选项：
 
 ## 安全与当前状态
 
-e7vm 就是为运行从网络下发的代码而设计的。发布前经过了 4 轮安全审查（每轮由单独运行的 AI 审查代理完成，尚未做第三方审计）、
+e7vm 就是为运行从网络下发的代码而设计的。发布前经过了 8 轮安全审查（每轮由单独运行的 AI 审查代理完成，尚未做第三方审计）、
 与 Node.js/OpenSSL 的差分测试、sanitizer 和模糊测试，所有发现的问题都已修复并配有回归测试。证据见 [docs/PRODUCTION.md](docs/PRODUCTION.md)。
-E7 目前是 **0.x** 版本：已完成全面测试和安全加固，但还没有在生产环境中运行过；次版本升级可能改动语言、C API 或字节码格式
-（见 [CHANGELOG.md](CHANGELOG.md)）。对 App 的建议：
+E7 0.1.0 是第一个版本：已完成全面测试和安全加固，但还没有在生产环境中运行过；1.0 之前的版本可能改动语言、C API 或字节码格式
+（通往 1.0 的计划见 [docs/ROADMAP.md](docs/ROADMAP.md)）。对 App 的建议：
 
 1. **如果脚本是在运行时从网络下载的，开启签名校验**（`require_signature` + 内置在 App 里的公钥），私钥只放在构建服务器上。
 2. **设置指令预算和内存上限**（例如 16–64 MiB）。
@@ -427,10 +430,11 @@ tests/ bench/ docs/                            third_party/     BearSSL（MIT）
 - [docs/SPEC.md](docs/SPEC.md)：语言规范（语法、类型系统、数值语义、标准库、与 TS 的差异）
 - [docs/TYPESCRIPT.md](docs/TYPESCRIPT.md)：TypeScript 特性支持对照表（支持、部分支持、不支持，以及 E7 中的替代写法）
 - [docs/EMBEDDING.md](docs/EMBEDDING.md)：C API、Android/iOS/Windows 集成、安全建议
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)：向 App 下发模块：密钥管理与轮换、签名清单（manifest）、灰度发布、紧急开关（kill switch）、回滚、按客户端 VM 版本使用 `--target`、依据实测设定指令预算和内存上限、错误上报、上线前的影子运行（shadow run）
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)：向 App 下发模块：密钥管理与轮换、签名清单（manifest）、灰度发布、紧急开关（kill switch）、回滚、客户端 VM 版本、依据实测设定指令预算和内存上限、错误上报、上线前的影子运行（shadow run）
 - [docs/BYTECODE.md](docs/BYTECODE.md)：`.e7b` 格式、指令集、验证规则、签名格式
 - [docs/DEBUGGING.md](docs/DEBUGGING.md)：`e7 debug`、调试信息、C 调试 API 与 WebAssembly JSON 协议
-- [docs/DESIGN.md](docs/DESIGN.md)：设计方案与决策记录
+- [docs/DESIGN.md](docs/DESIGN.md)：设计决策
+- [docs/ROADMAP.md](docs/ROADMAP.md)：0.1.0 包含的内容与后续计划（生产试点、1.0）
 - [docs/PRODUCTION.md](docs/PRODUCTION.md)：验证记录（测试、审查与证据）
 
 ## 许可

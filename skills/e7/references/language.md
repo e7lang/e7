@@ -229,7 +229,7 @@ console.log(JSON.stringify(patch({ name: "Ann", age: 30 }, { age: 31 })));
 
 `JSON.parse(text) as Map<string, V>` reads a JSON object with arbitrary keys.
 
-### Regular expressions (0.3)
+### Regular expressions
 
 ES2024 regular expressions work as in Node.js (no `v` flag): literals are checked when compiling, the named
 groups of a literal are typed, and matching counts against the instruction budget.
@@ -252,7 +252,7 @@ const m = new RegExp("(?<year>\\d{4})").exec("2024");
 console.log(m?.groups);
 ```
 
-### `async`, `await`, `Promise`, generators (0.3)
+### `async`, `await`, `Promise`, generators
 
 ```ts
 async function double(x: number): Promise<number> {
@@ -280,7 +280,7 @@ work as in Node.js, callbacks in the same order. There are no timers and no I/O:
 and storage through async host functions (`declare function fetchKey(id: string): Promise<Uint8Array>`,
 settled by the host; see EMBEDDING.md) or passes data in as arguments.
 
-Async generators (`async function*`, e7vm 0.3.1) produce values over time; `for await` consumes them and
+Async generators (`async function*`) produce values over time; `for await` consumes them and
 calls `return()` when the loop is left early, so `finally` blocks run:
 
 ```ts
@@ -405,7 +405,7 @@ const list: List<number> = { head: 1, tail: { head: 2, tail: null } };
 console.log(size(root), list.tail?.head);
 ```
 
-`JSON.parse(text) as T` into a recursive type works too (e7vm 0.3):
+`JSON.parse(text) as T` into a recursive type works too:
 
 ```ts
 interface TreeNode { label: string; children: TreeNode[] }
@@ -454,7 +454,7 @@ all typed arrays are supported.)
 - Spread arguments: tuples into any parameters (`f(...pair)`), arrays and tuples into rest parameters.
 - Object literal methods `{ n: 2, twice(x: number) { return x * this.n; } }` (`this` is the object); an
   object literal can implement an interface with methods.
-- Object literal getters and setters (e7vm 0.3.1): `this` is the object; the literal implements interfaces that
+- Object literal getters and setters: `this` is the object; the literal implements interfaces that
   declare the accessors (`get x(): T` / `set x(v: T)`), not ones that declare `x` as a property (read as a field).
   They are own properties: `Object.keys`, `JSON.stringify`, spread and destructuring see them (calling the getter),
   `console.log` prints `[Getter]`. A getter without a setter is read-only.
@@ -514,8 +514,8 @@ sq.side += 1;
 console.log(sq.label, sq.side, Square.created, JSON.stringify(sq));
 ```
 
-- A module with `#private` fields needs e7vm 0.2.5 or newer (older VMs would list them in `Object.keys`,
-  `JSON.stringify` and `console.log`); `e7c --target` reports it.
+- `#private` fields are not own properties: `Object.keys`, `JSON.stringify` and `console.log` leave them out, as in
+  Node.js.
 - Arrow-function fields can capture `this` and are the way to pass "methods" around.
 - Generics: functions, `const` arrow functions, classes (with generic methods), interfaces and type aliases,
   constraints (`<T extends Shape>`), defaults (`<T = number>`), explicit type arguments (`f<number>(x)`) and

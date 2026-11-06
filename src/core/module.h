@@ -56,7 +56,7 @@ struct HandlerDesc {
 constexpr uint8_t kClassFlagPresence = 1;
 // ClassDesc::cflags: a record (object literal) with getters / setters. Field x of the record is an
 // accessor property when the vtable has a method "get x" or "set x"; the field holds the accessor pair, a
-// tuple [getter closure or null, setter closure or null, slot of the property's value type] (BYTECODE.md 6.5)
+// tuple [getter closure or null, setter closure or null, slot of the property's value type] (BYTECODE.md 6.4)
 constexpr uint8_t kClassFlagAccessors = 2;
 
 struct FuncDesc {

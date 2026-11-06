@@ -1,8 +1,8 @@
-# Verification record (0.1)
+# Verification record
 
 This file records the verification items and evidence for e7vm, for review. Automated items run continuously in CI (`.github/workflows/ci.yml`).
 
-**Status**: E7 0.x has been thoroughly tested and hardened but has **not yet run in production**. The security reviews in
+**Status**: E7 0.1.0 has been thoroughly tested and hardened but has **not yet run in production**. The security reviews in
 section 3 were each performed by a separate AI review agent with no knowledge of the other reviews' conclusions; **no
 third-party audit has been done yet**. E7 will be called production-ready only after a production pilot and an external
 audit of the verifier, the loading path, the C API and the crypto wrappers.
@@ -11,20 +11,19 @@ audit of the verifier, the loading path, the C API and the crypto wrappers.
 
 | Item | Method | Result |
 |---|---|---|
-| Language/standard library semantics | `tests/run_tests.py`: 82 cases, compared **byte-for-byte** against Node.js 22 output (differential testing) + expected output + compile-error cases | All pass |
+| Language/standard library semantics | `tests/run_tests.py`: 357 cases, compared **byte-for-byte** against Node.js 22 output (differential testing) + expected output + compile-error cases | All pass |
 | TS compatibility | `tests/tsc/check.sh`: tsc 5.6 `--strict` checks all cases and examples | All pass |
-| Differential fuzzing (0.2.5) | `tests/difffuzz`: random well-typed programs in the E7 subset, each checked with tsc 5.6 `--strict`, run on e7 and Node.js; mismatches minimized by delta debugging. ctest `difffuzz_smoke` (40 programs) on every build, 5,000 per night (`.github/workflows/difffuzz.yml`) | About 44,000 programs locally (Node.js 24); 10 standard library bugs fixed (`tests/cases/lang/difffuzz_regressions.ts`), compiler issues reported; final 10,000 (seeds 40–44): no mismatch. `Math` results compared exactly since the fdlibm port (below; automatic for x64 builds of node): 4,500 programs on Node.js 24 arm64, the only 2 mismatches are `Math.cos(1000)`, where that Node.js build contracts fdlibm into fused multiply-adds |
-| `Math` functions and `**` (0.2.5) | V8's fdlibm (`src/base/ieee754.cc`) ported to `third_party/fdlibm` instead of the C library; `tests/cases/lang/math_fdlibm.ts` (compared with Node.js) and `math_pow_fdlibm.ts` (`.out`: Node.js 22 pow). Random and special arguments (whole double range, ±0, ±Infinity, NaN, subnormals, near multiples of π/2, huge trigonometric arguments, near 1, integer and half-integer exponents, negative bases, overflow/underflow boundaries), compared bit for bit: (1) the e7 binary against the port: 2,000,000 arguments for each of the 22 fdlibm functions and `**`, and 2,000,000 for each of `sqrt fround round trunc sign clz32 abs floor ceil hypot (2 and 3 arguments) imul max min` against Node.js (72 million results, macOS arm64), plus 100,000 per function with e7 built for x86-64 (Rosetta) and with ASan+UBSan; (2) the port compiled with FMA contraction as Node.js for arm64 is, against Node.js 24 arm64 (`--no-use-std-math-pow`): 44 million results; (3) V8's source compiled for x86-64 (as Node.js x64; even with `-ffp-contract=fast` the baseline ISA has no FMA) against e7: 44 million results | No difference. Node.js itself differs: its arm64 builds give another last bit for about 0.1% of `sin`/`log`/... results (FMA contraction), and Node.js 23+ uses the C library's pow (V8 `--use-std-math-pow`; 2% of the pow arguments above differ on macOS); e7 = Node.js 22 on x64 everywhere. Before (C library): with macOS libm, e.g. 1.6% of the `sin` and 2.2% of the `pow` results of a 100,000-argument sample differed, and on arm64 builds `Math.hypot` with 3 arguments and `parseInt` beyond 2^53 in radixes that are not powers of two were contracted into fused multiply-adds (now `-ffp-contract=off` / `FP_CONTRACT OFF`; e7 on arm64 = e7 on x86-64, checked with an x86-64 build under Rosetta) |
+| Differential fuzzing | `tests/difffuzz`: random well-typed programs in the E7 subset, each checked with tsc 5.6 `--strict`, run on e7 and Node.js; mismatches minimized by delta debugging. ctest `difffuzz_smoke` (40 programs) on every build, 5,000 per night (`.github/workflows/difffuzz.yml`) | About 44,000 programs locally (Node.js 24); 10 standard library bugs fixed (`tests/cases/lang/difffuzz_regressions.ts`), compiler issues reported; final 10,000 (seeds 40–44): no mismatch. `Math` results compared exactly since the fdlibm port (below; automatic for x64 builds of node): 4,500 programs on Node.js 24 arm64, the only 2 mismatches are `Math.cos(1000)`, where that Node.js build contracts fdlibm into fused multiply-adds |
+| `Math` functions and `**` | V8's fdlibm (`src/base/ieee754.cc`) ported to `third_party/fdlibm` instead of the C library; `tests/cases/lang/math_fdlibm.ts` (compared with Node.js) and `math_pow_fdlibm.ts` (`.out`: Node.js 22 pow). Random and special arguments (whole double range, ±0, ±Infinity, NaN, subnormals, near multiples of π/2, huge trigonometric arguments, near 1, integer and half-integer exponents, negative bases, overflow/underflow boundaries), compared bit for bit: (1) the e7 binary against the port: 2,000,000 arguments for each of the 22 fdlibm functions and `**`, and 2,000,000 for each of `sqrt fround round trunc sign clz32 abs floor ceil hypot (2 and 3 arguments) imul max min` against Node.js (72 million results, macOS arm64), plus 100,000 per function with e7 built for x86-64 (Rosetta) and with ASan+UBSan; (2) the port compiled with FMA contraction as Node.js for arm64 is, against Node.js 24 arm64 (`--no-use-std-math-pow`): 44 million results; (3) V8's source compiled for x86-64 (as Node.js x64; even with `-ffp-contract=fast` the baseline ISA has no FMA) against e7: 44 million results | No difference. Node.js itself differs: its arm64 builds give another last bit for about 0.1% of `sin`/`log`/... results (FMA contraction), and Node.js 23+ uses the C library's pow (V8 `--use-std-math-pow`; 2% of the pow arguments above differ on macOS); e7 = Node.js 22 on x64 everywhere. Before (C library): with macOS libm, e.g. 1.6% of the `sin` and 2.2% of the `pow` results of a 100,000-argument sample differed, and on arm64 builds `Math.hypot` with 3 arguments and `parseInt` beyond 2^53 in radixes that are not powers of two were contracted into fused multiply-adds (now `-ffp-contract=off` / `FP_CONTRACT OFF`; e7 on arm64 = e7 on x86-64, checked with an x86-64 build under Rosetta) |
 | C API | `tests/capi_test.cpp`: argument encoding/decoding, host functions, KeyHandle, signatures, budget suspend/resume, memory/stack limits, reuse after errors | Pass |
 | Locale independence | `tests/locale_test.cpp` (number parsing/formatting under de_DE) | Pass |
 | Bindings | JNI (OpenJDK 21 `E7VMTest`), iOS xcframework build, Android NDK build, C# (Windows) | Pass |
-| GC stress (0.2.5) | `-DE7_GC_STRESS=ON` + ASan/UBSan: the whole ctest suite with a collection at every safepoint and every allocation where one is allowed (CI job `gc-stress`), including inside callbacks from natives | Pass (found while reviewing where collections may run: the garbage of callbacks from natives, e.g. a sort comparator, was never collected before the native returned; fixed) |
-| Allocation failures (0.2.5) | `tests/alloc_fail_test.cpp`: the N-th allocation fails for every N in every language/library test and example (also with every later one failing, with a budget slice of 1, under a stepping debugger); clean `E7_ERR_MEMORY`, consistent heap accounting (`VM::checkHeap`), heap back at its baseline after a failed load, VM usable afterwards | Pass (found: a module whose initializer failed stayed allocated for the life of the VM; fixed) |
-| Equivalence runs (0.2.5) | `tests/equiv_test.cpp`: all test programs with a budget slice of 1 and under a single-stepping debugger inspecting every scope; switch dispatch in CI. Output identical to a normal run | Pass (found: up-front native charges failed with `E7_ERR_BUDGET` in suspend mode; fixed) |
-| Soak (0.2.5) | `tests/soak_test.cpp`: one VM, 100,000 calls (1,000,000 locally) plus a failing module load every 1,000 calls; heap after GC, GC statistics and process heap flat | Pass |
-| Threads (0.2.5) | `tests/threads_test.cpp` under ThreadSanitizer (CI job `tsan`): concurrent compilation, execution, slicing, cross-thread `e7_debug_pause` | Pass (found: a data race in the compiler; fixed) |
-| Forward compatibility (0.2.5) | `tests/compat/forward_compat.py` (CI job `forward-compat`): modules from the current `e7c --target 0.2` on the 0.2.1 and 0.2.0 VMs; newer modules rejected with `E7_ERR_VERSION` | Pass on 0.2.1; on 0.2.0 two programs differ by the 0.2.1 fixes (Error values in `instanceof` / `String` / `JSON.stringify`, the JSON nesting-limit message) |
-| Coverage (0.2.5) | `scripts/coverage.py` (CI job `coverage`, llvm-cov over the whole ctest suite; summary and artifact) | Lines 93.7%, functions 98.3% (local run; before the new tests 92.6% / 96.7%). The 80 natives no test called (Math functions, integer-keyed Map / Set / arrays, the `get()!` / `get() ??` / `pop()!` fast paths, ...) and the uncovered C API, stack-trace and disassembler paths now have tests |
+| GC stress | `-DE7_GC_STRESS=ON` + ASan/UBSan: the whole ctest suite with a collection at every safepoint and every allocation where one is allowed (CI job `gc-stress`), including inside callbacks from natives | Pass (found while reviewing where collections may run: the garbage of callbacks from natives, e.g. a sort comparator, was never collected before the native returned; fixed) |
+| Allocation failures | `tests/alloc_fail_test.cpp`: the N-th allocation fails for every N in every language/library test and example (also with every later one failing, with a budget slice of 1, under a stepping debugger); clean `E7_ERR_MEMORY`, consistent heap accounting (`VM::checkHeap`), heap back at its baseline after a failed load, VM usable afterwards | Pass (found: a module whose initializer failed stayed allocated for the life of the VM; fixed) |
+| Equivalence runs | `tests/equiv_test.cpp`: all test programs with a budget slice of 1 and under a single-stepping debugger inspecting every scope; switch dispatch in CI. Output identical to a normal run | Pass (found: up-front native charges failed with `E7_ERR_BUDGET` in suspend mode; fixed) |
+| Soak | `tests/soak_test.cpp`: one VM, 100,000 calls (1,000,000 locally) plus a failing module load every 1,000 calls; heap after GC, GC statistics and process heap flat | Pass |
+| Threads | `tests/threads_test.cpp` under ThreadSanitizer (CI job `tsan`): concurrent compilation, execution, slicing, cross-thread `e7_debug_pause` | Pass (found: a data race in the compiler; fixed) |
+| Coverage | `scripts/coverage.py` (CI job `coverage`, llvm-cov over the whole ctest suite; summary and artifact) | Lines 93.7%, functions 98.3% (local run; before the new tests 92.6% / 96.7%). The 80 natives no test called (Math functions, integer-keyed Map / Set / arrays, the `get()!` / `get() ??` / `pop()!` fast paths, ...) and the uncovered C API, stack-trace and disassembler paths now have tests |
 
 ## 2. Platform and compiler matrix (CI)
 
@@ -43,7 +42,7 @@ CMake disables the transform for `interp.cpp` on these compilers; other build me
 | Tampered/forged bytecode | Ed25519 signatures (`require_signature` + `trusted_keys`); signature is checked before parsing | Wrong public key, unsigned, and single-byte tampering are all rejected (`e7 --trust`, capi_test) |
 | Malicious bytecode corrupting memory | Load-time bytecode verifier (register types/ranges, jump targets, call metadata, constant indices) + runtime object shape checks | `fuzz_load`: thousands of mutated modules per CI run, zero crashes under ASan/UBSan |
 | Malicious source (on-device compilation) | Parse nesting limit 160, AST depth limit 400, JSON nesting limit 256 | `fuzz_compile`: about 60,000 cumulative mutations this round, zero internal errors, zero crashes |
-| Hostile arguments to `e7:crypto` / `e7:encoding` natives | Argument validation in every native (key / nonce / length checks, DER and PEM parsers), work charged to the budget | `fuzz_natives`: every native called with generated arguments, plus round-trip / tamper-detection properties (AEAD, CBC, CTR, Ed25519, ECDSA, RSA, X25519, encodings, HKDF / PBKDF2); 90,000 runs under ASan/UBSan before 0.2.0; the only report was clang's `-fsanitize=function` on BearSSL's vtable calls (C function pointers stored with generic types), now not instrumented in `e7_bearssl` |
+| Hostile arguments to `e7:crypto` / `e7:encoding` natives | Argument validation in every native (key / nonce / length checks, DER and PEM parsers), work charged to the budget | `fuzz_natives`: every native called with generated arguments, plus round-trip / tamper-detection properties (AEAD, CBC, CTR, Ed25519, ECDSA, RSA, X25519, encodings, HKDF / PBKDF2); 90,000 runs under ASan/UBSan; the only report was clang's `-fsanitize=function` on BearSSL's vtable calls (C function pointers stored with generic types), now not instrumented in `e7_bearssl` |
 | Infinite loops / resource exhaustion | Instruction budget (`e7_set_budget`), `memory_limit`, `stack_slots`, `max_frames`, native re-entry depth 64 | capi_test covers each one |
 | Key leakage | `KeyHandle`: keys appear only in host callbacks; scripts cannot read/print them | capi_test, examples |
 | Unauthorized calls | Scripts can call only explicitly registered host functions; signatures are checked at load time | capi_test |
@@ -61,7 +60,7 @@ loading/linking, the interpreter, and the standard library native functions, and
 | 4 | The key mode of `Map.new/Set.new` could disagree with the key type (hashing a double as a pointer) | Require the key mode and the key type to have the same register kind |
 
 Also fixed along the way: several native functions converted bytecode-supplied doubles to integers before the range check (UB); all now check first (`immIndex`).
-6 malicious samples are kept in `tests/malicious/` and regression-tested by `malicious_test` (C API, including ASan in CI). Areas the review confirmed correct:
+The malicious samples are kept in `tests/malicious/` and regression-tested by `malicious_test` (C API, including ASan in CI). Areas the review confirmed correct:
 deserialization bounds and integer overflow, register/constant/index ranges, jump targets (cannot jump into operand words), call arguments and metadata, closure captures,
 class inheritance layout, runtime type checks, stack/frame limits, GC roots.
 
@@ -115,13 +114,13 @@ with no case of "e7 accepts while Node rejects"). Conclusion: **READY WITH CAVEA
 
 Regression tests: `capi_reentry_test` adds native-loop budget and `max_frames` cases.
 
-### 3.5 Fifth security review: try/catch (0.2)
+### 3.5 Fifth security review: try/catch
 
-A separate AI review agent (given the source, the threat model and SPEC 3.1, without our tests' conclusions) reviewed the
-try/catch added in 0.2 end to end: handler tables, THROW, the catch path in the VM, Error objects, natives and callbacks,
+A separate AI review agent (given the source, the threat model and SPEC 3.1, without our tests' conclusions) reviewed
+try/catch end to end: handler tables, THROW, the catch path in the VM, Error objects, natives and callbacks,
 suspend/resume, the debugger and the compiler. It built with ASan+UBSan, fuzzed 964 random verifier-accepted handler
 tables (no sanitizer reports) and reproduced each finding. **No memory-safety issue was found.** All eight findings are
-fixed in 0.2.1 with regression tests:
+fixed, with regression tests:
 
 | # | Severity | Issue | Fix |
 |---|---|---|---|
@@ -143,22 +142,22 @@ Regression tests: `verify_handlers_test` (handlers before or inside their range)
 natives and unwinding, `Map` accounting after repeated out-of-memory), `tests/cases/lang/error_values.ts` (Node parity),
 `tests/cases/errors/rt_limit_not_catchable.ts`, `catch_console_log_nested.ts`.
 
-### 3.6 Sixth security review: the 0.2.5 VM changes (0.2.6)
+### 3.6 Sixth security review: GC in callbacks, the console.log formatter, fdlibm, `finally`
 
-A separate AI review agent reviewed everything the VM gained between 0.2.1 and 0.2.5: the garbage collector running
+A separate AI review agent reviewed the next set of VM additions: the garbage collector running
 during native callbacks (`Array.sort` comparators, `assertThrows`), the Node.js-compatible `console.log` formatter, `Map`
 iteration cursors, fdlibm, module unloading after a failed load, the test hooks, and the handler tables for `finally`.
 It built Release, ASan+UBSan and ASan+UBSan with `E7_GC_STRESS`, ran hostile comparators and every exit path of
 try/catch/finally under GC stress, fuzzed the 21 fdlibm functions (364k inputs) and the number formatting and parsing
 (300k inputs) under the sanitizers, and reproduced each finding. **No memory-safety issue was found.** All six findings
-are fixed in 0.2.6:
+are fixed:
 
 | # | Severity | Issue | Fix |
 |---|---|---|---|
-| 1 | High (0.2.5 regression) | With `suspend_on_budget`, a native that charges its work up front or as it goes (`pbkdf2`, `assertEqual` on an object graph with 2^60 paths) ran to completion whatever the slice: one call could hold the host thread for days | A native may run past the end of the slice by a bounded amount (2^22 ticks, or the slice when that is larger); past it the call fails with `E7_ERR_BUDGET`, as without suspension |
+| 1 | High | With `suspend_on_budget`, a native that charges its work up front or as it goes (`pbkdf2`, `assertEqual` on an object graph with 2^60 paths) ran to completion whatever the slice: one call could hold the host thread for days | A native may run past the end of the slice by a bounded amount (2^22 ticks, or the slice when that is larger); past it the call fails with `E7_ERR_BUDGET`, as without suspension |
 | 2 | High | The output of `JSON.stringify` (and of console.log's `%j`, which follows shared objects path by path) was not checked against the memory limit: an object graph of 2^23 shared nodes reached 1.5 GB of host memory under an 8 MB limit | The output buffer is checked against the memory limit as it grows |
 | 3 | Medium | console.log's formatting was charged by its arguments only: printing one large BigInt many times took 122 s on 801 ticks | Formatting charges the text it produces, `%j` its JSON, and a BigInt its quadratic decimal conversion, as `BigInt.toString` does |
-| 4 | Medium (older) | The string keys of a default `Array.sort()` were not checked against the memory limit (2.5 GB under an 8 MB limit) | The keys are checked as they are built and their comparison is charged; the buffers of `sort(cmp)` are checked too |
+| 4 | Medium | The string keys of a default `Array.sort()` were not checked against the memory limit (2.5 GB under an 8 MB limit) | The keys are checked as they are built and their comparison is charged; the buffers of `sort(cmp)` are checked too |
 | 5 | Low | `parseInt` with a power-of-two radix overflowed a signed counter (undefined behaviour) for about 430 million digits; Release printed 0 instead of Infinity | The exponent saturates (the result is Infinity, as in JavaScript) |
 | 6 | Low | A `Map` iteration cursor from crafted bytecode overflowed a signed subtraction (undefined behaviour; the result was still bounds-checked) | Cursors before the first entry are handled before the subtraction |
 
@@ -170,12 +169,12 @@ suspend mode, and the verifier and code generation for `finally`, generics, gett
 `capi_test` (bounded overrun with suspension; console.log, `%j`, `JSON.stringify` and default sort against the budget
 and memory limit).
 
-### 3.7 Seventh security review: the 0.3 VM changes (coroutines, promises, presence masks, typed arrays)
+### 3.7 Seventh security review: coroutines, promises, presence masks, typed arrays
 
-A separate AI review agent (given the source, the threat model and the 0.3 design, without our tests' conclusions)
-reviewed the VM side of 0.3 except the regular expression engine (reviewed separately): coroutines (`GEN_START`,
-`YIELD`, `RESUME_*`, `ASYNC_START`, `AWAIT` and the async return and error boundary), the verifier rules and format-3
-reading, the promise job queue, host tickets and the async C API, presence masks (`FIELD_ABSENT`), typed arrays,
+A separate AI review agent (given the source, the threat model and [DESIGN.md](DESIGN.md), without our tests'
+conclusions) reviewed the VM side of D1-D7 except the regular expression engine (reviewed separately): coroutines (`GEN_START`,
+`YIELD`, `RESUME_*`, `ASYNC_START`, `AWAIT` and the async return and error boundary), the verifier rules and the reading of
+function and class flags, the promise job queue, host tickets and the async C API, presence masks (`FIELD_ABSENT`), typed arrays,
 `structuredClone` and the recursive JSON descriptors. It built ASan+UBSan and confirmed findings 1-3 with
 proofs of concept (crafted modules and one plain script). All four are fixed:
 
@@ -186,14 +185,14 @@ proofs of concept (crafted modules and one plain script). All four are fixed:
 | 3 | High | `structuredClone` recursed once per nesting level: a plain script with a 400,000-node linked list overflowed the C++ stack | At most 256 levels (as `JSON.stringify`); deeper values fail with a catchable `DataCloneError` |
 | 4 | Low | `unloadModule` (not reachable through the C API) could free a module while promises, jobs or coroutines of a pending call referred to it | Not while a call waits for tickets or has queued jobs |
 
-Areas the review confirmed correct: the verifier's coroutine rules and format-3 bounds; RESUME's stack and frame
+Areas the review confirmed correct: the verifier's coroutine rules and flag bounds; RESUME's stack and frame
 checks, `CO_RUNNING` against re-entry, coroutines finished when frames are unwound; GC rooting of promises, reactions,
 queued jobs, tickets and saved coroutine registers (traced only while suspended); presence masks; the `@n` JSON
 back-references (bounded recursion, checked indices); the `allSettled` record class checks; the typed-array number
 paths, offsets and alignment; the async native thunk and `e7_settle`. Regression tests: `verify_coroutines_test`
 (malformed coroutine bytecode, a BigInt native on a byte array), `structured_clone_deep.ts`.
 
-### 3.8 Eighth security review: regular expressions (0.3)
+### 3.8 Eighth security review: regular expressions
 
 A separate review agent reviewed the regular expression engine (`src/regexp`) and its integration (literals, the
 module table, `RegExp` objects, match results, the String methods and the native `matchAll` iterator). Fuzzing about
@@ -229,7 +228,7 @@ GCC 290 ms, switch fallback ~380 ms).
 ## 5. Known limitations (by design, not defects)
 
 Every TypeScript feature E7 does not support is listed with its reason and a replacement in
-[TYPESCRIPT.md](TYPESCRIPT.md) (0.3.1: 155 of 250 supported, 17 partial, 78 unsupported); the rules behind them are
+[TYPESCRIPT.md](TYPESCRIPT.md) (0.1.0: 155 of 250 supported, 17 partial, 78 unsupported); the rules behind them are
 in SPEC.md section 0.1 (every type known at compile time: no `any`, general unions, index signatures, type-level
 computation). The run-time differences from JavaScript are in SPEC.md section 9: `try`/`catch` catches only errors
 that Node.js also throws (E7-specific checks such as out-of-bounds reads end the call), out-of-bounds array reads are

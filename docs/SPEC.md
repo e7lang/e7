@@ -1,4 +1,4 @@
-# E7 Language Specification (0.3)
+# E7 Language Specification
 
 E7 is a **strict subset** of TypeScript: every program accepted by the E7 compiler is also accepted by `tsc --strict` (with `lib/e7.d.ts`),
 and produces the same result when run on a JavaScript engine (except for fixed-width integers, see §4.2). The converse does not hold: E7 rejects TS
@@ -49,7 +49,7 @@ three references that can each be checked mechanically:
 - Numbers: decimal, `0x`/`0o`/`0b`, exponents, numeric separators `1_000`; **bigint** literals `123n`. Legacy octal `017` is not allowed.
 - Strings: `'...'`, `"..."`, escapes `\n \t \r \b \f \v \0 \xHH \uHHHH \u{H...}`; template strings `` `a ${expr} b` `` (nestable).
 - Private names `#x` for class members (section 5).
-- Regular expression literals `/pattern/flags` (0.3, section 6.6): a `/` where an expression can start begins
+- Regular expression literals `/pattern/flags` (section 6.6): a `/` where an expression can start begins
   one, elsewhere (after a value, an identifier, `)` or `]`) it is a division.
 - **Not supported**: decorators `@`.
 
@@ -75,7 +75,7 @@ three references that can each be checked mechanically:
 | `KeyHandle` (from `e7:crypto`) | Reference to a key held by the host | Handle |
 | `void`, `never`, `null`, `undefined` | | |
 
-Also (0.3): `Promise<T>`, `Generator<T, TReturn, TNext>` / `Iterator<T>` / `IterableIterator<T>` (coroutines at run
+Also: `Promise<T>`, `Generator<T, TReturn, TNext>` / `Iterator<T>` / `IterableIterator<T>` (coroutines at run
 time; `IteratorResult<T>` is `{ value: T | undefined; done: boolean }`, or `{ value: T; ... }` when the return type is
 `T`), the typed arrays `Int8Array` ... `Float64Array`, `Uint8ClampedArray`, `BigInt64Array`, `BigUint64Array`,
 `RegExp`, `RegExpMatchArray` / `RegExpExecArray` (section 6.6), and
@@ -111,7 +111,7 @@ User-defined generics are supported (section 2.3).
 - A recursive function that omits its return type is an error; an explicit annotation is required.
 - Interfaces and object type aliases may be recursive (`interface Tree { children: Tree[] }`, also mutually recursive
   and generic ones); structural compatibility between recursive types is checked coinductively, as in tsc.
-  `JSON.parse(text) as T` into a recursive type works (its descriptor refers back to the enclosing type; e7vm 0.3).
+  `JSON.parse(text) as T` into a recursive type works (its descriptor refers back to the enclosing type).
 - A `switch` with a case for every member of an enum or every value of a literal type is exhaustive: a function may
   end with it without a `default` or a final `return`, and its `default` branch sees the value as `never`
   (`assertNever(x)` patterns compile). Each case sees the value narrowed to its literals.
@@ -341,9 +341,8 @@ try {
   (of the same type) by the concrete subclasses and read or written by name through the abstract class type.
 - **`#private`** fields, methods and accessors (`get #x()` / `set #x(v)`; instance and static) can only be used inside the class body that declares
   them (including static blocks and closures there). Private methods are not virtual. Private fields are not
-  own enumerable properties: `Object.keys`, `JSON.stringify`, `console.log`, object spread and rest skip them. A
-  module with private instance fields requires e7vm 0.2.5 (older VMs would list them). Private methods and accessors
-  are not virtual. `#x in obj` and redeclaring a base class's private name in a subclass are not supported.
+  own enumerable properties: `Object.keys`, `JSON.stringify`, `console.log`, object spread and rest skip them.
+  Private methods and accessors are not virtual. `#x in obj` and redeclaring a base class's private name in a subclass are not supported.
 - **Static blocks** `static { ... }` run with the static field initializers, in source order, when the class
   declaration is executed; they can use the class's private static members.
 - **Not supported**: class expressions, decorators, methods as values (use arrow functions). Generic classes: section 2.3.
@@ -353,11 +352,11 @@ try {
   interface can also be implemented by arrow function properties. Methods cannot be used as values, and a
   literal with methods cannot contain spreads.
 - Object literals can have **getters and setters** (`{ n: 2, get twice(): number { return this.n * 2; },
-  set twice(v: number) { this.n = v / 2; } }`, e7vm 0.3.1). `this` is the object, as in methods; the
+  set twice(v: number) { this.n = v / 2; } }`). `this` is the object, as in methods; the
   accessors can use the object's fields, other accessors and methods, and capture variables. They are part of
   the literal's type, as accessors (`get twice(): number; set twice(v: number)`), never as fields, so every
   read or write of the property calls the getter or the setter (by name, like an interface's accessors; the
-  representation is in [BYTECODE.md](BYTECODE.md) section 6.5):
+  representation is in [BYTECODE.md](BYTECODE.md) section 6.4):
   - the literal is assignable to an interface (or an object type) that declares the accessors (`get x(): T` /
     `set x(v: T)`), and is then used like a class implementing them; an interface that declares `x` as a
     *property* reads it as a field, so assigning the literal to it is a compile error that says to declare
@@ -378,7 +377,7 @@ try {
     `entries` / `assign` of a literal with a setter-only accessor (its value would be `undefined`).
 - Uninitialized fields start as `0` / `false` / `null`; optional fields start as `undefined`.
 
-### 5.1 Generators and iterators (0.3)
+### 5.1 Generators and iterators
 
 - `function*` declarations and expressions, generator methods (`*m()`, also `*[Symbol.iterator]()`), `yield`,
   `yield*` (of a generator, an array or an iterable class: values, `next(v)` arguments, `return(v)` and `throw(e)`
@@ -392,12 +391,12 @@ try {
 - `next()` on a finished generator whose return type is a primitive gives `NaN` / `0` / `false` for `value`
   (section 9); default parameter values of a generator are evaluated by the first `next()`.
 
-### 5.2 `async` functions and promises (0.3)
+### 5.2 `async` functions and promises
 
 - `async` functions, methods and arrow functions, `await` (also top-level in the entry module; an imported module
   with top-level `await` is a compile error), `for await (const x of xs)` over arrays (each element awaited) and
   generators.
-- Async generators (e7vm 0.3.1): `async function*` declarations and expressions, async generator methods
+- Async generators: `async function*` declarations and expressions, async generator methods
   (`async *m()`, also `async *[Symbol.asyncIterator]()` and in object literals). Types:
   `AsyncGenerator<T, TReturn = void, TNext = (none)>`, `AsyncIterator<T>`, `AsyncIterableIterator<T>` and
   `AsyncIterable<T>` (all async generators at run time; `TReturn` is `void` or `T`, as for generators). In the body,
@@ -500,7 +499,7 @@ if (cfg === null) console.log("bad config: " + lastError());  // e.g. "expected 
   validated, and `lastError()` texts differ. Differential tests therefore only use shape-correct documents or syntax
   errors; shape mismatches are tested against E7 alone (`tests/cases/lib/json_try_shape.ts` with its `.out` file).
 
-### 6.6 Regular expressions (0.3)
+### 6.6 Regular expressions
 
 ECMAScript 2024 regular expressions without the `v` flag, with the semantics of V8 (Node.js 22) on UTF-16 strings,
 run by an own backtracking engine (`src/regexp`).
@@ -588,7 +587,7 @@ Assertion helpers used by the `e7 test` runner; they work in any program. A fail
 | `assertThrows(fn: () => void, expectedMessage?)` | calling `fn` does not raise a runtime error, or its message does not contain `expectedMessage` |
 | `fail(message?): never` | always |
 
-Also (0.3) `later<T>(value: T): Promise<T>` and `laterReject<T>(error: Error): Promise<T>`: a promise settled in a
+Also `later<T>(value: T): Promise<T>` and `laterReject<T>(error: Error): Promise<T>`: a promise settled in a
 later turn, each one after the previous (as `setImmediate` in Node.js, which the shim of the differential tests
 uses), for tests of asynchronous ordering. They do not fail.
 

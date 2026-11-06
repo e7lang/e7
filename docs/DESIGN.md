@@ -1,413 +1,490 @@
-# E7 Language and e7vm Virtual Machine Design (0.1, implemented)
+# E7 design decisions
 
-> **Implementation status (0.1)**: Everything in this document has been implemented. For implementation details, [SPEC.md](SPEC.md), [BYTECODE.md](BYTECODE.md)
-> and [EMBEDDING.md](EMBEDDING.md) are authoritative. Changes from the original plan:
-> - Strings are always stored as UTF-16 (no dual Latin-1 representation; concatenation in loops is kept correct by a native implementation; see the README for performance).
-> - Instructions are fixed-width 64-bit (`op:16 A:16 B:16 C:16`) with up to 65535 registers, which is roomier than the originally planned 32-bit encoding.
-> - The planned "runtime quickening" was replaced by emitting typed instructions directly from static types; compare-and-jump fusion, constant register hoisting and loop inversion were also added.
-> - `throw new Error(msg)` is supported. Since 0.2 there is `try`/`catch` for the errors that Node.js also throws
->   (per-function handler tables in the bytecode, checked by the verifier; see SPEC.md 3.1). E7-specific checks and
->   resource limits still terminate the call (and skip `finally` blocks, supported since 0.2.5). Sections 1.x and 3.4
->   below describe the original no-exceptions plan.
-> - Since 0.2.5, user-defined generics (compiled by monomorphization) and getters/setters (compiled to method calls)
->   are supported without VM changes; coroutine syntax is deferred to E8 (the VM already supports suspend/resume, `e7_resume`).
-> - Crypto libraries: BearSSL (RSA, ECDSA, AES, ChaCha20-Poly1305, SHA-1/2, HMAC, HKDF) + Monocypher (Ed25519/X25519);
->   SHA-3/Keccak, PBKDF2 and RSA-PSS are in-house implementations. All are cross-checked against Node.js `node:crypto`. The Chinese national (SM) algorithms SM2/3/4 are not included.
+This document records why E7 and e7vm are built the way they are: the foundations (sections 1-6), then the
+decisions behind coroutines, `async` / `await`, the bytecode format, regular expressions, literal types, recursive
+types and properties that hold `undefined` (D1-D7), with notes on how each was implemented. The specifications are
+[SPEC.md](SPEC.md) (the language), [BYTECODE.md](BYTECODE.md) (the `.e7b` format and the verifier) and
+[EMBEDDING.md](EMBEDDING.md) (the C API); where this document and those differ, they are authoritative.
 
-> v0.4 changes: Made it explicit that the main workload is **signing / signature verification algorithms**. Added §3.8 (design for signing): fixed-width integers and bitwise operations, byte handling, the native `e7:crypto` module, `bigint`, and KeyHandle; **proposed revising** the default type of integer literals (see §3.2); added optional bytecode hardening to the security section.
->
-> v0.3 changes: Settled on the names **E7 / e7vm**; the syntax is **a strict TypeScript subset only** (the Ruby option was dropped); integer literals default to `int`; **no exceptions** (`try/catch/throw`); the workload is general math/numeric algorithms + string processing, which drives the standard library and string implementation plans.
->
-> v0.2 changes: Based on feedback, switched to **strict static typing** with syntax based mainly on a **strict TypeScript subset**; made explicit that **scripts are delivered from the server**, that **an on-device compiler is optional**, and that **the design leaves room for coroutines**; added a naming survey.
-> At this stage this is design only, no development.
-
-Confirmed requirements:
+Every decision keeps the rules of [SPEC.md](SPEC.md) section 0.1: types are known at compile time (the fixed rule),
+the bytecode is verifiable, and behaviour is identical to JavaScript as Node.js 22 implements it.
 
 | Item | Decision |
 |---|---|
 | Types | Strict static typing, no `any` |
-| Syntax | **Strict TypeScript subset** (every E7 program is valid TS) |
-| Naming | Language **E7**, engine **e7vm** |
-| Numbers | Integer literals default to `int`(i64), `number` = f64 |
-| Exceptions | `try/catch/throw` **not supported**; runtime errors terminate the script and return to the host |
-| Workload | **Mainly signing / signature verification algorithms**, plus general math algorithms and string processing |
-| Script source | **Delivered from the server** → signature check + bytecode verification + sandbox are P0 |
-| Compiler | The core is the VM running `.e7b`; the compiler must also be able to run on phones (optional module) |
-| Coroutines | No syntax in v1, but the VM architecture is designed to be "suspendable" from day one |
-| Platforms | Android / iOS / Windows, C++17 |
+| Syntax | A strict TypeScript subset: every E7 program is a valid TypeScript program |
+| Names | Language **E7**, engine **e7vm** |
+| Numbers | Without annotations, JavaScript semantics (`number` is f64); fixed-width integer types (`u32`, `i64`, ...) when annotated |
+| Errors | `try` / `catch` for the errors Node.js also throws; E7-specific checks and resource limits end the call |
+| Workload | Mainly signing and signature verification, plus general math and string processing |
+| Script source | Delivered from a server: signature check, bytecode verification and a sandbox are required |
+| Compiler | The core is the VM running `.e7b`; the compiler is an optional part of the library |
+| Platforms | Android, iOS, macOS, Windows, Linux and WebAssembly, from one C++17 code base |
 
 ---
 
-## 1. Naming Survey
+## 1. Names
 
-### 1.1 A discovery: `e7f` is an abbreviation of `everettjf`
-`everettjf` = **e** + `verettj` (7 letters) + **f** → **e7f**, the same numeronym style as `i18n` (internationalization) and `k8s` (kubernetes).
-The language name **E7** comes from e7f, and the engine gets the shorter name **e7vm** (a search found no project with the same name).
+`everettjf` is **e** + 7 letters + **f**, the numeronym style of `i18n` and `k8s`: **e7f**. The language takes the
+first half, **E7**; the engine is **e7vm** (library `libe7vm`). Source files are `.ts` (or `.e7`), compiled modules
+`.e7b`, the compiler `e7c` and the runner `e7`. "E" alone is an older language (E, Electric Communities, 1997), hence
+E7.
 
-### 1.2 Candidate names
+## 2. A strict TypeScript subset
 
-| Name | Relation to everettjf | Conflicts (search results) | Assessment |
-|---|---|---|---|
-| **E7** ⭐ | First half of the e7f abbreviation | No programming language with this name; only Berkeley's E7 course and Esterel v7 | Short, memorable, natural extensions (`.e7` / `.e7b`); recommended |
-| **E7F** | The full numeronym | No conflicts found | Most distinctive, but a bit awkward to say; suits a project/organization name |
-| E8 | No direct relation (the "next generation" of E7; mathematically, the E8 Lie group is beautiful) | A niche `e8vm` project and E8, a PSU course language | Loses the link to the ID |
-| Eve | First three letters of Everett | The Eve language (witheve, abandoned in 2018), plus EVE Online | Many conflicts, not recommended |
-| Evr / Ever | The "ever" in Everett | No language with this name found | Nice meaning (ever); a possible alternative |
-| Rett | Second half of Everett | Same as the medical term Rett syndrome | Not recommended |
-| Jet | j(e)t / jf | Many conflicts: JetBrains, the Microsoft Jet engine, etc. | Not recommended |
+Core rule: **every valid E7 program is also a valid TypeScript program**, and runs with the same result on a
+JavaScript engine. E7 is stricter than TypeScript, not different from it.
 
-Note: "E" is already an old language (E by Electric Communities, 1997), hence "E7" rather than "E".
-
-### 1.3 Naming scheme (final)
-- Language: **E7** (pronounced "E-seven", from e7f = everettjf)
-- Engine: **e7vm** (library `libe7vm`, optional compiler library `libe7c`)
-- Repository: [github.com/e7lang/e7](https://github.com/e7lang/e7) (moved from `everettjf/e7fvm`)
-- Source files `.e7`, bytecode `.e7b`, compiler command `e7c`, runner `e7`
-- Future versions can naturally move on to **E8** (e.g. for a major release that introduces coroutines/generics)
-
----
-
-## 2. Syntax Survey
-
-### 2.1 Prior art for "statically typed scripting"
-
-| Project | Approach | Takeaway for us |
+| Prior art | Approach | What E7 takes from it |
 |---|---|---|
-| **Static TypeScript (Microsoft MakeCode, MPLR 2019 paper)** | A syntactic subset of TS where classes use **nominal typing**, compiled to ARM machine code with a mark-sweep GC; on object-access-heavy benchmarks it is ≥20x faster than MicroPython/Duktape and less than 2x slower than V8 | **The most direct precedent**: proves that "strict TS subset + static compilation" is feasible and fast |
-| AssemblyScript | TS syntax + numeric types such as `i32/i64/f64` (made known to tsc through declaration files), compiled to Wasm | Declare extra numeric types in `.d.ts` and **get IDE support for free** |
-| Swift / Kotlin | The benchmark for expressiveness in modern statically typed languages | Borrow nullable types `T?` and an expression-oriented style |
-| Wasm / JVM | Bytecode type verification at load time | The security model for bytecode delivered from the server |
+| Static TypeScript (Microsoft MakeCode, MPLR 2019) | A syntactic subset of TypeScript with nominal classes, compiled ahead of time | Proof that a strict TypeScript subset compiles to fast code |
+| AssemblyScript | TypeScript syntax plus numeric types (`i32`, `i64`, ...) declared for tsc in `.d.ts` files | Extra numeric types through a declaration file, so editors understand them |
+| Wasm, the JVM | Bytecode type verification at load time | The security model for code delivered from a server |
 
-### 2.2 E7 = a strict TypeScript subset
+Why a TypeScript subset rather than a new syntax:
 
-Core rule: **every valid E7 program is also a valid TypeScript program** (not the other way round: E7 is stricter).
+1. **Tooling for free.** Editors highlight, complete and type-check E7 with no plugin; `lib/e7.d.ts` declares the
+   built-in modules and the integer types. Mobile and web developers have little to learn.
+2. **Differential testing.** The same program runs on Node.js and on e7vm; the outputs must be identical. The test
+   suite and a random program fuzzer compare them byte for byte.
+3. **A mature type syntax.** Generics, nullable types, function types and literal types exist already.
 
-The same algorithm written in E7:
+The cost is that TypeScript's dynamic parts are left out: `any`, unions of different representations, index
+signatures, the prototype chain, `eval` and anything else whose representation would depend on a value at run time
+(SPEC.md lists them; [TYPESCRIPT.md](TYPESCRIPT.md) gives the reason and the alternative for each).
 
-```ts
-// Quicksort
-function quicksort(a: number[], lo = 0, hi = a.length - 1): void {
-  if (lo >= hi) return;
-  const p = a[(lo + hi) >> 1];
-  let i = lo, j = hi;
-  while (i <= j) {
-    while (a[i] < p) i++;
-    while (a[j] > p) j--;
-    if (i <= j) { [a[i], a[j]] = [a[j], a[i]]; i++; j--; }
-  }
-  quicksort(a, lo, j);
-  quicksort(a, i, hi);
-}
+## 3. Numbers
 
-class Point {
-  constructor(public x: number, public y: number) {}   // declares fields + constructor in one line
-  dist(o: Point): number { return Math.hypot(this.x - o.x, this.y - o.y); }
-}
+- **Without type annotations, JavaScript semantics apply exactly.** Integer literals are `number` (f64); the bitwise
+  operators convert to int32 first, so idioms such as `Math.imul`, `x >>> 0` and `(a + b) | 0` give the same results
+  as Node.js. A large amount of existing signing code relies on them; giving integer literals another default would
+  make such code compile and silently produce different results.
+- **Annotated fixed-width integers use machine semantics.** `let h: u32 = 0x6a09e667`: `+ - *` wrap, bitwise
+  operations work at the type's width, `>>` is arithmetic for signed and logical for unsigned types, and the shift
+  amount is taken modulo the width. Code that needs speed annotates its hot variables (`u32`, `u64`).
+- Conversions between integer types and `number`, and between widths, are explicit (`u32(x)`, `Number(h)`). Integer
+  division by zero is a run-time error; `number` division follows IEEE 754. There is no fast-math, so results are
+  identical on every platform.
 
-const pts = [new Point(0, 0), new Point(3, 4)];
-const total = pts.map(p => p.x + p.y).reduce((s, v) => s + v, 0);  // inferred as number
-export function main(): string { return `total=${total}`; }
-```
+## 4. Designed for signing
 
-Why this choice:
-1. **Tooling for free**: VS Code / WebStorm provide highlighting, completion, go-to-definition and type errors out of the box (all it takes is an `e7.d.ts` declaring the standard library and types such as `int`). Mobile and front-end developers have almost nothing to learn.
-2. **Differential testing is possible**: run the same script on Node.js and the E7 VM and compare the output. This is a free and powerful way to test correctness.
-3. **Static types come built in**: TS's type annotation syntax is mature (generics, nullable, unions, function types), so we don't have to design our own.
-4. Elegance comes from: type inference, arrow functions, destructuring, template strings, `for...of`, constructor parameter properties, optional chaining `?.`, and `??`.
-
-Cost: TS's structural typing, `any`, the prototype chain and so on must be cut (see §3).
-
-### 2.3 Conclusion
-- **Use a strict TS subset only**; Ruby-style syntax is no longer considered. Conciseness comes from type inference and a carefully chosen set of syntax features.
-- Internally the compiler still keeps the "front end (syntax → typed AST) / back end (typed IR → bytecode)" split, which is standard engineering practice and makes testing and optimization easier.
-
----
-
-## 3. E7 Language Specification Highlights (v1)
-
-### 3.1 Type system
-| Category | Contents | Notes |
-|---|---|---|
-| Primitive types | `boolean` `number` `string` `bigint` | Same semantics as TS; `number` = f64 |
-| Fixed-width integers (E7 extension) | `i8 u8 i16 u16 i32 u32 i64 u64`, `int` = alias of `i64` | Real machine integers: wrapping overflow, bitwise operations at the type's width (see §3.8.1). Declared in `e7.d.ts` as aliases of `number`/`bigint`, so IDEs work as usual |
-| Bytes | `Uint8Array`, `DataView` | The standard representation of byte strings; all signing input and output uses it |
-| Arrays | `T[]`, `Float64Array`, `Int32Array` … | With static types, `number[]` **is itself contiguous f64 storage**, with no boxing |
-| Containers | `Map<K,V>` `Set<T>` | Built-in generics |
-| Classes | `class` (single inheritance, `implements`) | **Nominal typing**; field layout is fixed at compile time; methods dispatch through a vtable |
-| Interfaces | `interface` | Structural checks at compile time, itable dispatch at runtime |
-| Records | `type P = { x: number, y: number }` / object literals | Compiled to anonymous fixed-layout structs |
-| Nullable | `T \| null`, `?.`, `??`, `!` | Only `null`; **no `undefined`** |
-| Enums | `enum`, string literal unions `"a" \| "b"` | Compiled to integers |
-| Functions | Function types, arrow functions, closures, default parameters, tuple returns `[int, string]` | |
-| Generics | Generic functions and classes | Monomorphized per "value category" (one copy each for each integer width / number / reference) |
-| Modules | `import` / `export` | Linked at compile time |
-
-### 3.2 Numeric semantics (confirmed in v0.4)
-v0.3 specified "integer literals default to `int`(i64)". Once it became clear the workload is signing algorithms, this was changed to:
-
-- **Without type annotations, TS/JS semantics are followed exactly**: integer literals are `number`(f64); `& | ^ << >> >>>` convert to int32 first per JS rules; idioms such as `Math.imul`, `x >>> 0` and `(a + b) | 0` give exactly the same results as Node.
-- **When annotated with a fixed-width integer type, machine integer semantics apply**: `let h: u32 = 0x6a09e667`; add/subtract/multiply wrap, bitwise operations are 32-bit, and `>>` is an arithmetic shift for signed types and a logical shift for unsigned types.
-
-Reasons for the revision:
-1. A large amount of existing JS/TS signing code (hashes, HMAC, custom obfuscation algorithms) relies heavily on JS bitwise semantics such as `|0` and `>>>0`. If integer literals defaulted to i64, such code would **compile in E7 but silently produce different results** (e.g. `1 << 31` is negative in JS but positive in i64; `x | 0` does not truncate in i64). For signing algorithms this is the most dangerous class of bug.
-2. After the revision, code ported from JS gives the same results without changes; when performance matters, annotate the key variables as `u32`/`u64` to take the fast path.
-3. The performance impact is small: in an interpreter, f64 add/subtract costs about the same as integer add/subtract, and the bottleneck is instruction dispatch; bitwise code that really needs to be fast will use fixed-width types explicitly.
-
-Other rules are unchanged:
-- Conversions between fixed-width integers and `number` must be explicit (`u32(x)`, `Number(h)`), as must conversions between different widths, ruling out implicit truncation.
-- Integer division by zero is a runtime error; `number` division by zero yields Infinity/NaN per IEEE (same as JS).
-- No fast-math, so floating-point results are identical across all three platforms (determinism).
-
-### 3.3 Deliberately unsupported (relative to TS)
-Free conversion via `any` / `unknown`, `undefined`, `==` (only `===` is allowed), `var`, the prototype chain/`prototype`, `eval`/`Function()`, adding or removing properties at runtime, `delete`, **`try`/`catch`/`finally`/`throw`**, getters/setters (v1), decorators, `with`, loose structural assignment conversions, and declaration merging.
-
-### 3.4 Error handling (no exceptions)
-- Expected failures are expressed through return values: `T | null`, or a tuple `[T, string | null]`.
-- Runtime errors (array index out of bounds, null reference, integer division by zero, budget/memory limit exceeded, stack overflow) and script calls to `abort(msg)`: **the current call is terminated immediately**, `e7_call` returns an error code, and `e7_last_error` gives the message and a call stack with source line numbers. The VM stays usable, and the host can go on calling other functions.
-- Benefit: the VM needs no exception unwinding tables; the generated bytecode and the verifier are both simpler.
-
-### 3.5 Reserved keywords (for coroutines)
-`function*` / `yield` and `async` / `await` are **recognized by the v1 parser but rejected as "not supported yet"**, so adding them later will not break existing code. `try`/`catch`/`throw` are likewise recognized and get a clear "E7 does not support exceptions" diagnostic.
-
-### 3.6 Standard library (driven by the workload: math + strings)
-| Module | v1 contents |
-|---|---|
-| `Math` | All of TS's `Math.*` (`sqrt` `pow` `exp` `log` `sin`… `floor` `ceil` `round` `trunc` `hypot` `min/max`); the host can inject the seed for `Math.random` for reproducibility; integer helpers `idiv` `imod` `gcd` `abs` `clamp` |
-| Arrays | `push pop slice splice concat indexOf includes sort(cmp) reverse fill map filter reduce some every find join`; `Float64Array/Int32Array/Uint8Array` |
-| Strings | `length charCodeAt at slice substring indexOf lastIndexOf includes startsWith endsWith split trim toUpperCase toLowerCase padStart padEnd repeat replace/replaceAll(string arguments)`, template strings |
-| Conversion | `parseInt parseFloat Number() String() toFixed toString(radix)` |
-| Containers | `Map` `Set` (insertion-ordered, same as JS) |
-| Host | `print` (redirected to the host log), native functions registered by the host |
-
-See also §3.8 for bytes, encoding and the `e7:crypto` module.
-
-Not included for now: `RegExp` (to be added in v2 if needed), `Date` (time functions are provided by the host). `bigint` and `JSON` were moved up to v1 because signing needs them (see §3.8).
-
-### 3.7 String implementation
-- Semantics match TS: `length`/indexing count **UTF-16 code units**, so differential tests against Node give identical results.
-- Dual storage representation (like V8): strings that are entirely Latin-1 use 1 byte per character, otherwise UTF-16; O(1) random access.
-- Immutable + interned (short strings/constants), with the hash cached in the object header.
-- Concatenation optimization: the compiler lowers `s += x` in loops and template strings to an internal StringBuilder, avoiding O(n²).
-- Strings are exchanged with the host as UTF-8 (the C API layer converts).
-
----
-
-### 3.8 Design for signing / signature verification
-
-Signing scripts usually have two layers, and E7 optimizes each separately:
+Signing scripts have two layers, and E7 treats them differently:
 
 | Layer | Typical contents | Where it runs |
 |---|---|---|
-| **Protocol/business layer** | Parameter sorting and joining, canonical JSON, URL encoding, timestamps/nonces, Base64/Hex, choosing the algorithm, assembling signature headers | **E7 script** (can be updated flexibly by delivering it from the server) |
-| **Cryptographic primitive layer** | SHA-1/2/3, MD5, HMAC, HKDF/PBKDF2, AES, RSA, ECDSA, Ed25519, Chinese national SM2/SM3/SM4, etc. | **Native C implementation**, exposed to scripts as a built-in module |
-| **Custom algorithms** | Proprietary obfuscation/digest/transform algorithms | E7 script, on the fixed-width integer fast path |
+| Protocol | Sorting and joining parameters, canonical JSON, URL encoding, timestamps and nonces, Base64 / hex, choosing the algorithm, building headers | The E7 script, updated by delivering a new module |
+| Cryptographic primitives | SHA-1/2/3, HMAC, HKDF, PBKDF2, AES, ChaCha20-Poly1305, RSA, ECDSA, Ed25519, X25519 | Native code, exposed as `e7:crypto` |
+| Custom algorithms | Proprietary digests and transforms | The E7 script, on the fixed-width integer fast path |
 
-Why: standard crypto algorithms usually run one to two orders of magnitude slower in an interpreter than natively (especially big-number arithmetic such as RSA/ECC), and native implementations are easier to make constant-time and get audited; the script only decides "how to combine them", which is exactly the part that needs to be delivered dynamically.
+Standard primitives are one to two orders of magnitude slower in an interpreter, and native implementations are
+easier to make constant-time and to audit; the script decides how to combine them, which is the part that changes.
+The primitives come from BearSSL (RSA, ECDSA, AES, ChaCha20-Poly1305, SHA-1/2, HMAC, HKDF) and Monocypher
+(Ed25519, X25519); SHA-3 / Keccak, PBKDF2 and RSA-PSS are implemented in E7's own code. All are checked against
+Node.js `node:crypto` and published test vectors. The Chinese national algorithms (SM2/3/4) are not included.
 
-#### 3.8.1 Fixed-width integers and bitwise operations
-- Types: `i8 u8 i16 u16 i32 u32 i64 u64` (`int` = `i64`).
-- Operations: `+ - *` wrap; `/ %` are integer division; `& | ^ ~ << >> >>>` work at the type's width; the shift amount is taken modulo the width (unlike C's undefined behavior, E7 defines it explicitly).
-- Intrinsics (each is a single VM instruction): `rotl32 rotr32 rotl64 rotr64 clz ctz popcnt bswap32 bswap64 mulhi64` (high 64 bits of a 64×64 product, for big numbers/hashing).
-- Literals are inferred from context: in `const K: u32[] = [0x428a2f98, ...]` the literals are `u32` directly.
+- **Bytes.** `Uint8Array` is the one byte-string type; `DataView` gives endian-aware reads and writes;
+  `e7:encoding` has hex, Base64, Base64url, Base32 and PEM.
+- **`bigint`** is backed by a native arbitrary-precision implementation with JavaScript's semantics.
+- **Keys never enter the script.** The host keeps keys in the Keychain, Keystore or DPAPI and passes an opaque
+  `KeyHandle`: a script can use it for `hmac` or `sign` but cannot read the key. MACs are compared with
+  `timingSafeEqual`.
 
-#### 3.8.2 Bytes and encoding
-- `Uint8Array` is the single standard type for byte strings; it supports `subarray`, `slice`, `set` and concatenation via `concatBytes(...)`.
-- `DataView`: `getUint32(off, littleEndian)` / `setUint32` etc. for endian-aware reads and writes (each is a single instruction).
-- `TextEncoder` / `TextDecoder` (UTF-8).
-- `e7:encoding` module: `hex`, `base64`, `base64url`, `base32` (encode/decode), `encodeURIComponent`.
-- `JSON.stringify` (v1): deterministic output (field order = declaration order; optional key sorting), for "signing a JSON body"; `JSON.parse` returns a `JsonValue` type (with type-safe accessors, without introducing `any`).
+## 5. Architecture and the VM
 
-#### 3.8.3 `bigint`
-- Supports TS's `bigint` type and `123n` literals, backed by a native C++ big-number implementation.
-- Also provides native functions such as `modPow`, `modInverse` and `gcd` (Montgomery multiplication), so scripts can implement non-standard number-theoretic algorithms.
-- For standard RSA/ECC, calling `e7:crypto` directly is still recommended rather than hand-writing it in a script with `bigint`.
+```
+ Server / build side
+   .ts → lexer → parser → type checker → code generator → .e7b → Ed25519 signature → delivery
+ Device
+   .e7b → signature check → format parsing → bytecode verifier → interpreter ⇄ GC
+            ⇅ C API (only the native functions the host registers)
+   Swift · Kotlin / Java · C# · C / C++ · JavaScript (WebAssembly)
+```
 
-#### 3.8.4 Native `e7:crypto` module (synchronous API)
+In production the server compiles and signs, and devices load only `.e7b`. The compiler is an optional part of the
+library (`E7_WITH_COMPILER`); its output passes the same verifier as any other module, since the verifier trusts no
+source.
+
+Static types let the VM be simpler and faster than a dynamically typed one:
+
+- **Untagged registers, typed instructions.** A register slot is 8 bytes without a type tag; every function carries
+  the kind of each register (integer, float, reference). Instructions are specific to their operand kinds
+  (`ADD_I`, `ADD_F`, ...), emitted directly from the static types, so no run-time quickening is needed. Instructions
+  are fixed-width 64-bit words (`op:16 A:16 B:16 C:16`, up to 65535 registers); compare-and-jump fusion, constant
+  register hoisting and loop inversion are done by the compiler. Dispatch uses computed goto where the compiler
+  supports it.
+- **The verifier is the security foundation.** At load time every function gets a data-flow check: operand kinds
+  match each instruction, indices and jump targets are in range, calls match their signatures. A module that passes
+  needs no type checks while it runs; only bounds, null and division checks remain. ([BYTECODE.md](BYTECODE.md)
+  section 3.)
+- **Memory.** A precise mark-sweep collector: register kinds are the root map, class layouts give the reference
+  fields. Each VM has its own heap and memory limit and shares no state, so threads can each run their own VM.
+  Strings are stored as UTF-16, as JavaScript sees them; concatenation in loops is kept linear by the runtime.
+- **Frames on the VM stack.** Script-to-script calls do not recurse on the C stack: frames live on a VM-managed stack
+  and refer to each other by offsets. The instruction budget is checked at backward jumps and calls, so a call can
+  stop with `E7_SUSPENDED` when its budget runs out and continue with `e7_resume`. The same property makes
+  coroutines cheap (D1).
+
+## 6. Security and sandboxing
+
+| Layer | Measure |
+|---|---|
+| Origin | Ed25519 module signatures; the host configures trusted public keys and rejects anything else (key ids allow rotation) |
+| Structure | Every read of the format is bounds-checked; the loader, verifier and compiler are fuzzed |
+| Types | The bytecode verifier (section 5) |
+| Capabilities | No file, network or system access; scripts call only the native functions the host registers |
+| Resources | Instruction budget, memory limit, call-depth limit; exceeding one ends the call cleanly with an error |
+| Versions | A module's header says which e7vm it needs (`requires`); an older VM rejects it with `E7_ERR_VERSION` (D3) |
+| Platform rules | No JIT, pure interpretation (allowed on iOS) |
+
+The security reviews and their results are in [PRODUCTION.md](PRODUCTION.md).
+
+---
+
+| | Decision | VM change |
+|---|---|---|
+| D1 | Coroutines: a generator or `async` activation keeps its frame in a heap object between resumptions | yes |
+| D2 | `async` / `await`: ECMAScript promise jobs in the VM, the host as the event loop | yes |
+| D3 | One bytecode format: function flags, class flags and a regular expression table are part of it | yes |
+| D4 | Regular expressions: an own backtracking engine, budget-bounded, patterns checked at compile time | yes |
+| D5 | Literal types: checked at compile time, represented as their base type | no |
+| D6 | Recursive interfaces and type aliases | no (JSON descriptors gain a back-reference) |
+| D7 | Properties that hold `undefined`: a presence mask in objects of interface / object types | yes |
+
+## D1. Coroutines
+
+### Decision
+
+A generator or `async` function call creates a **coroutine object** (`CoroObj`) that owns the function's frame while
+it is not running. Suspending (`yield`, `await`) copies the frame's registers and `ip` into the coroutine and pops
+the frame; resuming pushes a frame on top of the current stack and copies them back. While it runs, a coroutine's
+frame is an ordinary frame on the VM stack.
+
+### Why this works
+
+- Script frames live on the VM stack, addressed by offsets (`Frame::base`), not on the C stack (section 5). Moving
+  one frame is a copy of `nregs` slots.
+- `yield` and `await` may appear only directly in the body of their own generator or `async` function (an ECMAScript
+  rule, enforced by tsc). When one runs, the coroutine's frame is the **top** frame: every call it made has
+  returned. So suspending moves exactly one frame, never a stack segment, and never crosses a native frame.
+- Closures capture cells, not registers (cells are heap objects), so a moved frame does not invalidate any closure.
+- Register kinds are fixed per function, so the saved registers are scanned precisely by the collector with the
+  function's own kind table, as frames are.
+
+### Semantics
+
+- **Generators.** The first instruction of a generator function is `GEN_START`: it creates the coroutine, saves the
+  frame (with the arguments already in their registers) and returns the coroutine to the caller as the call's
+  result, without running the body (as in JavaScript). `RESUME` (used by `next`, `return`, `throw` and by `for...of`)
+  pushes the frame back and continues after the `yield` or at the start. `yield` (`YIELD`) saves the frame and returns
+  the value to the resumer with `done = false`; returning from the function marks the coroutine finished and returns
+  the value with `done = true`.
+- **How `return()` and `throw()` reach the body.** `YIELD` writes a resumption mode into an integer register: 0 for
+  `next(v)`, 2 for `return(v)`. For mode 2 the compiler emits, after each `yield`, the same code as a `return`
+  statement at that point, so `finally` blocks run through the handler-table mechanism; the VM has no separate
+  unwinding path. `throw(e)` raises `e` at the `YIELD` instruction, where the handler tables of the generator function
+  apply as for any `throw`.
+- **Re-entrancy.** Resuming a coroutine that is running raises `TypeError: Generator is already running`, as in
+  JavaScript. Resuming a finished one returns `done = true` (`next`), its value (`return(v)`), or raises (`throw`).
+- **No allocation in loops.** `RESUME` writes the value and the done flag into two registers; `for...of`, spread and
+  destructuring over a generator therefore allocate no `{ value, done }` objects. Only an explicit `g.next()` in
+  script code builds the result object.
+- **Budget suspension** (`suspend_on_budget`) works inside a running coroutine: its frame is on the stack like any
+  other.
+- **Natives** never suspend halfway. A generator resumed from a callback that a native made (a `sort` comparator
+  calling `g.next()`) is fine: its frame is pushed above the callback's frame and popped again at the `yield`.
+
+### Iterators
+
+- `Generator<T, TReturn, TNext>`, `Iterator<T>`, `IterableIterator<T>` and `IteratorResult<T>` are built-in types.
+  `IteratorResult<T, TReturn>` is the record `{ done: boolean; value: T | TReturn }`, accepted when `TReturn` is `T`,
+  `void` or `undefined` (then `value` is `T | undefined`, a nullable type); any other `TReturn` is a compile error,
+  because `value` would be a general union.
+- A class with a method named `[Symbol.iterator]` is iterable: `Symbol.iterator` is accepted as this one fixed method
+  name, not as a value (`Symbol` values stay out). `for...of`, spread and array destructuring over it call the method
+  and then `next()`, and call `return()` when the loop exits early, as the specification requires.
+
+### Costs and limits
+
+- A coroutine holds `nregs` slots plus a header; it is charged to the memory limit like any object.
+- `RESUME` / `YIELD` copy `nregs` slots each way. Functions with very many registers pay for it; acceptable for the
+  target workloads (measured in the benchmarks).
+- Debugger: a suspended coroutine is not on the stack, so it has no frame to show; stepping over `yield` / `await`
+  stops at the next statement of the same coroutine when it resumes (tracked by coroutine identity).
+
+---
+
+## D2. `async` / `await`
+
+### Decision
+
+The VM implements the ECMAScript promise machinery itself: promise objects, reaction records, a **microtask queue**
+processed in the order the specification gives, and `await` as a coroutine suspension (D1) with the one-tick
+semantics of ES2019 and later. There is **no event loop and no timer** in the VM: the host is the event loop.
+
+### The host as the event loop
+
 ```ts
-import { sha256, hmac, ed25519, ecdsa, rsa, timingSafeEqual } from "e7:crypto";
+declare function fetchKey(id: string): Promise<Uint8Array>;   // a host function that completes later
 
-export function sign(params: Map<string, string>, key: KeyHandle): string {
-  const keys = [...params.keys()].sort();
-  const canonical = keys.map(k => `${k}=${encodeURIComponent(params.get(k)!)}`).join("&");
-  const mac = hmac("sha256", key, new TextEncoder().encode(canonical));
-  return hex.encode(mac);
+export async function sign(id: string, body: Uint8Array): Promise<string> {
+  const key = await fetchKey(id);
+  return hexEncode(hmac("sha256", key, body));
 }
 ```
-- Algorithm coverage (trimmed by build flags to control size): digests SHA-1/224/256/384/512, SHA-3/Keccak, MD5, SM3, CRC32; MAC/KDF: HMAC, HKDF, PBKDF2; symmetric: AES-CBC/CTR/GCM, ChaCha20-Poly1305, SM4; signatures: RSA PKCS#1 v1.5 / PSS, ECDSA P-256/secp256k1, Ed25519, SM2.
-- Implementation sources (candidates, undecided): BearSSL (MIT, constant-time, small, covers RSA/ECDSA/AES/SHA) + Monocypher (Ed25519/X25519/ChaCha) + GmSSL (Apache-2.0, Chinese national algorithms); or mbedTLS for everything. Writing crypto primitives from scratch is not recommended.
-- WebCrypto's `crypto.subtle` is not used, because it is an asynchronous (Promise) API and v1 has no async.
-- Node differential testing: provide an `e7:crypto` shim based on `node:crypto` and compare the output of the same script on Node and E7; also validate against official NIST / RFC test vectors.
 
-#### 3.8.5 KeyHandle (keys never enter the script)
-- The host stores keys in the iOS Keychain / Android Keystore / Windows DPAPI and passes only an opaque `KeyHandle` to the script.
-- The script can use the handle for `hmac` / `sign`, but **cannot get the plaintext key**, so even if a delivered script is intercepted or tampered with, it cannot export the key.
-- Keys can also be passed directly as `Uint8Array` (suitable for public keys used in signature verification, or for testing).
-- MAC comparison must use `timingSafeEqual`.
+- The host registers `fetchKey` with `e7_register_async_native`. When the script calls it, the VM creates a pending
+  promise and an integer **ticket**, and calls the host function with the arguments and the ticket. The host may
+  settle the ticket at once or later, with `e7_settle(vm, ticket, &value)` or `e7_settle_error(vm, ticket, message)`.
+- `e7_call` runs the script until the VM stack is empty and the microtask queue is drained. If no ticket is open, it
+  returns the result (an `async` function's settled promise gives its value; a rejection is reported like an
+  uncaught error). Otherwise it returns **`E7_PENDING`**. The host settles one or more tickets and calls
+  `e7_resume`, which drains the microtasks the settlements queued and returns `E7_OK`, an error, or `E7_PENDING`
+  again.
+- While a call is pending, no new `e7_call` can start (`E7_ERR_STATE`, as for a suspended call);
+  `e7_abort_suspended` abandons it, and later settlements of its tickets return `E7_ERR_STATE`.
+- All of this happens on the VM's thread, like every other call; a host that completes work on another thread
+  marshals the settlement back.
+- An exported `async` function returns `Promise<T>`; the host sees `T` (the export's host signature marks it).
+- Unhandled rejections: a promise rejected with no handler when the queue is drained fails the call with the error,
+  as Node.js ends the process with it.
 
-#### 3.8.6 Performance targets (signing)
-- Script layer: a typical "parameter canonicalization + HMAC-SHA256 + Hex" takes < 1 ms on a mid-range phone.
-- A pure-script SHA-256 (on the `u32` fast path) serves as the benchmark for VM bitwise performance, with a target of 1/20 to 1/50 of a native implementation on the same device.
-- To support this, the VM provides: fully typed fixed-width integer instructions, single-instruction `rotl/rotr`, single-instruction `Uint8Array`/`DataView` reads and writes, and superinstructions for common combinations (e.g. `x = rotr32(x, n) ^ y`).
+### Why not an event loop in the VM
 
-## 4. Overall Architecture
+E7 runs inside apps that already have one (Android's, iOS's, a server's). A second loop would need threads or timers
+inside the VM, which the sandbox does not allow and which would make results depend on timing. With the host as the
+loop, a script's behaviour depends only on the order in which the host settles tickets.
 
-```
- ┌──────────── Server / build side (main path) ─────┐
- .e7 → Lexer → Parser → AST → TypeChecker → typed IR → Optimizer → CodeGen
-                                                  → .e7b → Ed25519 signing → deliver
- └──────────────────────────────────────────────────┘
- ┌──────────── Device side ─────────────────────────┐
- [optional] libe7c (same compiler source, build flag E7_WITH_COMPILER)
- .e7b → signature check → format parsing → **bytecode type verifier** → VM ⇄ GC
-                                    ⇅ C API (exposes only host-authorized native functions)
- Swift/ObjC · Kotlin/JNI · C#/C++
- └──────────────────────────────────────────────────┘
-```
+### Ordering identical to Node.js
 
-- Production: **the server compiles and signs**, and devices load only `.e7b`. The core library `libe7vm` contains no compiler, so it is small and has a small attack surface.
-- On-device compilation (debugging, local hot reload, offline editing): link `libe7c`; its output must still pass the verifier (the verifier trusts no source, including its own compiler).
+The microtask queue follows the specification's jobs (`PromiseReactionJob`, `PromiseResolveThenableJob`), including
+the extra ticks for resolving a promise with a promise and the single tick of `await` on a native promise. The
+differential tests check it: the `e7` CLI and the Node.js shim provide the same test-only async host functions, and
+both settle open tickets one at a time in creation order, each in its own macrotask (`setImmediate` in Node.js,
+`e7_settle` + `e7_resume` in the CLI). The fuzzer also settles them in random but seeded orders.
 
----
+### Types (the fixed rule)
 
-## 5. VM Design (Redesigned for Static Types)
+- `Promise<T>` is a built-in generic type with a fixed representation (a reference).
+- `then` takes a callback returning `U` or `Promise<U>`; which one is decided by the callback's **static** return
+  type, so there is no union at run time. The same for `resolve(value)` and `await value` (`await` of a non-promise
+  value is compiled as `await Promise.resolve(value)`, with the same number of ticks as in JavaScript).
+- `Promise.all` / `allSettled` / `race` / `any` take an array of `Promise<T>` with one `T` (tuples of different types
+  would need a union result); `allSettled` gives `PromiseSettledResult<T>[]`, a record with `status`, `value?` and
+  `reason?`.
+- `new Promise<T>((resolve, reject) => ...)` is supported: `resolve` and `reject` are closures over the promise.
 
-Static types let the VM be faster and simpler than dynamic VMs such as Lua:
+### In and out of scope
 
-### 5.1 Untagged registers + fully typed instructions
-- Register slots are 8 bytes with **no type tag**; each function prototype carries a "register type table" (int / number / ref …).
-- Instructions are type-specific: `ADD_I` `ADD_F` `LT_I_JMP` `LOAD_F64_ELEM` `GETFIELD off` `CALL_VIRT slot` `CALL_IFACE` …
-- Field access is **a single memory read at a fixed offset**, with no hash lookup or inline cache; the quickening that dynamic VMs need is also unnecessary.
-- Instruction encoding stays fixed-width 32-bit (`op:8 A:8 B:8 C:8` / `op:8 A:8 Bx:16`), with extended prefix instructions for very large functions.
-- Dispatch: computed goto on GCC/Clang, falling back to switch on MSVC (clang-cl is recommended for Windows releases).
+In: `async` functions, methods and arrow functions, `await` (also top-level in the entry module), `Promise<T>` with
+`then` / `catch` / `finally`, `Promise.resolve` / `reject` / `all` / `allSettled` / `race` / `any`, `new Promise`,
+async generators and `for await`, `AggregateError`. Out: timers (`setTimeout`, `setInterval`), `queueMicrotask`,
+`Promise.withResolvers`, and thenables that are not promises (a class with a `then` method is not awaited
+specially; tsc types it as a plain object, and so does E7).
 
-### 5.2 Bytecode verifier (the security foundation for server-delivered code)
-Like the JVM/Wasm: at load time, each function gets a dataflow type check that guarantees:
-- The types of each instruction's operand registers match what the instruction requires (e.g. an int cannot be dereferenced as a pointer);
-- Constant/register/field/function indices are in bounds, and jump targets are valid;
-- Call argument counts and types match.
-Once verification passes, execution **needs no type checks at all**, and memory safety is guaranteed. Only the necessary runtime checks remain: array bounds, null pointers, integer division by zero.
+### Bindings
 
-### 5.3 Memory and GC
-- Precise GC: register type table = GC root map; object layout table = pointer locations within objects.
-- v1: stop-the-world mark-sweep; v2: incremental tri-color marking (to reduce jank on mobile).
-- Each VM instance has its own heap, a configurable memory limit, and can plug in a custom allocator; instances share no state, so multiple threads can each run their own.
-- String interning; `number[]` and similar are stored contiguously; large host arrays can be wrapped into scripts with **zero copy**.
-
-### 5.4 Room for coroutines (no syntax exposed in v1)
-1. **Script-to-script calls do not recurse on the C stack**: all script frames live on a VM-managed stack, and frames refer to each other by offsets rather than raw pointers (so the stack can grow and be saved as a whole).
-2. **Execution state = a Fiber object** (stack + current frame + ip). v1 has only one main Fiber; when v2 adds `yield` / `await`, it simply creates more of them.
-3. **The instruction budget = a natural suspension point**: the budget is checked at backward jumps and calls. When the budget runs out, v1 can already return `E7_SUSPENDED`, and the host calls `e7_resume` on the next frame to continue. So **running long algorithms across frames without blocking the UI** comes for free in v1, with no coroutine syntax needed.
-4. Points where a native function calls back into the script are marked as "non-suspendable boundaries", with the rules fixed in advance.
-5. The instruction set reserves opcode numbers for `YIELD` / `RESUME` / `AWAIT`.
-
-The 0.3 design of coroutines, `async` / `await` and regular expressions is in [DESIGN-0.3.md](DESIGN-0.3.md).
-
-### 5.5 `.e7b` file format
-```
-Header : magic "E7B\0" | format version | minimum VM version | flags | little-endian
-Body   : constant pool | type table (class/interface/record layouts) | function prototypes (register type table + instructions) | import/export tables
-Debug  : line number table, local variable names (strippable)
-Trailer: SHA-256 digest | Ed25519 signature | public key ID
-```
+Each language binding wraps `E7_PENDING` in its own model: Kotlin `suspend` functions, Swift `async` with
+continuations, C# `Task<T>`, JavaScript `Promise`. Host async functions are registered with the language's async
+function type.
 
 ---
 
-## 6. Security and Sandboxing (P0)
+## D3. One bytecode format
 
-| Layer | Measures |
-|---|---|
-| Transport/origin | `.e7b` signature (Ed25519); the host has a built-in public key and refuses to load on signature verification failure; key rotation is supported (public key ID) |
-| Structure | All format parsing is bounds-checked; the parser and verifier are **fuzzed** (libFuzzer) |
-| Types | Bytecode verifier (§5.2) |
-| Capabilities | No file/network/system calls by default; scripts can only call native functions explicitly registered by the host (allowlist) |
-| Resources | Instruction budget, memory limit, call-depth limit, wall-clock timeout; on exceeding a limit, the script terminates safely and returns an error |
-| Versioning | The VM refuses to load bytecode newer than it supports; the server delivers the build matching the client's VM version |
-| Compliance | No JIT on iOS; pure interpretation, and delivered scripts do not change the app's primary purpose |
-| Hardening (optional, v1.x) | If the signing algorithm itself must resist reverse engineering: randomly shuffle opcode numbers per release, encrypt the constant pool/strings, strip debug info, flatten control flow; the VM checks its own integrity. Note: client-side algorithms can never be kept absolutely secret; hardening only raises the cost of reverse engineering |
+### Decision
+
+There is one `.e7b` format ([BYTECODE.md](BYTECODE.md)), with the format identifier 3 in its header. The features
+of D1, D4 and D7 are part of its layout:
+
+- a function flags byte (generator, `async`, async generator, and the value kinds of the coroutine), checked by the
+  verifier: `GEN_START`, `YIELD` and `AWAIT` appear only in functions with the matching kind, `GEN_START` /
+  `ASYNC_START` only as the first instruction;
+- a class flags byte (records with a presence mask, D7; records with accessors);
+- a regular expression table (source and flags, D4);
+- the opcodes `GEN_START`, `ASYNC_START`, `YIELD`, `RESUME_I/F/R`, `AWAIT` and `FIELD_ABSENT`; promise and iterator
+  operations are natives, so they need no verification rules of their own.
+
+A loader accepts exactly this format identifier and rejects any other with `E7_ERR_VERSION` before it reads the
+body, so a file of another layout is never mis-parsed.
+
+### The `requires` field
+
+The header also holds `requires`: the oldest e7vm that can run the module. The compiler computes it from "since"
+tables that give, for each opcode and native function, the release that introduced it (`src/core/since.h`). In 0.1.0
+the tables are empty, so every module requires 0.1.0. A later release that adds an opcode or a native adds an entry,
+and only the modules that use it require that release; a VM rejects a module whose `requires` is newer than itself
+with `E7_ERR_VERSION` instead of failing in the verifier. Hosts read the field without loading the module
+(`e7_inspect`, `e7c --info`), and update manifests carry it as `minVm` ([DEPLOYMENT.md](DEPLOYMENT.md)).
+
+### Why flags in the layout rather than more opcodes
+
+The kind of a function and the representation of a class change how the verifier and the VM treat every
+instruction that touches them; they belong in the descriptors the verifier reads first, not in instructions found
+later. New opcodes and natives are handled by `requires`; the format identifier changes only when the layout itself
+changes.
 
 ---
 
-## 7. Embedding API (Draft C Interface)
+## D4. Regular expressions
 
-```c
-e7_vm*  e7_new(const e7_config* cfg);   // memory limit, instruction budget, allocator, trusted public keys
-void    e7_free(e7_vm*);
-int     e7_load(e7_vm*, const uint8_t* e7b, size_t len, e7_module** out);  // signature verification + bytecode verification
-int     e7_compile(const char* src, size_t len, e7_buffer* out, e7_diag* diag); // requires libe7c
-int     e7_call(e7_vm*, e7_module*, const char* fn, const e7_value* args, int argc, e7_value* ret);
-int     e7_resume(e7_vm*, e7_value* ret);          // continue after the budget runs out
-void    e7_register_native(e7_vm*, const char* name, const char* signature, e7_native_fn, void* ud);
-e7_value e7_wrap_f64_array(e7_vm*, double* data, size_t n, e7_release_fn release);
-const char* e7_last_error(e7_vm*);                 // call stack with source line numbers
-```
-Native functions are registered with a type signature (e.g. `"(number[],int)->number"`), and script calls are checked against it at both compile time and load time.
-Higher-level wrappers: iOS → Swift Package + xcframework; Android → AAR (JNI + Kotlin); Windows → DLL / C# P/Invoke.
+### Decision
+
+An own regular expression engine in the VM (`src/regexp/`): a compiler from pattern to a small program and a
+**backtracking matcher with explicit stacks** (no C recursion), with ECMAScript semantics on UTF-16 strings, which is
+how E7 strings are stored.
+
+- **Flags**: `d g i m s u y`. The `v` flag (set notation, ES2024) is not supported.
+- **Syntax**: everything ES2018 adds (named groups, lookbehind, `s`, Unicode property escapes `\p{...}`) and the
+  Annex B syntax that V8 accepts without the `u` flag, so a pattern that works in Node.js works in E7.
+- **Patterns are data, not code.** A module stores a literal's source and flags (D3's regular expression table);
+  the VM compiles them when the module is loaded. A malformed pattern fails the load (it cannot happen for compiler
+  output, since the compiler checks literals). So there is no regular expression program in the module to verify.
+- **Compile-time checking**: the compiler parses every literal; a syntax error is a compile error with the position.
+  `new RegExp(source, flags)` with a source built at run time raises a catchable `SyntaxError`, as in JavaScript.
+
+### Bounded by the host's limits
+
+Every matcher step is charged to the instruction budget (in batches) and the backtracking stacks to the memory
+limit. A catastrophic pattern such as `/(a+)+$/` on a long input therefore ends with `E7_ERR_BUDGET` (or suspends
+with `suspend_on_budget`) instead of hanging the host: ReDoS is limited by the same budget as any other script work.
+
+### Types (the fixed rule)
+
+- `RegExp`, `RegExpMatchArray` (`string[]` with `index`, `input`, `groups`), `RegExpExecArray`.
+- **Named groups are known for literals**: for `/(?<year>\d{4})/`, `m.groups?.year` is a `string | undefined`. For a
+  pattern built at run time, `groups` has no known properties and only indexed groups are available (TypeScript
+  types `groups` as an index signature, which E7 does not have).
+- `replace(re, fn)`: the callback's parameters are fixed by the pattern: the match, one `string | undefined` per
+  capture group of a literal, then the offset and the input (and the groups object for a literal with named groups).
+  For a run-time pattern only `(match: string) => string` is accepted.
+- `matchAll` returns an `IterableIterator<RegExpExecArray>` (D1).
+
+### Unicode data and verification
+
+`\p{...}` (General_Category, Script, Script_Extensions and the binary properties) and case-insensitive matching use
+Unicode tables generated from the ICU data of Node.js 22 (`scripts/gen-regexp-unicode.mjs`), so results match V8.
+The engine is checked by test262-derived tests within the supported flags, a random pattern-and-input fuzzer
+compared with V8, ReDoS tests that check the budget bound, and the GC-stress, allocation-failure and sanitizer runs.
 
 ---
 
-## 8. Toolchain
-- `e7.d.ts`: declarations for the standard library and types such as `int`/`i32`, giving VS Code native support for E7.
-- `e7c`: the compiler CLI (`--check` for type checking only, `-O2`, `--strip-debug`, `--sign key`).
-- `e7`: runner / disassembler (`e7 dis a.e7b`) / benchmark tool.
-- Testing: unit tests + `.e7` cases (with expected output) + **Node.js differential testing** + fuzzing.
-- Benchmarks: numeric (fib, nbody, spectral-norm, mandelbrot, matmul, sieve, quicksort) + strings (concatenation, split/join, find and replace, word frequency with Map<string,int>); compared against Lua 5.4, QuickJS and Node (interpreter mode `--jitless`).
+## D5. Literal types
 
-## 9. Directory Layout (Planned)
-```
-include/e7/e7.h       public C API
-src/common/           memory, strings, containers
-src/compiler/         lexer parser ast checker ir optimizer codegen   → libe7c
-src/vm/               loader verifier interp gc object fiber natives  → libe7vm
-src/stdlib/           Math String Array Map etc.
-tools/e7c tools/e7    command-line tools
-lib/e7.d.ts           IDE type declarations
-tests/ bench/ fuzz/
-platform/ios android windows
-```
+### Decision
 
-## 10. Milestones
-| Phase | Contents | Acceptance |
-|---|---|---|
-| M0 Spec | Freeze the v1 syntax subset, type rules, numeric semantics, instruction set and `.e7b` format | This document finalized + `e7.d.ts` |
-| M1 Front end | Lexer, Parser (TS subset), AST, diagnostics | Example scripts parse; invalid syntax is reported accurately |
-| M2 Type checking | Inference, class/interface/generic/nullable checks | Cases agree with tsc (with dedicated cases where E7 is stricter) |
-| M3 Back end + VM | IR, register allocation, CodeGen, interpreter, primitive types and functions | fib / loops / quicksort run; Node differential tests pass |
-| M4 Objects and GC | class/interface/closures/arrays/Map/strings, mark-sweep | Comprehensive cases pass with no leaks (ASan/LSan) |
-| M5 Bytecode and security | `.e7b` serialization, verifier, signing, sandbox, budget suspend/resume | 24h of fuzzing with no crashes; tampered bytecode is rejected |
-| M5.5 Signing capabilities | Fixed-width integer instructions, `Uint8Array`/`DataView`, `e7:encoding`, `e7:crypto` (wired to native libraries), `bigint`, KeyHandle | All algorithms pass NIST/RFC test vectors; differential results match the Node shim |
-| M6 Performance | Constant folding, fused compare-and-jump, inlining small functions, superinstructions | Benchmarks match or beat Lua 5.4; script SHA-256 meets the §3.8.6 target |
-| M7 Three-platform integration | C API, iOS/Android/Windows builds and demo apps, on-device compilation | The same `.e7b` gives identical results on real devices on all three platforms |
-| E8 (v2) | Coroutines (`yield`/`async`), incremental GC, getters/setters, RegExp | — |
+String, numeric, boolean and bigint literal types (`"GET"`, `0`, `true`), unions of literals of **one base type**
+(`"GET" | "POST"`, `0 | 1 | 2`), with `null` / `undefined`, and enum member types (`E.A`) are checked at compile time
+as tsc checks them, and represented at run time as their base type. A literal type is a refinement of its base type,
+so the fixed rule holds: the representation never depends on a value.
 
-## 11. Decision Log
-| Question | Decision |
-|---|---|
-| Naming | Language E7, engine e7vm |
-| Syntax | Strict TS subset only |
-| Integer default | **Same as JS**: `number` when unannotated; fixed-width integers such as `u32`/`u64` are annotated explicitly (confirmed in v0.4, see §3.2) |
-| Exceptions | Not supported; runtime errors terminate the call and return to the host |
-| Workload | Mainly signing / signature verification, plus math and strings |
-| Crypto primitives | Native implementations exposed as `e7:crypto`; scripts handle the composition logic |
+- Narrowing by `===` / `!==` and `switch` on literal unions, with exhaustiveness (`never`) as for enums.
+- `as const` on arrays and objects of literals gives `readonly` tuples and objects of literal types.
+- Unions of different base types (`string | number`, `"a" | 1`) and unions of object types (discriminated unions)
+  stay out: their representation would depend on the value.
 
-## 12. Next Steps (Deliverables for the M0 Spec Freeze)
-1. `docs/SPEC.md`: E7 syntax subset (EBNF), type rules, numeric and string semantics, error model.
-2. `docs/BYTECODE.md`: instruction set table, encoding, `.e7b` format, verification rules.
-3. `lib/e7.d.ts`: declarations for the standard library and types such as `int`, so E7 scripts can be tried out directly in VS Code.
-4. `examples/`: about 10 typical scripts that double as the first tests and benchmarks: API parameter signing (HMAC), JSON body signing, RSA/ECDSA/Ed25519 signature verification, pure-script SHA-256, a custom bitwise digest, Base64/Hex, big-number modular exponentiation, and a few numeric and string algorithms.
+`let m: "GET" | "POST" = s` with a `string` `s` is a compile error, as in tsc.
 
-### Open questions
-1. Which specific algorithms are needed? In particular, are the **Chinese national SM2/SM3/SM4** algorithms and secp256k1 needed?
-2. Does the signing algorithm itself need **anti-reverse-engineering hardening** (the hardening row in §6)?
-3. Are keys managed by the host via Keychain/Keystore and passed to scripts as handles?
+---
+
+## D6. Recursive interfaces and type aliases
+
+### Decision
+
+Named object types are created before their members are resolved, so a member may refer to the type itself or to
+types that refer back (`interface Tree { label: string; children: Tree[] }`, mutually recursive interfaces, generic
+`interface List<T> { head: T; tail: List<T> | null }`).
+
+- A recursive **type alias** of an object type (`type Tree = { children: Tree[] }`) is resolved like an interface: a
+  named (nominal) shape instead of an interned anonymous one, because interning by structure cannot describe a cycle.
+  Assignability between such types stays structural, with a cycle guard (two types are compatible if they are
+  compatible assuming the pair being compared already is).
+- Generic instances are registered before their members are instantiated, so `List<number>` refers to itself.
+- Type names in messages, JSON descriptors and the debugger stop at a cycle.
+- **`JSON.parse(text) as Tree`**: the JSON type descriptor (a string the VM interprets) has a back-reference to an
+  enclosing record (`@<depth>`).
+
+No other VM change: objects of recursive types are ordinary records.
+
+---
+
+## D7. Properties that hold `undefined` (a presence mask)
+
+### Decision
+
+Records whose type has optional properties or properties whose type includes `undefined` get a **presence mask**:
+one bit per field after the fields (one 64-bit word per 64 fields), marked in the class descriptor's flags. A new
+record has every bit set; `FIELD_ABSENT` clears the bit of a property that an object literal or a spread leaves out,
+and any assignment to the property sets it again. Reading a field is unchanged (an absent field reads as
+`undefined`), so property reads cost nothing extra.
+
+`Object.keys` / `entries` / `values`, spread, `Object.assign`, `JSON.stringify` and `console.log` consult the mask:
+a property is listed when its bit is set, also when it holds `undefined`, as in JavaScript. A record without a mask
+has no property that could be absent, so all its fields are own properties.
+
+### Why a mask and not an "absent" value
+
+An "absent" sentinel stored in the field would have to be translated to `undefined` on every read of every reference
+field, a cost on the hottest path. The mask costs one bit per field and a store on writes to the flagged records only
+(`SETFIELD` on a class with the flag; the class is known from the object, so the check is one branch).
+
+### Effect
+
+With `exactOptionalPropertyTypes` and the mask, a record behaves like a JavaScript object for every property its type
+declares.
+
+---
+
+## Implementation notes
+
+- **D1.** The value kinds in the function flags are 0 none, 1 `I`, 2 `F`, 3 `R` (a plain function has flags 0), and
+  bits 6-7 hold the kind of the body's return value. `GEN_START` is the first instruction, so default parameter
+  values of a generator are evaluated when the body first runs (at the first `next()`), not at the call. Iterators
+  are generators at run time: an iterator object written by hand (an object with a `next()` method) is not an
+  `Iterator<T>`; a class is iterable through a generator method `*[Symbol.iterator]()`. `next()` on a finished
+  generator whose return type is a primitive gives NaN / 0 / false instead of `undefined` (the value's
+  representation is fixed).
+- **D2.** The C API is `e7_register_async_native`, `e7_settle`, `e7_settle_error`, `e7_open_tickets` and the status
+  `E7_PENDING` (15). A call returns `E7_PENDING` whenever host tickets are open at its end, also when the entry
+  function is not `async` (the call is finished when the work it started is). An uncaught error of the call itself
+  runs the jobs it queued first (as JavaScript does), then ends the call. For tests, `e7:test` provides `later(v)`
+  and `laterReject(e)`: promises the VM settles itself, one per turn, in creation order (`setImmediate` in the
+  Node.js shim).
+- **Async generators** (`async function*`) are coroutines of function kind 3 that start like a generator
+  (`GEN_START`); their `next` / `throw` / `return` requests are `RESUME_R` with an "async request" bit in its extra
+  word (BYTECODE.md section 6.2). The VM keeps the request queue of the specification in the coroutine
+  (AsyncGeneratorEnqueue, Resume, Yield, CompleteStep, DrainQueue, AwaitReturn): a request gets a promise at once and
+  runs the body only when the generator waits at its start or at a `yield`; `YIELD` in an async generator answers the
+  first request and, when another is queued, continues without suspending; `RET_*` and an error leaving the frame
+  answer the current request and drain the queue. The compiler emits the awaits around them (`yield v` and
+  `return v` await `v`, `return(v)` at a `yield` awaits `v` before returning, `for await` awaits each request's
+  promise), so the number of promise jobs is the specification's and the order of callbacks is Node's. The
+  IteratorResult records are built by the VM, of the record class the request names. `yield*` returns the inner
+  iterator's value after `return(v)` without awaiting it again (the current specification and V8). `yield*` of a
+  sync iterable (an array, a generator, an iterable class) is compiled as the specification's async-from-sync
+  iterator, step by step: the sync iterator is called at once, its value goes through `Promise.resolve` and a `then`
+  (whose rejection handler is a compiler-made closure that calls the generator's `return()`, as `closeIterator`
+  does) and the outer await, so a step takes the same two jobs as in Node.js; `throw(e)` into an array (no `throw`
+  method) rejects with a `TypeError` a job later, and `return(v)` on it gives `{ value: v, done: true }` (the ES2025
+  text, also what Node.js 22 and 24 do).
+- **D4.** The engine is `src/regexp/` (a parser following V8's, a compiled program, a matcher with two explicit
+  stacks); its Unicode tables are about 59 KB compiled. The `v` flag and duplicate named groups are rejected, as
+  Node.js 22 does.
+- **D5.** `as const` works for literals and for arrays and objects of literals; a `const` initialized with a literal
+  has the literal's type, a `let` the base type (TypeScript's widening). An enum member used as a type (`kind: E.A`)
+  is the enum's type (tsc checks the member).
+- **D6.** The back-reference in a JSON descriptor is `@<n>` (the n-th enclosing object descriptor), read by the
+  ordinary `JSON.parse` / `JSON.tryParse` natives.
+- **D7.** Records whose type has a property that may hold `undefined` (optional or `| undefined`) carry the mask;
+  object literals, spread and `JSON.parse` leave absent properties out, and `Object.has` (a native) tells spread
+  whether a source property is present.
+- **Output details.** Generators print as `Object [Generator] {}` and promises as `Promise { 1 }` /
+  `Promise { <pending> }` / `Promise { <rejected> Error: x }`, as in Node.js; stack traces through `await` show the
+  frames of the current continuation.
 
 ## References
-- Static TypeScript paper (MPLR 2019): https://mmoskal.github.io/pdf/static-typescript.pdf
-- Rocket-fast embedded TypeScript for MakeCode Arcade: https://www.microsoft.com/en-us/research/blog/rocket-fast-embedded-typescript-for-makecode-arcade/
+
+- Static TypeScript (MPLR 2019): https://mmoskal.github.io/pdf/static-typescript.pdf
 - MakeCode language notes: https://makecode.com/language
-- The E language (naming conflict reference): https://en.wikipedia.org/wiki/E_(programming_language)
-- The Eve language (witheve, naming conflict reference): https://github.com/witheve/Eve
-- e8vm (naming conflict reference): https://github.com/ryanphuang/e8
+- ECMAScript 2025 Language Specification: https://tc39.es/ecma262/
 - BearSSL: https://bearssl.org/
 - Monocypher: https://monocypher.org/
-- GmSSL (Chinese national algorithms): https://github.com/guanzhi/GmSSL
-- Mbed TLS: https://github.com/Mbed-TLS/mbedtls

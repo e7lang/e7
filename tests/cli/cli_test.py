@@ -195,7 +195,7 @@ def main():
               all(x in out for x in ("native #", "global #", "class #0 P", "func #0 <init>", "CALLN", "CLOSURE")), out)
         check("--disasm: no output file without -o", not os.path.exists(p("dis.e7b")), "")
 
-    # ---- e7c --info: the bytecode format and the `requires` header field; there is no --target
+    # ---- e7c --info: the bytecode format and the `requires` header field
     with tempfile.TemporaryDirectory() as tmp:
         def p(name):
             return os.path.join(tmp, name)
@@ -206,8 +206,6 @@ def main():
         rc2, out2, err2 = run([e7c, "--info", p("private.e7b")])
         check("--info: format and requires", rc == 0 and rc2 == 0 and "format:   3\n" in out2 and
               "requires: e7vm 0.1.0" in out2, out + err + out2 + err2)
-        rc, out, err = run([e7c, p("private.ts"), "--target", "0.1", "-o", p("t.e7b")])
-        check("--target is not an option", rc == 2 and "usage" in err, out + err)
 
     print("\n%d failed" % len(failures))
     return 1 if failures else 0

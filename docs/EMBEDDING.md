@@ -10,8 +10,8 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 ```
 
 For apps that receive modules over the air, [DEPLOYMENT.md](DEPLOYMENT.md) describes the complete flow: key
-management and rotation, signed manifests, staged rollout, kill switch, rollback, `e7c --target` per client VM
-version, sizing limits from measurements, error reporting and a shadow-run phase. `E7ModuleManager` (Java/Kotlin,
+management and rotation, signed manifests, staged rollout, kill switch, rollback, the minimum VM version of a
+module, sizing limits from measurements, error reporting and a shadow-run phase. `E7ModuleManager` (Java/Kotlin,
 Swift and C#) implements the client side.
 
 - **Signing is optional.** A plain `e7c app.ts -o app.e7b` module runs anywhere. Signing only adds a
@@ -26,9 +26,9 @@ Swift and C#) implements the client side.
   On the command line, `e7 --trust release.pub app.e7b` is the equivalent of the last row.
 - Generate keys: `e7c --keygen release` produces `release.seed` (32-byte private key seed, hex, **keep secret**) and `release.pub` (public key, built into the app).
 - Multiple public keys are supported (key rotation): pass N×32 bytes in `trusted_keys`.
-- `.e7b` carries a format version and the minimum e7vm version it needs; a VM rejects a module it cannot run with
-  `E7_ERR_VERSION`. Build with `e7c --target <version>` for the oldest app version you still serve, or keep one
-  build per VM version and pick it with `e7_inspect` / `e7c --info` (see [BYTECODE.md](BYTECODE.md#5-compatibility)).
+- `.e7b` carries its bytecode format and the oldest e7vm that can run it (`requires`); a VM rejects a module it
+  cannot run with `E7_ERR_VERSION`. `e7_inspect` / `e7c --info` read both without loading the module (see
+  [BYTECODE.md](BYTECODE.md#5-versions-and-compatibility)).
 - Source can also be compiled on the device (`e7_compile` / `e7_load_source`, requires `E7_WITH_COMPILER=ON`);
   if you only need to run `.e7b`, use `-DE7_WITH_COMPILER=OFF` to reduce size.
 
@@ -42,7 +42,7 @@ Swift and C#) implements the client side.
 | `e7_version` / `e7_version_number` | Library version (`"0.1.0"` / `0x000100`) |
 | `e7_gc_stats_get(vm, &stats)` | Garbage collections, total and longest pause, heap size and peak |
 | `e7_compile` / `e7_load_source` | Compile source (errors are formatted as `file:line:col: error: ...`) |
-| `e7_compile_ex(src, len, name, &opts, ...)` | Compile with options (`e7_compile_options_init` first): `E7_COMPILE_DEBUG` (debug information), a `read_file` callback for imports, `target_version` (oldest e7vm that must run the module) |
+| `e7_compile_ex(src, len, name, &opts, ...)` | Compile with options (`e7_compile_options_init` first): `E7_COMPILE_DEBUG` (debug information), a `read_file` callback for imports |
 | `e7_call(vm, module, "fn", args, n, &ret)` | Call an `export function` |
 | `e7_set_budget(vm, ticks)` | Instruction budget for subsequent execution (≤0 means unlimited) |
 | `e7_resume` / `e7_abort_suspended` | Resume / abandon a suspended call, or one waiting for async host functions (`E7_PENDING`) |
@@ -64,8 +64,8 @@ Swift and C#) implements the client side.
 
 **Error codes**: `E7_OK`, `E7_SUSPENDED`, `E7_ERR_RUNTIME` (script error/throw/abort), `E7_ERR_BUDGET`, `E7_ERR_MEMORY`,
 `E7_ERR_STACK`, `E7_ERR_LOAD`, `E7_ERR_VERIFY`, `E7_ERR_SIGNATURE`, `E7_ERR_NOT_FOUND`, `E7_ERR_ARGS`, `E7_ERR_COMPILE`, `E7_ERR_STATE`,
-`E7_ERR_VERSION` (bytecode format or required e7vm version not supported: deliver a module built with
-`e7c --target <app's e7vm version>`), `E7_PAUSED` (only with a debugger attached in pause-to-host mode), and
+`E7_ERR_VERSION` (bytecode format not supported, or the module requires a newer e7vm: recompile it with the
+compiler that matches the app's VM), `E7_PAUSED` (only with a debugger attached in pause-to-host mode), and
 `E7_PENDING` (the call waits for async host functions: [§2.6](#26-async-host-functions)).
 The VM remains usable after any error; module globals are preserved.
 
@@ -164,9 +164,9 @@ A VM may be used from only one thread; different VMs share no state and can run 
 
 ### 2.6 Async host functions
 
-Since 0.3 a script can `await` work the host does asynchronously (a network request, a Keystore / Keychain
+A script can `await` work the host does asynchronously (a network request, a Keystore / Keychain
 operation that shows UI, a database query). The VM has no event loop and no threads of its own: **the host is the
-event loop** ([DESIGN-0.3.md D2](DESIGN-0.3.md#d2-async--await)).
+event loop** ([DESIGN.md D2](DESIGN.md#d2-async--await)).
 
 ```ts
 import { hmac } from "e7:crypto";

@@ -296,6 +296,10 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
   - Syntax: destructuring with defaults and rest, object spread, `?.` (short-circuiting chains), `??`/`??=`,
     template strings, `for...of`, `switch` and labels.
   - Errors: `try`/`catch`/`finally` for the errors Node.js also throws.
+  - Generators, `async`/`await`, `Promise` (the host is the event loop; host functions may be async), async
+    generators and `for await`.
+  - Regular expressions (literals checked when compiling, named groups typed; matching is budget-bounded),
+    object literal getters and setters, literal types, recursive interfaces.
   - Multi-file `import`/`export`, and type narrowing.
 - **Same output as Node.js.** Every test program is compared with Node.js byte for byte; `console.log` formats
   like Node's `util.inspect`, and Math functions are bit-identical (V8's fdlibm) on every platform.
@@ -309,7 +313,8 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 - **Standard library.**
   - `Math`, `Number`, `String`, `Array` (`map`/`filter`/`reduce`/`sort` …), `Map`, `Set`, `bigint`, `Date` (UTC).
   - `JSON`: `JSON.parse(text) as T` **validates** the result against the type `T`.
-  - `Uint8Array`/`ArrayBuffer`/`DataView`, `TextEncoder`/`TextDecoder`, `encodeURIComponent`.
+  - Typed arrays (`Uint8Array` … `Float64Array`, `BigInt64Array`)/`ArrayBuffer`/`DataView`, `TextEncoder`/`TextDecoder`,
+    `structuredClone`, `encodeURIComponent`.
 - **`e7:crypto`.**
   - Hashes: MD5, SHA-1, SHA-2, SHA-3, Keccak.
   - Key derivation and MACs: HMAC, HKDF, PBKDF2.
@@ -354,12 +359,12 @@ CMake options:
 
 ## Security and status
 
-e7vm is built for running code that comes over the network. Before release it went through four
+e7vm is built for running code that comes over the network. Before release it went through eight
 security reviews (each by a separate AI review agent; no third-party audit yet), differential testing
 against Node.js/OpenSSL, sanitizers, and fuzzing, and every finding was fixed with a regression test. The
-evidence is in [docs/PRODUCTION.md](docs/PRODUCTION.md). E7 is **0.x**: thoroughly tested and hardened, but it
-has not yet run in production, and minor releases may change the language, the C API or the bytecode format
-(see [CHANGELOG.md](CHANGELOG.md)). Recommendations for apps:
+evidence is in [docs/PRODUCTION.md](docs/PRODUCTION.md). E7 0.1.0 is the first release: thoroughly tested and
+hardened, but it has not yet run in production, and releases before 1.0 may change the language, the C API or
+the bytecode format (see [docs/ROADMAP.md](docs/ROADMAP.md) for the road to 1.0). Recommendations for apps:
 
 1. **If scripts are downloaded at runtime, turn on signature checking** (`require_signature` plus the public key built into the app) and keep the private key on the build server.
 2. **Set an instruction budget and a memory limit** (for example 16–64 MiB).
@@ -452,10 +457,11 @@ tests/ bench/ docs/                            third_party/     BearSSL (MIT), M
 - [docs/SPEC.md](docs/SPEC.md): language specification (syntax, types, numeric semantics, standard library, differences from TS)
 - [docs/TYPESCRIPT.md](docs/TYPESCRIPT.md): TypeScript feature coverage table (supported, partial, unsupported, and the E7 alternative)
 - [docs/EMBEDDING.md](docs/EMBEDDING.md): C API, Android/iOS/Windows integration, security guidance
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): delivering modules to apps: keys and rotation, signed manifests, staged rollout, kill switch, rollback, `--target`, limits, error reporting, shadow runs
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): delivering modules to apps: keys and rotation, signed manifests, staged rollout, kill switch, rollback, VM versions, limits, error reporting, shadow runs
 - [docs/BYTECODE.md](docs/BYTECODE.md): `.e7b` format, instruction set, verification rules, signature format
 - [docs/DEBUGGING.md](docs/DEBUGGING.md): `e7 debug`, debug information, the C debug API and the WebAssembly JSON protocol
-- [docs/DESIGN.md](docs/DESIGN.md): design and decision record
+- [docs/DESIGN.md](docs/DESIGN.md): design decisions
+- [docs/ROADMAP.md](docs/ROADMAP.md): what 0.1.0 contains and what comes next (production pilot, 1.0)
 - [docs/PRODUCTION.md](docs/PRODUCTION.md): verification record (tests, reviews and evidence)
 
 ## License

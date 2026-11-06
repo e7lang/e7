@@ -1,5 +1,5 @@
 // Debugger tests: the C debug API (both execution models), debug information in bytecode
-// (serialization, backward compatibility, verifier rejection of malformed debug sections) and
+// (serialization, verifier rejection of malformed debug sections) and
 // columns in stack traces.
 #include <atomic>
 #include <chrono>

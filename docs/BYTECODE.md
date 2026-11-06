@@ -1,4 +1,4 @@
-# e7vm bytecode (.e7b format 2; format 3 planned)
+# e7vm bytecode (.e7b)
 
 ## 1. File format
 
@@ -6,18 +6,19 @@ All integers are little-endian. A string is `u32 length + UTF-8 bytes`.
 
 ```
 magic   "E7B\0"            4 bytes
-version u32 = 2            bytecode format (e7 0.2.x)
+format  u32 = 3            bytecode format identifier (the only one e7vm reads)
 flags   u32                bit 0: the module carries debug information (informational; readers ignore unknown bits)
-requires u32               minimum e7vm version: major << 16 | minor << 8 | patch (see "Compatibility")
+requires u32               oldest e7vm that can run the module: major << 16 | minor << 8 | patch (section 5)
 name    str
 ints    u32 n, n × i64        integer constant pool
 nums    u32 n, n × f64        number constant pool (IEEE-754 bit patterns)
 strs    u32 n, n × (u32 len, len × u16)   string constants (UTF-16)
 sigs    u32 n, n × str        signatures, e.g. "FR>I": param kind list '>' return kind (V = void)
 natives u32 n, n × (str name, u32 sig)          native function imports (linked by name + signature)
-classes u32 n, n × (str name, i32 parent, u8 kind(0 class/1 record/2 tuple),
+regexps u32 n, n × (str source, str flags)      regular expression literals
+classes u32 n, n × (str name, i32 parent, u8 kind(0 class/1 record/2 tuple), u8 cflags,
                     u32 nf × (str name, u8 vt), u32 nm × (u32 func, str methodName))
-funcs   u32 n, n × (str name, u32 sig, u16 nparams, u32 nregs × u8 kind, u32 nup × u8 kind,
+funcs   u32 n, n × (str name, u32 sig, u16 nparams, u8 fflags, u32 nregs × u8 kind, u32 nup × u8 kind,
                     u32 nic × u32 strIdx, u32 ncode × u64,
                     u32 nhandlers × (u32 start, u32 end, u32 handler, u32 reg),
                     u32 nlines × u32 (pc, line pairs))
@@ -36,13 +37,13 @@ distinct from module signatures. See [DEPLOYMENT.md](DEPLOYMENT.md#3-manifests).
   whose code comes from a source file other than the entry file (imported modules, and module initialization in
   multi-file programs) appends an extension after the pairs: `(0xFFFFFFFF, 0x53454C46)` followed by
   `(0xFFFFFFFF, pc), (0xFFFFFFFF, strIdx)` entries meaning "from `pc` on, the source file is string constant `strIdx`"
-  (a path relative to the entry file). Readers that stop at the first pair whose pc is past the instruction ignore it,
-  so older VMs still load such modules; single-file programs carry no extension.
+  (a path relative to the entry file). A line lookup stops at the first pair whose pc is past the instruction, so it
+  never reads the extension; single-file programs carry no extension.
 - **debug information** (optional, `e7c --debug`; see [DEBUGGING.md](DEBUGGING.md)): after the pairs and the file
   segments (if any), a function may append `(0xFFFFFFFF, 0x31474244 "DBG1")`, a word count `n` (< 2^31), `n` payload
-  words, and one `0` padding word if needed to keep the table a list of pairs. Older readers ignore it (their pair
-  scan stops at the first marker and their file-segment scan at the first group that is not
-  `(marker, pc, marker, index)`). Payload (all `u32`):
+  words, and one `0` padding word if needed to keep the table a list of pairs. The line lookup stops at the first
+  marker and the file-segment scan at the first group that is not `(marker, pc, marker, index)`, so neither reads
+  it. Payload (all `u32`):
   ```
   npos,   npos  x (pc, line, col)     position of the code from pc on; pcs strictly increasing
   nstmt,  nstmt x (pc, line, col)     statement boundaries (instruction starts, strictly increasing) and their position
@@ -57,6 +58,7 @@ distinct from module signatures. See [DEPLOYMENT.md](DEPLOYMENT.md#3-manifests).
 - **vt** (exact value type): `0 number, 1 boolean, 2 i8, 3 u8, 4 i16, 5 u16, 6 i32, 7 u32, 8 i64, 9 u64, 10 ref`.
   Used for array elements, fields, cells, boxed values, Map keys/values, and formatting.
 - **hostSig**: host type codes for an exported function's parameters/return (see `e7.h`); the host uses them to encode/decode arguments.
+- **regexps**, **cflags**, **fflags**: regular expression literals, class flags and function flags (section 6.1).
 
 ## 2. Instruction encoding
 
@@ -269,7 +271,7 @@ continues at `handler`. Handlers are listed innermost first.
 
 ## 3. Verification rules (at load time, `src/core/verify.cpp`)
 
-1. Structure: all counts are bounds-checked, and any out-of-bounds read fails the load; CRC32 check; version check.
+1. Structure: all counts are bounds-checked, and any out-of-bounds read fails the load; CRC32 check; format check (section 5).
 2. Signature strings are well-formed; each function's parameter kinds match its signature; the init function's signature is `>V`.
 3. Each instruction: the opcode is valid; every register operand exists and its **kind matches what the instruction requires**; constant/global/class/function/native/inline cache/upvalue indices are in range;
    global and upvalue kinds match the instruction; unused fields are 0.
@@ -296,58 +298,50 @@ string/byte types) are checked by the interpreter at runtime. So even maliciousl
   under memory pressure; no collection happens while a native function is running.
 - Instruction budget: each back edge deducts the loop body length, and each call deducts 1; on exhaustion the VM reports an error or suspends.
 
-## 5. Compatibility
+## 5. Versions and compatibility
 
-- The `version` field is the bytecode format. e7 0.2.x reads and writes format 2 only; a module of another format is
-  rejected at load time with `E7_ERR_VERSION` (0.1 modules must be recompiled).
+- The `format` field identifies the file layout described here; e7vm reads format 3 only. A module with any other
+  value is rejected at load time with `E7_ERR_VERSION` ("e7b format N is not supported ... recompile the module")
+  before its body is read.
 - `requires` is the oldest e7vm that can run the module. The compiler computes it from the instructions and native
-  functions the module uses (each has a "since" version, `src/core/since.h`), and from features that change how a
-  VM must treat it: a class (not a record) with a field named `#...` (a `#private` field, hidden from
-  `Object.keys`, `JSON.stringify` and `console.log` since e7vm 0.2.5) requires 0.2.5, a record with accessors
-  (section 6.5) 0.3.1; a VM older than `requires` rejects the
-  module with `E7_ERR_VERSION` instead of failing verification. `e7c --target 0.2` makes newer features compile
-  errors, so a server can build modules for the VM versions of the apps in the field.
-- `e7_inspect()` (and `e7c --info`) read the format, `requires` and signature without loading a module.
-- Promise: within a minor release line (0.2.x), every VM runs every module compiled by any 0.2.x compiler, with
-  the same results. `tests/compat/<version>/` keeps modules compiled by released compilers; CI checks that the 0.1
-  ones are rejected with `E7_ERR_VERSION` and that the 0.2.x ones load and print the recorded output.
+  functions the module uses: each has a "since" version in `src/core/since.h` (`opSince`, `nativeSinceTable`), and
+  everything without an entry counts as the baseline, 0.1.0. In 0.1.0 the tables are empty, so every module requires
+  0.1.0. A VM older than `requires` rejects the module with `E7_ERR_VERSION` ("the module requires e7vm X; this is
+  e7vm Y") instead of failing verification.
+- `e7_inspect()` (and `e7c --info`) read the format, `requires`, the debug flag and the signature trailer without
+  loading a module, so a host can tell whether it can run a module before loading it.
+- Policy for later releases: a release that adds an instruction or a native function gives it a "since" entry
+  (a new flag bit or operand bit gets a check in `moduleRequires`), so modules that use it require that release and
+  modules that do not keep running on older VMs. The format identifier changes only for an incompatible change of the
+  layout.
 
-## 6. Format 3 (0.3)
+## 6. Coroutines, regular expressions and record flags
 
-Format 3 is format 2 with the additions below ([DESIGN-0.3.md](DESIGN-0.3.md), D1-D4 and D7); everything not
-mentioned is unchanged. The compiler writes format 2 when a module uses none of them (and `e7c --target 0.2`
-compiles records without presence masks), and a 0.3 VM reads both formats. A 0.2.x VM refuses a format-3 module
-with `E7_ERR_VERSION` ("e7b format 3 is not supported") before reading its body.
+Generators, `async` functions and async generators ([DESIGN.md](DESIGN.md), D1-D2), regular expressions (D4) and
+records with a presence mask (D7) or with accessors use the tables, flags and instructions below.
 
-### 6.1 File format changes
-
-```
-version u32 = 3
-strs    ... (unchanged)
-regexps u32 n, n x (str source, str flags)       new, after the natives: regular expression literals (D4)
-classes u32 n, n x (str name, i32 parent, u8 kind, u8 cflags, ...)      cflags new
-funcs   u32 n, n x (str name, u32 sig, u16 nparams, u8 fflags, ...)    fflags new
-```
+### 6.1 Regular expressions, class flags and function flags
 
 - **regexps**: the source (UTF-8) and flags (a subset of `dgimsuy`, each at most once) of each regular expression
   literal. The VM compiles every entry when the module is loaded; a pattern that does not compile fails the load
   (`E7_ERR_LOAD`).
 - **cflags**, bit 0: the instances carry a presence mask (D7): one bit per field after the fields, all set by `NEW`;
-  allowed for records only (`kind` 1). Bit 1 (0.3.1): a record with accessor properties (section 6.5). Other bits
+  allowed for records only (`kind` 1). Records whose properties can never be absent or hold `undefined` have no
+  mask, and all their fields are own properties. Bit 1: a record with accessor properties (section 6.4). Other bits
   are 0.
-- **fflags**: bits 0-1 the function kind (0 plain, 1 generator, 2 `async`, 3 `async` generator, since 0.3.1);
-  bits 2-3 the kind of the yielded value, bits 4-5 the kind of the value `next(v)` sends, bits 6-7 the kind of the
-  value the body returns (generators and async generators: none or the yielded kind; `async` functions: the
-  promise's value), each 0 none, 1 `I`, 2 `F`, 3 `R`. A plain function has fflags 0.
+- **fflags**: bits 0-1 the function kind (0 plain, 1 generator, 2 `async`, 3 `async` generator); bits 2-3 the kind
+  of the yielded value, bits 4-5 the kind of the value `next(v)` sends, bits 6-7 the kind of the value the body
+  returns (generators and async generators: none or the yielded kind; `async` functions: the promise's value), each
+  0 none, 1 `I`, 2 `F`, 3 `R`. A plain function has fflags 0.
 
-### 6.2 New instructions (`since 0.3.0`)
+### 6.2 Coroutine instructions
 
 | Instruction | Format | Semantics |
 |---|---|---|
 | `GEN_START` | `___` | First instruction of a generator: create its coroutine, save the frame (arguments in place), return the coroutine to the caller |
 | `ASYNC_START` | `v__` | First instruction of an `async` function: create its coroutine (owning this frame) and its promise, of value type `A`; the body continues |
 | `YIELD` | `***` | `A` yielded value (yield kind), `B` received value (next kind, or `0xFFFF`), `C` mode (`I`); one following word: bits 0-15 the register receiving `return(v)`'s value (return kind, or `0xFFFF`), the rest 0. Saves the frame and gives `A` to the resumer with `done = false`; on resumption `B` receives the sent value and `C` the mode (0 `next`, 2 `return`); `throw(e)` raises `e` at this instruction |
-| `RESUME_I` / `RESUME_F` / `RESUME_R` | `***` | `A` coroutine (`R`), `B` destination of the value (kind of the variant), `C` destination of the done flag (`I`); one following word: bits 0-15 the register with the sent value (`0xFFFF`: none), bits 16-17 the mode (0 `next`, 1 `throw`, 2 `return`), bits 18-19 the sent value's kind (0 none, 1 `I`, 2 `F`, 3 `R`), the rest 0 (0.3.1: bits 20-44 of an async generator request, below) |
+| `RESUME_I` / `RESUME_F` / `RESUME_R` | `***` | `A` coroutine (`R`), `B` destination of the value (kind of the variant), `C` destination of the done flag (`I`); one following word: bits 0-15 the register with the sent value (`0xFFFF`: none), bits 16-17 the mode (0 `next`, 1 `throw`, 2 `return`), bits 18-19 the sent value's kind (0 none, 1 `I`, 2 `F`, 3 `R`), the rest 0 (except bits 20-44 of an async generator request, below) |
 | `AWAIT` | `***` | `A` destination (any kind, or `0xFFFF`), `B` promise (`R`), `C` 0; one word. Suspends the `async` function until the promise settles; then `A` receives the value, or the rejection is raised at this instruction. Leaving the frame gives the caller the function's promise (the first await) or ends the microtask |
 | `FIELD_ABSENT` | `Re_` | Clear the presence bit of field `B` of the record in `A` (D7); `SETF` / `SETN` set it again |
 
@@ -358,7 +352,7 @@ propagating to the caller. The module initializer may be `async` (top-level `awa
 fflags. The host signature of an exported `async` function has the promise's value as its return code; the call
 returns that value once the promise settles (or `E7_PENDING` while host tickets are open).
 
-**Async generators (0.3.1).** A function of kind 3 starts with `GEN_START` (its call returns the coroutine without
+**Async generators.** A function of kind 3 starts with `GEN_START` (its call returns the coroutine without
 running the body) and may contain `YIELD` and `AWAIT`. Its `next(v)` / `throw(e)` / `return(v)` are `RESUME_R` with
 bit 20 of the extra word set (an *async request*):
 
@@ -390,12 +384,12 @@ The records are instances of the class the request names (a primitive field gets
 `undefined`). The generator's kinds are checked against the request's at run time (`generator type mismatch`), as for
 `RESUME`.
 
-Promise, iterator, regular expression and typed array operations are native functions with `since 0.3.0`
-(`Promise.*`, `TA.*`, `RegExp.*`, `Array.toSorted` / `toReversed` / `toSpliced` / `with*`, `Date.set`,
-`Error.newCause` / `newAggregate` / `cause` / `errors`, `JSON.parseRec` / `tryParseRec`, `Object.has`,
-`Global.structuredClone`, `test.later*`); they need no new verification rules.
+Promise, iterator, regular expression and typed array operations are native functions (`Promise.*`, `TA.*`,
+`RegExp.*`, `Array.toSorted` / `toReversed` / `toSpliced` / `with*`, `Date.set`, `Error.newCause` / `newAggregate` /
+`cause` / `errors`, `Object.has`, `Global.structuredClone`, `test.later*`); they need no verification rules of their
+own.
 
-### 6.3 Verification (additions)
+### 6.3 Verification of coroutines and flags
 
 1. `GEN_START` is the first instruction of every generator and async generator function and appears nowhere
    else; the same for `ASYNC_START` in `async` functions, whose operand must be a value type of the fflags' return
@@ -405,30 +399,22 @@ Promise, iterator, regular expression and typed array operations are native func
    not none), `C` is `I`.
 3. `RESUME_*`: `A` is `R`, `B` has the variant's kind, `C` is `I`; the sent register exists exactly when its kind
    is not none and has that kind; mode 3 is invalid and mode 1 (`throw`) needs an `R` value. Bits 20-63 of the extra
-   word are 0, except in an async request (0.3.1: `RESUME_R` only, a record class `{ value, done: boolean }` whose
+   word are 0, except in an async request (`RESUME_R` only, a record class `{ value, done: boolean }` whose
    `value` field is a reference or has the kind of the value type in bits 37-44, bits 45-63 0). The coroutine's kinds
    are compared with the variant and the sent value **at run time** (the register is an untyped reference): a
    mismatch, a resumption of a running coroutine or of a non-coroutine is a runtime error, as for the signature
    check of `CALLV`.
 4. `RET_*` in a coroutine has the fflags' return kind (also `RET_R` in an `async` function, checked at run time).
 5. `FIELD_ABSENT`: `A` is `R`; the class's presence flag and the field index are checked at run time.
-6. Handler tables, jump targets and register kinds are checked as in format 2; a resumption continues after the
-   `YIELD` / `AWAIT` with the same register kinds, so no new data-flow rules are needed.
+6. cflags: only the bits of section 6.1, and only on records (`kind` 1).
+7. Handler tables, jump targets and register kinds are checked as in section 3; a resumption continues after the
+   `YIELD` / `AWAIT` with the same register kinds, so no extra data-flow rules are needed.
 
-### 6.4 Compatibility
+### 6.4 Records with accessors
 
-- A format-3 module has `requires` 0.3.0 or later; a 0.2.x VM rejects it with `E7_ERR_VERSION` before reading the
-  body (forward-compatibility CI job). A module with an async generator (function kind 3) or an async request
-  (`RESUME_R` with bit 20) has `requires` 0.3.1: a 0.3.0 VM rejects it with `E7_ERR_VERSION`, and
-  `e7c --target 0.3` refuses it.
-- The 0.3 promise extends section 5's: every 0.3.x VM runs every module compiled by a 0.2.x or 0.3.x compiler (the
-  backward-compatibility CI job runs the suite compiled by the 0.2.6 compiler on the current VM).
-
-### 6.5 Records with accessors (`since 0.3.1`)
-
-Getters and setters in object literals (SPEC section 5) use no new instruction or native function: a record whose
-literal has accessors carries **cflags bit 1** (`kClassFlagAccessors`, records only). In such a record, field `x`
-is an accessor property when the vtable has a method named `get x` and / or `set x`; the field holds the
+Getters and setters in object literals (SPEC section 5) use no instruction or native function of their own: a
+record whose literal has accessors carries **cflags bit 1** (`kClassFlagAccessors`, records only). In such a record,
+field `x` is an accessor property when the vtable has a method named `get x` and / or `set x`; the field holds the
 **accessor pair**, a tuple (kind 2) of three fields: the getter closure (`() => T`, or null), the setter closure
 (`(v: T) => void`, or null) and a slot that is never written, whose value type is the property's. The methods
 `get x` / `set x` (the targets of `CALLI` by name) load the pair and call its closure. Natives that read
@@ -438,9 +424,5 @@ kind is the slot's; anything else is the runtime error "malformed accessor prope
 `[Getter]`, `[Setter]` or `[Getter/Setter]`, and `structuredClone` refuses it (a runtime error; the compiler
 rejects types with accessors).
 
-- Verification: the flag only on records (`kind` 1); a field named by an accessor method is a reference field.
-  The accessor pair is checked when a native calls the getter (above).
-- `requires` is 0.3.1 for a module with the flag (`kRecordAccessorsSince` in `src/core/since.h`); a 0.3.0 VM
-  rejects it with `E7_ERR_VERSION`, and `e7c --target 0.3.0` refuses the program ("the program uses getters and
-  setters in object literals, which needs e7vm 0.3.1"). Modules that do not use the feature compile to the same
-  bytes as before and run on 0.3.0.
+Verification: the flag only on records (`kind` 1); a field named by an accessor method is a reference field. The
+accessor pair is checked when a native calls the getter (above).
