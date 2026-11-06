@@ -11,8 +11,8 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 
 For apps that receive modules over the air, [DEPLOYMENT.md](DEPLOYMENT.md) describes the complete flow: key
 management and rotation, signed manifests, staged rollout, kill switch, rollback, `e7c --target` per client VM
-version, sizing limits from measurements, error reporting and a shadow-run phase. `E7ModuleManager` (Java/Kotlin
-and Swift) implements the client side.
+version, sizing limits from measurements, error reporting and a shadow-run phase. `E7ModuleManager` (Java/Kotlin,
+Swift and C#) implements the client side.
 
 - **Signing is optional.** A plain `e7c app.ts -o app.e7b` module runs anywhere. Signing only adds a
   guarantee that the module came from you, which matters when it is downloaded at runtime. The rules:
@@ -238,7 +238,7 @@ pending status as an error (nothing else could settle its tickets).
 |---|---|---|---|---|
 | Java / Kotlin | `registerAsyncNative(name, sig, args -> CompletionStage<?>)` | `callAsync(executor, m, fn, args...)` → `CompletableFuture<Object>`; blocking `callAwait(m, fn, args...)` | `loadAsync(executor, bytes)` / `loadAwait(bytes)` | `E7Exception` with status `PENDING` |
 | Swift | `registerAsyncNative(name, signature:) { args async throws in ... }` | `try await callAsync(m, fn, args...)` | `try await loadAsync(bytes)` | `E7Error` with `isPending` |
-| C# | `RegisterAsyncNative(name, sig, Func<object?[], Task<object?>>)` (or with a `CancellationToken`) | `await CallAsync(m, fn, args...)` (overload with a `CancellationToken`) | `await LoadAsync(bytes)` | `E7Exception` with `E7Status.Pending` |
+| C# | `RegisterAsyncNative(name, sig, Func<object?[], Task<object?>>)` (or with a `CancellationToken`) | `await CallAsync(m, fn, args...)` (overload with a `CancellationToken`); blocking `CallAwait(m, fn, args...)` | `await LoadAsync(bytes)`; blocking `LoadAwait(bytes)` | `E7Exception` with `E7Status.Pending` |
 | JavaScript | (no host functions) | `run(..., { call })` returns an async export's value | top-level `await` works in `run` | status `"pending"` (cannot occur) |
 
 Common rules: a host operation that fails rejects the script's promise with an `Error` carrying the exception's
@@ -454,7 +454,7 @@ e7vm uses no JIT and allocates no executable memory, which meets the App Store r
 
   The package targets `netstandard2.0` and `net8.0` (managed assembly `E7.dll`, namespace `E7`). It is also attached to each GitHub release and published to
   GitHub Packages (`https://nuget.pkg.github.com/e7lang/index.json`).
-  Without NuGet, add `platform/windows/E7VM.cs` to your project and ship `e7vm.dll` (or `libe7vm.so` / `libe7vm.dylib`)
+  Without NuGet, add `platform/windows/E7VM.cs` (and `E7ModuleManager.cs` for over-the-air updates) to your project and ship `e7vm.dll` (or `libe7vm.so` / `libe7vm.dylib`)
   next to your app; build it with `-Shared` or `cmake -DE7_BUILD_SHARED=ON`.
   Tested in CI by `platform/windows/test`, both against a local build
   (`dotnet run --project platform/windows/test -- <dir with the library>`) and from the packed `.nupkg` on
@@ -468,8 +468,9 @@ vm.SetBudget(10_000_000);
 var sig = (string)vm.Call(module, "sign", "a=1&b=2", new E7.KeyHandle(1))!;
 ```
 
-Async host functions: `RegisterAsyncNative` with a `Task`-returning function, `CallAsync` / `LoadAsync`
-([§2.6](#26-async-host-functions)).
+Async host functions: `RegisterAsyncNative` with a `Task`-returning function, `CallAsync` / `LoadAsync`, and the
+blocking `CallAwait` / `LoadAwait` ([§2.6](#26-async-host-functions)). `E7ModuleManager` handles over-the-air
+delivery ([DEPLOYMENT.md](DEPLOYMENT.md#4-client-integration)).
 
 ## 6. JavaScript / WebAssembly (Node.js, browsers, editors)
 

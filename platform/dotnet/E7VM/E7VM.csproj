@@ -17,7 +17,7 @@
 
     <PackageId>E7VM</PackageId>
     <Authors>e7lang</Authors>
-    <Description>e7vm for .NET: an embeddable, sandboxed bytecode VM for E7 (a strict TypeScript subset). Run server-delivered, optionally signed scripts with memory limits, instruction budgets, host functions and key handles. Includes native libraries for Windows x64, Linux x64/arm64 and macOS (Apple Silicon + Intel).</Description>
+    <Description>e7vm for .NET: an embeddable, sandboxed bytecode VM for E7 (a strict TypeScript subset). Run server-delivered, optionally signed scripts with memory limits, instruction budgets, host functions and key handles, and deliver them over the air with signed manifests, staged rollout and rollback (E7ModuleManager). Includes native libraries for Windows x64, Linux x64/arm64 and macOS (Apple Silicon + Intel).</Description>
     <PackageTags>e7;e7vm;vm;bytecode;interpreter;scripting;sandbox;typescript;embedding</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/e7lang/e7</PackageProjectUrl>
@@ -39,6 +39,7 @@
 
   <ItemGroup>
     <Compile Include="../../windows/E7VM.cs" Link="E7VM.cs" />
+    <Compile Include="../../windows/E7ModuleManager.cs" Link="E7ModuleManager.cs" />
     <None Include="README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 
