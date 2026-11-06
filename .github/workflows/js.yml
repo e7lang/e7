@@ -2,14 +2,16 @@ name: JS
 
 # npm package @e7lang/e7 (packages/e7, from the WebAssembly build) and the VS Code extension
 # (editors/vscode). Builds, tests the packed tarball / .vsix and, when called with publish: true
-# (e.g. from a release workflow), attaches both to the GitHub release v<version> and publishes them.
+# (e.g. from a release workflow), attaches both to the GitHub release v<version> and publishes the
+# extension. The npm package is not published to the npm registry (E7 targets native apps): the
+# release's e7lang-e7-<version>.tgz is the package.
 #
 # Calling it from another workflow:
 #   jobs:
 #     js:
 #       uses: ./.github/workflows/js.yml
 #       with: { version: "0.3.1", publish: true }
-#       secrets: inherit                    # NPM_TOKEN, VSCE_PAT, OVSX_PAT (each optional)
+#       secrets: inherit                    # VSCE_PAT, OVSX_PAT (each optional)
 #       permissions: { contents: write, id-token: write, attestations: write }
 on:
   push:
@@ -22,12 +24,10 @@ on:
         type: string
         required: true
       publish:
-        description: "Upload to the GitHub release v<version>, npm, the VS Code Marketplace and Open VSX"
+        description: "Upload to the GitHub release v<version>, the VS Code Marketplace and Open VSX"
         type: boolean
         default: false
     secrets:
-      NPM_TOKEN:
-        required: false
       VSCE_PAT:
         required: false
       OVSX_PAT:
@@ -172,12 +172,12 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-      id-token: write      # npm provenance and build provenance attestations
+      id-token: write      # build provenance attestations
       attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+        with: { node-version: "22" }
       - uses: actions/download-artifact@v4
         with: { name: e7-npm, path: out }
       - uses: actions/download-artifact@v4
@@ -195,12 +195,6 @@ jobs:
         run: |
           v="${{ inputs.version }}"; v="v${v#v}"
           gh release upload "$v" out/*.tgz out/*.vsix --clobber --repo "$GITHUB_REPOSITORY"
-      - name: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "::notice::NPM_TOKEN is not set: skipping npm publish"; exit 0; fi
-          npm publish out/*.tgz --access public --provenance
       - name: Install publishing tools
         working-directory: editors/vscode
         run: npm ci --no-audit --no-fund

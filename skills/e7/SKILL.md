@@ -105,8 +105,8 @@ script you write or edit instead of trusting your memory of the subset:
 1. Write the script (`.ts`, or `.e7` for files you don't want TypeScript tooling to pick up).
 2. Check it — use whichever tool is available:
    - `e7c --check script.ts` (native toolchain: prebuilt from github.com/e7lang/e7/releases, or Homebrew/Scoop)
-   - `e7-js check script.ts` from the npm package `@e7lang/e7` (WebAssembly build, any OS with Node.js 18+;
-     install it from npm or from the `.tgz` attached to each GitHub release)
+   - `e7-js check script.ts` from the package `@e7lang/e7` (WebAssembly build, any OS with Node.js 18+; it is
+     not on the npm registry: download `e7lang-e7-<version>.tgz` from a GitHub release, `npm install ./<file>`)
 3. Fix every error and re-check until it is clean. If an error names a feature from the table above, rewrite
    the construct the E7 way instead of fighting the checker.
 4. Run it: `e7 script.ts` (calls `main()`, or `--call name`), or `e7-js run script.ts`.

@@ -480,8 +480,9 @@ delivery ([DEPLOYMENT.md](DEPLOYMENT.md#4-client-integration)).
 
 ## 6. JavaScript / WebAssembly (Node.js, browsers, editors)
 
-The npm package [`@e7lang/e7`](../packages/e7) is the compiler and VM built with Emscripten
-(`tools/e7wasm.cpp`). Every `run` uses a fresh VM with an instruction budget and a memory limit; host
+The JavaScript package [`@e7lang/e7`](../packages/e7) is the compiler and VM built with Emscripten
+(`tools/e7wasm.cpp`). It is not published to the npm registry: install `e7lang-e7-<version>.tgz` from a GitHub
+release (`npm install ./e7lang-e7-0.3.1.tgz`). Every `run` uses a fresh VM with an instruction budget and a memory limit; host
 functions and `KeyHandle` are not available from JavaScript (use the native API for those). Async exports and
 top-level `await` complete within `run` ([§2.6](#26-async-host-functions)).
 

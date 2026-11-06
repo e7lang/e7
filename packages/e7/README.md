@@ -6,8 +6,13 @@ compiles it to portable bytecode (`.e7b`, the same files `e7c` produces), disass
 with an instruction budget and a memory limit. It is the same engine as the native e7vm, the
 [playground](https://e7lang.github.io/playground) and the VS Code extension.
 
+The package is not published to the npm registry (E7 targets native apps). Each
+[GitHub release](https://github.com/e7lang/e7/releases) has it as `e7lang-e7-<version>.tgz`; download it and
+install the file (npm 12 does not install from URLs by default):
+
 ```sh
-npm install @e7lang/e7
+curl -LO https://github.com/e7lang/e7/releases/download/v<version>/e7lang-e7-<version>.tgz
+npm install ./e7lang-e7-<version>.tgz
 ```
 
 ```js

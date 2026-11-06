@@ -71,8 +71,9 @@ Linux（x64、arm64）、macOS（通用二进制）、Windows（x64）。压缩�
 每个 Release 还附有 SPDX 格式的 SBOM（`e7-<版本>.spdx.json`）。
 **.NET：** `dotnet add package E7VM`（C# 绑定，内含 Windows、Linux、macOS 原生库）。
 什么都不想装：[Playground](https://e7lang.github.io/playground) 直接在浏览器里运行编译器和虚拟机（WebAssembly）。
-**Node.js / 浏览器：** `npm install @e7lang/e7`（[packages/e7](packages/e7)）是同一套编译器和虚拟机的 WebAssembly 版本，
-提供 JavaScript API（`compile`、`check`、`run`、`disassemble`）和 `e7-js` 命令行（`npx -p @e7lang/e7 e7-js run sign.ts`）。
+**Node.js / 浏览器：** [packages/e7](packages/e7) 是同一套编译器和虚拟机的 WebAssembly 版本，提供 JavaScript API
+（`compile`、`check`、`run`、`disassemble`）和 `e7-js` 命令行。它不发布到 npm 仓库（E7 面向原生 App），需要时从 GitHub
+Release 下载 [`e7lang-e7-0.3.1.tgz`](https://github.com/e7lang/e7/releases/download/v0.3.1/e7lang-e7-0.3.1.tgz)，再运行 `npm install ./e7lang-e7-0.3.1.tgz`。
 
 **从源码构建：** 需要 CMake ≥ 3.16 和支持 C++17 的编译器（GCC、Clang、MSVC），Ninja 可选。
 

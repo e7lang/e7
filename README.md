@@ -73,9 +73,10 @@ checks that it was built by this repository's release workflow from the tagged c
 (`e7-<version>.spdx.json`) is attached to each release.
 **.NET:** `dotnet add package E7VM` (C# binding with native libraries for Windows, Linux and macOS).
 No install at all: the [playground](https://e7lang.github.io/playground) runs the compiler and VM in your browser (WebAssembly).
-**Node.js / browsers:** `npm install @e7lang/e7` ([packages/e7](packages/e7)) is the same compiler and VM on
-WebAssembly, with a JavaScript API (`compile`, `check`, `run`, `disassemble`) and the `e7-js` command
-(`npx -p @e7lang/e7 e7-js run sign.ts`).
+**Node.js / browsers:** [packages/e7](packages/e7) is the same compiler and VM on WebAssembly, with a JavaScript
+API (`compile`, `check`, `run`, `disassemble`) and the `e7-js` command. It is not published to the npm registry
+(E7 targets native apps); download [`e7lang-e7-0.3.1.tgz`](https://github.com/e7lang/e7/releases/download/v0.3.1/e7lang-e7-0.3.1.tgz) from the release and run
+`npm install ./e7lang-e7-0.3.1.tgz`.
 
 **From source:**
 

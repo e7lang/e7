@@ -10,6 +10,11 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+### Changed
+- The JavaScript package `@e7lang/e7` is not published to the npm registry (E7 targets native apps; it
+  never was, for lack of a token): the release workflow no longer has an npm step, and the docs install the
+  `e7lang-e7-<version>.tgz` attached to each GitHub release.
+
 ## [0.3.1] - 2026-11-06
 
 ### Added

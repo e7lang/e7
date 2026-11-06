@@ -31,7 +31,8 @@ gh attestation verify E7VM.0.2.0.nupkg --repo e7lang/e7
 ```
 
 The command fails unless the file was built by a workflow of `e7lang/e7`; its output names the workflow
-run and commit. The npm package also carries npm provenance (`npm audit signatures`). Each release
+run and commit. The JavaScript package (`e7lang-e7-<version>.tgz`, attached to the release, not published to the npm
+registry) and the VS Code extension are attested the same way. Each release
 includes an SPDX software bill of materials, `e7-<version>.spdx.json`; the C dependencies are vendored
 in `third_party/` (BearSSL, Monocypher).
 

@@ -2,7 +2,7 @@
 
 Editor support for [E7](https://e7lang.github.io), the strict, statically typed TypeScript subset that
 runs in the embeddable e7vm. The extension bundles the real E7 compiler and VM compiled to WebAssembly
-(the [`@e7lang/e7`](https://www.npmjs.com/package/@e7lang/e7) package), so diagnostics and runs match
+(the [`@e7lang/e7`](https://github.com/e7lang/e7/tree/main/packages/e7) package), so diagnostics and runs match
 `e7c` / `e7` exactly. No native install, no network access.
 
 ## Features
