@@ -11,4 +11,4 @@ try {
 }
 const wrapped = new Error("outer", { cause: new Error("inner") });
 const all = new AggregateError([new Error("a"), new Error("b")], "two");
-console.log(wrapped.cause?.message, all.name, all.errors.length);
+console.log(wrapped.cause instanceof Error ? wrapped.cause.message : "", all.name, all.errors.length);
