@@ -10,6 +10,8 @@ and a VM rejects a module it cannot run at load time rather than running it inco
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
 The language complete for its domain (docs/ROADMAP.md, section 0.3; design decisions in docs/DESIGN-0.3.md).
 Bytecode format 3 (docs/BYTECODE.md, section 6) for modules that use generators, `async`, regular expressions or
 records with a presence mask; every other module is still format 2 and runs on 0.2.x VMs. 0.2 modules run on this
@@ -72,8 +74,15 @@ features supported (129 in 0.2.7), 18 partial, 79 unsupported.
 - An uncaught error of a call runs the promise jobs it queued before the call fails, as in JavaScript.
 - `e7_load` / `e7_call` / `e7_resume` may return `E7_PENDING`; hosts that do not register async natives never see it.
 
+### Security
+- Two independent reviews of the new VM code (docs/PRODUCTION.md 3.7 and 3.8): typed-array, promise and
+  `structuredClone` hardening, and budget / memory-limit accounting of regular expression compilation, replacement
+  and per-match work. No memory-safety issue was found in the regular expression engine (about 2.9 million fuzz
+  cases under ASan / UBSan).
+
 ### Not in 0.3
-- Async generators (`async function*`): see docs/DESIGN-0.3.md, implementation notes.
+- Async generators (`async function*`) and getters / setters in object literals: see docs/DESIGN-0.3.md,
+  implementation notes.
 
 ## [0.2.7] - 2026-11-06
 
