@@ -1,8 +1,9 @@
-// @feature: Default exports and imports
+// @feature: Default exports and imports (`export default`, `import x from`)
 // @category: Modules
-// @status: unsupported
-// @why: not implemented yet
-// @instead: named exports: `export function hello()` and `import { hello } from "./x"`
-// @error: default imports are not supported
-import hello from "./_lib/default-export.ts";
-console.log(hello());
+// @status: supported
+// @note: `export default` of a function, class, interface or expression (evaluated once, where it stands), `export { x as default }`, `import x from`, `import x, { a } from`, `import { default as x } from`
+import hello, { greeting } from "./_lib/default-export.ts";
+import { default as hi } from "./_lib/default-export.ts";
+import Point from "./_lib/default-class.ts";
+import answer from "./_lib/default-value.ts";
+console.log(hello(), hi(), greeting, new Point(3, 4).length(), answer);
