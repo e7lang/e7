@@ -579,7 +579,8 @@ static std::string sigOf(FuncSym* f);
 
 static bool isAccessorMember(Expr* m) {
   return m->k == EK::Member && (m->intrinsic == IN_ACCESSOR || m->intrinsic == IN_STATIC_ACCESSOR ||
-                                m->intrinsic == IN_SUPER_ACCESSOR || m->intrinsic == IN_IFACE_ACCESSOR);
+                                m->intrinsic == IN_SUPER_ACCESSOR || m->intrinsic == IN_IFACE_ACCESSOR ||
+                                m->intrinsic == IN_PRIVATE_ACCESSOR);
 }
 
 // The getter ("get x") or setter ("set x") a member expression calls: its function and type.
@@ -594,6 +595,9 @@ FuncSym* Gen::accessorFn(Expr* m, bool set, Type** fnType) {
   if (m->intrinsic == IN_STATIC_ACCESSOR) {
     auto it = m->cls->staticMethods.find(key);
     if (it != m->cls->staticMethods.end()) f = it->second;
+  } else if (m->intrinsic == IN_PRIVATE_ACCESSOR) {
+    auto it = m->cls->privateMethods.find(key);
+    if (it != m->cls->privateMethods.end()) f = it->second;
   } else {
     auto it = m->cls->methodIdx.find(key);
     if (it != m->cls->methodIdx.end()) f = m->cls->vtable[it->second].fn;
@@ -630,7 +634,7 @@ void Gen::accessorCall(Expr* m, uint16_t obj, bool set, uint16_t v, uint16_t dst
       emitRegList(args);
       return;
     }
-    case IN_SUPER_ACCESSOR:
+    case IN_SUPER_ACCESSOR: case IN_PRIVATE_ACCESSOR:
       args.insert(args.begin(), obj);
       emit(OP_CALL, out, (uint16_t)f->funcIdx, (uint16_t)args.size());
       emitRegList(args);
@@ -4250,7 +4254,7 @@ void Gen::genMember(Expr* e, uint16_t d) {
       callNative(e->native, {obj}, d, kindChar(K(e->type)));
       return;
     }
-    case IN_ACCESSOR: case IN_STATIC_ACCESSOR: case IN_SUPER_ACCESSOR: case IN_IFACE_ACCESSOR: {
+    case IN_ACCESSOR: case IN_STATIC_ACCESSOR: case IN_SUPER_ACCESSOR: case IN_IFACE_ACCESSOR: case IN_PRIVATE_ACCESSOR: {
       // getter call; the result may be narrowed (e.g. unboxed after a null check)
       Type* ft = nullptr;
       accessorFn(e, false, &ft);

@@ -817,6 +817,12 @@ Type* Checker::declaredMemberType(Expr* target) {
       resolveSig(f);
       return f->type->params.empty() ? nullptr : f->type->params[0];
     }
+    case IN_PRIVATE_ACCESSOR: {
+      auto it = target->cls->privateMethods.find("set " + n);
+      if (it == target->cls->privateMethods.end()) return nullptr;
+      resolveSig(it->second);
+      return it->second->type->params.empty() ? nullptr : it->second->type->params[0];
+    }
     case IN_STATIC_ACCESSOR: {
       auto it = target->cls->staticMethods.find("set " + n);
       if (it == target->cls->staticMethods.end()) return nullptr;
@@ -839,6 +845,7 @@ std::string Checker::memberWriteError(Expr* target) {
   // accessors: checkAccessor already required a setter; abstract properties are writable
   if (target->intrinsic == IN_ACCESSOR || target->intrinsic == IN_STATIC_ACCESSOR ||
       target->intrinsic == IN_SUPER_ACCESSOR || target->intrinsic == IN_IFACE_ACCESSOR ||
+      target->intrinsic == IN_PRIVATE_ACCESSOR ||
       target->intrinsic == IN_ABSTRACT_PROP)
     return "";
   if (target->intrinsic == IN_STATIC_FIELD) {
@@ -1452,6 +1459,18 @@ Type* Checker::checkAccessor(Expr* e, ClassSym* c, const std::string& name, bool
     auto si = c->staticMethods.find("set " + name);
     if (gi != c->staticMethods.end()) g = gi->second;
     if (si != c->staticMethods.end()) s = si->second;
+  } else if (name[0] == '#') {
+    // private accessors: non-virtual, declared by the class itself or a base class
+    for (ClassSym* k = c; k && !g && !s; k = k->parent) {
+      auto gi = k->privateMethods.find("get " + name);
+      auto si = k->privateMethods.find("set " + name);
+      if (gi != k->privateMethods.end()) g = gi->second;
+      if (si != k->privateMethods.end()) s = si->second;
+      if (g || s) {
+        if (!checkPrivateAccess(e->nameLoc, name, k)) return T.unknown();
+        c = k;
+      }
+    }
   } else {
     if (c->getterSlot(name) >= 0) g = c->vtable[c->getterSlot(name)].fn;
     if (c->setterSlot(name) >= 0) s = c->vtable[c->setterSlot(name)].fn;
@@ -1473,7 +1492,7 @@ Type* Checker::checkAccessor(Expr* e, ClassSym* c, const std::string& name, bool
     t = s->type->params.empty() ? T.unknown() : s->type->params[0];
   }
   e->cls = c;
-  e->intrinsic = isStatic ? IN_STATIC_ACCESSOR : IN_ACCESSOR;
+  e->intrinsic = isStatic ? IN_STATIC_ACCESSOR : name[0] == '#' ? IN_PRIVATE_ACCESSOR : IN_ACCESSOR;
   return t;
 }
 

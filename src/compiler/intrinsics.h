@@ -53,6 +53,7 @@ enum Intrinsic : int {
   IN_STATIC_ACCESSOR,    // static accessor of class e->cls (direct call)
   IN_SUPER_ACCESSOR,     // super.x: accessor of the parent class e->cls (direct call, this = e->var)
   IN_IFACE_ACCESSOR,     // accessor declared by an interface (call by name)
+  IN_PRIVATE_ACCESSOR,   // this.#x with get #x() / set #x(v) of class e->cls (direct call)
   IN_PRIVATE_METHOD,     // this.#m(...): non-virtual call of e->callee
   IN_ABSTRACT_PROP,      // abstract property read/written through an abstract class type (by name)
   // arrays / objects / strings lowered to loops

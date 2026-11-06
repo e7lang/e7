@@ -27,7 +27,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **124 supported**, **18 partial**, **108 unsupported** (268 sample programs).
+250 features: **125 supported**, **17 partial**, **108 unsupported** (267 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -37,7 +37,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Object Types](#object-types) | 12 | 0 | 6 |
 | [Generics](#generics) | 9 | 1 | 5 |
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
-| [Classes](#classes) | 16 | 1 | 14 |
+| [Classes](#classes) | 17 | 0 | 14 |
 | [Modules](#modules) | 4 | 1 | 8 |
 | [Enums](#enums) | 4 | 1 | 4 |
 | [Utility Types](#utility-types) | 0 | 0 | 13 |
@@ -53,9 +53,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 21 | 1 | 9 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 9 | 6 | 11 |
-| **Total** | **124** | **18** | **108** |
+| **Total** | **125** | **17** | **108** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 66.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 41, verifiable bytecode 16, JavaScript-identical behaviour 3, not implemented yet 65.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -198,12 +198,12 @@ Within each category, supported features come first, then partial and unsupporte
 | Methods | supported |  | [methods.ts](../tests/ts-features/classes/methods.ts) |
 | The `override` modifier | supported |  | [override-modifier.ts](../tests/ts-features/classes/override-modifier.ts) |
 | Parameter properties (`constructor(public x: number)`) | supported |  | [parameter-properties.ts](../tests/ts-features/classes/parameter-properties.ts) |
+| ECMAScript `#private` members | supported | Private fields, methods and accessors (instance and static); not listed by `Object.keys`, `JSON.stringify` or `console.log` | [private-members.ts](../tests/ts-features/classes/private-members.ts) |
 | `readonly` fields | supported | Assignable only in the class's own constructor, as in tsc | [readonly-fields.ts](../tests/ts-features/classes/readonly-fields.ts) |
 | `private` / `protected` constructors | supported |  | [singleton-private-constructor.ts](../tests/ts-features/classes/singleton-private-constructor.ts) |
 | `static` initialization blocks | supported |  | [static-blocks.ts](../tests/ts-features/classes/static-blocks.ts) |
 | Static fields and methods (inherited by subclasses) | supported |  | [static-members.ts](../tests/ts-features/classes/static-members.ts) |
 | Overriding `toString()` | supported | Called by `String(x)`, template literals and `+` | [to-string.ts](../tests/ts-features/classes/to-string.ts) |
-| ECMAScript `#private` members | **partial** | **Works:** private fields and methods (instance and static); not listed by `Object.keys`, `JSON.stringify` or `console.log`. **Not supported:** private accessors (`get #x()`) (*not implemented yet*). **Instead:** a private field or a private method | [private-members.ok.ts](../tests/ts-features/classes/private-members.ok.ts), [private-members.no.ts](../tests/ts-features/classes/private-members.no.ts) |
 | Implementing an interface property with an accessor | **unsupported** | **Why:** interface properties are read as fields, so the class must have a field (*types known at compile time*). **Instead:** declare the accessor in the interface: `interface HasArea { get area(): number }` | [accessor-implements-property.ts](../tests/ts-features/classes/accessor-implements-property.ts) |
 | Auto-accessors (`accessor x = 1`) | **unsupported** | **Why:** *not implemented yet*. **Instead:** a field, or a private field with `get` / `set` accessors | [auto-accessors.ts](../tests/ts-features/classes/auto-accessors.ts) |
 | Class expressions | **unsupported** | **Why:** classes are declared at the top level of a scope (*not implemented yet*). **Instead:** a class declaration | [class-expressions.ts](../tests/ts-features/classes/class-expressions.ts) |

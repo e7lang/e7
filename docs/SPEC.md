@@ -317,11 +317,11 @@ try {
 - **Abstract classes** cannot be instantiated; abstract methods and accessors need a return type and are
   overridden by every concrete subclass. An abstract property (`abstract kind: string`) is declared as a field
   (of the same type) by the concrete subclasses and read or written by name through the abstract class type.
-- **`#private`** fields and methods (instance and static) can only be used inside the class body that declares
+- **`#private`** fields, methods and accessors (`get #x()` / `set #x(v)`; instance and static) can only be used inside the class body that declares
   them (including static blocks and closures there). Private methods are not virtual. Private fields are not
   own enumerable properties: `Object.keys`, `JSON.stringify`, `console.log`, object spread and rest skip them. A
-  module with private instance fields requires e7vm 0.2.5 (older VMs would list them). Private accessors
-  (`get #x()`), `#x in obj` and redeclaring a base class's private name in a subclass are not supported.
+  module with private instance fields requires e7vm 0.2.5 (older VMs would list them). Private methods and accessors
+  are not virtual. `#x in obj` and redeclaring a base class's private name in a subclass are not supported.
 - **Static blocks** `static { ... }` run with the static field initializers, in source order, when the class
   declaration is executed; they can use the class's private static members.
 - **Not supported**: class expressions, decorators, methods as values (use arrow functions). Generic classes: section 2.3.

@@ -1146,7 +1146,6 @@ void Checker::resolveClass(ClassSym* c) {
       if (m.name[0] == '#') err(m.loc, "an abstract member cannot be private (#)");
       if (!m.retType && m.accessor != 2) err(m.loc, "abstract method '" + m.name + "' needs a return type annotation");
     }
-    if (m.accessor && m.name[0] == '#') { err(m.loc, "private accessors (get #x / set #x) are not supported; use a private field or method"); continue; }
     if (m.accessor == 2) f->retNode = nullptr;
     if (m.isStatic) {
       if (c->staticMethods.count(key) || c->staticFields.count(key) ||

@@ -284,17 +284,13 @@ const maybe: string | null = null;
 console.log(count, "1" === "1", maybe == null);   // `== null` / `!= null` are allowed
 ```
 
-### Class expressions, decorators, private accessors
+### Class expressions and decorators
 
-Getters and setters, `#private` fields and methods, `abstract` classes and `static {}` blocks work (see
-section 4). Class expressions, decorators, private accessors (`get #x()`) and `#x in obj` are rejected:
+Getters and setters, `#private` fields, methods and accessors (`get #x()`), `abstract` classes and `static {}`
+blocks work (see section 4). Class expressions, decorators and `#x in obj` are rejected:
 
 ```ts e7-reject
 const Point = class { x = 0; };
-```
-
-```ts e7-reject
-class A { #v = 1; get #x(): number { return this.#v; } }
 ```
 
 `public` / `private` / `protected` are accepted (not enforced); `#private` members are enforced (only usable
