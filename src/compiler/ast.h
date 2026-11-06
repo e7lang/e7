@@ -186,6 +186,7 @@ struct SwitchCase {
 struct ImportSpec {
   std::string name, alias;  // import: alias is the local name; export: alias is the exported name ("" = name)
   Loc loc;
+  bool typeOnly = false;    // `import { type T }`: usable as a type only
 };
 
 struct EnumMember {
@@ -197,6 +198,7 @@ struct Stmt {
   SK k;
   Loc loc;
   bool exported = false;
+  bool typeOnly = false;           // `import type ...` / `export type ... from`: erased, does not run the module
   bool isDefault = false;          // `export default`: Func / Class / Interface (exported as "default"), or
                                    // Var: `export default <expression>` (a hidden const named "default")
   bool isConst = false;            // Var
@@ -252,6 +254,7 @@ struct Arena {
 struct SourceFile {
   std::string path;   // normalized path used for imports
   std::string text;
+  bool evaluated = true;  // false: reached only through `import type` / `export type`, so never run (as in JS)
   std::vector<Stmt*> body;
 };
 

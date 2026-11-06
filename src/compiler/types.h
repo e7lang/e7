@@ -207,6 +207,7 @@ struct AliasSym : Sym {
   Stmt* decl = nullptr;
   Type* type = nullptr;
   int state = 0;
+  bool typeOnlyImport = false;  // a class or enum imported with `import type` (usable as a type only)
 };
 
 struct EnumSym : Sym {

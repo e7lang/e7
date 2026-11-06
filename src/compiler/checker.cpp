@@ -792,8 +792,30 @@ void Checker::bindImports(FileInfo* fi, Stmt* s) {
   if (!importTarget(s, tfi)) return;
   // import "./x" binds nothing (the module still runs, in dependency order)
   if (!s->nsAlias.empty()) declare(s->nsAlias, moduleNamespace(s, tfi, s->nsAlias), s->loc);
-  for (auto& sp : s->imports)
-    if (Sym* m = importedSym(s, tfi, sp.name, sp.alias)) declare(sp.alias, m, s->loc);
+  for (auto& sp : s->imports) {
+    Sym* m = importedSym(s, tfi, sp.name, sp.alias);
+    if (!m) continue;
+    if (s->typeOnly || sp.typeOnly) {
+      // `import type { C }`: the name is a type only (tsc rejects a value use; the import is erased)
+      Type* t = nullptr;
+      if (m->k == SymK::Class) t = static_cast<ClassSym*>(m)->type;
+      else if (m->k == SymK::Enum) {
+        resolveEnum(static_cast<EnumSym*>(m));
+        t = static_cast<EnumSym*>(m)->type;
+      } else if (m->k == SymK::Var || m->k == SymK::Func || m->k == SymK::Builtin) {
+        continue;  // a value imported as a type: nothing to use without `typeof` types
+      }
+      if (t) {
+        AliasSym* a = P.make<AliasSym>();
+        a->name = sp.alias;
+        a->type = t;
+        a->state = 2;
+        a->typeOnlyImport = true;
+        m = a;
+      }
+    }
+    declare(sp.alias, m, s->loc);
+  }
 }
 
 // ------------------------------------------------------------------ type resolution
@@ -996,6 +1018,18 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "ArrayBuffer") { noArgs(); return T.arrayBuffer(); }
   if (name == "DataView") { noArgs(); return T.dataView(); }
   if (name == "KeyHandle" || name == "crypto.KeyHandle") { noArgs(); return T.handle(); }
+  {
+    // ns.KeyHandle through any namespace import of e7:crypto (import * as c from "e7:crypto")
+    size_t dot = name.find('.');
+    if (dot != std::string::npos && name.compare(dot + 1, std::string::npos, "KeyHandle") == 0) {
+      Sym* ns = lookup(name.substr(0, dot));
+      if (ns && ns->k == SymK::Namespace && static_cast<NamespaceSym*>(ns)->builtin &&
+          static_cast<NamespaceSym*>(ns)->module == "e7:crypto") {
+        noArgs();
+        return T.handle();
+      }
+    }
+  }
   if (name == "TextEncoder") { noArgs(); return T.textEncoder(); }
   if (name == "TextDecoder") { noArgs(); return T.textDecoder(); }
   if (name == "Error") { noArgs(); return T.error(); }

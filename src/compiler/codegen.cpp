@@ -797,6 +797,7 @@ void Gen::genInitOnce() {
   finallyOverflow = false;
   curLine = 0;
   for (auto& file : P.files) {
+    if (!file->evaluated) continue;  // reached only through `import type` (its functions are still compiled)
     curFile = file->path;
     blockEntry(file->body);
     for (Stmt* s : file->body) genStmt(s);

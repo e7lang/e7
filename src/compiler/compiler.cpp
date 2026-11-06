@@ -146,6 +146,26 @@ CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& rea
   Loader L{P, readFile, {}, {}, out.errors};
   L.load(entry, text);
   if (!out.errors.empty()) return out;
+  // modules reached only through `import type` / `export type ... from` are erased by TypeScript and never run:
+  // they are checked (their types are used) but not initialized
+  {
+    for (auto& f : P.files) f->evaluated = false;
+    std::vector<SourceFile*> work;
+    auto it0 = L.byPath.find(entry);
+    if (it0 != L.byPath.end()) { it0->second->evaluated = true; work.push_back(it0->second); }
+    while (!work.empty()) {
+      SourceFile* f = work.back();
+      work.pop_back();
+      for (Stmt* st : f->body) {
+        if (st->typeOnly || st->from.empty() || st->from.rfind("e7:", 0) == 0) continue;
+        if (st->k != SK::Import && st->k != SK::Export) continue;
+        auto it = L.byPath.find(L.resolvePath(st->from, f->path, nullptr));
+        if (it == L.byPath.end() || it->second->evaluated) continue;
+        it->second->evaluated = true;
+        work.push_back(it->second);
+      }
+    }
+  }
   Checker C(P, [&](const std::string& spec, const std::string& from) -> SourceFile* {
     std::string p = L.resolvePath(spec, from, nullptr);
     auto it = L.byPath.find(p);

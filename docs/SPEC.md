@@ -410,7 +410,9 @@ if (cfg === null) console.log("bad config: " + lastError());  // e.g. "expected 
 - Imports: `import { a, b as c } from "./x"`; `import x from "./x"` (the default export; also
   `import x, { a } from`, `import x, * as ns from` and `import { default as x } from`); `import * as ns from "./x"`;
   `import type ...` and inline `type` modifiers; `import "./x"`, which binds nothing and only makes x run. Imported
-  bindings are live (an imported `let` shows the exporting module's assignments) and cannot be assigned.
+  bindings are live (an imported `let` shows the exporting module's assignments) and cannot be assigned. Names
+  imported with `import type` (or an inline `type`) are types only; `import type` and `export type ... from` are
+  erased as in TypeScript, so a module reached only through them is type-checked but never run.
 - Namespace imports: through `ns`, every export of the module is available as in TypeScript: functions and
   constants (`ns.f()`, `ns.PI`), classes (`new ns.C()`, `ns.C.staticMember`, `x instanceof ns.C`,
   `class D extends ns.C`), enums (`ns.E.A`) and types in type positions (`ns.T`, `ns.I`, `ns.E`, `ns.Box<number>`),

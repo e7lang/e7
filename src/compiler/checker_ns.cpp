@@ -952,6 +952,8 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     e->callee = cls->ctor;
     return cls->type;
   }
+  if (s && s->k == SymK::Alias && static_cast<AliasSym*>(s)->typeOnlyImport)
+    return errT(l, "'" + name + "' cannot be used as a value because it was imported using 'import type'");
   if (s && s->k != SymK::Namespace) return errT(l, "'" + name + "' is not a class");
   auto typeArg = [&](size_t i) -> Type* { return i < e->typeArgs.size() ? resolveType(e->typeArgs[i]) : nullptr; };
   if (name == "Map") {

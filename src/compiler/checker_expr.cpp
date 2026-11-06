@@ -222,7 +222,10 @@ Type* Checker::checkIdent(Expr* e, Type* expected) {
     case SymK::Enum: return errT(e->loc, "enum '" + e->raw + "' cannot be used as a value");
     case SymK::Namespace: return errT(e->loc, "'" + e->raw + "' cannot be used as a value");
     case SymK::Builtin: return errT(e->loc, "builtin function '" + e->raw + "' cannot be used as a value; wrap it in an arrow function");
-    default: return errT(e->loc, "'" + e->raw + "' is a type, not a value");
+    default:
+      if (s->k == SymK::Alias && static_cast<AliasSym*>(s)->typeOnlyImport)
+        return errT(e->loc, "'" + e->raw + "' cannot be used as a value because it was imported using 'import type'");
+      return errT(e->loc, "'" + e->raw + "' is a type, not a value");
   }
 }
 
@@ -944,6 +947,8 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
     if (s && s->k == SymK::Generic && static_cast<GenericSym*>(s)->kind == GenericSym::Class)
       return errT(e->b->loc, "'instanceof " + r->raw + "' is not supported: '" + r->raw +
                                  "' is a generic class, and e7 compiles one class per type argument list");
+    if (s && s->k == SymK::Alias && static_cast<AliasSym*>(s)->typeOnlyImport)
+      return errT(e->b->loc, "'" + r->raw + "' cannot be used as a value because it was imported using 'import type'");
     if (!s || s->k != SymK::Class) return errT(e->b->loc, "'" + r->raw + "' is not a class");
     Type* b = baseOf(lt);
     if (b->t != TT::Class && b->t != TT::Object && b->t != TT::Unknown)

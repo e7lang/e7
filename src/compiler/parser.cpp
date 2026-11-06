@@ -664,10 +664,12 @@ class Parser {
         if (!topLevel) fail("export is only allowed at top level");
         i++;
         if (isKw("default")) return parseExportDefault(l);
-        if (isKw("type") && peek().k == TK::Punct && (peek().text == "{" || peek().text == "*")) i++;  // export type { ... }
+        bool exportType = false;
+        if (isKw("type") && peek().k == TK::Punct && (peek().text == "{" || peek().text == "*")) { i++; exportType = true; }  // export type { ... }
         if (isP("{")) {
           // export { a, b as c } / export { a, b as c } from "./x"
           Stmt* s = A.stmt(SK::Export, l);
+          s->typeOnly = exportType;
           i++;
           std::vector<bool> plain;  // per name: written as an identifier (not a keyword or a string)
           while (!isP("}")) {
@@ -699,6 +701,7 @@ class Parser {
         if (eatP("*")) {
           // export * from "./x" / export * as ns from "./x"
           Stmt* s = A.stmt(SK::Export, l);
+          s->typeOnly = exportType;
           if (eatKw("as")) s->nsAlias = ident();
           else s->starExport = true;
           expectKw("from");
@@ -952,8 +955,10 @@ class Parser {
     // `import type X from`, `import type { ... }`, `import type * as ns` (but `import type from "./x"` and
     // `import type, { a } from "./x"` import a default export named 'type')
     if (isKw("type") && !(peek().k == TK::Punct && peek().text == ",") &&
-        !(peek().k == TK::Ident && peek().text == "from" && peek(2).k == TK::Str))
+        !(peek().k == TK::Ident && peek().text == "from" && peek(2).k == TK::Str)) {
       i++;
+      s->typeOnly = true;
+    }
     if (cur().k == TK::Str) {
       // import "./x": runs the module (in the normal module order), binds nothing
       s->from = utf16ToUtf8(t[i++].str);
@@ -979,9 +984,14 @@ class Parser {
     } else if (isP("{")) {
       i++;
       while (!isP("}")) {
-        if (isKw("type") && peek().k == TK::Ident && !(peek(1).text == "," || peek(1).text == "}" || peek(1).text == "as")) i++;
+        bool inlineType = false;
+        if (isKw("type") && peek().k == TK::Ident && !(peek(1).text == "," || peek(1).text == "}" || peek(1).text == "as")) {
+          i++;
+          inlineType = true;
+        }
         ImportSpec sp;
         sp.loc = loc();
+        sp.typeOnly = inlineType;
         bool word = cur().k == TK::Ident;
         sp.name = propName();
         if (eatKw("as")) sp.alias = ident();
