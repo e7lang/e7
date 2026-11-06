@@ -27,22 +27,22 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **143 supported**, **17 partial**, **90 unsupported** (267 sample programs).
+250 features: **151 supported**, **17 partial**, **82 unsupported** (267 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
-| [Everyday Types](#everyday-types) | 15 | 2 | 3 |
+| [Everyday Types](#everyday-types) | 16 | 2 | 2 |
 | [Narrowing](#narrowing) | 11 | 1 | 2 |
 | [More on Functions](#more-on-functions) | 15 | 0 | 6 |
 | [Object Types](#object-types) | 12 | 1 | 5 |
 | [Generics](#generics) | 9 | 1 | 5 |
 | [Type Manipulation](#type-manipulation) | 0 | 0 | 6 |
-| [Classes](#classes) | 19 | 1 | 11 |
+| [Classes](#classes) | 20 | 1 | 10 |
 | [Modules](#modules) | 9 | 0 | 4 |
-| [Enums](#enums) | 4 | 1 | 4 |
-| [Utility Types](#utility-types) | 0 | 0 | 13 |
+| [Enums](#enums) | 5 | 1 | 3 |
+| [Utility Types](#utility-types) | 3 | 0 | 10 |
 | [Decorators](#decorators) | 0 | 0 | 3 |
-| [Declaration Merging](#declaration-merging) | 0 | 0 | 4 |
+| [Declaration Merging](#declaration-merging) | 1 | 0 | 3 |
 | [Iterators and Generators](#iterators-and-generators) | 5 | 2 | 0 |
 | [Symbols](#symbols) | 0 | 0 | 3 |
 | [Mixins](#mixins) | 0 | 0 | 1 |
@@ -51,11 +51,11 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Namespaces](#namespaces) | 0 | 0 | 2 |
 | [Type Compatibility and Inference](#type-compatibility-and-inference) | 5 | 1 | 0 |
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
-| [JavaScript: Syntax](#javascript-syntax) | 23 | 1 | 7 |
+| [JavaScript: Syntax](#javascript-syntax) | 24 | 1 | 6 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 11 | 6 | 9 |
-| **Total** | **143** | **17** | **90** |
+| **Total** | **151** | **17** | **82** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 43, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 43.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 43, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 35.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -63,6 +63,7 @@ Within each category, supported features come first, then partial and unsupporte
 
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
+| Angle-bracket type assertions `<T>x` | supported | `<T>expr` is the same as `expr as T` | [angle-bracket-assertions.ts](../tests/ts-features/everyday/angle-bracket-assertions.ts) |
 | Array types `T[]` and `Array<T>` | supported |  | [arrays.ts](../tests/ts-features/everyday/arrays.ts) |
 | Type assertions with `as` | supported | Upcasts, removing `null` and class downcasts are checked at run time; `JSON.parse(text) as T` validates the shape | [as-assertions.ts](../tests/ts-features/everyday/as-assertions.ts) |
 | `as const` assertions | supported | On literals and on arrays and objects of literals (readonly tuples and objects of literal types) | [as-const.ts](../tests/ts-features/everyday/as-const.ts) |
@@ -80,7 +81,6 @@ Within each category, supported features come first, then partial and unsupporte
 | Type inference for variables and return values | supported |  | [type-inference.ts](../tests/ts-features/everyday/type-inference.ts) |
 | Union types | **partial** | **Works:** unions with `null` / `undefined` (`T \| null \| undefined`). **Not supported:** a value of `string \| number` needs a run-time type tag that typed registers do not carry (*types known at compile time*). **Instead:** one function per type, an interface with a discriminating field and optional properties, or overload by name | [union-types.ok.ts](../tests/ts-features/everyday/union-types.ok.ts), [union-types.no.ts](../tests/ts-features/everyday/union-types.no.ts) |
 | The `unknown` type | **partial** | **Works:** only as the type of a `catch` variable (narrowed with `instanceof`) and of an ignored callback parameter. **Not supported:** an `unknown` value would need run-time type tests (*types known at compile time*). **Instead:** a concrete type; `JSON.parse(text) as T` / `tryParse` for external data | [unknown.ok.ts](../tests/ts-features/everyday/unknown.ok.ts), [unknown.no.ts](../tests/ts-features/everyday/unknown.no.ts) |
-| Angle-bracket type assertions `<T>x` | **unsupported** | **Why:** only the `as` form is parsed (*not implemented yet*). **Instead:** `x as T` | [angle-bracket-assertions.ts](../tests/ts-features/everyday/angle-bracket-assertions.ts) |
 | The `any` type | **unsupported** | **Why:** every value must have a static type (*types known at compile time*). **Instead:** a concrete type or an interface; `Map<K, V>` for dynamic keys | [any.ts](../tests/ts-features/everyday/any.ts) |
 | The `object` type | **unsupported** | **Why:** `object` has no known properties (*types known at compile time*). **Instead:** an interface or a class | [object-type.ts](../tests/ts-features/everyday/object-type.ts) |
 
@@ -205,6 +205,7 @@ Within each category, supported features come first, then partial and unsupporte
 | `static` initialization blocks | supported |  | [static-blocks.ts](../tests/ts-features/classes/static-blocks.ts) |
 | Static fields and methods (inherited by subclasses) | supported |  | [static-members.ts](../tests/ts-features/classes/static-members.ts) |
 | `this`-based type guards (`this is T`) | supported |  | [this-based-guards.ts](../tests/ts-features/classes/this-based-guards.ts) |
+| Polymorphic `this` types | supported | A method returning `this` gives the receiver's class at a call (method chaining in subclasses) | [this-types.ts](../tests/ts-features/classes/this-types.ts) |
 | Overriding `toString()` | supported | Called by `String(x)`, template literals and `+` | [to-string.ts](../tests/ts-features/classes/to-string.ts) |
 | `declare` fields | **partial** | **Works:** a field declared for the type checker and set elsewhere (by the constructor), also redeclaring an inherited field with its type. **Not supported:** redeclaring an inherited field with a narrower type (`number` of a `number \| string` field) would change its representation (*types known at compile time*). **Instead:** keep the inherited field's type, or a separate field | [declare-fields.ok.ts](../tests/ts-features/classes/declare-fields.ok.ts), [declare-fields.no.ts](../tests/ts-features/classes/declare-fields.no.ts) |
 | Implementing an interface property with an accessor | **unsupported** | **Why:** interface properties are read as fields, so the class must have a field (*types known at compile time*). **Instead:** declare the accessor in the interface: `interface HasArea { get area(): number }` | [accessor-implements-property.ts](../tests/ts-features/classes/accessor-implements-property.ts) |
@@ -217,7 +218,6 @@ Within each category, supported features come first, then partial and unsupporte
 | Methods as values (unbound methods) | **unsupported** | **Why:** an unbound method loses `this` in JavaScript; E7 rejects it rather than behave differently (*JavaScript-identical behaviour*). **Instead:** an arrow function `x => obj.method(x)`, or an arrow function field | [methods-as-values.ts](../tests/ts-features/classes/methods-as-values.ts) |
 | `new.target` | **unsupported** | **Why:** *not implemented yet*. **Instead:** an explicit constructor parameter | [new-target.ts](../tests/ts-features/classes/new-target.ts) |
 | Ergonomic brand checks (`#x in obj`) | **unsupported** | **Why:** private fields always exist on instances of their class (*types known at compile time*). **Instead:** `instanceof` | [private-in.ts](../tests/ts-features/classes/private-in.ts) |
-| Polymorphic `this` types | **unsupported** | **Why:** *not implemented yet*. **Instead:** return the class type (and override in subclasses where needed) | [this-types.ts](../tests/ts-features/classes/this-types.ts) |
 
 ## Modules
 
@@ -242,12 +242,12 @@ Within each category, supported features come first, then partial and unsupporte
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
 | `const enum` | supported |  | [const-enums.ts](../tests/ts-features/enums/const-enums.ts) |
+| Enum members as types (`E.A`) | supported | An enum member as a type (`kind: ShapeKind.Circle`); e7 checks it as the enum's type (any member), tsc checks the member | [enum-member-types.ts](../tests/ts-features/enums/enum-member-types.ts) |
 | Enum values as `number` / `string` | supported |  | [enum-to-number.ts](../tests/ts-features/enums/enum-to-number.ts) |
 | Numeric enums (auto-increment and explicit values) | supported |  | [numeric-enums.ts](../tests/ts-features/enums/numeric-enums.ts) |
 | String enums | supported |  | [string-enums.ts](../tests/ts-features/enums/string-enums.ts) |
 | Computed and constant-expression enum members | **partial** | **Works:** constant expressions: literals, other members, `+ - * / % ** \| & ^ << >> >>> ~`, string concatenation. **Not supported:** enum members are compile-time constants in E7; a computed member would be evaluated at run time (*not implemented yet*). **Instead:** a constant expression, or a `const` variable next to the enum | [computed-members.ok.ts](../tests/ts-features/enums/computed-members.ok.ts), [computed-members.no.ts](../tests/ts-features/enums/computed-members.no.ts) |
 | Ambient enums (`declare enum`) | **unsupported** | **Why:** only functions can be provided by the host (*verifiable bytecode*). **Instead:** an ordinary `enum` | [ambient-enums.ts](../tests/ts-features/enums/ambient-enums.ts) |
-| Enum members as types (`E.A`) | **unsupported** | **Why:** literal types are not represented (*not implemented yet*). **Instead:** the enum type, with a run-time check | [enum-member-types.ts](../tests/ts-features/enums/enum-member-types.ts) |
 | Heterogeneous enums (numbers and strings mixed) | **unsupported** | **Why:** an enum is either `number` or `string` (*types known at compile time*). **Instead:** two enums, or string values only | [heterogeneous-enums.ts](../tests/ts-features/enums/heterogeneous-enums.ts) |
 | Reverse mappings and enums as run-time objects (`E[value]`, `Object.keys(E)`) | **unsupported** | **Why:** enum members are compile-time constants, there is no enum object (*types known at compile time*). **Instead:** a `switch` or a `Map<E, string>` from values to names | [reverse-mappings.ts](../tests/ts-features/enums/reverse-mappings.ts) |
 
@@ -255,18 +255,18 @@ Within each category, supported features come first, then partial and unsupporte
 
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
-| `Awaited<T>` | **unsupported** | **Why:** no Promises (*not implemented yet*). **Instead:** synchronous values | [awaited.ts](../tests/ts-features/utility-types/awaited.ts) |
+| `Awaited<T>` | supported | `Awaited<Promise<T>>` is `T` | [awaited.ts](../tests/ts-features/utility-types/awaited.ts) |
+| `NonNullable<T>` | supported | `NonNullable<T>` removes `null` and `undefined` | [non-nullable.ts](../tests/ts-features/utility-types/non-nullable.ts) |
+| Intrinsic string types (`Uppercase`, `Lowercase`, `Capitalize`, `Uncapitalize`) | supported | `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize` of string literal types (ASCII letters; of `string`, `string`) | [string-manipulation.ts](../tests/ts-features/utility-types/string-manipulation.ts) |
 | `Exclude<T, U>` and `Extract<T, U>` | **unsupported** | **Why:** union types other than with `null` / `undefined` are not supported (*types known at compile time*). **Instead:** write the resulting type | [exclude-extract.ts](../tests/ts-features/utility-types/exclude-extract.ts) |
 | `Parameters`, `ReturnType`, `ConstructorParameters`, `InstanceType` | **unsupported** | **Why:** they need `typeof` types and conditional types (*types known at compile time*). **Instead:** name the types with aliases and use them in the declarations | [function-types.ts](../tests/ts-features/utility-types/function-types.ts) |
 | `NoInfer<T>` | **unsupported** | **Why:** *not implemented yet*. **Instead:** an explicit type argument at the call | [no-infer.ts](../tests/ts-features/utility-types/no-infer.ts) |
-| `NonNullable<T>` | **unsupported** | **Why:** *not implemented yet*. **Instead:** the type without `\| null \| undefined` | [non-nullable.ts](../tests/ts-features/utility-types/non-nullable.ts) |
 | `Omit<T, K>` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** a separate interface (the larger interface can extend it) | [omit.ts](../tests/ts-features/utility-types/omit.ts) |
 | `Partial<T>` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** an interface with optional properties (`interface UserPatch { name?: string; age?: number }`) | [partial.ts](../tests/ts-features/utility-types/partial.ts) |
 | `Pick<T, K>` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** a separate interface (the source interface can extend it) | [pick.ts](../tests/ts-features/utility-types/pick.ts) |
 | `Readonly<T>` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** an interface with `readonly` properties | [readonly.ts](../tests/ts-features/utility-types/readonly.ts) |
 | `Record<K, V>` | **unsupported** | **Why:** properties are fixed fields (*types known at compile time*). **Instead:** `Map<K, V>`, or an interface with the known keys | [record.ts](../tests/ts-features/utility-types/record.ts) |
 | `Required<T>` | **unsupported** | **Why:** E7 types are concrete; type-level computation is not implemented (*types known at compile time*). **Instead:** spell out the interface without `?` | [required.ts](../tests/ts-features/utility-types/required.ts) |
-| Intrinsic string types (`Uppercase`, `Lowercase`, `Capitalize`, `Uncapitalize`) | **unsupported** | **Why:** string literal types are treated as `string` (*not implemented yet*). **Instead:** `string` with `toUpperCase()` / `toLowerCase()` at run time | [string-manipulation.ts](../tests/ts-features/utility-types/string-manipulation.ts) |
 | `ThisType<T>`, `ThisParameterType`, `OmitThisParameter` | **unsupported** | **Why:** functions cannot be called with a chosen `this` (*not implemented yet*). **Instead:** object literal methods (`this` is the object) or classes | [this-type.ts](../tests/ts-features/utility-types/this-type.ts) |
 
 ## Decorators
@@ -281,8 +281,8 @@ Within each category, supported features come first, then partial and unsupporte
 
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
+| Merging interfaces | supported | Two `interface` declarations of one name in one scope merge their members | [interface-merging.ts](../tests/ts-features/declaration-merging/interface-merging.ts) |
 | Global augmentation (`declare global`) | **unsupported** | **Why:** built-in types and globals are fixed (*verifiable bytecode*). **Instead:** a module that exports the extra functions | [global-augmentation.ts](../tests/ts-features/declaration-merging/global-augmentation.ts) |
-| Merging interfaces | **unsupported** | **Why:** each type is declared once (*not implemented yet*). **Instead:** one interface (or an interface that extends the other) | [interface-merging.ts](../tests/ts-features/declaration-merging/interface-merging.ts) |
 | Module augmentation (`declare module "./x"`) | **unsupported** | **Why:** a module's types are fixed where it is declared (*verifiable bytecode*). **Instead:** declare the members in the module itself, or a subclass / extended interface | [module-augmentation.ts](../tests/ts-features/declaration-merging/module-augmentation.ts) |
 | Merging namespaces with classes, functions and enums | **unsupported** | **Why:** namespaces are not supported (*not implemented yet*). **Instead:** static members of the class, or module-level declarations | [namespace-merging.ts](../tests/ts-features/declaration-merging/namespace-merging.ts) |
 
@@ -364,6 +364,7 @@ Within each category, supported features come first, then partial and unsupporte
 | `debugger` statement | supported | Stops when a debugger is attached | [debugger-statement.ts](../tests/ts-features/js-syntax/debugger-statement.ts) |
 | Destructuring assignment to existing variables | supported | A pattern with defaults, nesting or rest must be a statement of its own (`[a = 1, ...rest] = xs;`) | [destructuring-assignment.ts](../tests/ts-features/js-syntax/destructuring-assignment.ts) |
 | Destructuring in `for...of` | supported |  | [for-of-destructuring.ts](../tests/ts-features/js-syntax/for-of-destructuring.ts) |
+| Hashbang line (`#!/usr/bin/env node`) | supported | A `#!` first line is a comment | [hashbang.ts](../tests/ts-features/js-syntax/hashbang.ts) |
 | Labeled statements (`break` / `continue` with labels, labeled blocks) | supported |  | [labeled-statements.ts](../tests/ts-features/js-syntax/labeled-statements.ts) |
 | Logical assignment operators (`??=`, `\|\|=`, `&&=`) | supported |  | [logical-assignment.ts](../tests/ts-features/js-syntax/logical-assignment.ts) |
 | Nullish coalescing `??` and `??=` | supported |  | [nullish-coalescing.ts](../tests/ts-features/js-syntax/nullish-coalescing.ts) |
@@ -383,7 +384,6 @@ Within each category, supported features come first, then partial and unsupporte
 | The `delete` operator | **unsupported** | **Why:** object layouts are fixed (*types known at compile time*). **Instead:** an optional property set to `undefined`, or `Map.delete` | [delete-operator.ts](../tests/ts-features/js-syntax/delete-operator.ts) |
 | `eval` and `new Function` | **unsupported** | **Why:** all code is compiled and verified ahead of time (*verifiable bytecode*). **Instead:** ship the code as a module; the host can compile and load modules | [eval.ts](../tests/ts-features/js-syntax/eval.ts) |
 | `for...in` | **unsupported** | **Why:** it enumerates property names as untyped strings, including inherited ones (*types known at compile time*). **Instead:** `for (const k of Object.keys(obj))` or a `Map` | [for-in.ts](../tests/ts-features/js-syntax/for-in.ts) |
-| Hashbang line (`#!/usr/bin/env node`) | **unsupported** | **Why:** *not implemented yet*. **Instead:** run the file with `e7 file.ts` | [hashbang.ts](../tests/ts-features/js-syntax/hashbang.ts) |
 | Regular expression literals | **unsupported** | **Why:** *not implemented yet*. **Instead:** string methods (`indexOf`, `includes`, `startsWith`, `split`, `replaceAll`) and character code tests | [regex-literals.ts](../tests/ts-features/js-syntax/regex-literals.ts) |
 | Throwing values other than `Error` objects | **unsupported** | **Why:** a caught value must have a known type (*types known at compile time*). **Instead:** `throw new Error(message)` (or `TypeError`, `RangeError`, ...) | [throw-non-errors.ts](../tests/ts-features/js-syntax/throw-non-errors.ts) |
 | Non-ASCII identifiers | **unsupported** | **Why:** identifiers are ASCII (string contents may be any Unicode) (*not implemented yet*). **Instead:** ASCII names | [unicode-identifiers.ts](../tests/ts-features/js-syntax/unicode-identifiers.ts) |

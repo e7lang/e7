@@ -119,6 +119,7 @@ struct FuncSym : Sym {
   // an override with fewer parameters than the method it overrides: the overridden method's other
   // parameters, as hidden parameters (unused), so that both have one signature in the vtable
   std::vector<Type*> padParams;
+  bool retThis = false;  // returns the polymorphic `this` type: a call gives the receiver's static type
   std::vector<Param>* params = nullptr;
   TypeNode* retNode = nullptr;
   Stmt* body = nullptr;

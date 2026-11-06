@@ -192,6 +192,7 @@ class Checker {
   }
   Type* taElem(Type* t) { return t->vt == 9 || t->vt == 10 ? T.bigint() : T.number(); }
   Expr* intLit(int64_t v, Loc l);
+  ClassSym* curThisClass = nullptr;  // the class whose `this` type is being resolved (method signatures)
   Type* genTypeArg(TypeNode* n);
   Type* iterResultType(Type* g, Loc l);
   Type* resolveNamedType(const std::string& name, const std::vector<TypeNode*>& args, Loc l);

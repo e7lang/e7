@@ -411,6 +411,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
         e->cls = c;
         e->intrinsic = IN_METHOD;
         ret = f->type->ret;
+        if (f->retThis && ret->t == TT::Class) ret = c->type;  // `this` type: the receiver's class
         break;
       }
       auto fit = c->fieldIdx.find(name);

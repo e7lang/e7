@@ -599,6 +599,15 @@ void Checker::declareFile(FileInfo* fi) {
           exportDecl(s, s->name, g, s->loc);
           break;
         }
+        // declaration merging: a second `interface X` in the same scope adds its members to the first
+        if (Sym* prev = scope->names.count(s->name) ? scope->names[s->name] : nullptr;
+            prev && prev->k == SymK::Interface && static_cast<InterfaceSym*>(prev)->state == 0) {
+          auto* first = static_cast<InterfaceSym*>(prev);
+          TypeNode* fb = first->decl->typeBody;
+          for (auto& m : s->typeBody->members) fb->members.push_back(m);
+          for (TypeNode* x : s->ifaceExtends) first->decl->ifaceExtends.push_back(x);
+          break;
+        }
         InterfaceSym* is = P.make<InterfaceSym>();
         is->name = s->name;
         is->decl = s;
@@ -991,6 +1000,15 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (dot != std::string::npos) {
     // ns.T: a type exported by a module namespace (resolved by lookup above)
     Sym* base = lookup(name.substr(0, dot));
+    // E.A: the type of an enum member (e7: the enum's type; tsc checks the member)
+    if (base && base->k == SymK::Enum) {
+      auto* en = static_cast<EnumSym*>(base);
+      resolveEnum(en);
+      std::string member = name.substr(dot + 1);
+      for (auto& m : en->members)
+        if (m.name == member) { noArgs(); return en->type; }
+      return errT(l, "enum '" + en->name + "' has no member '" + member + "'");
+    }
     if (base && base->k == SymK::Namespace && !static_cast<NamespaceSym*>(base)->builtin) {
       if (s) return errT(l, "'" + name + "' is not a type");
       std::string member = name.substr(dot + 1);
@@ -1006,6 +1024,39 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "bigint") { noArgs(); return T.bigint(); }
   if (name == "void") { noArgs(); return T.voidT(); }
   if (name == "true" || name == "false") { noArgs(); return T.boolLit(name == "true" ? 2 : 1); }
+  if (name == "this") {
+    // the polymorphic `this` type: the class (a method returning `this` gives the receiver's type at a call)
+    if (curThisClass) { noArgs(); return curThisClass->type; }
+    return errT(l, "a 'this' type is only available in classes");
+  }
+  if (name == "Awaited" && args.size() == 1) {
+    Type* t = resolveType(args[0]);
+    return t->t == TT::Promise ? t->elem : t;
+  }
+  if (name == "NonNullable" && args.size() == 1) {
+    Type* t = resolveType(args[0]);
+    if (t->t == TT::Null || t->t == TT::Undefined) return T.never();
+    return baseOf(t);
+  }
+  if ((name == "Uppercase" || name == "Lowercase" || name == "Capitalize" || name == "Uncapitalize") && args.size() == 1) {
+    // on string literal types (ASCII letters change case as in JavaScript); on string, string
+    Type* t = resolveType(args[0]);
+    if (t->t != TT::String) return errT(l, name + " needs a string type");
+    if (!t->lit) return t;
+    std::vector<std::u16string> out;
+    for (auto v : t->strLits) {
+      for (size_t k = 0; k < v.size(); k++) {
+        char16_t& c = v[k];
+        bool all = name == "Uppercase" || name == "Lowercase";
+        if (!all && k > 0) break;
+        bool up = name == "Uppercase" || name == "Capitalize";
+        if (up && c >= 'a' && c <= 'z') c = (char16_t)(c - 32);
+        if (!up && c >= 'A' && c <= 'Z') c = (char16_t)(c + 32);
+      }
+      out.push_back(v);
+    }
+    return T.strLit(out);
+  }
   if (name == "null") { noArgs(); return T.nullT(); }
   if (name == "undefined") { noArgs(); return T.undef(); }
   if (name == "never") { noArgs(); return T.never(); }
@@ -1736,7 +1787,11 @@ void Checker::resolveSig(FuncSym* f) {
       opt.push_back(isOpt);
     }
   }
+  ClassSym* savedThis = curThisClass;
+  curThisClass = f->cls;
   Type* ret = f->retNode ? resolveType(f->retNode) : nullptr;
+  curThisClass = savedThis;
+  f->retThis = f->cls && f->retNode && f->retNode->k == TNK::Ref && f->retNode->name == "this";
   if (f->isCtor || f->accessor == 2) ret = T.voidT();
   if (f->retNode && !f->retNode->predParam.empty()) {
     TypeNode* rn = f->retNode;

@@ -1,9 +1,7 @@
 // @feature: Polymorphic `this` types
 // @category: Classes
-// @status: unsupported
-// @why: not implemented yet
-// @instead: return the class type (and override in subclasses where needed)
-// @error: unknown type 'this'
+// @status: supported
+// @note: a method returning `this` gives the receiver's class at a call (method chaining in subclasses)
 class Box {
   contents = "";
   set(value: string): this {

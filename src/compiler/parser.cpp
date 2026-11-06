@@ -36,6 +36,9 @@ class Lexer {
   Lexer(const std::string& src) : s(src) {}
   std::vector<Tok> run() {
     std::vector<Tok> out;
+    // a hashbang line (#!/usr/bin/env ...) at the very start is a comment
+    if (s.size() >= 2 && s[0] == '#' && s[1] == '!')
+      while (p < s.size() && s[p] != '\n') p++;
     std::vector<int> tmplDepth;  // brace depth stack for template substitutions
     int braceDepth = 0;
     while (true) {
@@ -1634,15 +1637,20 @@ class Parser {
     if (isP("(") || isP("<")) {
       size_t save = i;
       if (isP("<")) {
-        // generic arrow function <T>(x: T) => ... (a '<' cannot start any other expression)
-        Expr* f = A.expr(EK::Arrow, l);
-        parseTypeParams(f->typeParams);
-        parseParams(f->params, false);
-        if (eatP(":")) f->retType = parseRetType();
-        if (!isP("=>") || cur().nl) fail("expected '=>' (generic arrow function)");
-        i++;
-        parseArrowBody(f);
-        return f;
+        // generic arrow function <T>(x: T) => ..., or else a type assertion <T>expr (parsed by parseUnary)
+        try {
+          Expr* f = A.expr(EK::Arrow, l);
+          parseTypeParams(f->typeParams);
+          parseParams(f->params, false);
+          if (eatP(":")) f->retType = parseRetType();
+          if (!isP("=>") || cur().nl) { i = save; return nullptr; }
+          i++;
+          parseArrowBody(f);
+          return f;
+        } catch (ParseError&) {
+          i = save;
+          return nullptr;
+        }
       }
       try {
         Expr* f = A.expr(EK::Arrow, l);
@@ -1845,7 +1853,6 @@ class Parser {
         e->a = parseUnary();
         return e;
       }
-      if (o == "<") fail("angle-bracket type assertions are not supported; use 'as'");
     }
     if (cur().k == TK::Ident) {
       const std::string& w = cur().text;
@@ -1869,6 +1876,15 @@ class Parser {
         e->a = parseUnary();
         return e;
       }
+    }
+    if (isP("<")) {
+      // <T>expr: the old form of `expr as T`
+      i++;
+      Expr* e = A.expr(EK::As, l);
+      e->asType = parseType();
+      expectP(">");
+      e->a = parseUnary();
+      return e;
     }
     return parsePostfix();
   }
