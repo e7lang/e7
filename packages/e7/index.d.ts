@@ -39,10 +39,15 @@ export interface CompileResult {
   diagnostics: Diagnostic[];
 }
 
+/**
+ * Name of an e7_status (`code` holds the number). "pending" (15) is a call waiting for async host
+ * functions; this package registers none, so async exports and top-level await finish within run()
+ * (e7:test's later() is settled by the VM itself).
+ */
 export type Status =
-  | "ok" | "runtime_error" | "budget_exceeded" | "out_of_memory" | "stack_overflow" | "load_error"
+  | "ok" | "suspended" | "runtime_error" | "budget_exceeded" | "out_of_memory" | "stack_overflow" | "load_error"
   | "verify_error" | "signature_error" | "not_found" | "bad_arguments" | "compile_error" | "invalid_state"
-  | "paused" | "version_error";
+  | "paused" | "version_error" | "pending";
 
 /** Values accepted as arguments of an exported function. */
 export type E7Argument = number | bigint | boolean | string | Uint8Array | ArrayBuffer | null;

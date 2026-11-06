@@ -82,7 +82,8 @@ void throwE7(JNIEnv* e, int status, const char* msg) {
 struct State;
 struct NativeRef {
   State* st;
-  jobject fn;
+  jobject fn;                 // NativeFunction, or E7VM.AsyncBridge for an async native
+  jmethodID start = nullptr;  // AsyncBridge.start
   std::string sig;
   std::string retStr;
   std::vector<uint8_t> retBytes;
@@ -92,6 +93,7 @@ struct State {
   e7_vm* vm = nullptr;
   jobject keyProvider = nullptr;
   jobject printHandler = nullptr;
+  e7_module* pendingModule = nullptr;  // module of the last load that returned E7_PENDING (top-level await)
   std::vector<std::unique_ptr<NativeRef>> natives;
   std::vector<uint8_t> keyBuf;
   ~State() {
@@ -171,9 +173,8 @@ jobject toJava(JNIEnv* e, const e7_value& v) {
   }
 }
 
-e7_status nativeThunk(e7_vm* vm, const e7_value* args, size_t n, e7_value* ret, void* user) {
-  auto* ref = static_cast<NativeRef*>(user);
-  JNIEnv* e = env();
+// A native's arguments as Object[] (KeyHandle for handles).
+jobjectArray argsToJava(JNIEnv* e, const e7_value* args, size_t n) {
   jobjectArray arr = e->NewObjectArray((jsize)n, gObject, nullptr);
   for (size_t i = 0; i < n; i++) {
     jobject o = args[i].type == E7_HANDLE ? nullptr : toJava(e, args[i]);
@@ -184,6 +185,13 @@ e7_status nativeThunk(e7_vm* vm, const e7_value* args, size_t n, e7_value* ret, 
     e->SetObjectArrayElement(arr, (jsize)i, o);
     if (o) e->DeleteLocalRef(o);
   }
+  return arr;
+}
+
+e7_status nativeThunk(e7_vm* vm, const e7_value* args, size_t n, e7_value* ret, void* user) {
+  auto* ref = static_cast<NativeRef*>(user);
+  JNIEnv* e = env();
+  jobjectArray arr = argsToJava(e, args, n);
   jclass fc = e->GetObjectClass(ref->fn);
   jmethodID inv = e->GetMethodID(fc, "invoke", "([Ljava/lang/Object;)Ljava/lang/Object;");
   e->DeleteLocalRef(fc);
@@ -230,6 +238,28 @@ e7_status nativeThunk(e7_vm* vm, const e7_value* args, size_t n, e7_value* ret, 
   return E7_OK;
 }
 
+// An async native: E7VM.AsyncBridge.start(args, ticket) starts the host operation and returns null, or an
+// error message (the script's call throws it; no ticket stays open).
+e7_status asyncThunk(e7_vm* vm, const e7_value* args, size_t n, int64_t ticket, void* user) {
+  auto* ref = static_cast<NativeRef*>(user);
+  JNIEnv* e = env();
+  jobjectArray arr = argsToJava(e, args, n);
+  jstring err = static_cast<jstring>(e->CallObjectMethod(ref->fn, ref->start, arr, (jlong)ticket));
+  e->DeleteLocalRef(arr);
+  if (e->ExceptionCheck()) {
+    e->ExceptionClear();
+    e7_native_error(vm, "async native function failed");
+    return E7_ERR_RUNTIME;
+  }
+  if (err) {
+    std::string msg = toUtf8(e, err);
+    e->DeleteLocalRef(err);
+    e7_native_error(vm, msg.c_str());
+    return E7_ERR_RUNTIME;
+  }
+  return E7_OK;
+}
+
 int keyThunk(void* user, int64_t id, const uint8_t** key, size_t* len) {
   auto* st = static_cast<State*>(user);
   if (!st->keyProvider) return -1;
@@ -265,7 +295,7 @@ void printThunk(void* user, const char* s, size_t n) {
 
 jobject finishCall(JNIEnv* e, State* st, e7_status s, const e7_value& ret) {
   if (s != E7_OK) {
-    throwE7(e, s, s == E7_SUSPENDED ? "suspended" : e7_last_error(st->vm));
+    throwE7(e, s, s == E7_SUSPENDED ? "suspended" : s == E7_PENDING ? "pending" : e7_last_error(st->vm));
     return nullptr;
   }
   return toJava(e, ret);
@@ -343,7 +373,8 @@ JNIEXPORT jlong JNICALL J(nativeLoad)(JNIEnv* e, jclass, jlong h, jbyteArray cod
   if (n) e->GetByteArrayRegion(code, 0, n, reinterpret_cast<jbyte*>(b.data()));
   e7_module* m = nullptr;
   e7_status s = e7_load(st->vm, b.data(), b.size(), &m);
-  if (s != E7_OK) { throwE7(e, s, e7_last_error(st->vm)); return 0; }
+  if (s == E7_PENDING) st->pendingModule = m;  // the initializer waits (top-level await): nativePendingModule
+  if (s != E7_OK) { throwE7(e, s, s == E7_PENDING ? "pending" : e7_last_error(st->vm)); return 0; }
   return reinterpret_cast<jlong>(m);
 }
 
@@ -355,7 +386,8 @@ JNIEXPORT jlong JNICALL J(nativeLoadSource)(JNIEnv* e, jclass, jlong h, jbyteArr
   std::string nm = toUtf8(e, name);
   e7_module* m = nullptr;
   e7_status rc = e7_load_source(st->vm, s.data(), s.size(), nm.c_str(), &m);
-  if (rc != E7_OK) { throwE7(e, rc, e7_last_error(st->vm)); return 0; }
+  if (rc == E7_PENDING) st->pendingModule = m;
+  if (rc != E7_OK) { throwE7(e, rc, rc == E7_PENDING ? "pending" : e7_last_error(st->vm)); return 0; }
   return reinterpret_cast<jlong>(m);
 }
 
@@ -411,6 +443,64 @@ JNIEXPORT void JNICALL J(nativeRegister)(JNIEnv* e, jclass, jlong h, jstring nam
     return;
   }
   st->natives.push_back(std::move(ref));
+}
+
+JNIEXPORT void JNICALL J(nativeRegisterAsync)(JNIEnv* e, jclass, jlong h, jstring name, jstring sig, jobject bridge) {
+  State* st = S(h);
+  auto ref = std::make_unique<NativeRef>();
+  ref->st = st;
+  ref->fn = e->NewGlobalRef(bridge);
+  jclass bc = e->GetObjectClass(bridge);
+  ref->start = e->GetMethodID(bc, "start", "([Ljava/lang/Object;J)Ljava/lang/String;");
+  e->DeleteLocalRef(bc);
+  ref->sig = toUtf8(e, sig);
+  std::string nm = toUtf8(e, name);
+  e7_status s = e7_register_async_native(st->vm, nm.c_str(), ref->sig.c_str(), asyncThunk, ref.get());
+  if (s != E7_OK) {
+    e->DeleteGlobalRef(ref->fn);
+    throwE7(e, s, e7_last_error(st->vm));
+    return;
+  }
+  st->natives.push_back(std::move(ref));
+}
+
+// e7_settle: returns the status instead of throwing. A value that cannot be converted is passed as null,
+// which e7_settle rejects with E7_ERR_ARGS for a non-void native (the reason is in nativeLastError).
+JNIEXPORT jint JNICALL J(nativeSettle)(JNIEnv* e, jclass, jlong h, jlong ticket, jobject value) {
+  State* st = S(h);
+  jobjectArray one = e->NewObjectArray(1, gObject, value);
+  std::vector<e7_value> vals;
+  std::vector<std::string> store;
+  if (!toValues(e, one, vals, store)) {
+    e->ExceptionClear();
+    vals.resize(1);
+    memset(&vals[0], 0, sizeof vals[0]);
+    vals[0].type = E7_NULL;
+  }
+  e->DeleteLocalRef(one);
+  e7_status s = e7_settle(st->vm, (int64_t)ticket, vals.data());
+  for (auto& x : store) std::fill(x.begin(), x.end(), '\0');
+  return (jint)s;
+}
+
+JNIEXPORT jint JNICALL J(nativeSettleError)(JNIEnv* e, jclass, jlong h, jlong ticket, jstring message) {
+  std::string m = toUtf8(e, message);
+  return (jint)e7_settle_error(S(h)->vm, (int64_t)ticket, m.c_str());
+}
+
+JNIEXPORT jlong JNICALL J(nativeOpenTickets)(JNIEnv*, jclass, jlong h) { return (jlong)e7_open_tickets(S(h)->vm); }
+
+// the module of the last load that returned E7_PENDING (once)
+JNIEXPORT jlong JNICALL J(nativePendingModule)(JNIEnv*, jclass, jlong h) {
+  State* st = S(h);
+  e7_module* m = st->pendingModule;
+  st->pendingModule = nullptr;
+  return reinterpret_cast<jlong>(m);
+}
+
+JNIEXPORT jstring JNICALL J(nativeLastError)(JNIEnv* e, jclass, jlong h) {
+  const char* m = e7_last_error(S(h)->vm);
+  return fromUtf8(e, m, strlen(m));
 }
 
 JNIEXPORT void JNICALL J(nativeSetKeyProvider)(JNIEnv* e, jclass, jlong h, jobject p) {

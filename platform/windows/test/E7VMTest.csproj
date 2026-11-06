@@ -12,5 +12,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../E7VM.cs" />
+    <Compile Include="../E7ModuleManager.cs" />
   </ItemGroup>
 </Project>

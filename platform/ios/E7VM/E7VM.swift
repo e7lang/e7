@@ -7,6 +7,10 @@
 //   let module = try vm.load(bytecodeFromServer)
 //   vm.keyProvider = { id in Keychain.loadKey(id) }
 //   let sig = try vm.call(module, "sign", .string(payload), .handle(KeyHandle(1)))
+//
+// Async host functions (0.3): `declare function fetchKey(id: string): Promise<Uint8Array>;` in the script,
+//   try vm.registerAsyncNative("fetchKey", signature: "s>y") { args in .bytes(try await keys.fetch(args[0])) }
+//   let r = try await vm.callAsync(module, "sign", .string("k1"), .bytes(payload))
 import CE7VM
 import Foundation
 
@@ -15,6 +19,9 @@ public struct E7Error: Error, CustomStringConvertible {
   public let message: String
   public var description: String { "e7 error \(status): \(message)" }
   public var isSuspended: Bool { status == Int32(E7_SUSPENDED.rawValue) }
+  /// A synchronous call (`call`, `load`, `resume`) that waits for an async host function: it was abandoned;
+  /// run it with `callAsync` / `loadAsync`.
+  public var isPending: Bool { status == Int32(E7_PENDING.rawValue) }
 }
 
 /// Opaque reference to a key held by the app (e.g. Keychain); resolved through `keyProvider`.
@@ -76,6 +83,9 @@ private final class ArgBuffers {
 public final class E7VM {
   private let vm: OpaquePointer
   private var natives: [NativeBox] = []
+  private var asyncNatives: [AsyncNativeBox] = []
+  /// The `callAsync` / `loadAsync` in progress, until it finishes.
+  private var currentRun: AsyncRun?
   /// Key material handed to the VM by the key provider; must stay valid until the next callback.
   private var keyBuffer: UnsafeMutableBufferPointer<UInt8>?
 
@@ -191,11 +201,24 @@ public final class E7VM {
     if st != E7_OK { throw E7Error(status: Int32(st.rawValue), message: String(cString: e7_last_error(vm))) }
   }
 
+  /// A synchronous call that returned E7_PENDING: nothing would settle its tickets, so it is abandoned.
+  private func checkSync(_ st: e7_status, _ what: String) throws {
+    if st == E7_PENDING {
+      e7_abort_suspended(vm)
+      throw E7Error(
+        status: Int32(E7_PENDING.rawValue),
+        message: "\(what) waits for an async host function, so it was abandoned: run it with callAsync / loadAsync")
+    }
+    try check(st)
+  }
+
+  /// Loads a module and runs its top-level code. If the top level awaits an async host function, throws an
+  /// E7Error with `isPending` (the initializer is abandoned): load such modules with `loadAsync`.
   public func load(_ bytecode: Data) throws -> E7Module {
     var m: OpaquePointer?
     let bytes = [UInt8](bytecode)
     let st = bytes.withUnsafeBufferPointer { e7_load(vm, $0.baseAddress, $0.count, &m) }
-    try check(st)
+    try checkSync(st, "the module's top-level code")
     return E7Module(m!)
   }
 
@@ -204,7 +227,7 @@ public final class E7VM {
     var m: OpaquePointer?
     let utf8 = [CChar](source.utf8CString)
     let st = utf8.withUnsafeBufferPointer { e7_load_source(vm, $0.baseAddress, $0.count - 1, fileName, &m) }
-    try check(st)
+    try checkSync(st, "the module's top-level code")
     return E7Module(m!)
   }
 
@@ -219,24 +242,33 @@ public final class E7VM {
     try call(module, function, arguments: args)
   }
 
-  /// `call` with the arguments as an array.
+  /// `call` with the arguments as an array. A call that waits for an async host function throws an E7Error
+  /// with `isPending` (the call is abandoned): use `callAsync` for it. An async export returns the promise's
+  /// value when no host operation is left open.
   @discardableResult
   public func call(_ module: E7Module, _ function: String, arguments args: [E7Value]) throws -> E7Value {
     let bufs = ArgBuffers()
     var vals = args.map { E7VM.toC($0, bufs) }
     var ret = e7_value()
     let st = vals.withUnsafeMutableBufferPointer { e7_call(vm, module.ptr, function, $0.baseAddress, $0.count, &ret) }
-    try check(st)
+    try checkSync(st, "'\(function)'")
     return E7VM.fromC(ret)
   }
 
   public func resume() throws -> E7Value {
     var ret = e7_value()
-    try check(e7_resume(vm, &ret))
+    try checkSync(e7_resume(vm, &ret), "the call")
     return E7VM.fromC(ret)
   }
 
-  public func abortSuspended() { e7_abort_suspended(vm) }
+  /// Abandons a suspended call, or the `callAsync` / `loadAsync` in progress (it throws `CancellationError`).
+  public func abortSuspended() {
+    if let run = currentRun {
+      currentRun = nil
+      run.close()
+    }
+    e7_abort_suspended(vm)
+  }
 
   /// signature: parameter codes '>' return code, e.g. "sn>s" (see e7.h). Register before load().
   public func registerNative(_ name: String, signature: String, _ fn: @escaping ([E7Value]) throws -> E7Value) throws {
@@ -257,6 +289,194 @@ public final class E7VM {
       }
     }, Unmanaged.passUnretained(box).toOpaque())
     try check(st)
+  }
+
+  // MARK: - async host functions (0.3)
+
+  /// Registers an async host function before `load()`. The script declares it returning a promise, e.g.
+  /// `declare function fetchKey(id: string): Promise<Uint8Array>;` with signature "s>y" (the return code is the
+  /// promise's value type). Each call of the function by a script running in `callAsync` / `loadAsync` starts
+  /// `fn` in a new task; its result settles the script's promise (a thrown error rejects it with an Error whose
+  /// message is the error's description). Results are settled on the caller's executor in the order the
+  /// operations complete. A synchronous `call` does not start `fn`: it throws an E7Error with `isPending`.
+  public func registerAsyncNative(
+    _ name: String, signature: String, _ fn: @escaping ([E7Value]) async throws -> E7Value
+  ) throws {
+    let box = AsyncNativeBox(name: name, fn: fn, owner: self)
+    asyncNatives.append(box)
+    let st = e7_register_async_native(vm, name, signature, { _, args, n, ticket, user in
+      let box = Unmanaged<AsyncNativeBox>.fromOpaque(user!).takeUnretainedValue()
+      var vals = [E7Value]()
+      for i in 0..<n { vals.append(E7VM.fromC(args![i])) }
+      box.owner?.startHostOperation(box, vals, ticket)
+      return E7_OK
+    }, Unmanaged.passUnretained(box).toOpaque())
+    try check(st)
+  }
+
+  /// Number of async host operations the VM waits for (e7_open_tickets).
+  public var openTickets: Int { e7_open_tickets(vm) }
+
+  #if compiler(>=6.0)
+    /// Calls an exported function that may wait for async host functions (for an async export, returns the
+    /// promise's value). The VM runs on the caller's actor (`isolation`, e.g. the main actor): use the VM
+    /// only from there while the call is in progress. While it waits, other calls fail with E7_ERR_STATE;
+    /// cancelling the task abandons the call (`CancellationError`).
+    @discardableResult
+    public func callAsync(
+      _ module: E7Module, _ function: String, _ args: E7Value..., isolation: isolated (any Actor)? = #isolation
+    ) async throws -> E7Value {
+      try await drive(AsyncRun(), callStep(module, function, args), isolation: isolation)
+    }
+
+    /// `callAsync` with the arguments as an array.
+    @discardableResult
+    public func callAsync(
+      _ module: E7Module, _ function: String, arguments args: [E7Value],
+      isolation: isolated (any Actor)? = #isolation
+    ) async throws -> E7Value {
+      try await drive(AsyncRun(), callStep(module, function, args), isolation: isolation)
+    }
+
+    /// `load` for a module whose top-level code awaits async host functions (see `callAsync`).
+    public func loadAsync(_ bytecode: Data, isolation: isolated (any Actor)? = #isolation) async throws -> E7Module {
+      let run = AsyncRun()
+      _ = try await drive(run, loadStep(bytecode, run), isolation: isolation)
+      return run.module!
+    }
+
+    private func drive(_ run: AsyncRun, _ first: () -> (e7_status, E7Value), isolation: isolated (any Actor)?)
+      async throws -> E7Value
+    {
+      var (st, value) = try begin(run, first)
+      var completions = run.stream.makeAsyncIterator()
+      while st == E7_PENDING {
+        guard let c = await completions.next() else { throw abandon(run) }
+        if let next = settleAndResume(run, c) { (st, value) = next }
+      }
+      return try end(run, st, value)
+    }
+  #else
+    /// Calls an exported function that may wait for async host functions (for an async export, returns the
+    /// promise's value). Use the VM from one task at a time while the call is in progress. While it waits,
+    /// other calls fail with E7_ERR_STATE; cancelling the task abandons the call (`CancellationError`).
+    @discardableResult
+    public func callAsync(_ module: E7Module, _ function: String, _ args: E7Value...) async throws -> E7Value {
+      try await drive(AsyncRun(), callStep(module, function, args))
+    }
+
+    /// `callAsync` with the arguments as an array.
+    @discardableResult
+    public func callAsync(_ module: E7Module, _ function: String, arguments args: [E7Value]) async throws -> E7Value {
+      try await drive(AsyncRun(), callStep(module, function, args))
+    }
+
+    /// `load` for a module whose top-level code awaits async host functions (see `callAsync`).
+    public func loadAsync(_ bytecode: Data) async throws -> E7Module {
+      let run = AsyncRun()
+      _ = try await drive(run, loadStep(bytecode, run))
+      return run.module!
+    }
+
+    private func drive(_ run: AsyncRun, _ first: () -> (e7_status, E7Value)) async throws -> E7Value {
+      var (st, value) = try begin(run, first)
+      var completions = run.stream.makeAsyncIterator()
+      while st == E7_PENDING {
+        guard let c = await completions.next() else { throw abandon(run) }
+        if let next = settleAndResume(run, c) { (st, value) = next }
+      }
+      return try end(run, st, value)
+    }
+  #endif
+
+  private func callStep(_ module: E7Module, _ function: String, _ args: [E7Value]) -> () -> (e7_status, E7Value) {
+    return { [vm] in
+      let bufs = ArgBuffers()
+      var vals = args.map { E7VM.toC($0, bufs) }
+      var ret = e7_value()
+      let st = vals.withUnsafeMutableBufferPointer { e7_call(vm, module.ptr, function, $0.baseAddress, $0.count, &ret) }
+      return (st, st == E7_OK ? E7VM.fromC(ret) : .void)
+    }
+  }
+
+  private func loadStep(_ bytecode: Data, _ run: AsyncRun) -> () -> (e7_status, E7Value) {
+    return { [vm] in
+      var m: OpaquePointer?
+      let bytes = [UInt8](bytecode)
+      let st = bytes.withUnsafeBufferPointer { e7_load(vm, $0.baseAddress, $0.count, &m) }
+      if let m = m { run.module = E7Module(m) }  // also on E7_PENDING: the initializer finishes on resume
+      return (st, .void)
+    }
+  }
+
+  private func begin(_ run: AsyncRun, _ first: () -> (e7_status, E7Value)) throws -> (e7_status, E7Value) {
+    if currentRun != nil {
+      throw E7Error(
+        status: Int32(E7_ERR_STATE.rawValue),
+        message: "VM waits for host operations of another call; finish or cancel it first")
+    }
+    currentRun = run
+    return first()
+  }
+
+  // a host operation completed: settle its ticket and let the script continue (nil: the ticket is not open)
+  private func settleAndResume(_ run: AsyncRun, _ c: AsyncCompletion) -> (e7_status, E7Value)? {
+    run.tasks[c.ticket] = nil
+    var st: e7_status
+    switch c.result {
+    case .success(let v):
+      let bufs = ArgBuffers()
+      var cv = E7VM.toC(v, bufs)
+      st = e7_settle(vm, c.ticket, &cv)
+      if st == E7_ERR_ARGS {  // a value of the wrong type rejects the promise (the script does not wait forever)
+        st = e7_settle_error(vm, c.ticket, "\(c.name): \(String(cString: e7_last_error(vm)))")
+      }
+    case .failure(let error):
+      st = e7_settle_error(vm, c.ticket, "\(error)")
+    }
+    guard st == E7_OK else { return nil }
+    var ret = e7_value()
+    let rs = e7_resume(vm, &ret)
+    return (rs, rs == E7_OK ? E7VM.fromC(ret) : .void)
+  }
+
+  private func end(_ run: AsyncRun, _ st: e7_status, _ value: E7Value) throws -> E7Value {
+    let message = st == E7_OK ? "" : String(cString: e7_last_error(vm))
+    if currentRun === run { currentRun = nil }
+    run.close()
+    if st == E7_OK { return value }
+    if st == E7_SUSPENDED {  // an async call does not stop for the budget: abandon it
+      e7_abort_suspended(vm)
+      throw E7Error(status: Int32(st.rawValue), message: "instruction budget exhausted (the async call was abandoned)")
+    }
+    throw E7Error(status: Int32(st.rawValue), message: message)
+  }
+
+  // the task was cancelled, or abortSuspended() abandoned the call
+  private func abandon(_ run: AsyncRun) -> Error {
+    if currentRun === run {
+      currentRun = nil
+      e7_abort_suspended(vm)
+    }
+    run.close()
+    return CancellationError()
+  }
+
+  // called by the VM when a script calls an async native
+  fileprivate func startHostOperation(_ box: AsyncNativeBox, _ args: [E7Value], _ ticket: Int64) {
+    guard let run = currentRun else { return }  // a synchronous call: abandoned when it returns E7_PENDING
+    let fn = box.fn
+    let name = box.name
+    let completions = run.continuation
+    run.tasks[ticket] = Task {
+      let result: Result<E7Value, Error>
+      do {
+        result = .success(try await fn(args))
+      } catch {
+        result = .failure(error)
+      }
+      completions.yield(AsyncCompletion(ticket: ticket, name: name, result: result))
+    }
   }
 
   public static func compile(_ source: String, fileName: String = "main.ts") throws -> Data {
@@ -374,6 +594,45 @@ public final class E7VM {
     case E7_HANDLE: return .handle(KeyHandle(v.v.handle))
     default: return .void
     }
+  }
+}
+
+private final class AsyncNativeBox {
+  let name: String
+  let fn: ([E7Value]) async throws -> E7Value
+  weak var owner: E7VM?
+  init(name: String, fn: @escaping ([E7Value]) async throws -> E7Value, owner: E7VM) {
+    self.name = name
+    self.fn = fn
+    self.owner = owner
+  }
+}
+
+/// The outcome of a host operation, sent to the VM's executor.
+private struct AsyncCompletion: @unchecked Sendable {
+  let ticket: Int64
+  let name: String
+  let result: Result<E7Value, Error>
+}
+
+/// One `callAsync` / `loadAsync`: the completions of its host operations, in the order they complete.
+private final class AsyncRun {
+  let stream: AsyncStream<AsyncCompletion>
+  let continuation: AsyncStream<AsyncCompletion>.Continuation
+  var tasks: [Int64: Task<Void, Never>] = [:]
+  var module: E7Module?  // loadAsync
+
+  init() {
+    var c: AsyncStream<AsyncCompletion>.Continuation!
+    stream = AsyncStream(bufferingPolicy: .unbounded) { c = $0 }
+    continuation = c
+  }
+
+  /// No more completions: cancels the host operations still running.
+  func close() {
+    continuation.finish()
+    for t in tasks.values { t.cancel() }
+    tasks = [:]
   }
 }
 

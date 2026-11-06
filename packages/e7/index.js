@@ -8,7 +8,7 @@ export const version = "0.3.0";
 const STATUS = [
   "ok", "suspended", "runtime_error", "budget_exceeded", "out_of_memory", "stack_overflow", "load_error",
   "verify_error", "signature_error", "not_found", "bad_arguments", "compile_error", "invalid_state", "paused",
-  "version_error",
+  "version_error", "pending",
 ];
 
 export const DEFAULT_BUDGET = 100_000_000;

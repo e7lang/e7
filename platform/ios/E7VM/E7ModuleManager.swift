@@ -14,7 +14,11 @@
 //   mm.start()                                  // at launch: last-known-good from disk, or the fallback
 //   DispatchQueue.global().async { mm.update() } // manifest, download, verify, self-test, activate
 //   let price = try mm.active!.call("price", .string(order))
+//   let quote = try await mm.active!.callAsync("quote", .string(order))   // awaits async host functions
 //   mm.reportSuccess()                          // or mm.reportFailure(status:message:)
+//
+// start() / update() load modules and run selfTest synchronously: a module whose top-level code or selfTest
+// waits for an async host function is reported (E7_PENDING) and not activated; its exports may be async.
 //
 // The manifest is JSON {version, url, sha256, rolloutPercent, killSwitch, minVm?, serial?} with a detached
 // signature (hex, `e7c --sign-file` / tools/manifest.py) at "<manifest URL>.sig". Manifests that do not verify
@@ -88,6 +92,22 @@ public final class E7ModuleManager {
     public func call(_ function: String, _ args: E7Value...) throws -> E7Value {
       try vm.call(module, function, arguments: args)
     }
+
+    #if compiler(>=6.0)
+      /// `E7VM.callAsync` on the active module (exports that await async host functions).
+      @discardableResult
+      public func callAsync(_ function: String, _ args: E7Value..., isolation: isolated (any Actor)? = #isolation)
+        async throws -> E7Value
+      {
+        try await vm.callAsync(module, function, arguments: args, isolation: isolation)
+      }
+    #else
+      /// `E7VM.callAsync` on the active module (exports that await async host functions).
+      @discardableResult
+      public func callAsync(_ function: String, _ args: E7Value...) async throws -> E7Value {
+        try await vm.callAsync(module, function, arguments: args)
+      }
+    #endif
   }
 
   private struct Entry: Codable, Equatable {

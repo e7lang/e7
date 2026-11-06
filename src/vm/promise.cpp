@@ -149,6 +149,7 @@ void VM::settleReaction(const Reaction& r, bool rejected, Slot v, uint8_t vt) {
     case RK_THENABLE:
       if (!d) return;
       if (rejected) rejectPromise(d, v.r);
+      else if (kindOfVT(vt) != kindOfVT(d->vt)) error("promise value type mismatch");
       else resolvePromise(d, v);
       return;
     case RK_FINALLY_VALUE:
@@ -469,7 +470,10 @@ E7_NATIVE(n_promiseThen) {
   PromiseObj* p = Pr(vm, a[0]);
   for (int k = 1; k <= 2; k++)
     if (a[k].r && a[k].r->type != OT::Closure) vm.error("then: the callback is not a function");
-  PromiseObj* d = vm.newPromise(vtArg(vm, a[3]));
+  uint8_t dvt = vtArg(vm, a[3]);
+  // without onFulfilled the value passes through to the derived promise: one representation
+  if (!a[1].r && kindOfVT(dvt) != kindOfVT(p->vt)) vm.error("then: promise value type mismatch");
+  PromiseObj* d = vm.newPromise(dvt);
   Reaction rr;
   rr.kind = RK_THEN;
   rr.a = a[1].r;
