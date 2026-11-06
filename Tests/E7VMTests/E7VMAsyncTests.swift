@@ -175,8 +175,10 @@ final class E7VMAsyncTests: XCTestCase {
   func testPromiseAllReverseOrder() async throws {
     let h = try Host()
     let call = Task { try await h.vm.callAsync(h.module, "both") }
-    let a = await h.next(), b = await h.next()
-    XCTAssertEqual([a.key, b.key], ["a", "b"])
+    // each operation starts in its own Task, so they may arrive in either order: match them by key
+    let x = await h.next(), y = await h.next()
+    XCTAssertEqual(Set([x.key, y.key]), ["a", "b"])
+    let (a, b) = x.key == "a" ? (x, y) : (y, x)
     b.completeLater(.success(.bytes(Data(count: 4))), after: 0.01)
     a.completeLater(.success(.bytes(Data(count: 1))), after: 0.15)
     let r = try await call.value
