@@ -5,7 +5,10 @@
 
 namespace e7 {
 
-constexpr uint32_t kFormatVersion = 2;
+// Newest e7b format this code reads and writes. Format 3 (0.3) adds function and class flags and the
+// regular expression table; a module that uses none of them is written as format 2, which 0.2.x VMs read.
+constexpr uint32_t kFormatVersion = 3;
+constexpr uint32_t kMinFormatVersion = 2;
 
 struct FieldDesc {
   std::string name;
@@ -16,6 +19,7 @@ struct ClassDesc {
   std::string name;
   int32_t parent = -1;     // index of parent class or -1
   uint8_t isRecord = 0;    // anonymous object-literal shape
+  uint8_t cflags = 0;      // format 3: kClassFlag*
   std::vector<FieldDesc> fields;      // full layout incl. inherited fields
   std::vector<uint32_t> vtable;       // function indices (incl. inherited)
   std::vector<std::string> methodNames;  // parallel to vtable
@@ -49,10 +53,14 @@ struct HandlerDesc {
   uint32_t reg = 0;
 };
 
+// ClassDesc::cflags: the instances carry a presence mask (D7, records only)
+constexpr uint8_t kClassFlagPresence = 1;
+
 struct FuncDesc {
   std::string name;
   uint32_t sig = 0;                 // index into Module::sigs
   uint16_t nparams = 0;
+  uint8_t fflags = 0;               // format 3: function kind and coroutine value kinds (opcodes.h)
   std::vector<uint8_t> regKinds;    // Kind per register; first nparams are params
   std::vector<uint8_t> upvalKinds;  // Kind of each captured cell's content
   std::vector<uint32_t> icNames;    // string-constant index per inline-cache slot
@@ -96,13 +104,20 @@ struct ExportDesc {
   std::string hostSig;
 };
 
+struct RegExpDesc {
+  std::string source;  // UTF-8
+  std::string flags;   // a subset of "dgimsuy"
+};
+
 struct Module {
+  uint32_t format = 2;  // e7b format written / read (2 or 3)
   std::string name;
   std::vector<int64_t> ints;
   std::vector<double> nums;
   std::vector<std::u16string> strs;
   std::vector<std::string> sigs;  // e.g. "FR>I" : param kinds '>' return kind (V = void)
   std::vector<NativeImport> natives;
+  std::vector<RegExpDesc> regexps;  // format 3
   std::vector<ClassDesc> classes;
   std::vector<FuncDesc> funcs;
   std::vector<GlobalDesc> globals;
@@ -124,6 +139,9 @@ bool readModuleHeader(const uint8_t* data, size_t len, ModuleHeader& out);
 // Signature string helpers
 inline std::string sigParams(const std::string& sig) { return sig.substr(0, sig.find('>')); }
 inline char sigRet(const std::string& sig) { return sig.empty() ? 'V' : sig.back(); }
+
+// The format a module needs: 3 if it uses a format-3 feature, else 2.
+uint32_t neededFormat(const Module& m);
 
 // Serialization (core/serialize.cpp)
 std::vector<uint8_t> serializeModule(const Module& m);

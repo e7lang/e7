@@ -182,10 +182,20 @@ const char kFooter[4] = {'E', '7', 'B', '$'};
 
 }  // namespace
 
+uint32_t neededFormat(const Module& m) {
+  if (!m.regexps.empty()) return 3;
+  for (auto& c : m.classes)
+    if (c.cflags) return 3;
+  for (auto& f : m.funcs)
+    if (f.fflags) return 3;
+  return 2;
+}
+
 std::vector<uint8_t> serializeModule(const Module& m) {
   W w;
   w.b.insert(w.b.end(), kMagic, kMagic + 4);
-  w.u32(kFormatVersion);
+  const uint32_t format = neededFormat(m);
+  w.u32(format);
   bool anyDebug = false;
   for (auto& f : m.funcs) anyDebug = anyDebug || f.hasDebug;
   w.u32(anyDebug ? (m.flags | kModuleFlagDebug) : (m.flags & ~kModuleFlagDebug));  // flags
@@ -201,11 +211,16 @@ std::vector<uint8_t> serializeModule(const Module& m) {
   for (auto& s : m.sigs) w.str(s);
   w.u32((uint32_t)m.natives.size());
   for (auto& n : m.natives) { w.str(n.name); w.u32(n.sig); }
+  if (format >= 3) {
+    w.u32((uint32_t)m.regexps.size());
+    for (auto& r : m.regexps) { w.str(r.source); w.str(r.flags); }
+  }
   w.u32((uint32_t)m.classes.size());
   for (auto& c : m.classes) {
     w.str(c.name);
     w.u32((uint32_t)c.parent);
     w.u8(c.isRecord);
+    if (format >= 3) w.u8(c.cflags);
     w.u32((uint32_t)c.fields.size());
     for (auto& f : c.fields) { w.str(f.name); w.u8(f.vt); }
     w.u32((uint32_t)c.vtable.size());
@@ -216,6 +231,7 @@ std::vector<uint8_t> serializeModule(const Module& m) {
     w.str(f.name);
     w.u32(f.sig);
     w.u16(f.nparams);
+    if (format >= 3) w.u8(f.fflags);
     w.u32((uint32_t)f.regKinds.size());
     for (uint8_t k : f.regKinds) w.u8(k);
     w.u32((uint32_t)f.upvalKinds.size());
@@ -268,7 +284,11 @@ bool deserializeModule(const uint8_t* data, size_t len, Module& m, std::string& 
   Rd r{data, len - 8};
   r.pos = 4;
   uint32_t ver = r.u32();
-  if (ver != kFormatVersion) { err = "unsupported e7b format version " + std::to_string(ver); return false; }
+  if (ver < kMinFormatVersion || ver > kFormatVersion) {
+    err = "unsupported e7b format version " + std::to_string(ver);
+    return false;
+  }
+  m.format = ver;
   m.flags = r.u32();  // informational (unknown bits are ignored)
   m.minVm = r.u32();
   m.name = r.str();
@@ -291,12 +311,18 @@ bool deserializeModule(const uint8_t* data, size_t len, Module& m, std::string& 
   n = r.count(8);
   m.natives.resize(n);
   for (auto& x : m.natives) { x.name = r.str(); x.sig = r.u32(); }
-  n = r.count(17);
+  if (ver >= 3) {
+    n = r.count(8);
+    m.regexps.resize(n);
+    for (auto& x : m.regexps) { x.source = r.str(); x.flags = r.str(); }
+  }
+  n = r.count(ver >= 3 ? 18 : 17);
   m.classes.resize(n);
   for (auto& c : m.classes) {
     c.name = r.str();
     c.parent = (int32_t)r.u32();
     c.isRecord = r.u8();
+    if (ver >= 3) c.cflags = r.u8();
     uint32_t nf = r.count(5);
     c.fields.resize(nf);
     for (auto& f : c.fields) { f.name = r.str(); f.vt = r.u8(); }
@@ -306,12 +332,13 @@ bool deserializeModule(const uint8_t* data, size_t len, Module& m, std::string& 
     for (uint32_t i = 0; i < nv; i++) { c.vtable[i] = r.u32(); c.methodNames[i] = r.str(); }
     if (!r.ok) break;
   }
-  n = r.count(30);
+  n = r.count(ver >= 3 ? 31 : 30);
   m.funcs.resize(n);
   for (auto& f : m.funcs) {
     f.name = r.str();
     f.sig = r.u32();
     f.nparams = r.u16();
+    if (ver >= 3) f.fflags = r.u8();
     uint32_t k = r.count(1);
     f.regKinds.resize(k);
     for (auto& x : f.regKinds) x = r.u8();

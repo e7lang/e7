@@ -1204,8 +1204,73 @@ class Gen:
             self.stmt_loop(ind, d - 1)
         elif k < 93:
             self.stmt_try(ind, d - 1)
-        else:
+        elif k < 97:
             self.stmt_destructure(ind, max(d, 1))
+        elif k < 99:
+            self.stmt_coroutine(ind, max(d, 1))
+        else:
+            self.stmt_regexp(ind, max(d, 1))
+
+    # ---------------------------------------------------------------- regular expressions (0.3)
+    REGEXPS = [r"/\d+/", r"/(\w)(\w)?/", r"/(?<w>[a-z]+)/i", r"/\s+/", r"/^./u", r"/(?<=a)b/", r"/x*/",
+               r"/[😀-😁]/u", r"/(a|b)+c?/", r"/(?<p>.)\k<p>/", r"/[^\w\s]/", r"/$/m"]
+
+    def stmt_regexp(self, ind, d):
+        r = self.r
+        s = self.string(d - 1)
+        p = self.pick(self.REGEXPS)
+        g = p + "g"
+        k = r.randrange(7)
+        rep = self.pick(['"[$&]"', '"$1|$2"', '"$`$\'"', '"$<w>"', '"$$"'])
+        src = tslit(self.pick(["a+", "(.)", "\\d", "x|", "(?:)"]))
+        if k == 0:
+            self.emit(ind, f"console.log({s}.match({self.pick([p, g])}));")
+        elif k == 1:
+            self.emit(ind, f"console.log({s}.replace({self.pick([p, g])}, {rep}));")
+        elif k == 2:
+            self.emit(ind, f"console.log({s}.split({p}, {r.randrange(0, 5)}), {s}.search({p}));")
+        elif k == 3:
+            self.emit(ind, f"console.log([...{s}.matchAll({g})].map(m => `${{m.index}}:${{m[0]}}`));")
+        elif k == 4:
+            self.emit(ind, f"console.log({p}.test({s}), {p}.exec({s}));")
+        elif k == 5:
+            self.emit(ind, f"console.log({s}.replaceAll({g}, (m) => String(m.length)));")
+        else:
+            self.emit(ind, f"console.log(new RegExp({src}, \"g\").exec({s}));")
+
+    # ---------------------------------------------------------------- generators, async, literal types (0.3)
+    def stmt_coroutine(self, ind, d):
+        r = self.r
+        k = r.randrange(7)
+        n = r.randrange(0, 5)
+        if k == 0:
+            # a generator over its range, left early or not; return() runs its finally block
+            stop = r.randrange(0, 6)
+            self.emit(ind, f"for (const g of gRange({n}, \"{self.fresh('g')}\")) {{ if (g >= {stop}) break; console.log(\"g\", g); }}")
+        elif k == 1:
+            self.emit(ind, f"console.log([...gRange({n}, \"s\")], Array.from(gMap([{self.num(d - 1)}, {self.num(d - 1)}], x => x * 2)));")
+        elif k == 2:
+            v = self.fresh("it")
+            self.emit(ind, f"const {v} = gAcc();")
+            sends = ", ".join(str(r.randrange(-3, 9)) for _ in range(r.randrange(1, 5)))
+            self.emit(ind, f"for (const x of [{sends}]) console.log({v}.next(x));")
+            if r.random() < 0.5:
+                self.emit(ind, f"console.log({v}.return(7));")
+        elif k == 3:
+            # promise jobs: the order of then callbacks and await continuations
+            a, b = self.num(d - 1), self.num(d - 1)
+            self.emit(ind, f"Promise.resolve({a}).then(x => console.log(\"then\", x)).finally(() => console.log(\"fin\"));")
+            self.emit(ind, f"aStep(\"{self.fresh('a')}\", {b}, {r.randrange(0, 3)});")
+        elif k == 4:
+            self.emit(ind, f"aStep(\"{self.fresh('w')}\", {self.num(d - 1)}, {r.randrange(0, 3)}).then(v => console.log(\"got\", v));")
+            self.emit(ind, f"later({self.num(d - 1)}).then(v => console.log(\"later\", v));")
+        elif k == 5:
+            self.emit(ind, f"Promise.all([aStep(\"p\", {self.num(d - 1)}, 1), later({self.num(d - 1)})]).then(v => console.log(\"all\", v));")
+            if r.random() < 0.5:
+                self.emit(ind, f"Promise.allSettled([aFail({r.randrange(0, 3)}), aStep(\"q\", 1, 0)]).then(rs => console.log(rs.map(x => x.status)));")
+        else:
+            sz = r.choice(["\"s\"", "\"m\"", "\"l\""])
+            self.emit(ind, f"console.log(sizeName({sz}), sizeName(pickSize({self.num(d - 1)})));")
 
     # ---------------------------------------------------------------- declarations
     def gen_classes(self):
@@ -1287,6 +1352,32 @@ class Gen:
         r = self.r
         # helpers used by expressions
         self.lines += [
+            "function* gRange(n: number, tag: string): Generator<number> {",
+            "  try { for (let i = 0; i < n; i++) yield i; } finally { console.log(\"closed\", tag); }",
+            "}",
+            "function* gMap(xs: number[], f: (x: number) => number): Generator<number> {",
+            "  for (const x of xs) yield f(x);",
+            "}",
+            "function* gAcc(): Generator<number, number, number> {",
+            "  let t = 0;",
+            "  while (t < 20) { const v = yield t; t += v; }",
+            "  return t;",
+            "}",
+            "async function aStep(tag: string, v: number, n: number): Promise<number> {",
+            "  console.log(tag, \"start\");",
+            "  let x = v;",
+            "  for (let i = 0; i < n; i++) { x = (await Promise.resolve(x)) + 1; console.log(tag, i); }",
+            "  return x;",
+            "}",
+            "async function aFail(n: number): Promise<number> {",
+            "  for (let i = 0; i < n; i++) await null;",
+            "  throw new Error(\"failed \" + n);",
+            "}",
+            "type Size = \"s\" | \"m\" | \"l\";",
+            "function sizeName(z: Size): string {",
+            "  switch (z) { case \"s\": return \"small\"; case \"m\": return \"medium\"; case \"l\": return \"large\"; }",
+            "}",
+            "function pickSize(x: number): Size { return x > 1 ? \"l\" : x > 0 ? \"m\" : \"s\"; }",
             "function ix(i: number, n: number): number {",
             "  const k = Math.trunc(i);",
             "  if (!Number.isFinite(k)) return 0;",
@@ -1366,6 +1457,7 @@ class Gen:
 
     def program(self, nstmts):
         self.lines.append("// generated by tests/difffuzz/gen.py")
+        self.lines.append("import { later } from \"e7:test\";")
         self.lines.append("interface Rec { id: number; label: string; score?: number | undefined; tags: string[] }")
         self.gen_functions()
         self.gen_classes()

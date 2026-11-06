@@ -170,6 +170,54 @@ suspend mode, and the verifier and code generation for `finally`, generics, gett
 `capi_test` (bounded overrun with suspension; console.log, `%j`, `JSON.stringify` and default sort against the budget
 and memory limit).
 
+### 3.7 Seventh security review: the 0.3 VM changes (coroutines, promises, presence masks, typed arrays)
+
+A separate AI review agent (given the source, the threat model and the 0.3 design, without our tests' conclusions)
+reviewed the VM side of 0.3 except the regular expression engine (reviewed separately): coroutines (`GEN_START`,
+`YIELD`, `RESUME_*`, `ASYNC_START`, `AWAIT` and the async return and error boundary), the verifier rules and format-3
+reading, the promise job queue, host tickets and the async C API, presence masks (`FIELD_ABSENT`), typed arrays,
+`structuredClone` and the recursive JSON descriptors. It built ASan+UBSan and confirmed findings 1-3 with
+proofs of concept (crafted modules and one plain script). All four are fixed:
+
+| # | Severity | Issue | Fix |
+|---|---|---|---|
+| 1 | Critical | The 64-bit typed-array natives (`TA.getBig` / `setBig` / `fillBig`) did not check the array's element kind: a crafted module applying them to a byte array accessed 8-byte elements of a 1-byte array (out-of-bounds read and write) | They check that the array is a `BigInt64Array` / `BigUint64Array` (and the number natives that it is not) |
+| 2 | High | `then` without an `onFulfilled` handler passed the value to the derived promise without comparing value types: crafted bytecode could make a number read as a reference | `Promise.then` requires one representation for a pass-through, and every pass-through checks it again when the job runs |
+| 3 | High | `structuredClone` recursed once per nesting level: a plain script with a 400,000-node linked list overflowed the C++ stack | At most 256 levels (as `JSON.stringify`); deeper values fail with a catchable `DataCloneError` |
+| 4 | Low | `unloadModule` (not reachable through the C API) could free a module while promises, jobs or coroutines of a pending call referred to it | Not while a call waits for tickets or has queued jobs |
+
+Areas the review confirmed correct: the verifier's coroutine rules and format-3 bounds; RESUME's stack and frame
+checks, `CO_RUNNING` against re-entry, coroutines finished when frames are unwound; GC rooting of promises, reactions,
+queued jobs, tickets and saved coroutine registers (traced only while suspended); presence masks; the `@n` JSON
+back-references (bounded recursion, checked indices); the `allSettled` record class checks; the typed-array number
+paths, offsets and alignment; the async native thunk and `e7_settle`. Regression tests: `verify_coroutines_test`
+(malformed coroutine bytecode, a BigInt native on a byte array), `structured_clone_deep.ts`.
+
+### 3.8 Eighth security review: regular expressions (0.3)
+
+A separate review agent reviewed the regular expression engine (`src/regexp`) and its integration (literals, the
+module table, `RegExp` objects, match results, the String methods and the native `matchAll` iterator). Fuzzing about
+2.9 million generated patterns, inputs and crafted modules under ASan+UBSan found no memory-safety issue; the
+findings are budget and memory-limit bypasses, all confirmed with proofs of concept and fixed:
+
+| # | Severity | Issue | Fix |
+|---|---|---|---|
+| 1 | High | GetSubstitution searched for the `>` of `$<` to the end of the replacement for every `$<` (quadratic, uncharged: 4 s for 32K ticks) and looked each `$<name>` up through all group names | The replacement is parsed once per call into pieces (the next `>` is remembered, names are looked up in a hash map) and applied per match, charged by pieces and output |
+| 2 | High | `replace` built its result and the captures of all matches in C++ buffers that were not counted (1 GB at a 32 MB limit) | The result counts against the memory limit (and the string length limit) as it grows; a replacement string is applied to each match as it is found; the matches kept for a replacement function count against the limit |
+| 3 | High | Pattern compilation was not charged or counted: `new RegExp` of a large pattern (33 s, 1.9 GB at a 256 MB limit), module literals at load (488 MB, 0 ticks); per-occurrence class copies, case closure over large sets, quadratic group-name checks | `re::compile` takes the Limits: about one step per character, node, instruction, class range and case-folding lookup, and the memory it builds up is reserved; identical classes and property escapes are built once per pattern; names use a map. `new RegExp` charges the budget and the memory limit; module literals are bounded at load (`kLoadRegExpWork` steps, the memory limit) and their programs are counted in the heap while the module is loaded |
+| 4 | Medium | Copies sharing a run-time program (`new RegExp(re)`, the `matchAll` copy, `structuredClone`) did not count it: when the original was freed, the program stayed with the copies uncounted (680 MB at a 32 MB limit); the size was truncated to 32 bits | A run-time program is counted once while any object holds it (the last holder releases it); 64-bit sizes |
+| 5 | Medium | The VM's record classes of group-name sets grew without bound and were not counted (330 MB at 32 MB) | They are bounded: at most 16384 sets and a quarter of the memory limit in size, then `E7_ERR_MEMORY` (they are kept for the VM's lifetime, since inline caches compare class pointers) |
+| 6 | Low | The setup of each match (registers and captures, proportional to the number of groups) was not charged (100 times the normal cost per tick with 32,000 groups) | Each match charges registers / 8 steps |
+| 7 | Info | Error messages formatted into a 512-byte buffer could be cut inside a UTF-8 sequence (a long SyntaxError message quotes the pattern) | Cut at a character boundary |
+
+Areas the review confirmed correct: the parser's and matcher's bounds (nesting limit, explicit backtracking stacks
+charged and counted, no recursion on the input); the natives against crafted bytecode (argument types checked, literal
+indices checked against the module's table); match arrays and their extra block (flags copied only with the block);
+the native `matchAll` iterator under `RESUME` (kinds, finished state); the lifetime of a module's literal programs
+(shared with the objects made from them). Regression tests: `capi_test` (each finding ends with `E7_ERR_BUDGET`,
+`E7_ERR_MEMORY` or `E7_ERR_LOAD` within the limits and in bounded time, or completes linearly), `regexp_test`
+(compilation under throwing limits, the per-match charge).
+
 **Configuration the host must apply** (see EMBEDDING.md §6): enable signature checking, set an instruction budget and a memory limit. The command-line tool `e7` is for development only
 and sets no budget by default.
 

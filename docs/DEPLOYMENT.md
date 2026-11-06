@@ -1,10 +1,10 @@
 # Deploying E7 modules to apps
 
-This guide covers delivering E7 modules over the air to Android, JVM and iOS apps: keys, signing,
+This guide covers delivering E7 modules over the air to Android, JVM, iOS and .NET apps: keys, signing,
 manifests, staged rollout, kill switch, rollback, choosing limits, error reporting, and a shadow-run
 phase before the first rollout. The client side is `E7ModuleManager`
 ([Java / Kotlin](../platform/java/org/e7vm/E7ModuleManager.java),
-[Swift](../platform/ios/E7VM/E7ModuleManager.swift)); the tools are `e7c` and
+[Swift](../platform/ios/E7VM/E7ModuleManager.swift), [C#](../platform/windows/E7ModuleManager.cs)); the tools are `e7c` and
 [`tools/manifest.py`](../tools/manifest.py). For the C API and platform setup see [EMBEDDING.md](EMBEDDING.md).
 
 ```
@@ -151,6 +151,40 @@ try mm.start()
 DispatchQueue.global(qos: .utility).async { _ = try? mm.update() }
 ```
 
+C# (the `E7VM` NuGet package; `Update()` blocks while downloading, so run it off the UI thread):
+
+```csharp
+using var mm = new E7ModuleManager(new E7ModuleManager.Options
+{
+    ManifestUrl = new Uri("https://updates.example.com/pricing/vm-0.2/manifest.json"),
+    TrustedKeys = { ReleaseKey, NextReleaseKey },
+    Fetcher = url => http.GetByteArrayAsync(url).GetAwaiter().GetResult(),   // called on Update's thread
+    StorageDirectory = Path.Combine(appData, "e7", "pricing"),
+    UserId = installationId,
+    FallbackModule = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "pricing.e7b")),
+    FallbackVersion = $"bundled-{appVersion}",
+    MemoryLimit = 16 << 20,
+    SetUpVM = vm => vm.SetBudget(5_000_000),
+    ReportError = (version, status, message) => telemetry.E7Error(version, status, message),
+});
+mm.Start();
+_ = Task.Run(() => mm.Update());
+
+try
+{
+    var price = (double)mm.Active!.Call("price", orderJson)!;
+    mm.ReportSuccess();
+}
+catch (E7Exception e)
+{
+    mm.ReportFailure(e.Status, e.Message);
+}
+```
+
+The managers behave the same on every platform (the C# one keeps its state in `state.json` like the Swift one;
+the Java one in `state.properties`). Names differ only by language: `vmSetup` / `setUpVM` / `SetUpVM`,
+`maxFailures` / `maxConsecutiveFailures` / `MaxConsecutiveFailures`, `active()` / `active` / `Active`.
+
 What `update()` does, in order (any failure leaves the current module active and goes to the error reporter):
 
 1. Fetch `manifest.json` and `manifest.json.sig`; verify the signature against the trusted keys.
@@ -164,6 +198,14 @@ What `update()` does, in order (any failure leaves the current module active and
 
 The manager owns its VMs: a replaced VM is closed. Use the module through `active()` each time, and do not run
 `update()` while another thread is inside a call of the same manager's module.
+
+Async exports ([EMBEDDING.md §2.6](EMBEDDING.md#26-async-host-functions)): call them with
+`active().callAsync(vmExecutor, "quote", order)` / `callAwait("quote", order)` (Java, Kotlin),
+`try await mm.active!.callAsync("quote", .string(order))` (Swift) or `await mm.Active!.CallAsync("quote", order)` /
+`CallAwait("quote", order)` (C#). The Java and C# managers also wait for async host functions registered in
+`vmSetup` / `SetUpVM` while they run a module's top-level code and `selfTest()` (on the thread that calls
+`start()` / `update()`); the Swift manager runs them synchronously, so a module whose top level or `selfTest()`
+waits for a host operation is reported with `E7_PENDING` and not activated.
 
 ## 5. Staged rollout
 
@@ -227,7 +269,7 @@ Set both from measurements of the real module with representative (and worst-cas
 ## 9. Error reporting
 
 The error reporter receives `(moduleVersion, status, message)`: `moduleVersion` is `null`/`nil` when the
-manifest itself was the problem; `status` is an `e7_status` code:
+manifest itself was the problem; `status` is an `e7_status` code (an `E7Status` value in C#):
 
 | situation | status |
 |---|---|

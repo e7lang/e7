@@ -13,6 +13,7 @@ struct VarSym;
 struct FuncSym;
 struct ClassSym;
 struct GenericSym;
+struct Expr;
 
 struct Loc {
   uint32_t line = 0, col = 0;
@@ -31,9 +32,16 @@ struct TypeNode {
   std::vector<Param> params;         // Func
   TypeNode* ret = nullptr;           // Func
   // accessor: 0 = property or method, 1 = `get name(): T`, 2 = `set name(v: T)` (interfaces / type literals)
-  struct Member { std::string name; TypeNode* type; bool optional = false; bool method = false; bool readonly = false; int accessor = 0; };
+  struct Member { std::string name; TypeNode* type; bool optional = false; bool method = false; bool readonly = false; int accessor = 0; Expr* computed = nullptr; };
   std::vector<Member> members;       // Object
   std::string literal;               // Literal (string literal type / null / undefined handled as Ref)
+  // a return type `x is T` (Ref "boolean") / `asserts x is T` / `asserts x` (Ref "void"): the parameter
+  // and the type it is narrowed to (null for `asserts x`)
+  std::string predParam;
+  TypeNode* predType = nullptr;
+  bool asserts = false;
+  bool numLiteral = false;           // Literal: a numeric literal type (value in `num`)
+  double num = 0;
 };
 
 // A type parameter <T extends C = D>
@@ -48,7 +56,10 @@ struct TypeParam {
 enum class EK {
   Num, BigLit, Str, Template, Bool, Null, Undefined, Ident, This, Super,
   Array, Object, Unary, Update, Binary, Logical, Assign, Cond, Call, New,
-  Member, Index, NonNull, As, Arrow, Spread, Conv, Paren, TypeOf
+  Member, Index, NonNull, As, Arrow, Spread, Conv, Paren, TypeOf,
+  Yield,  // a = operand (or null); delegate: yield*
+  Await,  // a = operand
+  RegExp  // a regular expression literal: raw = the pattern as written, regexFlags
 };
 
 struct Stmt;
@@ -82,6 +93,7 @@ struct ObjProp {
   bool spread = false;
   bool method = false;  // method shorthand `name(params) { body }` (value is an Arrow)
   bool coverInit = false;  // `{ a = 1 }`: only valid as a destructuring assignment target (value is an Assign)
+  Expr* computed = nullptr;  // `{ [K]: v }`: the key expression (a constant known at compile time)
   Loc loc;
 };
 
@@ -97,9 +109,12 @@ struct Expr {
   bool isIntLit = false;     // Num: written as integer literal
   std::string raw;           // Num raw text / BigLit digits / Ident name / Member name / op
   std::u16string str;        // Str
+  std::string regexFlags;    // RegExp
   bool bval = false;
   // template
   std::vector<std::u16string> quasis;
+  std::vector<std::u16string> rawQuasis;  // Template: the raw text of the parts (String.raw / tagged templates)
+  bool tagged = false;                    // Call: a tagged template (list[0] is the template)
   // children
   Expr* a = nullptr;  // unary operand, binary lhs, callee, object, cond test
   Expr* b = nullptr;  // binary rhs, index, cond consequent
@@ -117,6 +132,8 @@ struct Expr {
   TypeNode* asType = nullptr;
   bool prefix = false;    // update
   bool optional = false;  // ?. member / call
+  bool isGenerator = false, isAsync = false;  // Arrow (function expression / method): function* / async
+  bool delegate = false;  // Yield: yield*
   // arrow function
   std::vector<TypeParam> typeParams;  // generic arrow function <T>(x: T) => ...
   std::vector<Param> params;
@@ -168,6 +185,9 @@ struct ClassMember {
   bool optional = false;
   bool isAbstract = false;
   int accessor = 0;  // Method: 1 = getter, 2 = setter
+  bool isGenerator = false, isAsync = false;  // Method: *name() / async name()
+  bool isDeclare = false;                     // Field: `declare x: T` (no initializer)
+  Expr* computed = nullptr;                   // `[K]` member name: a constant known at compile time
   std::vector<TypeParam> typeParams;  // generic method
   TypeNode* type = nullptr;
   Expr* init = nullptr;
@@ -202,6 +222,8 @@ struct Stmt {
   bool isDefault = false;          // `export default`: Func / Class / Interface (exported as "default"), or
                                    // Var: `export default <expression>` (a hidden const named "default")
   bool isConst = false;            // Var
+  bool isGenerator = false, isAsync = false;  // Func: function* / async function
+  bool isAwait = false;            // ForOf: for await
   std::vector<VarDecl> decls;      // Var
   std::string name;                // Func / Class / Interface / TypeAlias / Enum / labels
   std::vector<TypeParam> typeParams;

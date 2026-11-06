@@ -54,3 +54,12 @@ export function assertThrows(fn, expectedMessage) {
   }
   throw new Error("assertThrows failed: the function did not throw");
 }
+
+// later(v) / laterReject(e): a promise settled in a later turn (each one in its own setImmediate), the
+// same order as e7's test tickets; for tests of async ordering
+export function later(v) {
+  return new Promise((resolve) => setImmediate(() => resolve(v)));
+}
+export function laterReject(e) {
+  return new Promise((_, reject) => setImmediate(() => reject(e)));
+}

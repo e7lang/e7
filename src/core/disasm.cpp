@@ -17,6 +17,8 @@ std::string disassemble(const Module& m) {
   for (size_t i = 0; i < m.natives.size(); i++)
     add("  native #%zu %s %s\n", i, m.natives[i].name.c_str(), m.sigs[m.natives[i].sig].c_str());
   for (size_t i = 0; i < m.globals.size(); i++) add("  global #%zu %s vt=%u\n", i, m.globals[i].name.c_str(), m.globals[i].vt);
+  for (size_t i = 0; i < m.regexps.size(); i++)
+    add("  regexp #%zu /%s/%s\n", i, m.regexps[i].source.c_str(), m.regexps[i].flags.c_str());
   for (size_t i = 0; i < m.classes.size(); i++) {
     auto& c = m.classes[i];
     add("  class #%zu %s parent=%d fields=%zu methods=%zu\n", i, c.name.c_str(), c.parent, c.fields.size(), c.vtable.size());
@@ -39,6 +41,13 @@ std::string disassemble(const Module& m) {
       if (oi.fmt[0] == '*') {
         uint16_t c = insC(w);
         bool meta = op == OP_CALLV || op == OP_CALLM || op == OP_CALLI;
+        if (op == OP_YIELD || op == OP_RESUME_I || op == OP_RESUME_F || op == OP_RESUME_R || op == OP_AWAIT) {
+          add(" %u, %u, %u", insA(w), insB(w), c);
+          if (insWords(w) > 1 && pc + 1 < f.code.size()) add(" ex=%llx", (unsigned long long)f.code[pc + 1]);
+          out += "\n";
+          pc += insWords(w);
+          continue;
+        }
         add(" a=%u b=%u n=%u", insA(w), insB(w), c);
         if (meta && pc + 1 < f.code.size()) add(" meta=%llx", (unsigned long long)f.code[pc + 1]);
         extra = (meta ? 1 : 0) + (c + 3) / 4;

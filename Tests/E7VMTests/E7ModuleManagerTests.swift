@@ -97,6 +97,7 @@ private final class Fixture {
   let server = Server()
   let reports = Reports()
   var userId = "user-42"
+  var setUp: ((E7VM) throws -> Void)?
 
   init() throws {
     dir = FileManager.default.temporaryDirectory.appendingPathComponent("e7mm-\(UUID().uuidString)")
@@ -113,7 +114,11 @@ private final class Fixture {
       fallbackVersion: "bundled")
     cfg.memoryLimit = 16 << 20
     cfg.gcGrowthPercent = 150
-    cfg.setUpVM = { $0.setBudget(10_000_000) }
+    let setUp = self.setUp
+    cfg.setUpVM = { vm in
+      vm.setBudget(10_000_000)
+      try setUp?(vm)
+    }
     cfg.reportError = { [reports] v, s, m in reports.add(v, s, m) }
     cfg.maxConsecutiveFailures = 3
     let server = self.server
@@ -309,5 +314,33 @@ final class E7ModuleManagerTests: XCTestCase {
     f.server.offline = false
     try f.server.publish("4", try module(4), rollout: "100", serial: 3, seed: moduleSeed)
     XCTAssertEqual(try answer(try mm2.update()), 4, "a new version recovers")
+  }
+
+  // async exports through Active.callAsync; a selfTest that waits for a host operation is not activated
+  func testAsyncExports() async throws {
+    let f = try Fixture()
+    f.setUp = { vm in
+      try vm.registerAsyncNative("hostValue", signature: ">n") { _ in
+        try await Task.sleep(nanoseconds: 1_000_000)
+        return .number(7)
+      }
+    }
+    let decl = "declare function hostValue(): Promise<number>;\n"
+    let quote = "export async function quote(x: number): Promise<number> { return x + (await hostValue()); }\n"
+    let v2 = decl + quote + "export function selfTest(): boolean { return true; }\nexport function answer(): number { return 2; }\n"
+    try f.server.publish("2", try E7VM.sign(try E7VM.compile(v2, fileName: "app.ts"), seed: moduleSeed),
+                         rollout: "100", serial: 1, seed: moduleSeed)
+    let mm = try f.manager()
+    let a = try mm.update()
+    XCTAssertEqual(try answer(a), 2)
+    let q = try await a.callAsync("quote", .number(1))
+    XCTAssertEqual(q, .number(8))
+    let v3 = decl + quote
+      + "export async function selfTest(): Promise<boolean> { return (await hostValue()) === 7; }\n"
+      + "export function answer(): number { return 3; }\n"
+    try f.server.publish("3", try E7VM.sign(try E7VM.compile(v3, fileName: "app.ts"), seed: moduleSeed),
+                         rollout: "100", serial: 2, seed: moduleSeed)
+    XCTAssertEqual(try answer(try mm.update()), 2, "selfTest waits for a host operation: version 3 not activated")
+    XCTAssertTrue(f.reports.has("3", E7_PENDING, "selfTest"), "\(f.reports.lines)")
   }
 }

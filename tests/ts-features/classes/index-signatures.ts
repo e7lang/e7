@@ -3,7 +3,7 @@
 // @status: unsupported
 // @why: types known at compile time: class layouts are fixed
 // @instead: a `Map<string, T>` field
-// @error: computed members / index signatures are not supported
+// @error: index signatures are not supported
 class MyClass {
   [s: string]: boolean | ((s: string) => boolean);
   check(s: string): boolean { return this[s] as boolean; }

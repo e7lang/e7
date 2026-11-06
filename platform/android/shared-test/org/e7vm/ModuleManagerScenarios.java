@@ -7,6 +7,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.CRC32;
 
 /**
@@ -21,7 +25,7 @@ public final class ModuleManagerScenarios {
 
   public static final String[] ALL = {
     "happyPath", "badSha256", "badManifestSignature", "killSwitch", "rolloutExclusion", "requiresNewerVm",
-    "selfTestFailure", "rollbackAfterFailures",
+    "selfTestFailure", "rollbackAfterFailures", "asyncExports",
   };
 
   public static void run(String name) throws Exception {
@@ -34,6 +38,7 @@ public final class ModuleManagerScenarios {
       case "requiresNewerVm": requiresNewerVm(); break;
       case "selfTestFailure": selfTestFailure(); break;
       case "rollbackAfterFailures": rollbackAfterFailures(); break;
+      case "asyncExports": asyncExports(); break;
       default: throw new IllegalArgumentException(name);
     }
   }
@@ -224,6 +229,37 @@ public final class ModuleManagerScenarios {
     }
   }
 
+  // a module whose top level and selfTest await an async host function (completed on another thread)
+  static void asyncExports() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.setup = vm -> vm.registerAsyncNative("hostValue", ">n", args -> CompletableFuture.supplyAsync(() -> 7.0));
+      String src = "declare function hostValue(): Promise<number>;\n"
+          + "const base = await hostValue();\n"
+          + "export async function selfTest(): Promise<boolean> { return (await hostValue()) === 7; }\n"
+          + "export async function quote(x: number): Promise<number> { return base + x + (await hostValue()); }\n"
+          + "export function answer(): number { return 9; }\n";
+      f.server.publish("9", E7VM.sign(E7VM.compile(src, "app.ts"), SEED), "100", 1, SEED);
+      E7ModuleManager mm = f.manager();
+      mm.start();
+      E7ModuleManager.Active a = mm.update();
+      check(!a.isFallback && answer(a) == 9 && f.reports.lines.isEmpty(), "async top level and selfTest: activated " + f.reports.lines);
+      check((Double) a.callAwait("quote", 1.0) == 15.0, "Active.callAwait");
+      ExecutorService vmThread = Executors.newSingleThreadExecutor();
+      try {
+        check((Double) a.callAsync(vmThread, "quote", 2.0).get(10, TimeUnit.SECONDS) == 16.0, "Active.callAsync");
+      } finally {
+        vmThread.shutdown();
+      }
+      try {
+        a.call("quote", 1.0);
+        check(false, "a synchronous call of a pending export must fail");
+      } catch (E7Exception e) {
+        check(e.status == E7Exception.PENDING, "Active.call: PENDING");
+      }
+      check(answer(f.manager().start()) == 9, "restart: the stored module's top level awaits again");
+    }
+  }
+
   // ------------------------------------------------------------------ helpers
   static void check(boolean cond, String what) {
     if (!cond) throw new AssertionError(what);
@@ -324,6 +360,7 @@ public final class ModuleManagerScenarios {
     final Reports reports = new Reports();
     final List<E7ModuleManager> managers = new ArrayList<>();
     String userId = "user-42";
+    E7ModuleManager.VmSetup setup = null;
 
     Fixture() throws IOException {
       dir = File.createTempFile("e7mm", "");
@@ -339,7 +376,10 @@ public final class ModuleManagerScenarios {
           .userId(userId)
           .fallback(E7VM.compile("export function answer(): number { return 0; }", "fallback.ts"), "bundled")
           .vmConfig(new E7VM.Config().memoryLimit(16 << 20).gcGrowthPercent(150))
-          .vmSetup(vm -> vm.setBudget(10_000_000))
+          .vmSetup(vm -> {
+            vm.setBudget(10_000_000);
+            if (setup != null) setup.setUp(vm);
+          })
           .errorReporter(reports)
           .maxFailures(3)
           .build();

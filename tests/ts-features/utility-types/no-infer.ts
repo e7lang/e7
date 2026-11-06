@@ -1,9 +1,7 @@
 // @feature: `NoInfer<T>`
 // @category: Utility Types
-// @status: unsupported
-// @why: not implemented yet
-// @instead: an explicit type argument at the call
-// @error: unknown type 'NoInfer'
+// @status: supported
+// @note: `NoInfer<T>` is `T` (it only steers tsc's inference)
 function createLight<C extends string>(colors: C[], defaultColor?: NoInfer<C>): string {
   return defaultColor ?? colors[0];
 }

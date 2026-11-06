@@ -14,7 +14,11 @@ enum class TT : uint8_t {
   Number, Bool, String, BigInt, Void, Null, Undefined, Never, Int,
   Array, Bytes, ArrayBuffer, DataView, Map, Set, Func, Class, Object, Tuple, Optional, Enum,
   Handle, TextEncoder, TextDecoder, Error, Date, Unknown,
-  Caught  // a catch variable: 'unknown' in TypeScript; narrow with instanceof Error
+  Caught,  // a catch variable: 'unknown' in TypeScript; narrow with instanceof Error
+  Generator,  // 0.3: Generator<T, TReturn, TNext> / Iterator<T> / IterableIterator<T> (elem, ret, val; gk)
+  Promise,    // 0.3: Promise<T> (elem)
+  TypedArray, // 0.3: Int8Array ... Float64Array, BigInt64Array, BigUint64Array (vt: the element kind, TAKind)
+  RegExp      // 0.3: RegExp (reCaps / reNames: the groups of a literal; reCaps -1 for a pattern unknown until run time)
 };
 
 struct ObjShape;
@@ -36,6 +40,23 @@ struct Type {
   bool hasNull = false, hasUndef = false;  // Optional
   bool ro = false;  // Array / Tuple / Map / Set: readonly T[], readonly [A, B], ReadonlyMap, ReadonlySet (no mutation)
   EnumSym* en = nullptr;
+  // Generator: 0 Generator<T, TReturn, TNext>, 1 Iterator<T, TReturn, TNext>, 2 IterableIterator<T>,
+  // 3 IteratorObject (all are coroutines at run time); ret = TReturn (void: none), val = TNext (void: none)
+  uint8_t gk = 0;
+  // literal types (D5): a string / number / boolean type restricted to these values; t is the base's
+  // (String / Number / Bool), so the representation and every operation are the base's
+  bool lit = false;
+  Type* litBase = nullptr;
+  std::vector<std::u16string> strLits;  // sorted
+  std::vector<double> numLits;          // sorted (0 and -0 are one literal)
+  uint8_t boolLits = 0;                 // bit 0: false, bit 1: true
+  // regular expressions (D4): a RegExp type with the groups of a literal (reCaps >= 0), and the result
+  // of a match, an Array type of strings with `re` set (index, input, groups, indices; reExec: an
+  // exec result, whose index and input are always there)
+  int32_t reCaps = -1;
+  std::vector<std::string> reNames;
+  Type* re = nullptr;
+  bool reExec = false;
 };
 
 struct GenericSym;
@@ -94,6 +115,19 @@ struct VarSym : Sym {
 struct FuncSym : Sym {
   FuncSym() : Sym(SymK::Func) {}
   Type* type = nullptr;  // Func type
+  // 0.3: generator (function*: type->ret is a Generator type) and async function (type->ret is a
+  // Promise type); yieldTypes collects the yielded types when the return type is inferred
+  bool isGenerator = false, isAsync = false;
+  std::vector<Type*> yieldTypes;
+  // type predicate `x is T` / assertion function `asserts x [is T]`: the parameter (-2: this), the
+  // type (null: `asserts x`, narrowed by truthiness)
+  int predParam = -1;
+  Type* predType = nullptr;
+  bool asserts = false;
+  // an override with fewer parameters than the method it overrides: the overridden method's other
+  // parameters, as hidden parameters (unused), so that both have one signature in the vtable
+  std::vector<Type*> padParams;
+  bool retThis = false;  // returns the polymorphic `this` type: a call gives the receiver's static type
   std::vector<Param>* params = nullptr;
   TypeNode* retNode = nullptr;
   Stmt* body = nullptr;
@@ -161,6 +195,7 @@ struct ClassSym : Sym {
   bool isRecord = false;
   bool isTuple = false;
   bool isAbstract = false;
+  bool presence = false;  // record whose fields may be absent or hold undefined: a presence mask (D7)
   // generics: 1 = holder of the static members of a generic class (one per template),
   // 2 = an instance (Box<number>: the instance members, with the type parameters bound)
   int genericRole = 0;
@@ -291,6 +326,17 @@ class Types {
   Type* objectType(ObjShape* s);  // nominal (interface) object type
   Type* anonObject(const std::vector<ObjShape::Prop>& props);  // structural, interned
   Type* enumType(EnumSym* e);
+  Type* generator(Type* yieldT, Type* ret, Type* next, uint8_t gk = 0);
+  // literal types: the union of the given values (a full boolean set is `boolean`)
+  Type* strLit(std::vector<std::u16string> vals);
+  Type* numLit(std::vector<double> vals);
+  Type* boolLit(uint8_t mask);
+  // the union of two literal types of one base
+  Type* litUnion(Type* a, Type* b);
+  Type* promise(Type* t);
+  Type* typedArray(uint8_t kind);
+  Type* regexp(int32_t caps = -1, const std::vector<std::string>& names = {});  // -1: unknown groups
+  Type* matchArray(Type* re, bool exec);
   std::vector<std::unique_ptr<ObjShape>> shapes;
 
  private:
@@ -335,6 +381,8 @@ inline std::vector<std::pair<std::string, Type*>> enumerableProps(Type* t) {
   }
   return out;
 }
+// The type without literal restriction: "a" | "b" -> string
+inline Type* baseLit(Type* t) { return t && t->lit ? t->litBase : t; }
 // Optional primitives are stored boxed.
 inline bool isBoxedOptional(const Type* t) {
   return t->t == TT::Optional && kindOf(t->elem) != K_R;

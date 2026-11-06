@@ -155,6 +155,27 @@ void Checker::checkArgs(Expr* call, Type* ft, std::vector<Expr*>& args, size_t s
 
 // ------------------------------------------------------------------ calls
 Type* Checker::checkCall(Expr* e, Type* expected) {
+  if (e->tagged) {
+    e->tagged = false;
+    Expr* tpl = e->list[0];
+    Expr* tag = strip(e->a);
+    // String.raw`...`: the raw text of the parts with the values in between (a template)
+    if (tag->k == EK::Member && tag->raw == "raw" && strip(tag->a)->k == EK::Ident && strip(tag->a)->raw == "String" &&
+        (!lookup("String") || lookup("String")->k == SymK::Namespace)) {
+      Expr saved = *tpl;
+      *e = saved;
+      e->quasis = e->rawQuasis;
+      return check(e, expected);
+    }
+    // tag(strings, ...values): the parts as a readonly string[] (TypeScript's TemplateStringsArray)
+    Expr* strs = P.arena.expr(EK::Array, tpl->loc);
+    for (auto& q : tpl->quasis) {
+      Expr* sx = P.arena.expr(EK::Str, tpl->loc);
+      sx->str = q;
+      strs->list.push_back(sx);
+    }
+    e->list[0] = strs;
+  }
   Expr* c = strip(e->a);
   if (!e->typeArgs.empty() && !(c->k == EK::Member)) {
     // generic call type arguments are only meaningful for a few builtins
@@ -390,6 +411,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
         e->cls = c;
         e->intrinsic = IN_METHOD;
         ret = f->type->ret;
+        if (f->retThis && ret->t == TT::Class) ret = c->type;  // `this` type: the receiver's class
         break;
       }
       auto fit = c->fieldIdx.find(name);
@@ -536,8 +558,98 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
   Type* num = T.number();
   Type* str = T.string();
   Type* boo = T.boolean();
+  if (bt->t == TT::Array && bt->re) {
+    // a regular expression match (D4): index / input / groups / indices, else a string[]
+    if (prop("index")) {
+      native(bt->reExec ? "Match.index" : "Match.indexOpt");
+      return bt->reExec ? num : T.optional(num, false, true);
+    }
+    if (prop("input")) {
+      native("Match.input");
+      return bt->reExec ? str : T.optional(str, false, true);
+    }
+    if (prop("groups")) {
+      Type* re = bt->re;
+      if (re->reCaps < 0)
+        return errT(m->loc, "the groups of a pattern built at run time are not known at compile time; use a regular "
+                            "expression literal or the indexed groups (m[1], m[2], ...)");
+      native("Match.groups");
+      if (re->reNames.empty()) return T.undef();
+      return T.optional(regexpGroupsType(re), false, true);
+    }
+    if (prop("indices")) {
+      native("Match.indices");
+      return T.optional(T.array(T.array(num)), false, true);
+    }
+    bt = T.array(str);
+  }
   switch (bt->t) {
+    case TT::RegExp: {
+      if (prop("lastIndex")) { native("RegExp.lastIndex"); return num; }
+      if (prop("source") || prop("flags")) { native("RegExp." + name); return str; }
+      static const char* const flagProps[] = {"global", "ignoreCase", "multiline", "sticky", "unicode", "dotAll", "hasIndices"};
+      for (const char* fp : flagProps)
+        if (prop(fp)) { native(std::string("RegExp.") + fp); return boo; }
+      if (prop("unicodeSets")) return errT(m->loc, "the v flag (unicodeSets) is not supported");
+      if (meth("test")) {
+        if (!argsMatch(e, args, {str}, 1, "test")) return T.unknown();
+        native("RegExp.test");
+        return boo;
+      }
+      if (meth("exec")) {
+        if (!argsMatch(e, args, {str}, 1, "exec")) return T.unknown();
+        native("RegExp.exec");
+        return T.optional(T.matchArray(bt, true), true, false);
+      }
+      if (meth("toString")) {
+        if (!argsMatch(e, args, {}, 0, "toString")) return T.unknown();
+        native("RegExp.toString");
+        return str;
+      }
+      return noSuch();
+    }
     case TT::String: {
+      if ((meth("match") || meth("matchAll") || meth("search") || meth("split") || meth("replace") || meth("replaceAll")) &&
+          !args.empty() && args[0]->k != EK::Spread && baseOf(check(args[0], nullptr))->t == TT::RegExp) {
+        // a RegExp argument (D4)
+        Type* reT = baseOf(args[0]->type);
+        if (args[0]->type->t == TT::Optional) return errT(args[0]->loc, "the regular expression is possibly null or undefined");
+        if (meth("match") || meth("matchAll") || meth("search")) {
+          if (!argsMatch(e, args, {T.regexp()}, 1, name.c_str())) return T.unknown();
+          if (name == "search") { native("String.searchRe"); return num; }
+          if (name == "match") { native("String.matchRe"); return T.optional(T.matchArray(reT, false), true, false); }
+          native("String.matchAllRe");
+          return T.generator(T.matchArray(reT, true), T.voidT(), T.voidT(), 2);
+        }
+        if (meth("split")) {
+          if (args.size() == 1) args.push_back(N(4294967295.0));
+          if (!argsMatch(e, args, {T.regexp(), num}, 2, "split")) return T.unknown();
+          native("String.splitRe");
+          return T.array(str);
+        }
+        if (args.size() != 2 || args[1]->k == EK::Spread) return errT(l, name + " takes a pattern and a replacement");
+        if (strip(args[1])->k == EK::Arrow || check(args[1], nullptr)->t == TT::Func) {
+          // the callback's parameters are fixed by the pattern: (match, p1, ..., pn, offset, input[, groups]) for a
+          // literal, (match) for a pattern built at run time
+          std::vector<Type*> ps = {str};
+          if (reT->reCaps >= 0) {
+            for (int32_t k = 0; k < reT->reCaps; k++) ps.push_back(str);
+            ps.push_back(num);
+            ps.push_back(str);
+            if (!reT->reNames.empty()) ps.push_back(regexpGroupsType(reT));
+          }
+          Type* ft = cb(args[1], ps, str);
+          if (ft->t != TT::Func) return T.unknown();
+          if (ft->ret != str) return errT(args[1]->loc, "the replacement function must return a string");
+          if (!coerce(args[0], T.regexp())) return T.unknown();
+          args.push_back(intLit(name == "replaceAll", l));
+          native("String.replaceReFn");
+          return str;
+        }
+        if (!argsMatch(e, args, {T.regexp(), str}, 2, name.c_str())) return T.unknown();
+        native(name == "replace" ? "String.replaceRe" : "String.replaceAllRe");
+        return str;
+      }
       if (prop("length")) { e->intrinsic = IN_ARR_LEN; return num; }
       if (meth("toString") || meth("valueOf")) {
         if (!argsMatch(e, args, {}, 0, "toString")) return str;
@@ -627,8 +739,9 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         e->intrinsic = IN_STR_CONCAT;
         return str;
       }
-      if (meth("match") || meth("matchAll") || meth("search") || meth("normalize"))
-        return errT(m->loc, "'" + name + "' is not supported (no regular expressions / normalization)");
+      if (meth("match") || meth("matchAll") || meth("search"))
+        return errT(m->loc, "'" + name + "' takes a regular expression (RegExp)");
+      if (meth("normalize")) return errT(m->loc, "'normalize' is not supported (no Unicode normalization data)");
       return noSuch();
     }
     case TT::Number:
@@ -720,6 +833,44 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         if (!argsMatch(e, args, {num, num}, 2, "slice")) return T.unknown();
         native("Array.slice");
         return T.array(bt->elem);  // a new (mutable) array, also from a readonly one
+      }
+      // ES2023 copying methods (also on readonly arrays: they return a new mutable array)
+      if (meth("toReversed")) {
+        if (!argsMatch(e, args, {}, 0, "toReversed")) return T.unknown();
+        native("Array.toReversed");
+        return T.array(bt->elem);
+      }
+      if (meth("toSorted")) {
+        if (args.empty()) { native("Array.toSorted"); return T.array(bt->elem); }
+        if (args.size() != 1) return errT(e->loc, "toSorted takes at most one argument");
+        Type* ft = cb(args[0], {et, et}, num);
+        if (ft->t == TT::Func && ft->params.size() != 2) return errT(args[0]->loc, "toSorted comparator must take two parameters");
+        if (ft->t == TT::Func && ft->ret != num) return errT(args[0]->loc, "toSorted comparator must return a number");
+        native("Array.toSortedCmp");
+        return T.array(bt->elem);
+      }
+      if (meth("with")) {
+        if (!argsMatch(e, args, {num, et}, 2, "with")) return T.unknown();
+        native("Array.with" + K);
+        return T.array(bt->elem);
+      }
+      if (meth("toSpliced")) {
+        if (args.empty()) args.push_back(N(0));
+        if (args.size() == 1) args.push_back(N(INFINITY));
+        Expr* items;
+        if (args.size() > 2) {
+          items = P.arena.expr(EK::Array, l);
+          for (size_t i = 2; i < args.size(); i++) items->list.push_back(args[i]);
+          args.resize(2);
+          check(items, T.array(bt->elem));
+        } else {
+          items = P.arena.expr(EK::Null, l);
+          items->type = T.nullT();
+        }
+        if (!argsMatch(e, args, {num, num}, 2, "toSpliced")) return T.unknown();
+        args.push_back(items);
+        native("Array.toSpliced");
+        return T.array(bt->elem);
       }
       if (meth("splice")) {
         if (args.empty()) return errT(e->loc, "splice requires a start index");
@@ -976,6 +1127,168 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       return noSuch();
     }
+    case TT::TypedArray: {
+      Type* et = taElem(bt);
+      bool big = et->t == TT::BigInt;
+      if (prop("length")) { native("TA.length"); return num; }
+      if (prop("byteLength")) { e->intrinsic = IN_ARR_LEN; return num; }
+      if (prop("byteOffset")) { native("Bytes.byteOffset"); return num; }
+      if (prop("buffer")) { native("TA.buffer"); return T.arrayBuffer(); }
+      if (prop("BYTES_PER_ELEMENT")) {
+        static const int sz[11] = {1, 1, 1, 2, 2, 4, 4, 4, 8, 8, 8};
+        e->intrinsic = IN_CONST_NUM;
+        e->num = sz[bt->vt];
+        return num;
+      }
+      if (meth("subarray") || meth("slice")) {
+        if (args.empty()) args.push_back(N(0));
+        if (args.size() == 1) args.push_back(N(INFINITY));
+        if (!argsMatch(e, args, {num, num}, 2, name.c_str())) return T.unknown();
+        native(name == "slice" ? "TA.slice" : "TA.subarray");
+        return bt;
+      }
+      if (meth("fill")) {
+        if (args.size() == 1) args.push_back(N(0));
+        if (args.size() == 2) args.push_back(N(INFINITY));
+        if (!argsMatch(e, args, {et, num, num}, 3, "fill")) return T.unknown();
+        native(big ? "TA.fillBig" : "TA.fill");
+        return bt;
+      }
+      if (meth("set")) {
+        if (args.size() == 1) args.push_back(N(0));
+        if (args.size() != 2) return errT(l, "set takes a source and an offset");
+        Type* st = check(args[0], T.array(et));
+        if (!(st->t == TT::TypedArray || st->t == TT::Bytes || (st->t == TT::Array && baseLit(st->elem) == et)))
+          return errT(args[0]->loc, "set needs an array of " + typeName(et) + "s or a typed array");
+        Expr* src = args[0];
+        args.erase(args.begin());
+        if (!argsMatch(e, args, {num}, 1, "set")) return T.unknown();
+        args.insert(args.begin(), src);
+        native("TA.setFrom");
+        return T.voidT();
+      }
+      if (!big && (meth("indexOf") || meth("includes"))) {
+        if (name == "indexOf" && args.size() == 1) args.push_back(N(0));
+        if (!argsMatch(e, args, name == "indexOf" ? std::vector<Type*>{num, num} : std::vector<Type*>{num}, name == "indexOf" ? 2 : 1, name.c_str()))
+          return T.unknown();
+        native(name == "indexOf" ? "TA.indexOf" : "TA.includes");
+        return name == "indexOf" ? num : boo;
+      }
+      if (meth("join") || meth("toString")) {
+        if (name == "toString" && !args.empty()) return errT(l, "toString takes no arguments");
+        if (args.empty()) args.push_back(S(u","));
+        if (!argsMatch(e, args, {str}, 1, "join")) return T.unknown();
+        native("TA.join");
+        return str;
+      }
+      if (meth("reverse") || (meth("sort") && args.empty())) {
+        if (!argsMatch(e, args, {}, 0, name.c_str())) return T.unknown();
+        native(name == "reverse" ? "TA.reverse" : "TA.sort");
+        return bt;
+      }
+      // the other methods (callbacks, at, ...): on the elements as an array; map / filter / toSorted /
+      // toReversed give the typed array again
+      {
+        Expr* recv = m->a;
+        Expr* conv = P.arena.expr(EK::Call, recv->loc);
+        conv->list = {recv};
+        conv->native = "TA.toArray";
+        conv->intrinsic = IN_NATIVE_NORECV;
+        conv->type = T.array(et);
+        m->a = conv;
+        bool wrap = isCall && (name == "map" || name == "filter" || name == "toSorted" || name == "toReversed" || name == "with" ||
+                               (name == "sort" && !args.empty()));
+        Type* r = checkBuiltinMethod(e, m, T.array(et), wrap ? T.array(et) : expected);
+        if (!wrap || r->t == TT::Unknown) return r;
+        if (r->t != TT::Array || baseLit(r->elem) != et) return errT(l, "'" + name + "' on a " + typeName(bt) + " must give " + typeName(et) + "s");
+        // e becomes TA.from(kind, <the array call>)
+        Expr* inner = P.arena.expr(EK::Call, e->loc);
+        *inner = *e;
+        inner->type = r;
+        Expr saved = *e;
+        e->list = {intLit(bt->vt, l), inner};
+        e->a = nullptr;
+        e->native = "TA.from";
+        e->intrinsic = IN_NATIVE_NORECV;
+        (void)saved;
+        return bt;
+      }
+    }
+    case TT::Promise: {
+      Type* vt = bt->elem;
+      std::vector<Type*> valueParams;
+      if (vt->t != TT::Void) valueParams.push_back(vt);
+      Type* errFn = nullptr;
+      if (meth("then")) {
+        if (args.empty() || args.size() > 2) return errT(l, "then takes one or two callbacks");
+        Type* f1 = check(args[0], T.func(valueParams, T.unknown()));
+        if (f1->t != TT::Func) return errT(args[0]->loc, "then expects a function");
+        Type* u = promiseCallbackRet(args[0], f1->ret, args[0]->loc);
+        if (args.size() == 2) {
+          errFn = check(args[1], T.func({T.error()}, u->t == TT::Void ? T.voidT() : u));
+          if (errFn->t != TT::Func) return errT(args[1]->loc, "then expects a function");
+          Type* u2 = promiseCallbackRet(args[1], errFn->ret, args[1]->loc);
+          if (u2 != u && !(u2->t == TT::Void && u->t == TT::Void))
+            return errT(args[1]->loc, "the callbacks of then must return the same type ('" + typeName(u) + "' and '" + typeName(u2) + "')");
+        }
+        e->intrinsic = IN_PROMISE_THEN;
+        e->raw = "then";
+        return T.promise(u);
+      }
+      if (meth("catch")) {
+        if (args.size() != 1) return errT(l, "catch takes one callback");
+        Type* f2 = check(args[0], T.func({T.error()}, vt));
+        if (f2->t != TT::Func) return errT(args[0]->loc, "catch expects a function");
+        Type* u = promiseCallbackRet(args[0], f2->ret, args[0]->loc);
+        // a handler that returns nothing: the promise keeps the type (an e7 limit: undefined is not a T)
+        if (u != vt && u->t != TT::Void)
+          return errT(args[0]->loc, "the catch callback must return '" + typeName(vt) + "' (the promise's type), not '" + typeName(u) + "'");
+        e->intrinsic = IN_PROMISE_THEN;
+        e->raw = "catch";
+        return T.promise(vt);
+      }
+      if (meth("finally")) {
+        if (args.size() != 1) return errT(l, "finally takes one callback");
+        Type* f3 = check(args[0], T.func({}, T.voidT()));
+        if (f3->t != TT::Func || !f3->params.empty()) return errT(args[0]->loc, "finally expects a function without parameters");
+        e->intrinsic = IN_PROMISE_THEN;
+        e->raw = "finally";
+        return T.promise(vt);
+      }
+      return noSuch();
+    }
+    case TT::Generator: {
+      // g.next(v?) / g.return(v?) / g.throw(e): an IteratorResult record
+      if (meth("next") || meth("return")) {
+        bool isNext = name == "next";
+        Type* want = isNext ? bt->val : bt->ret;
+        if (args.size() > 1) return errT(l, "'" + name + "' takes at most one argument");
+        if (args.size() == 1) {
+          if (!want || want->t == TT::Void) {
+            Type* at = check(args[0], nullptr);
+            if (at->t != TT::Undefined)
+              return errT(args[0]->loc, std::string(isNext ? "this generator receives no value from next()" : "this generator returns no value") +
+                                             " (" + typeName(bt) + ")");
+            args.clear();
+          } else {
+            check(args[0], want);
+            coerce(args[0], want, isNext ? "next() value" : "return() value");
+          }
+        }
+        e->intrinsic = isNext ? IN_GEN_NEXT : IN_GEN_RETURN;
+        Type* rt = iterResultType(bt, l);
+        e->cls = recordFor({{"value", rt->shape->props[0].type}, {"done", T.boolean()}})->cls;
+        return rt;
+      }
+      if (meth("throw")) {
+        if (!argsMatch(e, args, {T.error()}, 1, "throw")) return T.unknown();
+        e->intrinsic = IN_GEN_THROW;
+        Type* rt = iterResultType(bt, l);
+        e->cls = recordFor({{"value", rt->shape->props[0].type}, {"done", T.boolean()}})->cls;
+        return rt;
+      }
+      return noSuch();
+    }
     case TT::Map: {
       std::string K = kindSuffix(bt->key), V = kindSuffix(bt->val);
       if (prop("size")) { native("Map.size"); return num; }
@@ -1074,6 +1387,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
     case TT::Error: {
       if (prop("message")) { native("Error.message"); return str; }
       if (prop("name")) { native("Error.name"); return str; }
+      if (prop("cause")) { native("Error.cause"); return T.optional(T.error(), false, true); }
+      if (prop("errors")) { native("Error.errors"); return T.array(T.error()); }
       if (prop("stack")) return errT(e->loc, "Error.stack is not supported (stack traces differ between engines)");
       if (meth("toString")) {
         if (!argsMatch(e, args, {}, 0, "toString")) return T.unknown();
@@ -1106,6 +1421,25 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         e->num = 0;
         return num;
       }
+      {
+        static const char* setters[] = {"setFullYear", "setMonth", "setDate", "setHours", "setMinutes", "setSeconds",
+                                        "setMilliseconds"};
+        static const int maxArgs[] = {3, 2, 1, 4, 3, 2, 1};
+        for (int k = 0; k < 7; k++) {
+          std::string sn = setters[k];
+          std::string us = "setUTC" + sn.substr(3);
+          if (!meth(sn.c_str()) && !meth(us.c_str())) continue;
+          if (args.empty() || (int)args.size() > maxArgs[k])
+            return errT(l, "'" + name + "' takes 1 to " + std::to_string(maxArgs[k]) + " argument(s)");
+          size_t given = args.size();
+          while (args.size() < 4) args.push_back(N(0));
+          if (!argsMatch(e, args, {num, num, num, num}, 4, name.c_str())) return T.unknown();
+          args.insert(args.begin(), N(k));
+          args.push_back(N((double)given));
+          native("Date.set");
+          return num;
+        }
+      }
       if (meth("setTime")) {
         if (!argsMatch(e, args, {num}, 1, "setTime")) return T.unknown();
         native("Date.setTime");
@@ -1127,4 +1461,15 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
   }
 }
 
+}  // namespace e7
+
+namespace e7 {
+// The value type a promise callback produces: U for a callback returning U or Promise<U>
+Type* Checker::promiseCallbackRet(Expr* cb, Type* ret, Loc l) {
+  (void)cb;
+  (void)l;
+  if (ret->t == TT::Promise) return ret->elem;
+  if (ret->t == TT::Undefined) return T.voidT();
+  return ret;
+}
 }  // namespace e7

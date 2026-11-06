@@ -1,13 +1,16 @@
 // @feature: Overriding with a compatible signature (covariant return type, fewer parameters)
 // @category: Classes
-// @status: unsupported
-// @why: not implemented yet: an override must have the same signature as the overridden method
-// @instead: keep the base signature (and downcast with `as` at the call site where needed)
-// @error: must have the same signature as the overridden method
+// @status: supported
+// @note: parameters and return types with the overridden method's representation (a class instead of its base class, fewer parameters)
 class Animal { name = "animal"; }
 class Dog extends Animal { bark(): string { return "woof"; } }
-class Shelter { adopt(): Animal { return new Animal(); } }
+class Shelter {
+  adopt(): Animal { return new Animal(); }
+  describe(id: number): string { return "shelter " + id; }
+}
 class DogShelter extends Shelter {
   adopt(): Dog { return new Dog(); }
+  describe(): string { return "dog shelter"; }
 }
-console.log(new DogShelter().adopt().bark());
+const s: Shelter = new DogShelter();
+console.log(new DogShelter().adopt().bark(), s.describe(1));

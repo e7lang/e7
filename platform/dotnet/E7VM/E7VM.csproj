@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- NuGet package "E7VM": the C# binding (platform/windows/E7VM.cs) plus prebuilt e7vm native
        libraries under runtimes/<rid>/native/. Pack (see .github/workflows/nuget.yml):
-         dotnet pack platform/dotnet/E7VM -c Release -p:Version=0.2.7 -p:E7NativeDir=<dir> -o out
+         dotnet pack platform/dotnet/E7VM -c Release -p:Version=0.3.0 -p:E7NativeDir=<dir> -o out
        where <dir> holds win-x64/e7vm.dll, linux-x64/libe7vm.so, linux-arm64/libe7vm.so and
        osx/libe7vm.dylib (universal arm64 + x86_64). -->
   <PropertyGroup>
@@ -11,13 +11,13 @@
     <!-- not "E7VM": E7VM.dll would collide with the native e7vm.dll on case-insensitive file systems -->
     <AssemblyName>E7</AssemblyName>
     <RootNamespace>E7</RootNamespace>
-    <Version>0.2.7</Version>
+    <Version>0.3.0</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
 
     <PackageId>E7VM</PackageId>
     <Authors>e7lang</Authors>
-    <Description>e7vm for .NET: an embeddable, sandboxed bytecode VM for E7 (a strict TypeScript subset). Run server-delivered, optionally signed scripts with memory limits, instruction budgets, host functions and key handles. Includes native libraries for Windows x64, Linux x64/arm64 and macOS (Apple Silicon + Intel).</Description>
+    <Description>e7vm for .NET: an embeddable, sandboxed bytecode VM for E7 (a strict TypeScript subset). Run server-delivered, optionally signed scripts with memory limits, instruction budgets, host functions and key handles, and deliver them over the air with signed manifests, staged rollout and rollback (E7ModuleManager). Includes native libraries for Windows x64, Linux x64/arm64 and macOS (Apple Silicon + Intel).</Description>
     <PackageTags>e7;e7vm;vm;bytecode;interpreter;scripting;sandbox;typescript;embedding</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/e7lang/e7</PackageProjectUrl>
@@ -39,6 +39,7 @@
 
   <ItemGroup>
     <Compile Include="../../windows/E7VM.cs" Link="E7VM.cs" />
+    <Compile Include="../../windows/E7ModuleManager.cs" Link="E7ModuleManager.cs" />
     <None Include="README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(e7vm VERSION 0.2.7 LANGUAGES C CXX)
+project(e7vm VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -111,10 +111,11 @@ endif()
 set(E7_CORE_SRC src/core/utf.cpp src/core/numfmt.cpp src/core/serialize.cpp src/core/verify.cpp src/core/disasm.cpp
   third_party/fdlibm/ieee754.cpp)
 set(E7_VM_SRC
-  src/vm/vm.cpp src/vm/interp.cpp src/vm/debug.cpp
+  src/vm/vm.cpp src/vm/interp.cpp src/vm/debug.cpp src/vm/promise.cpp
   src/stdlib/core.cpp src/stdlib/string.cpp src/stdlib/array.cpp src/stdlib/map.cpp src/stdlib/math.cpp
   src/stdlib/bytes.cpp src/stdlib/bigint.cpp src/stdlib/json.cpp src/stdlib/encoding.cpp src/stdlib/date.cpp
-  src/stdlib/test.cpp
+  src/stdlib/test.cpp src/stdlib/typed.cpp src/stdlib/regexp.cpp
+  src/regexp/regexp.cpp src/regexp/parser.cpp src/regexp/compiler.cpp src/regexp/unicode.cpp
   src/crypto/crypto.cpp src/crypto/keccak.cpp src/crypto/sign.cpp
   src/capi/capi.cpp)
 set(E7_COMPILER_SRC

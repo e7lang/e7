@@ -52,7 +52,9 @@ inline bool parseVersion(const std::string& s, uint32_t& out) {
 
 inline uint32_t opSince(uint16_t op) {
   switch (op) {
-    // case OP_NEWTHING: return makeVersion(0, 3, 0);
+    case OP_GEN_START: case OP_ASYNC_START: case OP_YIELD: case OP_RESUME_I: case OP_RESUME_F: case OP_RESUME_R:
+    case OP_AWAIT: case OP_FIELD_ABSENT:
+      return makeVersion(0, 3, 0);
     default: return kBaselineVersion;
   }
 }
@@ -60,8 +62,61 @@ inline uint32_t opSince(uint16_t op) {
 struct NativeSince { const char* name; uint32_t since; };
 // Natives added after the baseline, e.g. { "json.somethingNew", makeVersion(0, 3, 0) }.
 inline const NativeSince* nativeSinceTable(size_t& n) {
-  static const NativeSince kTable[] = {{"", 0}};
-  n = 0;
+  static const NativeSince kTable[] = {
+      {"Object.has", makeVersion(0, 3, 0)},
+      {"RegExp.lit", makeVersion(0, 3, 0)}, {"RegExp.new", makeVersion(0, 3, 0)}, {"RegExp.copy", makeVersion(0, 3, 0)},
+      {"RegExp.newRe", makeVersion(0, 3, 0)}, {"RegExp.exec", makeVersion(0, 3, 0)}, {"RegExp.test", makeVersion(0, 3, 0)},
+      {"RegExp.lastIndex", makeVersion(0, 3, 0)}, {"RegExp.setLastIndex", makeVersion(0, 3, 0)},
+      {"RegExp.source", makeVersion(0, 3, 0)}, {"RegExp.flags", makeVersion(0, 3, 0)}, {"RegExp.toString", makeVersion(0, 3, 0)},
+      {"RegExp.global", makeVersion(0, 3, 0)}, {"RegExp.ignoreCase", makeVersion(0, 3, 0)},
+      {"RegExp.multiline", makeVersion(0, 3, 0)}, {"RegExp.sticky", makeVersion(0, 3, 0)},
+      {"RegExp.unicode", makeVersion(0, 3, 0)}, {"RegExp.dotAll", makeVersion(0, 3, 0)},
+      {"RegExp.hasIndices", makeVersion(0, 3, 0)},
+      {"Match.index", makeVersion(0, 3, 0)}, {"Match.indexOpt", makeVersion(0, 3, 0)}, {"Match.input", makeVersion(0, 3, 0)},
+      {"Match.groups", makeVersion(0, 3, 0)}, {"Match.indices", makeVersion(0, 3, 0)},
+      {"String.matchRe", makeVersion(0, 3, 0)}, {"String.matchAllRe", makeVersion(0, 3, 0)},
+      {"String.replaceRe", makeVersion(0, 3, 0)}, {"String.replaceAllRe", makeVersion(0, 3, 0)},
+      {"String.replaceReFn", makeVersion(0, 3, 0)}, {"String.splitRe", makeVersion(0, 3, 0)},
+      {"String.searchRe", makeVersion(0, 3, 0)},
+      {"TA.new", makeVersion(0, 3, 0)},
+      {"TA.from", makeVersion(0, 3, 0)},
+      {"TA.fromBuffer", makeVersion(0, 3, 0)},
+      {"TA.length", makeVersion(0, 3, 0)},
+      {"TA.get", makeVersion(0, 3, 0)},
+      {"TA.set", makeVersion(0, 3, 0)},
+      {"TA.getBig", makeVersion(0, 3, 0)},
+      {"TA.setBig", makeVersion(0, 3, 0)},
+      {"TA.subarray", makeVersion(0, 3, 0)},
+      {"TA.slice", makeVersion(0, 3, 0)},
+      {"TA.fill", makeVersion(0, 3, 0)},
+      {"TA.fillBig", makeVersion(0, 3, 0)},
+      {"TA.toArray", makeVersion(0, 3, 0)},
+      {"TA.setFrom", makeVersion(0, 3, 0)},
+      {"TA.indexOf", makeVersion(0, 3, 0)},
+      {"TA.includes", makeVersion(0, 3, 0)},
+      {"TA.join", makeVersion(0, 3, 0)},
+      {"TA.reverse", makeVersion(0, 3, 0)},
+      {"TA.sort", makeVersion(0, 3, 0)},
+      {"TA.buffer", makeVersion(0, 3, 0)},
+      {"Date.set", makeVersion(0, 3, 0)}, {"Global.structuredClone", makeVersion(0, 3, 0)},
+      {"JSON.parseRec", makeVersion(0, 3, 0)}, {"JSON.tryParseRec", makeVersion(0, 3, 0)},
+      {"Error.newCause", makeVersion(0, 3, 0)}, {"Error.newAggregate", makeVersion(0, 3, 0)},
+      {"Error.cause", makeVersion(0, 3, 0)}, {"Error.errors", makeVersion(0, 3, 0)},
+      {"Array.toReversed", makeVersion(0, 3, 0)}, {"Array.toSorted", makeVersion(0, 3, 0)},
+      {"Array.toSortedCmp", makeVersion(0, 3, 0)}, {"Array.toSpliced", makeVersion(0, 3, 0)},
+      {"Array.withI", makeVersion(0, 3, 0)}, {"Array.withF", makeVersion(0, 3, 0)}, {"Array.withR", makeVersion(0, 3, 0)},
+      {"Promise.resolveI", makeVersion(0, 3, 0)}, {"Promise.resolveF", makeVersion(0, 3, 0)},
+      {"Promise.resolveR", makeVersion(0, 3, 0)}, {"Promise.reject", makeVersion(0, 3, 0)},
+      {"Promise.new", makeVersion(0, 3, 0)}, {"Promise.resolveFnI", makeVersion(0, 3, 0)},
+      {"Promise.resolveFnF", makeVersion(0, 3, 0)}, {"Promise.resolveFnR", makeVersion(0, 3, 0)},
+      {"Promise.rejectFn", makeVersion(0, 3, 0)}, {"Promise.then", makeVersion(0, 3, 0)},
+      {"Promise.finally", makeVersion(0, 3, 0)}, {"Promise.all", makeVersion(0, 3, 0)},
+      {"Promise.allSettled", makeVersion(0, 3, 0)}, {"Promise.any", makeVersion(0, 3, 0)},
+      {"Promise.race", makeVersion(0, 3, 0)},
+      {"test.laterI", makeVersion(0, 3, 0)}, {"test.laterF", makeVersion(0, 3, 0)},
+      {"test.laterR", makeVersion(0, 3, 0)}, {"test.laterReject", makeVersion(0, 3, 0)},
+  };
+  n = sizeof kTable / sizeof kTable[0];
   return kTable;
 }
 
@@ -75,14 +130,7 @@ inline uint32_t nativeSince(const std::string& name) {
 
 // Number of code words of the instruction starting with word w (call-like instructions carry
 // extra words: see docs/BYTECODE.md).
-inline size_t instructionWords(uint64_t w) {
-  uint16_t op = insOp(w), c = insC(w);
-  switch (op) {
-    case OP_CALL: case OP_CALLN: case OP_CLOSURE: return 1 + (c + 3u) / 4;
-    case OP_CALLV: case OP_CALLM: case OP_CALLI: return 2 + (c + 3u) / 4;
-    default: return 1;
-  }
-}
+inline size_t instructionWords(uint64_t w) { return insWords(w); }
 
 // Features that are not an opcode or a native function but change how a VM must treat a module.
 // #private class fields: a class (not a record) field named "#x". Since 0.2.5 Object.keys,
@@ -100,6 +148,15 @@ inline uint32_t moduleRequires(const Module& m, std::string* why = nullptr) {
         req = kPrivateFieldsSince;
         if (why) *why = "#private class fields";
       }
+  }
+  // format 3 (0.3): coroutines, records with a presence mask, regular expressions
+  constexpr uint32_t v030 = makeVersion(0, 3, 0);
+  if (req < v030) {
+    for (const ClassDesc& c : m.classes)
+      if (c.cflags && req < v030) { req = v030; if (why) *why = "objects with optional properties (presence mask)"; }
+    for (const FuncDesc& f : m.funcs)
+      if (f.fflags && req < v030) { req = v030; if (why) *why = fflagsKind(f.fflags) == FK_GENERATOR ? "generators" : "async functions"; }
+    if (!m.regexps.empty() && req < v030) { req = v030; if (why) *why = "regular expressions"; }
   }
   for (const NativeImport& n : m.natives) {
     uint32_t s = nativeSince(n.name);

@@ -61,6 +61,14 @@ enum Intrinsic : int {
   IN_OBJECT_VALUES, IN_OBJECT_ENTRIES,
   IN_OBJECT_ASSIGN,      // Object.assign(target, ...sources) (target not a literal)
   IN_STR_REPLACE_FN,     // s.replace(pattern, fn) / s.replaceAll(pattern, fn) (e->bval: all)
+  // generators (0.3)
+  IN_GEN_NEXT, IN_GEN_RETURN, IN_GEN_THROW,  // g.next(v?) / g.return(v?) / g.throw(e)
+  // promises (0.3)
+  IN_PROMISE_THEN,       // p.then(f, r?) / p.catch(r) (raw "catch") / p.finally(f) (raw "finally")
+  IN_PROMISE_STATIC,     // Promise.resolve / reject / all / allSettled / any / race (raw = the name)
+  IN_NEW_PROMISE,        // new Promise<T>(executor)
+  // regular expressions (0.3)
+  IN_LASTINDEX_SET,      // re.lastIndex = v (Member target)
   // Arrow nodes
   IN_OBJ_METHOD = 1000,  // method shorthand in an object literal (own 'this': the object)
 };

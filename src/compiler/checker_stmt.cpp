@@ -67,9 +67,25 @@ static bool isAncestor(ClassSym* anc, ClassSym* c) {
   return false;
 }
 
+// whether every value of literal type a is one of literal type b's (same base)
+static bool litSubset(const Type* a, const Type* b) {
+  if (a->t != b->t) return false;
+  for (auto& s : a->strLits)
+    if (!std::binary_search(b->strLits.begin(), b->strLits.end(), s)) return false;
+  for (double d : a->numLits) {
+    bool f = false;
+    for (double e : b->numLits) f = f || e == d || (e != e && d != d);
+    if (!f) return false;
+  }
+  return (a->boolLits & ~b->boolLits) == 0;
+}
+
 bool Checker::assignable(Type* src, Type* dst) {
   if (src == dst) return true;
   if (src->t == TT::Unknown || dst->t == TT::Unknown || src->t == TT::Never) return true;
+  // literal types (D5): a literal type is its base type with fewer values
+  if (dst->lit) return src->lit && litSubset(src, dst);
+  if (src->lit) return assignable(src->litBase, dst);
   switch (dst->t) {
     case TT::Optional: {
       if (src->t == TT::Null) return dst->hasNull;
@@ -85,7 +101,13 @@ bool Checker::assignable(Type* src, Type* dst) {
     }
     case TT::Class:
       return src->t == TT::Class && isAncestor(dst->cls, src->cls);
+    case TT::RegExp:
+      // a literal's type (with its groups) is a RegExp
+      return src->t == TT::RegExp && dst->reCaps < 0;
     case TT::Array:
+      // a match result is a string[]; only a match result is one (exec results have index and input)
+      if (dst->re)
+        return src->t == TT::Array && src->re && (src->reExec || !dst->reExec) && (dst->re->reCaps < 0 || src->re == dst->re);
       // a mutable array is assignable to a readonly one, not the other way round (as in TypeScript)
       if (src->t == TT::Array && src->ro && !dst->ro) return false;
       if (src->t == TT::Array && src->elem == dst->elem) return true;
@@ -101,6 +123,11 @@ bool Checker::assignable(Type* src, Type* dst) {
       return src->t == TT::Set && dst->ro && src->elem == dst->elem;
     case TT::Object:
       return structurallyAssignable(src, dst);
+    case TT::Generator:
+      // all iterator types are coroutines at run time: Generator -> Iterator / IterableIterator, with the
+      // same value types (a target without TReturn / TNext accepts any)
+      return src->t == TT::Generator && (dst->gk != 0 || src->gk == 0) && src->elem == dst->elem &&
+             (dst->ret->t == TT::Void || src->ret == dst->ret) && (dst->val->t == TT::Void || src->val == dst->val);
     case TT::Number:
       return src->t == TT::Enum && !src->en->isString;
     case TT::String:
@@ -118,10 +145,49 @@ Expr* Checker::wrapConv(Expr* e, ConvKind k, Type* t) {
   return c;
 }
 
+static Expr* stripParens(Expr* e) {
+  while (e && e->k == EK::Paren) e = e->a;
+  return e;
+}
+
+// The literal type of a constant expression ("a", 1, -2, true, `x`, c ? "a" : "b"), or null
+Type* Checker::constLit(Expr* e) {
+  while (e && (e->k == EK::Paren || (e->k == EK::Conv && e->conv == ConvKind::None))) e = e->a;
+  if (!e) return nullptr;
+  switch (e->k) {
+    case EK::Str: return T.strLit({e->str});
+    case EK::Template: return e->list.empty() && e->quasis.size() == 1 ? T.strLit({e->quasis[0]}) : nullptr;
+    case EK::Num: return e->type && e->type->t == TT::Number ? T.numLit({e->num}) : nullptr;
+    case EK::Bool: return T.boolLit(e->bval ? 2 : 1);
+    case EK::Unary:
+      if (e->raw == "-" && e->a && stripParens(e->a)->k == EK::Num && e->type && e->type->t == TT::Number)
+        return T.numLit({-stripParens(e->a)->num});
+      return nullptr;
+    case EK::Cond: {
+      Type* a = constLit(e->b);
+      Type* b = a ? constLit(e->c) : nullptr;
+      return b ? T.litUnion(a, b) : nullptr;
+    }
+    default:
+      return e->type && e->type->lit ? e->type : nullptr;
+  }
+}
+
+// a variable's type from its initializer: a const keeps the literal type of a constant ("a"), other
+// variables get the base type (TypeScript's widening)
+Type* Checker::inferVarType(Expr* init, Type* t, bool isConst) {
+  if (!isConst) return widen(t);
+  if (Type* c = init && (t->t == TT::String || t->t == TT::Number || t->t == TT::Bool) ? constLit(init) : nullptr) return c;
+  return t;
+}
+
 bool Checker::coerce(Expr*& e, Type* target, const char* ctx) {
   Type* t = e->type;
   if (!t || !target) return true;
   if (t == target) return true;
+  // a constant of a literal type's base: its value decides ("GET" is a "GET" | "POST")
+  if (baseOf(target)->lit && !t->lit && (t->t == TT::String || t->t == TT::Number || t->t == TT::Bool))
+    if (Type* c = constLit(e)) t = c;
   if (target->t == TT::Void && ctx && std::string(ctx) == "return") return false;
   if (!assignable(t, target)) {
     err(e->loc, "type '" + typeName(t) + "' is not assignable to type '" + typeName(target) + "'");
@@ -136,7 +202,15 @@ bool Checker::coerce(Expr*& e, Type* target, const char* ctx) {
   return true;
 }
 
-Type* Checker::widen(Type* t) { return t; }
+// the type a mutable location gets from a value: literal types become their base type (TypeScript
+// widens `let x = "a"` to string)
+Type* Checker::widen(Type* t) {
+  if (!t) return t;
+  if (t->lit) return t->litBase;
+  if (t->t == TT::Optional && t->elem->lit) return T.optional(t->elem->litBase, t->hasNull, t->hasUndef);
+  if (t->t == TT::RegExp && t->reCaps >= 0) return T.regexp();  // `let re = /x/` may get another pattern
+  return t;
+}
 
 Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
   if (a == b) return a;
@@ -152,6 +226,7 @@ Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
     bool un = (a->t == TT::Optional && a->hasUndef) || (b->t == TT::Optional && b->hasUndef);
     return T.optional(u, n, un);
   }
+  if (a->t == TT::RegExp && b->t == TT::RegExp) return T.regexp();
   if (a->t == TT::Class && b->t == TT::Class) {
     for (ClassSym* c = a->cls; c; c = c->parent)
       if (isAncestor(c, b->cls)) return c->type;
@@ -162,6 +237,25 @@ Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
 }
 
 // ------------------------------------------------------------------ functions
+// the type that `return` statements in f's body return: TReturn of a generator, T of an async
+// function's Promise<T>, else the function's return type
+Type* Checker::bodyRet(FuncSym* f) {
+  Type* r = f->type->ret;
+  if (f->isGenerator) return r->t == TT::Generator && r->ret ? r->ret : T.voidT();
+  if (f->isAsync) return r->t == TT::Promise ? r->elem : T.voidT();
+  return r;
+}
+
+// the declared return type of a generator / async function must be Generator / Promise
+void Checker::checkCoroutineRet(FuncSym* f, Type* ret, Loc l) {
+  if (f->isGenerator && !f->isAsync && ret->t != TT::Generator && ret->t != TT::Unknown)
+    err(l, "the return type of a generator must be Generator<T>, Iterator<T> or IterableIterator<T>, not '" + typeName(ret) + "'");
+  if (f->isGenerator && f->isAsync)
+    err(l, "async generators are not supported yet");
+  if (f->isAsync && !f->isGenerator && ret->t != TT::Promise && ret->t != TT::Unknown)
+    err(l, "the return type of an async function must be Promise<T>, not '" + typeName(ret) + "'");
+}
+
 void Checker::checkFunction(FuncSym* f) {
   if (f->checked || f->isNative) return;
   if (f->checking) return;
@@ -231,8 +325,9 @@ void Checker::checkBody(FuncSym* f) {
       }
     }
   }
-  Type* declaredRet = f->inferRet ? nullptr : f->type->ret;
+  Type* declaredRet = f->inferRet ? nullptr : bodyRet(f);
   f->returnTypes.clear();
+  f->yieldTypes.clear();
   if (f->isCtor) {
     // field initializers are checked in constructor context
     ClassSym* c = f->cls;
@@ -264,6 +359,7 @@ void Checker::checkBody(FuncSym* f) {
     Type* r = nullptr;
     for (Type* t : f->returnTypes) r = r ? unify(r, t, f->loc, "return statements") : t;
     if (!r) r = T.voidT();
+    if ((f->isGenerator || f->isAsync) && r->t == TT::Undefined) r = T.voidT();
     if (r->t == TT::Null || r->t == TT::Undefined) {
       err(f->loc, "cannot infer return type of '" + f->name + "' from null/undefined; add a return type annotation");
       r = T.unknown();
@@ -271,6 +367,13 @@ void Checker::checkBody(FuncSym* f) {
     // a function returning values on some paths only
     if (r->t != TT::Void && f->body && !exits(f->body)) {
       err(f->loc, "not all code paths of '" + f->name + "' return a value");
+    }
+    if (f->isAsync && !f->isGenerator) r = T.promise(r->t == TT::Undefined ? T.voidT() : r);
+    if (f->isGenerator) {
+      Type* y = nullptr;
+      for (Type* t : f->yieldTypes) y = y ? unify(y, t, f->loc, "yield expressions") : t;
+      if (!y || y->t == TT::Void || y->t == TT::Undefined || y->t == TT::Never) y = T.undef();
+      r = T.generator(y, r, T.voidT(), 0);
     }
     f->type = T.func(f->type->params, r, f->type->optParams, f->type->restParam);
     f->inferRet = false;
@@ -295,6 +398,8 @@ void Checker::hoistFunctions(std::vector<Stmt*>& stmts) {
       continue;
     }
     FuncSym* f = newFunc(s->name, &s->params, s->retType, s->body, nullptr);
+    f->isGenerator = s->isGenerator;
+    f->isAsync = s->isAsync;
     f->declStmt = s;
     f->parent = curFn;
     f->defScope = scope;
@@ -315,6 +420,45 @@ void Checker::checkBlockStmts(std::vector<Stmt*>& stmts) {
 }
 
 // a switch over an enum value whose cases name every member of the enum (as tsc, exhaustive)
+bool Checker::switchCoversLits(Stmt* s) {
+  Type* dt = s->expr ? s->expr->type : nullptr;
+  if (!dt || !dt->lit) return false;
+  Type* covered = nullptr;
+  for (auto& c : s->cases)
+    if (c.test)
+      if (Type* lt = constLit(c.test)) covered = covered ? T.litUnion(covered, lt) : lt;
+  return covered && litMinus(dt, covered) == nullptr;
+}
+
+// whether a switch clause's body ends by leaving the switch (no fall-through into the next clause)
+bool Checker::exitsClause(SwitchCase& c) {
+  for (Stmt* x : c.body)
+    if (exits(x) || x->k == SK::Break) return true;
+  return false;
+}
+
+// the values of literal type a that are not in b (null: none left)
+Type* Checker::litMinus(Type* a, Type* b) {
+  if (!b) return a;
+  if (a->t == TT::String) {
+    std::vector<std::u16string> v;
+    for (auto& s : a->strLits)
+      if (!std::binary_search(b->strLits.begin(), b->strLits.end(), s)) v.push_back(s);
+    return v.empty() ? nullptr : T.strLit(v);
+  }
+  if (a->t == TT::Number) {
+    std::vector<double> v;
+    for (double d : a->numLits) {
+      bool in = false;
+      for (double e : b->numLits) in = in || e == d;
+      if (!in) v.push_back(d);
+    }
+    return v.empty() ? nullptr : T.numLit(v);
+  }
+  uint8_t m = a->boolLits & ~b->boolLits;
+  return m ? T.boolLit(m) : nullptr;
+}
+
 bool Checker::switchCoversEnum(Stmt* s) {
   Type* dt = s->expr ? s->expr->type : nullptr;
   if (!dt || dt->t != TT::Enum || !dt->en) return false;
@@ -368,7 +512,7 @@ bool Checker::exits(Stmt* s) {
       // exits if there is a default and every case ends by exiting (no breaks)
       bool hasDefault = false;
       for (auto& c : s->cases) if (!c.test) hasDefault = true;
-      if (!hasDefault && !switchCoversEnum(s)) return false;  // an enum switch with every member is exhaustive
+      if (!hasDefault && !switchCoversEnum(s) && !switchCoversLits(s)) return false;  // an enum / literal switch with every value is exhaustive
       for (size_t i = 0; i < s->cases.size(); i++) {
         auto& c = s->cases[i];
         for (Stmt* x : c.body) if (containsBreakFor(x, "", 0)) return false;
@@ -542,7 +686,7 @@ Type* Checker::globalVarType(VarSym* v) {
       err(d.loc, "an expression of type 'void' cannot be assigned to a variable");
       t = T.unknown();
     }
-    v->type = t;
+    v->type = inferVarType(d.init, t, v->isConst);
     d.sym = v;
     v->checked = true;  // initializer already checked
   } else {
@@ -583,6 +727,9 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
     return bt;
   };
   if (d.isArrayPat) {
+    // a generator (or an iterable class) is destructured like an array of its values
+    if (t->t == TT::Generator) t = T.array(t->elem);
+    else if (Type* gt = t->t == TT::Class ? iteratorMethodType(t, l) : nullptr) t = T.array(gt->elem);
     for (size_t i = 0; i < d.elems.size(); i++) {
       VarDecl& el = d.elems[i];
       Type* et;
@@ -743,7 +890,7 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
           err(d.loc, "an expression of type 'void' cannot be assigned to a variable");
           t = T.unknown();
         }
-        declared = t;
+        declared = inferVarType(d.init, t, isConst);
       }
     } else if (!declared) {
       err(d.loc, "'" + d.name + "' needs a type annotation or initializer");
@@ -800,7 +947,7 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
         err(d.loc, "an expression of type 'void' cannot be assigned to a variable");
         it = T.unknown();
       }
-      t = it;
+      t = simple ? inferVarType(d.init, it, isConst) : widen(it);
     }
   } else {
     if (!declared) {
@@ -871,6 +1018,22 @@ void Checker::checkStmt(Stmt* s) {
     case SK::Expr: {
       Type* t = check(s->expr, nullptr);
       (void)t;
+      // an assertion function: the rest of the block sees what it asserts
+      Expr* c = s->expr;
+      while (c->k == EK::Paren) c = c->a;
+      if (c->k == EK::Call && c->callee && c->callee->asserts && c->callee->predParam >= 0 &&
+          (size_t)c->callee->predParam < c->list.size()) {
+        Expr* arg = c->list[(size_t)c->callee->predParam];
+        while (arg->k == EK::Conv || arg->k == EK::Paren) arg = arg->a;
+        std::vector<Fact> facts;
+        if (c->callee->predType) {
+          std::string key = pathKey(arg);
+          if (!key.empty()) facts.push_back({key, c->callee->predType});
+        } else {
+          factsFrom(arg, true, facts);
+        }
+        applyFacts(facts);
+      }
       break;
     }
     case SK::Block:
@@ -979,6 +1142,18 @@ void Checker::checkStmt(Stmt* s) {
         Type* it = check(s->expr, nullptr);
         et = elemTypeForIter(s->expr, it, s->expr->loc);
       }
+      if (s->isAwait) {
+        // for await: each element is awaited (a promise gives its value)
+        if (!curFn || (!curFn->isAsync && !curFn->isInit))
+          err(s->loc, "'for await' is only allowed in async functions and at the top level of the entry module");
+        else if (curFn->isInit && !curFn->isAsync) {
+          curFn->isAsync = true;
+          curFn->type = T.func({}, T.promise(T.voidT()));
+        }
+        if (s->declareKind) err(s->loc, "'for await' over keys / values / entries is not supported; iterate the array");
+        if (et->t == TT::Promise) et = et->elem;
+        if (et->t == TT::Void) et = T.undef();
+      }
       pushScope();
       VarDecl& d = s->decls[0];
       // [k, v] of map: bind directly without allocating tuples
@@ -995,10 +1170,15 @@ void Checker::checkStmt(Stmt* s) {
     case SK::Return: {
       if (!curFn || curFn->isInit) { err(s->loc, "'return' outside of a function"); break; }
       FuncSym* f = curFn;
-      Type* declared = f->inferRet ? nullptr : f->type->ret;
+      Type* declared = f->inferRet ? nullptr : bodyRet(f);
       if (s->expr) {
         Type* t = check(s->expr, declared);
-        if (declared) {
+        if (f->isAsync && t->t == TT::Promise) {
+          // `return p` in an async function: its promise adopts p (codegen: RET_R of the promise)
+          if (declared && t->elem != declared && !(declared->t == TT::Void && t->elem->t == TT::Void))
+            err(s->loc, "type '" + typeName(t) + "' is not assignable to the return type 'Promise<" + typeName(declared) + ">'");
+          if (!declared) f->returnTypes.push_back(t->elem);
+        } else if (declared) {
           if (declared->t == TT::Void) err(s->loc, "a void function cannot return a value");
           else coerce(s->expr, declared, "return");
         } else {
@@ -1052,16 +1232,50 @@ void Checker::checkStmt(Stmt* s) {
       for (auto& c : s->cases)
         for (Stmt* x : c.body) all.push_back(x);
       hoistFunctions(all);
-      for (auto& c : s->cases) {
+      // literal types (D5): each clause sees the discriminant narrowed to its case values (with the
+      // values of the empty clauses that fall into it), the default clause the values left (never when
+      // the switch covers them all)
+      std::string dkey = dt->lit || (dt->t == TT::Enum && dt->en) ? pathKey(s->expr) : "";
+      Type* group = nullptr;
+      bool groupOk = true;
+      Type* covered = nullptr;
+      for (size_t ci = 0; ci < s->cases.size(); ci++) {
+        auto& c = s->cases[ci];
+        Type* cv = nullptr;
         if (c.test) {
           Type* ct = check(c.test, dt);
+          if (dt->lit)
+            if (Type* lt = constLit(c.test)) {
+              ct = lt;
+              cv = lt;
+            }
           if (ct != dt && !(dt->t == TT::Unknown || ct->t == TT::Unknown)) {
-            if (!assignable(ct, dt)) err(c.test->loc, "case type '" + typeName(ct) + "' is not comparable to '" + typeName(dt) + "'");
+            bool ok = assignable(ct, dt) || (ct->lit && dt->lit && baseLit(ct) == baseLit(dt));
+            if (!ok) err(c.test->loc, "case type '" + typeName(ct) + "' is not comparable to '" + typeName(dt) + "'");
           }
+          if (cv && dt->lit) covered = covered ? T.litUnion(covered, cv) : cv;
+          if (cv && groupOk) group = group ? T.litUnion(group, cv) : cv;
+          else groupOk = false;
         } else {
           defaults++;
+          groupOk = false;
+        }
+        pushScope();
+        if (!dkey.empty() && dt->lit) {
+          if (c.test && groupOk && group) setNarrow(dkey, group);
+          else if (!c.test && (ci == 0 || exitsClause(s->cases[ci - 1]))) {
+            Type* rest = litMinus(dt, covered);
+            setNarrow(dkey, rest ? rest : T.never());
+          }
+        } else if (!dkey.empty() && !c.test && switchCoversEnum(s) && (ci == 0 || exitsClause(s->cases[ci - 1]))) {
+          setNarrow(dkey, T.never());
         }
         for (Stmt* x : c.body) checkStmt(x);
+        popScope();
+        if (!c.body.empty()) {
+          group = nullptr;
+          groupOk = true;
+        }
       }
       if (defaults > 1) err(s->loc, "multiple default clauses");
       loops.pop_back();

@@ -251,6 +251,28 @@ E7_NATIVE(d_setTime) {
   b->v.f = timeClip(a[1].f);
   r->f = b->v.f;
 }
+// setFullYear / setMonth / setDate / setHours / setMinutes / setSeconds / setMilliseconds (and the UTC
+// variants: e7 dates are UTC): a[1] which field (0..6), a[2..5] the arguments, a[6] how many were given
+E7_NATIVE(d_set) {
+  E7_UNUSED;
+  BoxObj* b = D(vm, a[0]);
+  int which = immIndex(a[1].f, 7);
+  int given = immIndex(a[6].f, 5);
+  if (which < 0 || given < 1) vm.error("bad Date setter");
+  double t = b->v.f;
+  if (t != t) {
+    if (which != 0) { r->f = NAN; return; }
+    t = 0;  // setFullYear on an invalid date starts from +0
+  }
+  Parts p = split(t);
+  double v[7] = {p.y, p.mo - 1, p.d, p.h, p.mi, p.s, p.ms};
+  // the field and the ones after it that were given: setHours(h, m, s, ms), setFullYear(y, m, d)
+  int last = which <= 2 ? 2 : 6;
+  for (int k = 0; k < given && which + k <= last; k++) v[which + k] = a[2 + k].f;
+  double nt = timeClip(makeDay(v[0], v[1], v[2]) * 86400000.0 + makeTime(v[3], v[4], v[5], v[6]));
+  b->v.f = nt;
+  r->f = nt;
+}
 E7_NATIVE(d_get) {
   E7_UNUSED;
   double t = D(vm, a[0])->v.f;
@@ -298,6 +320,7 @@ void registerDateNatives(VM& vm) {
   vm.registerNative("Date.getTime", "R>F", d_getTime);
   vm.registerNative("Date.setTime", "RF>F", d_setTime);
   vm.registerNative("Date.get", "RF>F", d_get);
+  vm.registerNative("Date.set", "RFFFFFF>F", d_set);
   vm.registerNative("Date.toISOString", "R>R", d_toISOString);
   vm.registerNative("Date.toString", "R>R", d_toString);
   vm.registerNative("Date.toUTCString", "R>R", d_toUTCString);

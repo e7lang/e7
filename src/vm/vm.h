@@ -1,6 +1,7 @@
 // e7vm core virtual machine.
 #pragma once
 #include <atomic>
+#include <deque>
 #include <exception>
 #include <memory>
 #include <string>
@@ -82,6 +83,8 @@ struct ModuleRT {
   std::vector<Slot> globals;
   std::vector<NativeBinding> natives;
   std::vector<uint32_t> sigMap;
+  std::vector<std::shared_ptr<const re::Program>> regexps;  // compiled Module::regexps (format 3)
+  uint64_t regexpBytes = 0;  // their size, counted in the VM's heap while the module is loaded
   bool initialized = false;
 };
 
@@ -92,6 +95,10 @@ struct Frame {
   uint32_t base;
   uint16_t retDst;
   bool entry;  // returning from this frame leaves execute()
+  // a running coroutine (generator / async function) owns this frame; for a generator resumed by
+  // RESUME, retDst / doneDst are the resumer's value and done registers
+  CoroObj* coro = nullptr;
+  uint16_t doneDst = 0xFFFF;
 };
 
 struct Obj;
@@ -110,7 +117,9 @@ enum ErrCode {
   ERR_OK = 0, ERR_SUSPENDED = 1, ERR_RUNTIME = 2, ERR_BUDGET = 3, ERR_MEMORY = 4,
   ERR_STACK = 5, ERR_LOAD = 6, ERR_VERIFY = 7, ERR_SIGNATURE = 8, ERR_NOT_FOUND = 9,
   ERR_ARGS = 10, ERR_COMPILE = 11, ERR_STATE = 12,
-  ERR_PAUSED = 13  // stopped by the debugger (pause-to-host mode): frames are kept, resume() continues
+  ERR_PAUSED = 13,  // stopped by the debugger (pause-to-host mode): frames are kept, resume() continues
+  ERR_VERSION = 14,
+  ERR_PENDING = 15  // an async call waits for host tickets: settle them, then resume()
 };
 
 // A source position (file name as shown in stack traces, 1-based line, column 0 = unknown).
@@ -171,6 +180,10 @@ class VM {
   // cannot hold the host thread for longer than that: past it the call fails with E7_ERR_BUDGET.
   // 2^22 ticks: about 20 ms of interpreted code, or a PBKDF2 of 4 million HMACs (about 0.6 s; one tick each)
   static constexpr int64_t kNativeOverrun = int64_t(1) << 22;
+  // regular expressions (D4): the compilation work allowed for the literals of one module at load, and
+  // the number of distinct sets of group names whose record classes the VM keeps
+  static constexpr uint64_t kLoadRegExpWork = uint64_t(1) << 26;
+  static constexpr size_t kMaxGroupsClasses = 16384;
   void chargeWork(uint64_t ticks) {
     if (ticks > (uint64_t)(budget_ < 0 ? 0 : budget_)) {
       if (budgetStart_ == INT64_MAX) return;  // unlimited budget: never fails
@@ -244,6 +257,42 @@ class VM {
   MapObj* newMap(uint8_t kvt, uint8_t vvt, KeyMode km, bool isSet);
   BigObj* newBig();
   HandleObj* newHandle(int64_t id);
+  CoroObj* newCoro(FuncRT* fn, CloObj* closure);
+  PromiseObj* newPromise(uint8_t vt);
+  // ---- regular expressions (stdlib/regexp.cpp, DESIGN-0.3.md D4)
+  // fresh: a program compiled at run time that no object holds yet (its progBytes are counted now);
+  // otherwise a copy sharing the program (and the count) of another RegExp, or a module literal (0 bytes)
+  RegExpObj* newRegExp(std::shared_ptr<const re::Program> prog, StrObj* source, uint64_t progBytes, bool fresh);
+  // the limits a regular expression compilation runs under (budget and memory limit), for natives
+  re::Limits regexpLimits();
+  // an array of strings with a MatchExtra (flag kArrFlagMatch or kArrFlagIndices), its references null
+  ArrObj* newMatchArray(uint8_t vt, uint32_t cap, uint16_t flag);
+  // a native iterator (CoroObj without a function) over the elements of items (an array of references)
+  CoroObj* newNativeIterator(ArrObj* items);
+  // the record class of a groups object with these property names (VM-owned, shared by all modules)
+  // (nullProto false: the same record as a plain object, for structuredClone)
+  ClassRT* groupsClass(const std::vector<std::string>& names, bool nullProto = true);
+
+  // ---- promises and the microtask queue (promise.cpp, DESIGN-0.3.md D2)
+  // Resolves p with v (of p's value type); a promise value (a thenable) is adopted through a job.
+  void resolvePromise(PromiseObj* p, Slot v);
+  void adoptPromise(PromiseObj* p, PromiseObj* thenable);  // resolve p with a promise (ResolveThenableJob)
+  void fulfillPromise(PromiseObj* p, Slot v);
+  void rejectPromise(PromiseObj* p, Obj* reason);
+  // PerformPromiseThen: adds the reaction, or queues its job when p is already settled
+  void promiseThen(PromiseObj* p, const Reaction& r);
+  // a host ticket: a pending promise of value type vt settled later by settleTicket
+  int64_t newTicket(PromiseObj* p, void* hostData = nullptr);
+  bool ticketHostData(int64_t ticket, void** data) const;
+  // settles an open ticket (false: unknown or already settled ticket)
+  bool settleTicket(int64_t ticket, bool ok, Slot value, Obj* reason);
+  size_t openTickets() const { return tickets_.size(); }
+  // a ticket the VM settles itself, in creation order, once nothing else is left to run (each in its own
+  // turn, like setImmediate in Node.js): e7:test's later() / laterReject()
+  void newAutoTicket(PromiseObj* p, bool ok, Slot v, uint8_t vt);
+  bool pending() const { return pending_; }
+  // the reason of a rejected promise as a host error message ("TypeError: x" / "x")
+  std::string rejectionMessage(Obj* reason) const;
   Obj* undef() const { return undef_; }
 
   // External buffer accounting
@@ -274,6 +323,9 @@ class VM {
     }
     ~TempRootSlots() { vm.tempRoots_.resize(n); }
   };
+
+  // Drops the frames above `n` (unwinding): coroutines running in them are finished.
+  void dropFrames(size_t n);
 
   void collectGarbage();
   size_t bytesAllocated() const { return bytes_; }
@@ -358,6 +410,40 @@ class VM {
   friend class Debugger;
   int execute(size_t entryDepth);
   int runFrames();
+  // the microtask driver (promise.cpp): what the job on the stack does when it returns or throws
+  enum JobKind : uint8_t { JOB_NONE, JOB_ENTRY, JOB_CALLBACK, JOB_AWAIT };
+  struct Job {
+    Reaction r;
+    Slot arg{};
+    uint8_t argVT = 0;
+    bool rejected = false;
+  };
+  bool startJob(Job& j);              // false: the job finished without running script code
+  void finishCallbackJob(Slot v, char kind);
+  bool failCallbackJob(E7Error& e);   // a then-callback threw: rejects its promise (true)
+  int finishTurn();                   // after the queue is drained: the entry call's result
+  void settleReaction(const Reaction& r, bool rejected, Slot v, uint8_t vt);
+  Obj* errorValue(E7Error& e);
+  std::deque<Job> microtasks_;
+  std::unordered_map<int64_t, std::pair<PromiseObj*, void*>> tickets_;
+  struct AutoTicket { int64_t ticket; bool ok; Slot v; uint8_t vt; };
+  std::deque<AutoTicket> autoTickets_;
+  bool settleNextAutoTicket();
+  int64_t nextTicket_ = 1;
+  std::vector<PromiseObj*> unhandled_;  // rejected without a handler (checked when the queue is drained)
+  JobKind curJob_ = JOB_NONE;
+  PromiseObj* curDerived_ = nullptr;    // JOB_CALLBACK: the promise the callback's result resolves
+  Reaction curReaction_{};              // JOB_CALLBACK: the reaction (finally needs the source outcome)
+  bool curRejected_ = false;
+  Slot curArg_{};
+  uint8_t curArgVT_ = 0;
+  FuncRT* entryFn_ = nullptr;
+  Slot entryResult_{};
+  char entryKind_ = 'V';
+  bool pending_ = false;
+  Obj* pendingThrow_ = nullptr;         // raised at the AWAIT when a resumed async function continues
+  // an uncaught error of the entry call: the queued jobs still run (as in JavaScript), then it is reported
+  std::unique_ptr<E7Error> entryError_;
   int runNormal();  // the interpreter (interp_loop.inc)
   int runDebug();   // the same loop with debugger checks, used only while a debugger is attached
   Slot invokeNativeMany(NativeBinding& nb, Slot* R, const uint64_t* aw, uint32_t argc);
@@ -452,6 +538,8 @@ class VM {
   size_t dbgRetDepth_ = 0;  // stepping: returning below this frame depth stops at the next instruction
   int catchDepth_ = 0;
 
+  std::unordered_map<std::string, std::unique_ptr<ClassRT>> groupsClasses_;  // never freed (inline caches hold them)
+  uint64_t groupsBytes_ = 0;  // their size (bounded by a quarter of the memory limit)
   std::unordered_map<std::string, NativeEntry> natives_;
   std::unordered_map<std::string, uint32_t> sigIds_;
   std::vector<std::string> sigs_;
@@ -481,6 +569,9 @@ void registerJsonNatives(VM& vm);
 void registerCryptoNatives(VM& vm);
 void registerDateNatives(VM& vm);
 void registerTestNatives(VM& vm);
+void registerPromiseNatives(VM& vm);  // promise.cpp
+void registerTypedArrayNatives(VM& vm);  // stdlib/typed.cpp
+void registerRegExpNatives(VM& vm);  // stdlib/regexp.cpp
 void applyNativeCosts(VM& vm);  // core.cpp
 
 }  // namespace e7

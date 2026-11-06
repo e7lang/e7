@@ -1,7 +1,7 @@
 // @feature: Typed arrays, `ArrayBuffer`, `DataView`
 // @category: JavaScript: Standard Library
 // @status: partial
-// @note: `Uint8Array`, `ArrayBuffer` and `DataView` (all getters and setters, both byte orders)
+// @note: `Uint8Array`, `Int8Array` ... `Float64Array`, `BigInt64Array`, `BigUint64Array` (elements little-endian), `ArrayBuffer` and `DataView` (all getters and setters, both byte orders)
 const buf = new ArrayBuffer(8);
 const bytes = new Uint8Array(buf);
 const view = new DataView(buf);

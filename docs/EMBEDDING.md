@@ -11,8 +11,8 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 
 For apps that receive modules over the air, [DEPLOYMENT.md](DEPLOYMENT.md) describes the complete flow: key
 management and rotation, signed manifests, staged rollout, kill switch, rollback, `e7c --target` per client VM
-version, sizing limits from measurements, error reporting and a shadow-run phase. `E7ModuleManager` (Java/Kotlin
-and Swift) implements the client side.
+version, sizing limits from measurements, error reporting and a shadow-run phase. `E7ModuleManager` (Java/Kotlin,
+Swift and C#) implements the client side.
 
 - **Signing is optional.** A plain `e7c app.ts -o app.e7b` module runs anywhere. Signing only adds a
   guarantee that the module came from you, which matters when it is downloaded at runtime. The rules:
@@ -39,14 +39,15 @@ and Swift) implements the client side.
 | `e7_config_init` / `e7_vm_new` / `e7_vm_free` | Create/destroy a VM. Config: `memory_limit`, `stack_slots`, `max_frames`, `suspend_on_budget`, `require_signature`, `trusted_keys`, `gc_growth_percent`. Always fill the struct with `e7_config_init` first: it sets `struct_size`, which lets newer libraries add fields |
 | `e7_load(vm, data, len, &module)` | Verify signature → parse → verify → link native functions → run module top-level code (`E7_ERR_VERSION` for a module of another bytecode format or one that needs a newer e7vm) |
 | `e7_inspect(data, len, &info)` | Read a module's format, required e7vm version (`requires_version`) and signature key id without loading it |
-| `e7_version` / `e7_version_number` | Library version (`"0.2.7"` / `0x000207`) |
+| `e7_version` / `e7_version_number` | Library version (`"0.3.0"` / `0x000300`) |
 | `e7_gc_stats_get(vm, &stats)` | Garbage collections, total and longest pause, heap size and peak |
 | `e7_compile` / `e7_load_source` | Compile source (errors are formatted as `file:line:col: error: ...`) |
 | `e7_compile_ex(src, len, name, &opts, ...)` | Compile with options (`e7_compile_options_init` first): `E7_COMPILE_DEBUG` (debug information), a `read_file` callback for imports, `target_version` (oldest e7vm that must run the module) |
 | `e7_call(vm, module, "fn", args, n, &ret)` | Call an `export function` |
 | `e7_set_budget(vm, ticks)` | Instruction budget for subsequent execution (≤0 means unlimited) |
-| `e7_resume` / `e7_abort_suspended` | Resume / abandon a suspended call |
+| `e7_resume` / `e7_abort_suspended` | Resume / abandon a suspended call, or one waiting for async host functions (`E7_PENDING`) |
 | `e7_register_native(vm, name, sig, fn, user)` | Register a host function (must be done before `e7_load`) |
+| `e7_register_async_native` / `e7_settle` / `e7_settle_error` / `e7_open_tickets` | Async host functions: the script gets a promise, the host settles its ticket later ([§2.6](#26-async-host-functions)) |
 | `e7_set_key_provider` | Provide keys for `KeyHandle` |
 | `e7_set_print` | Take over `console.log` output |
 | `e7_seed_random` | Fix the `Math.random` seed |
@@ -64,7 +65,8 @@ and Swift) implements the client side.
 **Error codes**: `E7_OK`, `E7_SUSPENDED`, `E7_ERR_RUNTIME` (script error/throw/abort), `E7_ERR_BUDGET`, `E7_ERR_MEMORY`,
 `E7_ERR_STACK`, `E7_ERR_LOAD`, `E7_ERR_VERIFY`, `E7_ERR_SIGNATURE`, `E7_ERR_NOT_FOUND`, `E7_ERR_ARGS`, `E7_ERR_COMPILE`, `E7_ERR_STATE`,
 `E7_ERR_VERSION` (bytecode format or required e7vm version not supported: deliver a module built with
-`e7c --target <app's e7vm version>`), and `E7_PAUSED` (only with a debugger attached in pause-to-host mode).
+`e7c --target <app's e7vm version>`), `E7_PAUSED` (only with a debugger attached in pause-to-host mode), and
+`E7_PENDING` (the call waits for async host functions: [§2.6](#26-async-host-functions)).
 The VM remains usable after any error; module globals are preserved.
 
 ### 2.1 Host functions
@@ -160,6 +162,158 @@ semantics, the inspection API and the `e7 debug` command-line debugger.
 A VM may be used from only one thread; different VMs share no state and can run in parallel on different threads. For concurrency, create one VM per thread
 (each can load the same `.e7b`).
 
+### 2.6 Async host functions
+
+Since 0.3 a script can `await` work the host does asynchronously (a network request, a Keystore / Keychain
+operation that shows UI, a database query). The VM has no event loop and no threads of its own: **the host is the
+event loop** ([DESIGN-0.3.md D2](DESIGN-0.3.md#d2-async--await)).
+
+```ts
+import { hmac } from "e7:crypto";
+import { hexEncode } from "e7:encoding";
+declare function fetchKey(id: string): Promise<Uint8Array>;   // an async host function
+
+export async function sign(id: string, body: Uint8Array): Promise<string> {
+  const key = await fetchKey(id);
+  return hexEncode(hmac("sha256", key, body));
+}
+```
+
+The protocol of the C API:
+
+1. `e7_register_async_native(vm, "fetchKey", "s>y", fn, user)` before `e7_load`. The signature is written as for
+   `e7_register_native`, with the **promise's value type** as the return code (`"s>y"`: `(string) => Promise<Uint8Array>`;
+   `v` for `Promise<void>`).
+2. When the script calls it, the VM creates a pending promise and calls `fn(vm, args, nargs, ticket, user)`. `fn` starts
+   the operation and returns `E7_OK`; returning an error status (with `e7_native_error`) throws in the script at the
+   call instead, and no ticket stays open.
+3. The host settles the ticket **on the VM's thread**, inside `fn` (at once) or later: `e7_settle(vm, ticket, &value)`
+   fulfills the promise (`E7_ERR_ARGS`: a value of the wrong type, the ticket stays open), `e7_settle_error(vm, ticket, message)`
+   rejects it with an `Error`. Unknown or already settled tickets give `E7_ERR_STATE`. `e7_open_tickets(vm)` counts the
+   open ones.
+4. `e7_call` runs until the script has nothing left to do. With tickets still open it returns **`E7_PENDING`**: settle
+   one or more tickets, then `e7_resume(vm, &ret)`, which runs the promise jobs those settlements queued and returns
+   `E7_OK` with the result, an error, or `E7_PENDING` again.
+5. An `export async function f(): Promise<T>` is called like any export and the host gets `T`: the call waits for
+   the promise (`E7_ERR_RUNTIME` with the error if it rejects, as does an unhandled rejection). Without open tickets
+   (e.g. every async native settled at once) it returns `E7_OK` directly.
+6. Top-level `await` of a host operation makes `e7_load` return `E7_PENDING`, with the module pointer already set;
+   `e7_resume` finishes the initializer.
+7. While a call is pending, `e7_call` fails with `E7_ERR_STATE` (as for a suspended call). `e7_abort_suspended`
+   abandons it; settling its tickets later returns `E7_ERR_STATE`, so late completions are simply ignored.
+
+Operations that complete on other threads hand their results to the VM's thread, which settles them **in the order
+they complete** and resumes after each (one macrotask per completion, as Node.js runs `setImmediate` callbacks):
+
+```c
+static e7_status fetch_key(e7_vm* vm, const e7_value* a, size_t n, int64_t ticket, void* user) {
+  start_fetch(a[0].v.str.ptr, a[0].v.str.len, ticket);   // its completion is pushed to `done_queue` by another thread
+  return E7_OK;
+}
+e7_register_async_native(vm, "fetchKey", "s>y", fetch_key, NULL);
+/* ... e7_load ... */
+e7_status st = e7_call(vm, m, "sign", args, 2, &ret);
+while (st == E7_PENDING) {
+  struct completion c = queue_pop_blocking(&done_queue);  // the next operation that finished
+  if (c.ok) {
+    e7_value v = {.type = E7_BYTES};
+    v.v.bytes.ptr = c.data;
+    v.v.bytes.len = c.len;
+    e7_settle(vm, c.ticket, &v);
+  } else {
+    e7_settle_error(vm, c.ticket, c.message);
+  }
+  st = e7_resume(vm, &ret);
+}
+```
+
+`tests/capi_test.cpp` (last block) exercises the whole protocol.
+
+**The language bindings drive this loop themselves.** Each registers async host functions with the language's own
+async type and offers an async call that settles completions on the VM's thread in completion order. The synchronous
+`call` / `load` / `resume` stay as they were; when they would return `E7_PENDING` they abandon the call and report the
+pending status as an error (nothing else could settle its tickets).
+
+- **Java / Kotlin**: register with `registerAsyncNative(name, sig, args -> CompletionStage<?>)`; call with
+  `callAsync(executor, m, fn, args...)` → `CompletableFuture<Object>` or the blocking `callAwait(m, fn, args...)`; load
+  (top-level `await`) with `loadAsync(executor, bytes)` / `loadAwait(bytes)`. A synchronous call that would wait throws
+  `E7Exception` with status `PENDING`.
+- **Swift**: `registerAsyncNative(name, signature:) { args async throws in ... }`; `try await callAsync(m, fn, args...)`;
+  `try await loadAsync(bytes)`. A synchronous call that would wait throws `E7Error` with `isPending`.
+- **C#**: `RegisterAsyncNative(name, sig, Func<object?[], Task<object?>>)` (or with a `CancellationToken`);
+  `await CallAsync(m, fn, args...)` (an overload takes a `CancellationToken`) or the blocking `CallAwait(m, fn, args...)`;
+  `await LoadAsync(bytes)` or the blocking `LoadAwait(bytes)`. A synchronous call that would wait throws `E7Exception`
+  with `E7Status.Pending`.
+- **JavaScript**: no host functions; `run(..., { call })` returns an async export's value and top-level `await` works in
+  `run` (the status `"pending"` cannot occur).
+
+Common rules: a host operation that fails rejects the script's promise with an `Error` carrying the exception's
+message (Swift: the error's description); a value of the wrong type rejects it too, naming the function. Java and C#
+settle an operation whose future / task is **already complete** at once, so a synchronous `call` works when all of
+them complete immediately; Swift starts each operation in a new `Task`, so async natives need `callAsync`. While an
+async call waits, other calls fail with `E7_ERR_STATE`. Cancelling the call (cancelling the Java future, the Swift
+task or the C# token) or calling `abortSuspended()` abandons it; late completions are ignored. An async call does not
+stop at an exhausted budget with `suspend_on_budget`: it is abandoned with the `SUSPENDED` status. `openTickets`
+mirrors `e7_open_tickets`.
+
+**Java.** The VM runs on an executor, the "VM thread", which must run tasks one at a time in order:
+`Executors.newSingleThreadExecutor()`, Android's main thread (`context.getMainExecutor()`) or `handler::post`. Use the
+VM only from that executor while a call is in progress. `callAwait` blocks the calling thread instead, which becomes
+the VM thread (interrupting it abandons the call). On Android, `registerAsyncNative` and `callAsync` / `loadAsync`
+need API 24 (`CompletionStage` / `CompletableFuture`); the rest of the class, including `callAwait` / `loadAwait`
+(which `E7ModuleManager` uses for module initializers and `selfTest`), works from API 21.
+
+```java
+ExecutorService vmThread = Executors.newSingleThreadExecutor();
+vm.registerAsyncNative("fetchKey", "s>y", args -> keyStore.fetchAsync((String) args[0]));  // CompletableFuture<byte[]>
+E7VM.Module m = vm.loadAwait(bytecode);
+CompletableFuture<Object> sig = vm.callAsync(vmThread, m, "sign", "k1", body);
+sig.thenAccept(s -> show((String) s));
+```
+
+**Kotlin** wraps it in a `suspend` function with kotlinx-coroutines (cancelling the coroutine cancels the future,
+which abandons the call):
+
+```kotlin
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.future.future
+
+val vmThread = Executors.newSingleThreadExecutor()
+val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+vm.registerAsyncNative("fetchKey", "s>y") { args -> ioScope.future { keyStore.fetch(args[0] as String) } }
+
+suspend fun E7VM.callSuspend(module: E7VM.Module, function: String, vararg args: Any?): Any? =
+  callAsync(vmThread, module, function, *args).await()
+
+val sig = vm.callSuspend(module, "sign", "k1", body) as String
+```
+
+**Swift.** `callAsync` runs the VM on the caller's actor (Swift 6 compilers: an `isolation` parameter defaulting to
+`#isolation`, e.g. the main actor); host operations run in their own tasks and their results come back through an
+`AsyncStream`. Cancelling the task that awaits `callAsync` abandons the call and cancels the host tasks.
+
+```swift
+try vm.registerAsyncNative("fetchKey", signature: "s>y") { args in
+  guard case .string(let id) = args[0] else { throw KeyError.badId }
+  return .bytes(try await keychain.fetch(id))
+}
+let module = try await vm.loadAsync(bytecode)
+let sig = try await vm.callAsync(module, "sign", .string("k1"), .bytes(body))
+```
+
+**C#.** `CallAsync` starts on the calling thread and settles each completion where its `await` continues: the
+caller's `SynchronizationContext` (e.g. the UI thread), otherwise one thread-pool thread at a time.
+
+```csharp
+vm.RegisterAsyncNative("fetchKey", "s>y", async args => await keyStore.FetchAsync((string)args[0]!));
+var module = await vm.LoadAsync(bytecode);
+var sig = (string)(await vm.CallAsync(module, "sign", "k1", body))!;
+```
+
+**JavaScript.** The npm package has no host functions, so nothing can stay pending: `run` completes async exports
+and top-level `await` (and `e7:test`'s `later()` stand-ins) before it returns; `result` is the promise's value.
+
 ## 3. Android and JVM (Java / Kotlin)
 
 ### 3.1 Gradle dependency (recommended)
@@ -174,8 +328,8 @@ The binding is published as two Maven artifacts (group `org.e7vm`):
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("org.e7vm:e7vm-android:0.2.7")   // Android
-    // implementation("org.e7vm:e7vm:0.2.7")         // desktop / server JVM
+    implementation("org.e7vm:e7vm-android:0.3.0")   // Android
+    // implementation("org.e7vm:e7vm:0.3.0")         // desktop / server JVM
 }
 ```
 
@@ -199,7 +353,7 @@ dependencyResolutionManagement {
 ```
 
 The `.aar` and `.jar` are also attached to each [GitHub release](https://github.com/e7lang/e7/releases);
-a downloaded AAR can be used with `implementation(files("libs/e7vm-android-0.2.7.aar"))`.
+a downloaded AAR can be used with `implementation(files("libs/e7vm-android-0.3.0.aar"))`.
 
 On the desktop JVM, `org.e7vm.NativeLoader` loads the library in this order: the path in the system
 property `e7vm.library`, then `System.loadLibrary("e7vm_jni")` (`java.library.path`), then the copy bundled
@@ -224,6 +378,7 @@ Returns: `Double`, `Long`, `Boolean`, `String`, `ByteArray`, or `null`. Errors a
 `E7VM.Config().gcGrowthPercent(n)`, `vm.gcStats()`, `E7VM.versionNumber()`, `E7VM.inspect(bytes)` and
 `E7VM.signDetached` / `verifyDetached` mirror the C functions of the same names. For over-the-air delivery use
 `E7ModuleManager` (signed manifest, rollout, kill switch, rollback; see [DEPLOYMENT.md](DEPLOYMENT.md#4-client-integration)).
+Async host functions: `registerAsyncNative`, `callAsync` / `callAwait`, `loadAsync` / `loadAwait` ([§2.6](#26-async-host-functions)).
 
 ### 3.3 Building from source
 
@@ -240,7 +395,8 @@ Returns: `Double`, `Long`, `Boolean`, `String`, `ByteArray`, or `null`. Errors a
 libraries, and as an instrumented test on an Android emulator (API 30, x86_64) against the AAR. It checks the
 AAR (all four ABIs, consumer rules, 16 KB alignment) and the jar, and uploads the AAR as the `e7-android-aar`
 build artifact. The suite includes the `E7ModuleManager` scenarios (`ModuleManagerScenarios.java`), which
-`platform/java/test/E7VMTest.java` and `ModuleManagerTest.java` additionally run without JUnit in `ci.yml`.
+`platform/java/test/E7VMTest.java` and `ModuleManagerTest.java` additionally run without JUnit in `ci.yml`,
+as do the async host function scenarios (`AsyncScenarios.java`, JUnit `E7VMAsyncTest`, plain `AsyncTest.java`).
 
 Releases call it with `publish: true`: artifacts go to GitHub Packages, and to Maven Central (Central Portal
 bundle via `scripts/maven-central-bundle.sh`) when the repository has the secrets `MAVEN_CENTRAL_USERNAME`,
@@ -255,7 +411,7 @@ crypto libraries from source; no prebuilt binary is involved. In Xcode use *File
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/e7lang/e7.git", from: "0.2.7"),
+  .package(url: "https://github.com/e7lang/e7.git", from: "0.3.0"),
 ],
 targets: [
   .target(name: "App", dependencies: [.product(name: "E7VM", package: "e7")]),
@@ -281,6 +437,8 @@ if case let .string(sig) = try vm.call(module, "sign", .string("a=1&b=2"), .hand
 
 Values are `E7Value` cases: `.number(Double)`, `.int(Int64)`, `.uint(UInt64)`, `.bool`, `.string`, `.bytes(Data)`,
 `.handle(KeyHandle)` and `.void`. Errors are `E7Error(status, message)` (`isSuspended` for time-slicing with `resume()`).
+Async host functions: `registerAsyncNative(_:signature:_:)` with an `async` closure, `callAsync` / `loadAsync`
+([§2.6](#26-async-host-functions)).
 `E7VM.compile(_:)`, `E7VM.sign(_:seed:)` and `E7VM.publicKey(seed:)` compile and sign modules (e.g. in tests or tooling).
 `E7VM(gcGrowthPercent:)`, `vm.gcStats()`, `E7VM.versionNumber`, `E7VM.inspect(_:)` and `E7VM.signDetached` /
 `verifyDetached` mirror the C API; `E7ModuleManager` handles over-the-air delivery ([DEPLOYMENT.md](DEPLOYMENT.md#4-client-integration)).
@@ -297,12 +455,12 @@ e7vm uses no JIT and allocates no executable memory, which meets the App Store r
   and macOS 11+ (universal), which .NET loads automatically from `runtimes/<rid>/native/`:
 
   ```bash
-  dotnet add package E7VM --version 0.2.7
+  dotnet add package E7VM --version 0.3.0
   ```
 
   The package targets `netstandard2.0` and `net8.0` (managed assembly `E7.dll`, namespace `E7`). It is also attached to each GitHub release and published to
   GitHub Packages (`https://nuget.pkg.github.com/e7lang/index.json`).
-  Without NuGet, add `platform/windows/E7VM.cs` to your project and ship `e7vm.dll` (or `libe7vm.so` / `libe7vm.dylib`)
+  Without NuGet, add `platform/windows/E7VM.cs` (and `E7ModuleManager.cs` for over-the-air updates) to your project and ship `e7vm.dll` (or `libe7vm.so` / `libe7vm.dylib`)
   next to your app; build it with `-Shared` or `cmake -DE7_BUILD_SHARED=ON`.
   Tested in CI by `platform/windows/test`, both against a local build
   (`dotnet run --project platform/windows/test -- <dir with the library>`) and from the packed `.nupkg` on
@@ -316,11 +474,16 @@ vm.SetBudget(10_000_000);
 var sig = (string)vm.Call(module, "sign", "a=1&b=2", new E7.KeyHandle(1))!;
 ```
 
+Async host functions: `RegisterAsyncNative` with a `Task`-returning function, `CallAsync` / `LoadAsync`, and the
+blocking `CallAwait` / `LoadAwait` ([§2.6](#26-async-host-functions)). `E7ModuleManager` handles over-the-air
+delivery ([DEPLOYMENT.md](DEPLOYMENT.md#4-client-integration)).
+
 ## 6. JavaScript / WebAssembly (Node.js, browsers, editors)
 
 The npm package [`@e7lang/e7`](../packages/e7) is the compiler and VM built with Emscripten
 (`tools/e7wasm.cpp`). Every `run` uses a fresh VM with an instruction budget and a memory limit; host
-functions and `KeyHandle` are not available from JavaScript (use the native API for those).
+functions and `KeyHandle` are not available from JavaScript (use the native API for those). Async exports and
+top-level `await` complete within `run` ([§2.6](#26-async-host-functions)).
 
 ```js
 import { compile, run } from "@e7lang/e7";

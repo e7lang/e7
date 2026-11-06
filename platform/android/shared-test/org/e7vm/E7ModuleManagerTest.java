@@ -12,4 +12,5 @@ public class E7ModuleManagerTest {
   @Test public void requiresNewerVm() throws Exception { ModuleManagerScenarios.requiresNewerVm(); }
   @Test public void selfTestFailure() throws Exception { ModuleManagerScenarios.selfTestFailure(); }
   @Test public void rollbackAfterFailures() throws Exception { ModuleManagerScenarios.rollbackAfterFailures(); }
+  @Test public void asyncExports() throws Exception { ModuleManagerScenarios.asyncExports(); }
 }

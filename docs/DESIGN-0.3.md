@@ -1,8 +1,9 @@
 # E7 0.3 design decisions
 
-Status: **decided, not implemented**. These are the design decisions the 0.3 plan ([ROADMAP.md](ROADMAP.md),
-section 0.3) asks for before any code is written. Each one states what is decided, why, what it costs, and what is
-left open. The bytecode changes are specified in [BYTECODE.md](BYTECODE.md), section 6 (format 3).
+Status: **implemented in 0.3**, with the changes listed in [Implementation notes](#implementation-notes) at the
+end. These are the design decisions the 0.3 plan ([ROADMAP.md](ROADMAP.md), section 0.3) asked for before any
+code was written. Each one states what is decided, why, what it costs, and what is left open. The bytecode
+changes are specified in [BYTECODE.md](BYTECODE.md), section 6 (format 3).
 
 Every decision keeps the rules of [SPEC.md](SPEC.md) section 0.1: types are known at compile time (the fixed rule),
 the bytecode is verifiable, and behaviour is identical to JavaScript as Node.js 22 implements it.
@@ -325,3 +326,43 @@ behaves like a JavaScript object for every property its type declares.
    ordering, decide the exact text with the debugger work.
 3. Whether `queueMicrotask` is worth adding with D2 (cheap, but rarely used by the target scripts).
 4. The size budget for the Unicode tables (D4), measured on the iOS and Android libraries.
+
+---
+
+## Implementation notes
+
+What 0.3 implements differs from the decisions above in these points:
+
+- **D1.** The value kinds in fflags are 0 none, 1 `I`, 2 `F`, 3 `R` (a plain function has fflags 0), and bits 6-7
+  hold the kind of the body's return value. `GEN_START` is the first instruction, so default parameter values of a
+  generator are evaluated when the body first runs (at the first `next()`), not at the call. Iterators are
+  generators at run time: an iterator object written by hand (an object with a `next()` method) is not an
+  `Iterator<T>`; a class is iterable through a generator method `*[Symbol.iterator]()`. `next()` on a finished
+  generator whose return type is a primitive gives NaN / 0 / false instead of `undefined` (the value's
+  representation is fixed).
+- **D2.** The C API is `e7_register_async_native`, `e7_settle`, `e7_settle_error`, `e7_open_tickets` and the status
+  `E7_PENDING` (15). A call returns `E7_PENDING` whenever host tickets are open at its end, also when the entry
+  function is not `async` (the call is finished when the work it started is). An uncaught error of the call itself
+  runs the jobs it queued first (as JavaScript does), then ends the call. For tests, `e7:test` provides `later(v)`
+  and `laterReject(e)`: promises the VM settles itself, one per turn, in creation order (`setImmediate` in the
+  Node.js shim). **Async generators (`async function*`) are not implemented**: they are rarely needed by the target
+  scripts (an async function returning an array, or `for await` over an array of promises, covers them), and their
+  request queue is a separate state machine; they wait for a later release.
+- **D3.** As decided. Records get the presence class flag only when the module may need format 3: `e7c --target 0.2`
+  compiles them without masks (the 0.2 behaviour).
+- **D4.** As decided; the engine is `src/regexp/` (a parser following V8's, a compiled program, a matcher with two
+  explicit stacks), its Unicode tables are generated from Node.js by `scripts/gen-regexp-unicode.mjs` (about 59 KB
+  compiled). The `v` flag and duplicate named groups are rejected, as Node.js 22 does.
+- **D5.** As decided, with `as const` for literals and arrays and objects of literals; a `const` initialized with a
+  literal has the literal's type, a `let` the base type (TypeScript's widening). An enum member used as a type
+  (`kind: E.A`) is the enum's type (tsc checks the member).
+- **D6.** The back-reference in a JSON descriptor is `@<n>` (the n-th enclosing object descriptor); a module using
+  one calls the natives `JSON.parseRec` / `JSON.tryParseRec` (`since 0.3.0`), which is what sets its `requires`.
+- **D7.** Records whose type has a property that may hold `undefined` (optional or `| undefined`) carry the mask;
+  object literals, spread and `JSON.parse` leave absent properties out, `Object.has` (a native) tells spread
+  whether a source property is present.
+
+Open questions: generators print as `Object [Generator] {}` and promises as `Promise { 1 }` / `Promise { <pending> }`
+/ `Promise { <rejected> Error: x }`, as in Node.js; stack traces through `await` show the frames of the current
+continuation; `queueMicrotask` is not added.
+

@@ -1,4 +1,4 @@
-# E7 Language Specification (0.2)
+# E7 Language Specification (0.3)
 
 E7 is a **strict subset** of TypeScript: every program accepted by the E7 compiler is also accepted by `tsc --strict` (with `lib/e7.d.ts`),
 and produces the same result when run on a JavaScript engine (except for fixed-width integers, see §4.2). The converse does not hold: E7 rejects TS
@@ -36,8 +36,8 @@ three references that can each be checked mechanically:
    - **Behaviour equals JavaScript.** If E7 cannot reproduce JavaScript's behaviour exactly, the construct is a
      compile error rather than something that runs differently (section 9 lists the exceptions that remain).
 
-   Features that satisfy the rules but are not implemented yet (generators, `async`, regular expressions, ...) are
-   listed as such. [TYPESCRIPT.md](TYPESCRIPT.md) lists every TypeScript feature with its status, the reason and
+   Features that satisfy the rules but are not implemented yet (async generators, object literal accessors, ...)
+   are listed as such. [TYPESCRIPT.md](TYPESCRIPT.md) lists every TypeScript feature with its status, the reason and
    what to write instead; each row is a sample program that CI compiles (and, for supported features, compares with
    Node.js), so the table always matches the compiler.
 
@@ -50,7 +50,9 @@ three references that can each be checked mechanically:
 - Numbers: decimal, `0x`/`0o`/`0b`, exponents, numeric separators `1_000`; **bigint** literals `123n`. Legacy octal `017` is not allowed.
 - Strings: `'...'`, `"..."`, escapes `\n \t \r \b \f \v \0 \xHH \uHHHH \u{H...}`; template strings `` `a ${expr} b` `` (nestable).
 - Private names `#x` for class members (section 5).
-- **Not supported**: regex literals, decorators `@`.
+- Regular expression literals `/pattern/flags` (0.3, section 6.6): a `/` where an expression can start begins
+  one, elsewhere (after a value, an identifier, `)` or `]`) it is a division.
+- **Not supported**: decorators `@`.
 
 ## 2. Types
 
@@ -74,10 +76,18 @@ three references that can each be checked mechanically:
 | `KeyHandle` (from `e7:crypto`) | Reference to a key held by the host | Handle |
 | `void`, `never`, `null`, `undefined` | | |
 
-**Not supported** (compile error with a hint): `any`, `unknown`, `object`, union types other than with `null/undefined`, intersection types,
-index signatures (use `Map<K, V>`), `keyof`/`typeof` type operators, conditional/mapped types,
-utility types such as `Record/Partial/Pick`, `Promise`, `Symbol`, `RegExp`, and typed arrays other than `Uint8Array`, such as `Int32Array`
-(use `u32[]` or `DataView`). String literal types (`"a" | "b"`) are treated as `string`.
+Also (0.3): `Promise<T>`, `Generator<T, TReturn, TNext>` / `Iterator<T>` / `IterableIterator<T>` (coroutines at run
+time; `IteratorResult<T>` is `{ value: T | undefined; done: boolean }`, or `{ value: T; ... }` when the return type is
+`T`), the typed arrays `Int8Array` ... `Float64Array`, `Uint8ClampedArray`, `BigInt64Array`, `BigUint64Array`,
+`RegExp`, `RegExpMatchArray` / `RegExpExecArray` (section 6.6), and
+literal types: string, numeric and boolean literals and unions of literals of one base type (`"GET" | "POST"`,
+`0 | 1`, `true`), checked as tsc checks them (narrowed by `===`, `!==` and `switch`) and represented as their base
+type. The utility types `Awaited<T>`, `NonNullable<T>`, `NoInfer<T>` and `Uppercase` / `Lowercase` / `Capitalize`
+/ `Uncapitalize` (of literal types) are resolved at compile time.
+
+**Not supported** (compile error with a hint): `any`, `unknown`, `object`, union types other than with `null/undefined` (and
+unions of literals of one base type), intersection types, index signatures (use `Map<K, V>`), `keyof`/`typeof` type
+operators, conditional/mapped/template literal types, utility types such as `Record/Partial/Pick`, `Symbol`.
 User-defined generics are supported (section 2.3).
 
 ### 2.1 Assignment compatibility
@@ -96,13 +106,18 @@ User-defined generics are supported (section 2.3).
 - Variables, return values, arrow function parameters (contextual typing), and object/array literals can all be inferred; an empty array `[]` needs an annotation or a contextual type.
   As in tsc, an array literal destructured by an array pattern is a tuple when its elements have different types
   (`const [n, s] = [1, "x"]` binds a `number` and a `string`; nested patterns and literals likewise); with elements of
-  compatible types it is an array. `as const` is not supported (annotate the type instead).
+  compatible types it is an array. `x as const` gives literal types, readonly tuples and objects with readonly
+  properties (for literals and arrays and objects of literals). A `const` initialized with a literal has the
+  literal's type (`const k = "a"` is a `"a"`); a `let` has its base type, as in tsc.
 - A recursive function that omits its return type is an error; an explicit annotation is required.
 - Interfaces and object type aliases may be recursive (`interface Tree { children: Tree[] }`, also mutually recursive
   and generic ones); structural compatibility between recursive types is checked coinductively, as in tsc.
-  `JSON.parse(text) as T` into a recursive type is not supported yet.
-- A `switch` with a case for every member of an enum is exhaustive: a function may end with it without a `default`
-  or a final `return` (the `default` branch of such a switch does not see the value as `never`).
+  `JSON.parse(text) as T` into a recursive type works (its descriptor refers back to the enclosing type; e7vm 0.3).
+- A `switch` with a case for every member of an enum or every value of a literal type is exhaustive: a function may
+  end with it without a `default` or a final `return`, and its `default` branch sees the value as `never`
+  (`assertNever(x)` patterns compile). Each case sees the value narrowed to its literals.
+- Type predicates `(x: T): x is U` and `this is U`, and assertion functions `asserts x is U` / `asserts x`, narrow
+  at their calls (nullable values, literal types, classes); the function's check is trusted, as in TypeScript.
 - Narrowing: `x === null`, `x !== undefined`, `x == null`, truthiness checks `if (x)`, `instanceof`, combinations with `&&`/`||`/`!`,
   early `return/throw/break/continue`, `x ??= v`, and assignment (also an assignment that ends an `if` branch, when the
   other path is narrowed to the same type: `if (x === null) x = [];`, and a conditional expression whose branches are
@@ -276,12 +291,17 @@ try {
 - `typeof x` is evaluated at compile time to a constant string (not supported for nullable types).
 - `x as T`: same type, upcast, removing nullability (runtime-checked), class downcast (runtime-checked, terminates on failure), `JSON.parse(text) as T` (§6.4).
 - `x!` non-null assertion: runtime-checked, terminates on null/undefined.
-- Not supported: `delete`, `in`, `new.target`, tagged templates, `eval`.
+- Tagged templates `` tag`a${x}b` `` call `tag(["a", "b"], x)` (the parts as a `readonly string[]`, TypeScript's
+  `TemplateStringsArray`; its `raw` property is not available); `` String.raw`...` `` gives the raw text.
+- `<T>x` is the same as `x as T`.
+- Not supported: `delete`, `in`, `new.target`, `eval`.
 
 ## 5. Functions and classes
 
 - Parameters must have type annotations (arrow functions can infer them from context). Default parameters (which may reference earlier parameters), optional parameters `x?: T`, and rest parameters `...xs: T[]` are supported.
-  A function declaration with default parameters cannot be passed as a value (wrap it in an arrow function).
+  A function declaration with default parameters, and a built-in function (`Math.sqrt`, `parseInt`, `String`,
+  `Boolean`, ...), becomes a value where a function type is expected (`xs.map(Math.sqrt)`, `["1", "2"].map(parseInt)`
+  passes the index as the radix, as in JavaScript): the compiler wraps it in an arrow function.
   Arrow functions and function expressions can have default parameters too: such a closure parameter has the
   type `T | undefined` (a default applies when the argument is omitted or `undefined`, as in JavaScript).
   A callback parameter annotated `unknown` takes its contextual type (`Array.from({ length: n }, (_: unknown, i) => i)`).
@@ -294,7 +314,10 @@ try {
   expression through its name (`function f(n: number): number { ... f(n - 1) ... }`).
 - Classes: fields (optionally initialized, types can be inferred), constructor parameter properties (`constructor(public x: number)`), methods, static fields/methods,
   single inheritance with `extends` (the first statement of a derived class constructor must be `super(...)`; if the constructor is omitted, the superclass constructor parameters are inherited automatically),
-  `super.method()`, `implements` (checked structurally), `instanceof`. Method overrides require identical signatures.
+  `super.method()`, `implements` (checked structurally), `instanceof`. A method override may have fewer parameters
+  and a return type assignable to the overridden method's (a subclass of its class), with the same representations
+  (the overridden method's other parameters are passed and ignored). A method returning `this` gives the receiver's
+  class at a call. `declare x: T` declares a field set elsewhere (also an inherited field, with its type).
   `public/private/protected` modifiers are accepted but not enforced. `readonly` is enforced at compile time as in TypeScript: a readonly
   field (or parameter property) can only be assigned through `this` in its own class's constructor, and a `static readonly` field only by its
   initializer. A `readonly` property of an interface or object type cannot be assigned; `readonly T[]` /
@@ -332,6 +355,38 @@ try {
   literal with methods cannot contain spreads.
 - Uninitialized fields start as `0` / `false` / `null`; optional fields start as `undefined`.
 
+### 5.1 Generators and iterators (0.3)
+
+- `function*` declarations and expressions, generator methods (`*m()`, also `*[Symbol.iterator]()`), `yield`,
+  `yield*` (of a generator, an array or an iterable class: values, `next(v)` arguments, `return(v)` and `throw(e)`
+  are forwarded), `next(v)` / `return(v)` / `throw(e)` (`throw` takes an `Error`).
+- Types: `Generator<T, TReturn = void, TNext = (none)>`, `Iterator<T>` and `IterableIterator<T>` (a generator is all
+  three at run time). `TReturn` must be `void` or `T` (otherwise `IteratorResult` would be a general union); a return
+  type left out is inferred (`Generator<yielded types, returned types>`).
+- A generator, or an instance of a class with a `*[Symbol.iterator]()` method, works with `for...of`, spread,
+  `Array.from` and array destructuring. Leaving a `for...of` early (`break`, `return`, a `throw` from the body) calls
+  the iterator's `return()`, so its `finally` blocks run, as in JavaScript.
+- `next()` on a finished generator whose return type is a primitive gives `NaN` / `0` / `false` for `value`
+  (section 9); default parameter values of a generator are evaluated by the first `next()`.
+
+### 5.2 `async` functions and promises (0.3)
+
+- `async` functions, methods and arrow functions, `await` (also top-level in the entry module; an imported module
+  with top-level `await` is a compile error), `for await (const x of xs)` over arrays (each element awaited) and
+  generators.
+- `Promise<T>`: `then` (callbacks returning `U` or `Promise<U>`), `catch` (a handler returning `T`, or nothing),
+  `finally`, `new Promise<T>((resolve, reject) => ...)` (`reject` takes an `Error`; an error thrown by the executor
+  rejects), `Promise.resolve` / `reject` / `all` / `allSettled` / `any` / `race` over arrays of promises of one type
+  (`allSettled` gives records `{ status, value?, reason? }`, `any` rejects with an `AggregateError`).
+- The VM runs the promise jobs of the ECMAScript specification in its order, so callbacks run in the order of
+  Node.js. A call runs its frames, then the jobs they queued, until none is left. An `async` function returns its
+  promise at its first `await`; an exported `async` function gives the host the promise's value. A rejection that
+  no handler takes by the end of the call fails the call with its error (Node.js ends the process).
+- There are no timers. Host operations are `declare function f(...): Promise<T>` functions the host registers with
+  `e7_register_async_native`; their promises are settled by the host through tickets, and a call returns
+  `E7_PENDING` while tickets are open (see EMBEDDING.md). For tests, `later(v)` / `laterReject(e)` of `e7:test`
+  settle in a later turn (section 7.1).
+
 ## 6. Standard library
 
 The following behave the same as JavaScript (verified by differential testing against Node.js):
@@ -345,8 +400,9 @@ The following behave the same as JavaScript (verified by differential testing ag
 - **Number**: `isInteger isSafeInteger isFinite isNaN parseFloat parseInt`, constants; instance methods `toString(radix) toFixed toPrecision toExponential`.
 - **String**: `length charAt charCodeAt codePointAt at indexOf lastIndexOf includes startsWith endsWith slice substring substr
   toUpperCase toLowerCase trim trimStart trimEnd padStart padEnd repeat split replace replaceAll concat localeCompare`,
-  `String.fromCharCode/fromCodePoint`. `split/replace` accept only string patterns (no regex); the replacement of
-  `replace` / `replaceAll` can be a function `(match, offset, string) => string`; case conversion covers Latin, Greek and Cyrillic letters;
+  `String.fromCharCode/fromCodePoint`, and `match matchAll search` with a regular expression (section 6.6). `split`,
+  `replace` and `replaceAll` take a string or a regular expression; with a string pattern the replacement of `replace` /
+  `replaceAll` can be a function `(match, offset, string) => string`; case conversion covers Latin, Greek and Cyrillic letters;
   `localeCompare` compares by code units (locale-independent).
 - **Array**: `length push pop shift unshift at slice splice concat indexOf lastIndexOf includes join reverse fill sort
   map filter forEach reduce reduceRight some every find findIndex findLast findLastIndex flatMap flat`
@@ -405,6 +461,43 @@ if (cfg === null) console.log("bad config: " + lastError());  // e.g. "expected 
   validated, and `lastError()` texts differ. Differential tests therefore only use shape-correct documents or syntax
   errors; shape mismatches are tested against E7 alone (`tests/cases/lib/json_try_shape.ts` with its `.out` file).
 
+### 6.6 Regular expressions (0.3)
+
+ECMAScript 2024 regular expressions without the `v` flag, with the semantics of V8 (Node.js 22) on UTF-16 strings,
+run by an own backtracking engine (`src/regexp`).
+
+- **Literals** `/pattern/flags` with the flags `d g i m s u y` (each at most once). The compiler checks every
+  literal: a syntax error is a compile error at the literal with V8's message (`Invalid regular expression: /(/:
+  Unterminated group`, `Invalid regular expression flags`). Each evaluation of a literal creates a new `RegExp`
+  object (its own `lastIndex`), as in JavaScript.
+- **Syntax**: everything ES2018-2024 adds (named groups `(?<name>...)` and `\k<name>`, lookbehind, the `s` flag,
+  `\p{...}` property escapes with General_Category, Script, Script_Extensions and the binary properties) and the Annex B
+  syntax V8 accepts without the `u` flag. Duplicate group names and pattern modifiers `(?i:...)` (ES2025) are syntax
+  errors, as in Node.js 22. The Unicode data is that of the Node.js the tables were generated from
+  (`scripts/gen-regexp-unicode.mjs`).
+- **`new RegExp(pattern, flags?)`** with a string or a `RegExp` pattern: a pattern built at run time; a syntax error is a
+  catchable `SyntaxError`.
+- **`RegExp`**: `test exec toString`, `lastIndex` (read and assigned), `source flags global ignoreCase multiline sticky
+  unicode dotAll hasIndices`. `exec` and `test` follow RegExpBuiltinExec (`lastIndex` is used and updated with `g` or `y`).
+- **Match results**: `exec` returns a `RegExpExecArray | null` and `match` a `RegExpMatchArray | null`: a `string[]` (a
+  group that did not participate is `undefined` at run time, typed `string` as in TypeScript) with `index`, `input`,
+  `groups` and, with the `d` flag, `indices` (`number[][]`). `RegExpMatchArray`'s `index` and `input` may be `undefined`
+  (a `g` match is a plain array of the matched texts). For a **literal**, `groups` is typed from its named groups:
+  `/(?<year>\d{4})/.exec(s)?.groups?.year` is a `string | undefined`; for a pattern built at run time `groups` cannot be
+  read (only the indexed groups), since its names are not known at compile time.
+- **String methods**: `match`, `matchAll` (an `IterableIterator<RegExpExecArray>`; the matches are found when it is
+  created, which gives the same results as JavaScript's lazy iterator), `replace` / `replaceAll` with a replacement
+  string (`` $$ $& $` $' $n $nn $<name> ``) or a function, `split(re, limit?)` (groups are included), `search`. The
+  replacement function of a literal pattern gets `(match, p1, ..., pn, offset, input[, groups])` (as many as it
+  declares); for a pattern built at run time it is `(match: string) => string`. `replaceAll` and `matchAll` with a
+  regular expression without `g` throw a catchable `TypeError`.
+- **Resource limits**: every matcher step counts against the instruction budget and the backtracking stack against
+  the memory limit, so a catastrophic pattern such as `/(a+)+$/` on a long input ends the call with `E7_ERR_BUDGET` (or
+  `E7_ERR_MEMORY`), also with `suspend_on_budget` (the match is one native call: it may run past the end of the slice by
+  the bounded overrun, then the call fails).
+- `console.log`, `String(re)`, template literals and `JSON.stringify` (`{}`) print regular expressions and match
+  results as Node.js does; `structuredClone` copies them.
+
 ## 7. Modules
 
 - Imports: `import { a, b as c } from "./x"`; `import x from "./x"` (the default export; also
@@ -455,6 +548,10 @@ Assertion helpers used by the `e7 test` runner; they work in any program. A fail
 | `assertClose(actual: number, expected: number, tolerance = 1e-9, message?)` | `|actual - expected| > tolerance` |
 | `assertThrows(fn: () => void, expectedMessage?)` | calling `fn` does not raise a runtime error, or its message does not contain `expectedMessage` |
 | `fail(message?): never` | always |
+
+Also (0.3) `later<T>(value: T): Promise<T>` and `laterReject<T>(error: Error): Promise<T>`: a promise settled in a
+later turn, each one after the previous (as `setImmediate` in Node.js, which the shim of the differential tests
+uses), for tests of asynchronous ordering. They do not fail.
 
 `assertEqual` / `assertNotEqual` accept any one type for both operands (the checker treats them as a builtin
 generic `<T>(actual: T, expected: T)`). The second operand is checked
@@ -511,8 +608,11 @@ or host function that was running (or that called back into the script, like `Ar
 | Fixed-width integer arithmetic | Floating point | Machine integers that wrap around |
 | `console.log` of functions | `[Function: f]` (name inferred from the variable or property) | `[Function (anonymous)]` for arrow functions and function expressions; `%o` does not list their hidden properties |
 | `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null` |
-| An object property set to `undefined` (possible only when its declared type includes `undefined`: `score: number \| undefined` or `score?: number \| undefined`; an optional `score?: number` cannot be set to `undefined`, as with tsc's `exactOptionalPropertyTypes`) | An own property: listed by `Object.keys` / `entries` / `values`, copied by spread, printed as `score: undefined` by `console.log` | Objects of interface / object types (object literals) store a missing optional property as `undefined`, so a property holding `undefined` *is* missing: `Object.keys` / `entries` / `values`, spread and `console.log` leave it out. `JSON.stringify` omits it in both. Fields of class instances are always own properties, as in JavaScript (also when `undefined`) |
 | Key order of optional properties added later | A property added to an object goes last | The property order of an object is its layout, fixed when it is created: an object literal puts the optional properties of its type that it does not set last, in declaration order, so properties added later appear in JavaScript's order unless several are added in another order |
+| `next()` on a finished generator whose return type is a primitive (`Generator<number, number>`) | `{ value: undefined, done: true }` | `value` is `NaN` (number), `0` / `false` (integers, booleans): the value's representation is fixed |
+| Default parameter values of a generator function | Evaluated at the call | Evaluated when the body first runs (the first `next()`) |
+| Iterators written by hand (an object with `next()`) | Any object with `next()` | Iterators are generators (`function*`); a class is iterable through `*[Symbol.iterator]()` |
+| Asynchronous host operations, timers | The event loop (`setTimeout`, I/O) | No timers; host functions returning promises settle through tickets, and a call returns `E7_PENDING` while tickets are open (the host is the event loop) |
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
 | JSON of the wrong shape | Accepted (no validation) | `JSON.parse(text) as T` ends the call (not catchable); `tryParse(text) as T \| null` from `e7:json` returns `null`. Syntax errors are a catchable `SyntaxError` in both |
 | `Array.join` / `console.log("%s")` of class instances | Calls the class's `toString()` | `"[object Object]"` (`String(x)`, template literals and `+` do call `toString()`) |
@@ -522,4 +622,5 @@ or host function that was running (or that called back into the script, like `Ar
 | `Object.values` / `entries` of an object with more properties than its type | All own properties | E7 error (the extra property's type is unknown) |
 | `Object.assign` with an object having more properties than its type | Copies them all | Copies the properties of the static type (like spread) |
 | Instances of a generic class with different type arguments | Structurally compatible | Different classes (`Box<Circle>` is not a `Box<Shape>`) |
+| Regular expressions | ES2025 adds the `v` flag, duplicate group names and `(?i:...)` | Not supported (syntax errors, as in Node.js 22); `groups` of a pattern built at run time cannot be read; a `/` after `)` is a division (`if (x) /re/.test(s)` needs a parenthesized pattern) |
 | `console.log` of an instantiated generic function value | `[Function: f]` | `[Function: f<number>]` |

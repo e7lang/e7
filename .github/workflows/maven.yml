@@ -12,7 +12,7 @@ name: Maven
 # Publishing only happens when called from another workflow with publish: true, e.g. from release.yml:
 #   maven:
 #     uses: ./.github/workflows/maven.yml
-#     with: { version: "0.2.7", publish: true }
+#     with: { version: "0.3.0", publish: true }
 #     secrets: inherit
 #     permissions: { contents: write, packages: write, id-token: write, attestations: write }
 # It then publishes to GitHub Packages (always), to Maven Central (only if the MAVEN_CENTRAL_* and SIGNING_*
@@ -24,7 +24,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Version to build/publish, e.g. 0.2.7 (a leading v is ignored)"
+        description: "Version to build/publish, e.g. 0.3.0 (a leading v is ignored)"
         type: string
         required: true
       publish:
@@ -264,7 +264,7 @@ jobs:
                   for c in s.iter("testcase"):
                       print(s.get("hostname", ""), c.get("classname"), c.get("name"), "FAILED" if len(c) else "ok")
           print(f"{t} instrumented tests, {f} failed")
-          sys.exit(1 if f or t < 20 else 0)  # E7VMApiTest (12) + E7ModuleManagerTest (8)
+          sys.exit(1 if f or t < 29 else 0)  # E7VMApiTest (12) + E7ModuleManagerTest (9) + E7VMAsyncTest (8)
           EOF
       - uses: actions/upload-artifact@v4
         if: always()

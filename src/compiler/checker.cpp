@@ -195,7 +195,7 @@ std::string Checker::suggestMember(Type* t, const std::string& name) {
       add({"at", "concat", "copyWithin", "entries", "every", "fill", "filter", "find", "findIndex", "findLast",
            "findLastIndex", "flat", "flatMap", "forEach", "includes", "indexOf", "join", "keys", "lastIndexOf",
            "length", "map", "pop", "push", "reduce", "reduceRight", "reverse", "shift", "slice", "some", "sort",
-           "splice", "toString", "unshift", "values"});
+           "splice", "toReversed", "toSorted", "toSpliced", "toString", "unshift", "values", "with"});
       break;
     case TT::Bytes:
       add({"at", "buffer", "byteLength", "byteOffset", "fill", "forEach", "includes", "indexOf", "join",
@@ -354,7 +354,9 @@ void Checker::declareBuiltins() {
   globalScope = pushScope(false);
   const char* namespaces[] = {"Math", "JSON", "console", "Number", "String", "Array", "Uint8Array", "BigInt",
                               "Object", "Map", "Set", "DataView", "TextEncoder", "TextDecoder", "Error",
-                              "ArrayBuffer", "Boolean", "Date", "Symbol", "Promise", "RegExp", "Reflect", "globalThis"};
+                              "ArrayBuffer", "Boolean", "Date", "Symbol", "Promise", "RegExp", "Reflect", "globalThis",
+                              "Int8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+                              "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array"};
   for (const char* n : namespaces) {
     NamespaceSym* ns = P.make<NamespaceSym>();
     ns->name = n;
@@ -363,7 +365,7 @@ void Checker::declareBuiltins() {
     globalScope->names[n] = ns;
   }
   const char* fns[] = {"parseInt", "parseFloat", "isNaN", "isFinite", "encodeURIComponent", "decodeURIComponent",
-                       "encodeURI", "decodeURI", "print", "abort",
+                       "encodeURI", "decodeURI", "print", "abort", "structuredClone",
                        "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "int",
                        "rotl32", "rotr32", "rotl64", "rotr64", "clz32", "clz64", "ctz32", "ctz64", "popcnt",
                        "bswap16", "bswap32", "bswap64", "mulhi64", "imulhi64", "idiv", "imod"};
@@ -537,6 +539,8 @@ void Checker::declareFile(FileInfo* fi) {
           break;
         }
         FuncSym* f = newFunc(s->name, &s->params, s->retType, s->body, nullptr);
+        f->isGenerator = s->isGenerator;
+        f->isAsync = s->isAsync;
         f->isTopLevel = true;
         f->declStmt = s;
         f->exported = s->exported;
@@ -593,6 +597,15 @@ void Checker::declareFile(FileInfo* fi) {
           s->generic = g;
           declare(s->name, g, s->loc);
           exportDecl(s, s->name, g, s->loc);
+          break;
+        }
+        // declaration merging: a second `interface X` in the same scope adds its members to the first
+        if (Sym* prev = scope->names.count(s->name) ? scope->names[s->name] : nullptr;
+            prev && prev->k == SymK::Interface && static_cast<InterfaceSym*>(prev)->state == 0) {
+          auto* first = static_cast<InterfaceSym*>(prev);
+          TypeNode* fb = first->decl->typeBody;
+          for (auto& m : s->typeBody->members) fb->members.push_back(m);
+          for (TypeNode* x : s->ifaceExtends) first->decl->ifaceExtends.push_back(x);
           break;
         }
         InterfaceSym* is = P.make<InterfaceSym>();
@@ -857,7 +870,9 @@ Type* Checker::resolveType(TypeNode* n) {
           Type* pt = resolveType(m.type);
           bool uo = m.optional && hasUndefined(pt);
           if (m.optional) pt = T.optional(pt, false, true);
-          props.push_back({m.name, pt, m.optional, uo, m.readonly});
+          std::string name = m.name;
+          if (m.computed && !constKey(m.computed, name)) continue;
+          props.push_back({name, pt, m.optional, uo, m.readonly});
         }
         return T.anonObject(props);
       }
@@ -877,27 +892,35 @@ Type* Checker::resolveType(TypeNode* n) {
     case TNK::Union: {
       bool hasNull = false, hasUndef = false;
       Type* base = nullptr;
-      bool literalStrings = false;
+      // unions of literals of one base type ("a" | "b", 0 | 1, true | false) are literal types; a literal
+      // with its base type is the base type
+      auto join = [&](Type* t) -> bool {
+        if (!base || base == t) { base = t; return true; }
+        if (base->lit && t->lit) {
+          if (Type* u = T.litUnion(base, t)) { base = u; return true; }
+          return false;
+        }
+        if (baseLit(base) == baseLit(t) && (base->lit || t->lit)) { base = baseLit(base); return true; }
+        return false;
+      };
       for (TypeNode* a : n->args) {
-        Type* t = (a->k == TNK::Literal) ? (literalStrings = true, T.string()) : resolveType(a);
+        Type* t = resolveType(a);
         if (t->t == TT::Null) hasNull = true;
         else if (t->t == TT::Undefined) hasUndef = true;
         else if (t->t == TT::Optional) {
           hasNull |= t->hasNull;
           hasUndef |= t->hasUndef;
-          if (base && base != t->elem) return errT(n->loc, "union types other than 'T | null | undefined' are not supported");
-          base = t->elem;
-        } else {
-          if (base && base != t) return errT(n->loc, "union types other than 'T | null | undefined' are not supported");
-          base = t;
+          if (!join(t->elem)) return errT(n->loc, "union types other than 'T | null | undefined' are not supported (E7 types are static; a union of literals must have one base type)");
+        } else if (!join(t)) {
+          return errT(n->loc, "union types other than 'T | null | undefined' are not supported (E7 types are static; a union of literals must have one base type)");
         }
       }
-      (void)literalStrings;
       if (!base) return hasNull ? T.nullT() : T.undef();
       return T.optional(base, hasNull, hasUndef);
     }
     case TNK::Literal:
-      return T.string();  // string literal types are treated as 'string'
+      if (n->numLiteral) return T.numLit({n->num});
+      return T.strLit({utf8ToUtf16(n->literal)});
   }
   return T.unknown();
 }
@@ -977,6 +1000,15 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (dot != std::string::npos) {
     // ns.T: a type exported by a module namespace (resolved by lookup above)
     Sym* base = lookup(name.substr(0, dot));
+    // E.A: the type of an enum member (e7: the enum's type; tsc checks the member)
+    if (base && base->k == SymK::Enum) {
+      auto* en = static_cast<EnumSym*>(base);
+      resolveEnum(en);
+      std::string member = name.substr(dot + 1);
+      for (auto& m : en->members)
+        if (m.name == member) { noArgs(); return en->type; }
+      return errT(l, "enum '" + en->name + "' has no member '" + member + "'");
+    }
     if (base && base->k == SymK::Namespace && !static_cast<NamespaceSym*>(base)->builtin) {
       if (s) return errT(l, "'" + name + "' is not a type");
       std::string member = name.substr(dot + 1);
@@ -991,6 +1023,41 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "boolean") { noArgs(); return T.boolean(); }
   if (name == "bigint") { noArgs(); return T.bigint(); }
   if (name == "void") { noArgs(); return T.voidT(); }
+  if (name == "true" || name == "false") { noArgs(); return T.boolLit(name == "true" ? 2 : 1); }
+  if (name == "this") {
+    // the polymorphic `this` type: the class (a method returning `this` gives the receiver's type at a call)
+    if (curThisClass) { noArgs(); return curThisClass->type; }
+    return errT(l, "a 'this' type is only available in classes");
+  }
+  if (name == "NoInfer" && args.size() == 1) return resolveType(args[0]);  // only affects tsc's inference
+  if (name == "Awaited" && args.size() == 1) {
+    Type* t = resolveType(args[0]);
+    return t->t == TT::Promise ? t->elem : t;
+  }
+  if (name == "NonNullable" && args.size() == 1) {
+    Type* t = resolveType(args[0]);
+    if (t->t == TT::Null || t->t == TT::Undefined) return T.never();
+    return baseOf(t);
+  }
+  if ((name == "Uppercase" || name == "Lowercase" || name == "Capitalize" || name == "Uncapitalize") && args.size() == 1) {
+    // on string literal types (ASCII letters change case as in JavaScript); on string, string
+    Type* t = resolveType(args[0]);
+    if (t->t != TT::String) return errT(l, name + " needs a string type");
+    if (!t->lit) return t;
+    std::vector<std::u16string> out;
+    for (auto v : t->strLits) {
+      for (size_t k = 0; k < v.size(); k++) {
+        char16_t& c = v[k];
+        bool all = name == "Uppercase" || name == "Lowercase";
+        if (!all && k > 0) break;
+        bool up = name == "Uppercase" || name == "Capitalize";
+        if (up && c >= 'a' && c <= 'z') c = (char16_t)(c - 32);
+        if (!up && c >= 'A' && c <= 'Z') c = (char16_t)(c + 32);
+      }
+      out.push_back(v);
+    }
+    return T.strLit(out);
+  }
   if (name == "null") { noArgs(); return T.nullT(); }
   if (name == "undefined") { noArgs(); return T.undef(); }
   if (name == "never") { noArgs(); return T.never(); }
@@ -1032,15 +1099,69 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   }
   if (name == "TextEncoder") { noArgs(); return T.textEncoder(); }
   if (name == "TextDecoder") { noArgs(); return T.textDecoder(); }
-  if (name == "Error") { noArgs(); return T.error(); }
+  if (name == "Error" || name == "AggregateError") { noArgs(); return T.error(); }
+  if (name == "TemplateStringsArray") { noArgs(); return T.array(T.string(), true); }
   if (name == "Date") { noArgs(); return T.date(); }
+  if (name == "RegExp") { noArgs(); return T.regexp(); }
+  if (name == "RegExpMatchArray" || name == "RegExpExecArray") { noArgs(); return T.matchArray(T.regexp(), name == "RegExpExecArray"); }
   if (name == "Record" || name == "Partial" || name == "Required" || name == "Pick" || name == "Omit" || name == "Readonly")
     return errT(l, "utility type '" + name + "' is not supported; use Map<K, V> or an interface");
-  if (name == "Promise") return errT(l, "Promise is not supported (no async in E7 v1)");
-  if (name == "Int32Array" || name == "Uint32Array" || name == "Float64Array" || name == "Uint16Array" ||
-      name == "Int8Array" || name == "Int16Array" || name == "Float32Array" || name == "Uint8ClampedArray")
-    return errT(l, "'" + name + "' is not supported; use Uint8Array, DataView or typed arrays like u32[]");
+  if (name == "Generator" || name == "Iterator" || name == "IterableIterator" || name == "IteratorObject" ||
+      name == "Generator" || name == "IterableIterator") {
+    uint8_t gk = name == "Generator" ? 0 : name == "Iterator" ? 1 : name == "IterableIterator" ? 2 : 3;
+    size_t maxArgs = gk == 2 ? 1 : 3;
+    if (args.empty() || args.size() > maxArgs) {
+      err(l, "type '" + name + "' requires 1" + (maxArgs > 1 ? " to " + std::to_string(maxArgs) : std::string()) + " type argument(s)");
+      return T.unknown();
+    }
+    Type* y = resolveType(args[0]);
+    Type* r = args.size() > 1 ? genTypeArg(args[1]) : T.voidT();
+    Type* n = args.size() > 2 ? genTypeArg(args[2]) : T.voidT();
+    if (y->t == TT::Void || y->t == TT::Undefined) y = T.undef();
+    return T.generator(y, r, n, gk);
+  }
+  if (name == "AsyncGenerator" || name == "AsyncIterator" || name == "AsyncIterable" || name == "AsyncIterableIterator")
+    return errT(l, "async generators are not supported yet (" + name + ")");
+  if (name == "IteratorResult" || name == "IteratorYieldResult" || name == "IteratorReturnResult") {
+    if (args.empty() || args.size() > 2) return errT(l, "type '" + name + "' requires 1 or 2 type argument(s)");
+    Type* y = resolveType(args[0]);
+    Type* r = args.size() > 1 ? genTypeArg(args[1]) : T.voidT();
+    return iterResultType(T.generator(y, r, T.voidT()), l);
+  }
+  if (name == "Promise" || name == "PromiseLike") {
+    if (!nargs(1)) return T.unknown();
+    Type* e = resolveType(args[0]);
+    if (e->t == TT::Undefined) e = T.voidT();
+    if (e->t == TT::Promise) e = e->elem;  // Promise<Promise<T>> is Promise<T>
+    return T.promise(e);
+  }
+  if (int k = typedArrayKind(name)) { noArgs(); return T.typedArray((uint8_t)k); }
   return errT(l, "unknown type '" + name + "'" + suggestName(name, true));
+}
+
+// TReturn / TNext of a generator type: `void`, `undefined`, `unknown` and `any` mean "no value"
+Type* Checker::genTypeArg(TypeNode* n) {
+  if (n->k == TNK::Ref && n->args.empty() &&
+      (n->name == "void" || n->name == "undefined" || n->name == "unknown" || n->name == "any"))
+    return T.voidT();
+  Type* t = resolveType(n);
+  return t->t == TT::Undefined ? T.voidT() : t;
+}
+
+// IteratorResult<T, TReturn> of a generator type: { value: T; done: boolean } when TReturn is T or
+// none (then value is T | undefined); any other TReturn would make `value` a general union
+Type* Checker::iterResultType(Type* g, Loc l) {
+  Type* v = g->elem;
+  if (g->ret && g->ret->t != TT::Void && g->ret != g->elem) {
+    if (!(assignable(g->ret, g->elem) && kindOf(g->ret) == kindOf(g->elem) && !isBoxedOptional(g->elem) &&
+          isBoxedOptional(g->ret) == isBoxedOptional(g->elem)))
+      err(l, "the result of next() on '" + typeName(g) + "' would be a union of '" + typeName(g->elem) + "' and '" +
+                 typeName(g->ret) + "' (E7 types are static); give the generator the return type '" + typeName(g->elem) +
+                 "' or void");
+  } else if (!g->ret || g->ret->t == TT::Void) {
+    v = T.optional(g->elem, false, true);
+  }
+  return T.anonObject({{"value", v, false}, {"done", T.boolean(), false}});
 }
 
 // whether a type expression mentions the type named `name` (a recursive type alias)
@@ -1078,6 +1199,13 @@ void Checker::resolveInterface(InterfaceSym* is) {
     for (auto& p : pt->shape->props) sh->props.push_back(p);
     for (auto& m : pt->shape->methods) sh->methods.push_back(m);
   }
+  for (auto& m : is->decl->typeBody->members)
+    if (m.computed) {
+      std::string key;
+      Expr* k = m.computed;
+      m.computed = nullptr;
+      if (constKey(k, key)) m.name = key;
+    }
   for (auto& m : is->decl->typeBody->members) {
     Type* pt = resolveType(m.type);
     if (sh->findProp(m.name) || sh->findMethod(m.name)) {
@@ -1239,6 +1367,16 @@ void Checker::resolveClass(ClassSym* c) {
     f->instName = f->qualName;
     f->instDepth = c->instDepth;
   };
+  // computed member names `[K]`: constants known at compile time
+  for (auto& m : d->members)
+    if (m.computed) {
+      std::string key;
+      FuncSym* f1 = curFn;
+      curFn = nullptr;
+      if (constKey(m.computed, key)) m.name = key;
+      curFn = f1;
+      m.computed = nullptr;
+    }
   if (d->extends && !holder) {
     Type* pt = resolveType(d->extends);
     if (pt->t != TT::Class) err(d->extends->loc, "a class can only extend another class");
@@ -1370,6 +1508,10 @@ void Checker::resolveClass(ClassSym* c) {
     std::string key = m.accessor == 1 ? "get " + m.name : m.accessor == 2 ? "set " + m.name : m.name;
     curFn = nullptr;
     FuncSym* f = newFunc(key, &m.params, m.retType, m.body, nullptr);
+    f->isGenerator = m.isGenerator;
+    f->isAsync = m.isAsync;
+    if ((m.isGenerator || m.isAsync) && (m.accessor || m.kind == ClassMember::Ctor))
+      err(m.loc, "an accessor or constructor cannot be a generator or async");
     f->loc = m.loc;
     f->parent = nullptr;
     f->cls = c;
@@ -1494,6 +1636,14 @@ void Checker::resolveClass(ClassSym* c) {
       err(m.loc, "field '" + m.name + "' needs a type annotation or initializer");
       t = T.unknown();
     }
+    if (m.isDeclare && c->fieldIdx.count(m.name) && c->fields[c->fieldIdx[m.name]].owner != c) {
+      // `declare x: T` of an inherited field: a declaration for the type checker, the same field
+      Type* inherited = c->fields[c->fieldIdx[m.name]].type;
+      if (t != inherited)
+        err(m.loc, "a 'declare' field must have the type of the inherited field ('" + typeName(inherited) + "') in e7 (the field's representation is fixed)");
+      continue;
+    }
+    if (m.isDeclare && m.init) err(m.loc, "a 'declare' field cannot have an initializer");
     addField(m.name, t, m.init, m.optional, m.loc, m.readonly, uo);
   }
   if (!c->defScope) scope = savedScope;
@@ -1511,9 +1661,31 @@ void Checker::resolveClass(ClassSym* c) {
       if (base == ov) continue;
       resolveSig(base);
       resolveSig(ov);
-      if (base->type && ov->type && base->type != ov->type && ov->type->ret && base->type->ret)
-        err(ov->loc, "method '" + ov->name + "' must have the same signature as the overridden method (" +
-                         typeName(base->type) + ")");
+      if (base->type && ov->type && base->type != ov->type && ov->type->ret && base->type->ret) {
+        // a compatible override (as TypeScript allows): fewer parameters (the others are passed and
+        // ignored) with the same representations, and a return type assignable to the overridden one's
+        Type* bt = base->type;
+        Type* ot = ov->type;
+        if (ot->ret->t == TT::Class) resolveClass(ot->ret->cls);  // its parents decide the assignability
+        bool ok = !base->hasDefaults && !ov->hasDefaults && !ot->restParam && !bt->restParam &&
+                  ot->params.size() <= bt->params.size() + 0 && kindOf(ot->ret) == kindOf(bt->ret) &&
+                  isBoxedOptional(ot->ret) == isBoxedOptional(bt->ret) && assignable(ot->ret, bt->ret);
+        for (size_t i = 0; ok && i < ot->params.size(); i++) {
+          Type* a = ot->params[i];
+          Type* b = bt->params[i];
+          ok = kindOf(a) == kindOf(b) && isBoxedOptional(a) == isBoxedOptional(b) && (assignable(b, a) || assignable(a, b)) &&
+               ot->optParams[i] == bt->optParams[i];
+        }
+        if (!ok) {
+          err(ov->loc, "method '" + ov->name + "' must have a signature compatible with the overridden method (" +
+                           typeName(base->type) + ")");
+        } else {
+          ov->padParams.assign(bt->params.begin() + (std::ptrdiff_t)ot->params.size(), bt->params.end());
+          ov->padParams.insert(ov->padParams.end(), base->padParams.begin(), base->padParams.end());
+        }
+      } else if (base->type == ov->type) {
+        ov->padParams = base->padParams;
+      }
     }
   }
   // a getter and its setter have the same type
@@ -1618,8 +1790,33 @@ void Checker::resolveSig(FuncSym* f) {
       opt.push_back(isOpt);
     }
   }
+  ClassSym* savedThis = curThisClass;
+  curThisClass = f->cls;
   Type* ret = f->retNode ? resolveType(f->retNode) : nullptr;
+  curThisClass = savedThis;
+  f->retThis = f->cls && f->retNode && f->retNode->k == TNK::Ref && f->retNode->name == "this";
   if (f->isCtor || f->accessor == 2) ret = T.voidT();
+  if (f->retNode && !f->retNode->predParam.empty()) {
+    TypeNode* rn = f->retNode;
+    f->asserts = rn->asserts;
+    f->predParam = -1;
+    if (rn->predParam == "this" && f->thisVar) f->predParam = -2;
+    if (params)
+      for (size_t k = 0; k < params->size(); k++)
+        if ((*params)[k].name == rn->predParam) f->predParam = (int)k;
+    if (f->predParam == -1) err(rn->loc, "cannot find parameter '" + rn->predParam + "'");
+    if (rn->predType) {
+      f->predType = resolveType(rn->predType);
+      Type* pt = f->predParam >= 0 && (size_t)f->predParam < ps.size() ? ps[(size_t)f->predParam] : nullptr;
+      if (pt && !assignable(f->predType, pt))
+        err(rn->predType->loc, "a type predicate's type must be assignable to its parameter's type ('" + typeName(f->predType) +
+                                   "' is not a '" + typeName(pt) + "')");
+    }
+  }
+  if (ret && (f->isGenerator || f->isAsync)) checkCoroutineRet(f, ret, f->retNode ? f->retNode->loc : f->loc);
+  // an async host function: declare function f(...): Promise<T> (the host settles a ticket)
+  bool asyncNative = f->isNative && ret && ret->t == TT::Promise;
+  if (asyncNative) ret = ret->elem;
   if (f->isNative) {
     if (!ret) ret = T.voidT();
     for (Type* t : ps)
@@ -1628,8 +1825,9 @@ void Checker::resolveSig(FuncSym* f) {
         err(f->loc, "native function parameters must be number, boolean, string, integer, Uint8Array or KeyHandle");
     if (ret->t != TT::Void && ret->t != TT::Number && ret->t != TT::Bool && ret->t != TT::String && ret->t != TT::Int &&
         ret->t != TT::Bytes)
-      err(f->loc, "native function return type must be void, number, boolean, string, integer or Uint8Array");
+      err(f->loc, "native function return type must be void, number, boolean, string, integer or Uint8Array (or a Promise of one)");
   }
+  if (asyncNative) ret = T.promise(ret);
   std::vector<Type*> pp;
   for (Type* t : ps) pp.push_back(t ? t : T.unknown());
   if (!ret) { f->inferRet = true; ret = T.unknown(); }

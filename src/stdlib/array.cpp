@@ -271,6 +271,64 @@ E7_NATIVE(a_newLen) {
     for (uint32_t i = 0; i < arr->len; i++) arr->data[i].r = vm.undef();
   r->r = arr;
 }
+// ES2023 copying methods: a copy of the array, then the mutating operation on the copy
+static ArrObj* copyOf(VM& vm, ArrObj* arr) {
+  ArrObj* out = vm.newArray(arr->vt, arr->len);
+  if (arr->len) memcpy(out->data, arr->data, (size_t)arr->len * sizeof(Slot));
+  out->len = arr->len;
+  return out;
+}
+E7_NATIVE(a_toReversed) {
+  ArrObj* c = copyOf(vm, A(vm, a[0]));
+  VM::TempRoot keep(vm, c);
+  Slot s[1];
+  s[0].r = c;
+  a_reverse(vm, s, 1, r, ud);
+  (void)n;
+}
+E7_NATIVE(a_toSorted) {
+  ArrObj* c = copyOf(vm, A(vm, a[0]));
+  VM::TempRoot keep(vm, c);
+  Slot s[1];
+  s[0].r = c;
+  a_sort(vm, s, 1, r, ud);
+  (void)n;
+}
+E7_NATIVE(a_toSortedCmp) {
+  ArrObj* c = copyOf(vm, A(vm, a[0]));
+  VM::TempRoot keep(vm, c);
+  Slot s[2];
+  s[0].r = c;
+  s[1] = a[1];
+  a_sortCmp(vm, s, 2, r, ud);
+  (void)n;
+}
+E7_NATIVE(a_toSpliced) {
+  ArrObj* c = copyOf(vm, A(vm, a[0]));
+  VM::TempRoot keep(vm, c);
+  Slot s[4];
+  s[0].r = c;
+  s[1] = a[1];
+  s[2] = a[2];
+  s[3] = a[3];
+  Slot removed;
+  a_splice(vm, s, 4, &removed, ud);
+  r->r = c;
+  (void)n;
+}
+// arr.with(index, value): a copy with one element replaced (a RangeError outside the array)
+E7_NATIVE(a_with) {
+  E7_UNUSED;
+  ArrObj* arr = A(vm, a[0]);
+  double d = a[1].f;
+  double t = std::isnan(d) ? 0 : std::trunc(d);
+  double idx = t < 0 ? t + arr->len : t;
+  if (!(idx >= 0 && idx < arr->len)) vm.error("RangeError: Invalid index : %s", numberToString(t).c_str());
+  ArrObj* c = copyOf(vm, arr);
+  c->data[(uint32_t)idx] = a[2];
+  r->r = c;
+}
+
 E7_NATIVE(a_setLength) {
   E7_UNUSED;
   ArrObj* arr = A(vm, a[0]);
@@ -320,6 +378,13 @@ void registerArrayNatives(VM& vm) {
   vm.registerNative("Array.fillR", "RRFF>R", a_fill<K_R>);
   vm.registerNative("Array.sort", "R>R", a_sort);
   vm.registerNative("Array.sortCmp", "RR>R", a_sortCmp);
+  vm.registerNative("Array.toReversed", "R>R", a_toReversed);
+  vm.registerNative("Array.toSorted", "R>R", a_toSorted);
+  vm.registerNative("Array.toSortedCmp", "RR>R", a_toSortedCmp);
+  vm.registerNative("Array.toSpliced", "RFFR>R", a_toSpliced);
+  vm.registerNative("Array.withI", "RFI>R", a_with);
+  vm.registerNative("Array.withF", "RFF>R", a_with);
+  vm.registerNative("Array.withR", "RFR>R", a_with);
   vm.registerNative("Array.newLen", "FF>R", a_newLen);
   vm.registerNative("Array.setLength", "RF>V", a_setLength);
 }

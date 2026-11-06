@@ -345,6 +345,16 @@ void Checker::inferMatch(GenericSym* g, std::vector<Type*>& bound, TypeNode* n, 
         if (t->t == TT::Set) rec(n->args[0], t->elem);
         return;
       }
+      if ((nm == "Generator" || nm == "Iterator" || nm == "IterableIterator" || nm == "IteratorObject") && t->t == TT::Generator) {
+        rec(n->args[0], t->elem);
+        if (n->args.size() > 1 && t->ret && t->ret->t != TT::Void) rec(n->args[1], t->ret);
+        if (n->args.size() > 2 && t->val && t->val->t != TT::Void) rec(n->args[2], t->val);
+        return;
+      }
+      if (nm == "Promise" && n->args.size() == 1) {
+        if (t->t == TT::Promise) rec(n->args[0], t->elem);
+        return;
+      }
       Sym* s = lookupFrom(g->defScope, nm);
       if (!s || s->k != SymK::Generic) return;
       GenericSym* h = static_cast<GenericSym*>(s);
@@ -532,6 +542,8 @@ FuncSym* Checker::instantiateFunc(GenericSym* g, const std::vector<Type*>& args,
     s->typeParams.clear();
     curFn = g->topLevel ? nullptr : g->parentFn;
     f = newFunc(nm, &s->params, s->retType, s->body, nullptr);
+    f->isGenerator = s->isGenerator;
+    f->isAsync = s->isAsync;
     f->declStmt = s;
     s->fn = f;
     f->defScope = sc;
@@ -558,6 +570,8 @@ FuncSym* Checker::instantiateFunc(GenericSym* g, const std::vector<Type*>& args,
     m->typeParams.clear();
     curFn = nullptr;
     f = newFunc(nm, &m->params, m->retType, m->body, nullptr);
+    f->isGenerator = m->isGenerator;
+    f->isAsync = m->isAsync;
     m->fn = f;
     f->loc = m->loc;
     f->parent = nullptr;

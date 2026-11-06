@@ -1,6 +1,9 @@
 #include "types.h"
 
+#include <algorithm>
 #include <cstdio>
+
+#include "../core/numfmt.h"
 
 namespace e7 {
 
@@ -153,6 +156,114 @@ Type* Types::enumType(EnumSym* e) {
   return interned_[k] = t;
 }
 
+Type* Types::generator(Type* y, Type* r, Type* n, uint8_t gk) {
+  std::string k = "G" + std::to_string(gk) + ptrKey(y) + "," + ptrKey(r) + "," + ptrKey(n);
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::Generator);
+  t->elem = y;
+  t->ret = r;
+  t->val = n;
+  t->gk = gk;
+  return interned_[k] = t;
+}
+Type* Types::typedArray(uint8_t kind) {
+  std::string k = "TA" + std::to_string(kind);
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::TypedArray);
+  t->vt = kind;
+  return interned_[k] = t;
+}
+Type* Types::regexp(int32_t caps, const std::vector<std::string>& names) {
+  std::string k = "RE" + std::to_string(caps);
+  for (auto& n : names) k += "," + n;
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::RegExp);
+  t->reCaps = caps;
+  t->reNames = names;
+  return interned_[k] = t;
+}
+Type* Types::matchArray(Type* re, bool exec) {
+  std::string k = std::string(exec ? "MX" : "MM") + ptrKey(re);
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::Array);
+  t->elem = string_;
+  t->re = re;
+  t->reExec = exec;
+  return interned_[k] = t;
+}
+Type* Types::promise(Type* e) {
+  std::string k = "P" + ptrKey(e);
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::Promise);
+  t->elem = e;
+  return interned_[k] = t;
+}
+
+Type* Types::strLit(std::vector<std::u16string> vals) {
+  std::sort(vals.begin(), vals.end());
+  vals.erase(std::unique(vals.begin(), vals.end()), vals.end());
+  std::string k = "LS";
+  for (auto& v : vals) {
+    k += std::to_string(v.size()) + ":";
+    for (char16_t c : v) { k += (char)(c & 0xFF); k += (char)(c >> 8); }
+  }
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::String);
+  t->lit = true;
+  t->litBase = string_;
+  t->strLits = vals;
+  return interned_[k] = t;
+}
+Type* Types::numLit(std::vector<double> vals) {
+  for (double& d : vals) d = d + 0.0;  // -0 is the literal 0
+  std::sort(vals.begin(), vals.end(), [](double a, double b) { return a < b || (a != a && b == b); });
+  vals.erase(std::unique(vals.begin(), vals.end(), [](double a, double b) { return a == b || (a != a && b != b); }), vals.end());
+  std::string k = "LN";
+  for (double d : vals) {
+    char b[40];
+    snprintf(b, sizeof b, "%.17g,", d);
+    k += b;
+  }
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::Number);
+  t->lit = true;
+  t->litBase = number_;
+  t->numLits = vals;
+  return interned_[k] = t;
+}
+Type* Types::boolLit(uint8_t mask) {
+  if ((mask & 3) == 3) return bool_;
+  std::string k = "LB" + std::to_string(mask & 3);
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::Bool);
+  t->lit = true;
+  t->litBase = bool_;
+  t->boolLits = mask & 3;
+  return interned_[k] = t;
+}
+Type* Types::litUnion(Type* a, Type* b) {
+  if (!a->lit || !b->lit || a->litBase != b->litBase) return nullptr;
+  if (a->t == TT::String) {
+    std::vector<std::u16string> v = a->strLits;
+    v.insert(v.end(), b->strLits.begin(), b->strLits.end());
+    return strLit(v);
+  }
+  if (a->t == TT::Number) {
+    std::vector<double> v = a->numLits;
+    v.insert(v.end(), b->numLits.begin(), b->numLits.end());
+    return numLit(v);
+  }
+  return boolLit(a->boolLits | b->boolLits);
+}
+
 Kind kindOf(const Type* t) {
   switch (t->t) {
     case TT::Number: return K_F;
@@ -184,6 +295,20 @@ static const char* intName(uint8_t vt) {
 static std::string typeNameB(const Type* t, int& budget) {
   if (!t) return "?";
   if (--budget < 0) return "...";
+  if (t->lit) {
+    std::string s;
+    auto sep = [&]() { if (!s.empty()) s += " | "; };
+    for (auto& v : t->strLits) {
+      sep();
+      s += "\"";
+      for (char c : utf16ToUtf8(v)) s += (c == '"' || c == '\\') ? std::string("\\") + c : std::string(1, c);
+      s += "\"";
+    }
+    for (double d : t->numLits) { sep(); s += numberToString(d); }
+    if (t->boolLits & 1) { sep(); s += "false"; }
+    if (t->boolLits & 2) { sep(); s += "true"; }
+    return s.empty() ? "never" : s;
+  }
   switch (t->t) {
     case TT::Number: return "number";
     case TT::Bool: return "boolean";
@@ -196,6 +321,7 @@ static std::string typeNameB(const Type* t, int& budget) {
     case TT::Unknown: case TT::Caught: return "unknown";
     case TT::Int: return intName(t->vt);
     case TT::Array: {
+      if (t->re) return t->reExec ? "RegExpExecArray" : "RegExpMatchArray";
       std::string e = typeNameB(t->elem, budget);
       if (t->elem->t == TT::Optional || t->elem->t == TT::Func) e = "(" + e + ")";
       return (t->ro ? "readonly " : "") + e + "[]";
@@ -239,6 +365,22 @@ static std::string typeNameB(const Type* t, int& budget) {
     case TT::TextDecoder: return "TextDecoder";
     case TT::Error: return "Error";
     case TT::Date: return "Date";
+    case TT::RegExp: return "RegExp";
+    case TT::Generator: {
+      static const char* const names[4] = {"Generator", "Iterator", "IterableIterator", "IteratorObject"};
+      std::string s = std::string(names[t->gk & 3]) + "<" + typeNameB(t->elem, budget);
+      bool showRet = t->ret && t->ret->t != TT::Void, showNext = t->val && t->val->t != TT::Void;
+      if (t->gk == 0 || showRet || showNext) s += ", " + (showRet || t->gk == 0 ? typeNameB(t->ret, budget) : std::string("void"));
+      if (t->gk == 0 || showNext) s += ", " + (showNext ? typeNameB(t->val, budget) : std::string("unknown"));
+      return s + ">";
+    }
+    case TT::Promise: return "Promise<" + typeNameB(t->elem, budget) + ">";
+    case TT::TypedArray: {
+      static const char* const n[11] = {"Uint8Array", "Int8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
+                                        "Int32Array", "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array",
+                                        "BigUint64Array"};
+      return t->vt < 11 ? n[t->vt] : "TypedArray";
+    }
   }
   return "?";
 }

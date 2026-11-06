@@ -75,9 +75,12 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Bytes: {
       auto* b = static_cast<BytesObj*>(o);
       std::u16string out;
-      for (uint32_t i = 0; i < b->len; i++) {
+      uint32_t n = taLength(b);
+      for (uint32_t i = 0; i < n; i++) {
         if (i) out += u',';
-        out += ascii(std::to_string(b->ptr()[i]));
+        std::string t = taKind(b) == TA_U8 ? std::to_string(b->ptr()[i]) : taElemText(b, i);
+        if (taIsBig(taKind(b))) t.pop_back();
+        out += ascii(t);
       }
       return out;
     }
@@ -100,6 +103,9 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Closure: return u"function " + utf8ToUtf16(static_cast<CloObj*>(o)->fn->name) + u"() { [native code] }";
     case OT::Buffer: return u"[object ArrayBuffer]";
     case OT::Handle: return u"[object KeyHandle]";
+    case OT::Promise: return u"[object Promise]";
+    case OT::Coro: return static_cast<CoroObj*>(o)->fn ? u"[object Generator]" : u"[object RegExp String Iterator]";
+    case OT::RegExp: return regexpToString(static_cast<RegExpObj*>(o));
     default: return u"[object Object]";
   }
 }
@@ -333,6 +339,20 @@ struct Inspector {
       case OT::BigInt: return bigDecimal(vm, static_cast<BigObj*>(o), charge) + "n";
       case OT::Closure: return functionBase(static_cast<CloObj*>(o));
       case OT::Handle: return "KeyHandle {}";
+      case OT::Coro: return static_cast<CoroObj*>(o)->fn ? "Object [Generator] {}" : "Object [RegExp String Iterator] {}";
+      case OT::RegExp: return utf16ToUtf8(regexpToString(static_cast<RegExpObj*>(o)));
+      case OT::Promise: {
+        auto* p = static_cast<PromiseObj*>(o);
+        if (p->state == PS_PENDING) return "Promise { <pending> }";
+        if (p->state == PS_REJECTED) {
+          StrObj *n, *m;
+          std::string e = vm.errorParts(p->value.r, &n, &m)
+                              ? (strUtf8(n) + (m->len ? ": " + strUtf8(m) : std::string()))
+                              : value(p->value, VT_REF, rt, false);
+          return "Promise { <rejected> " + e + " }";
+        }
+        return "Promise { " + value(p->value, p->vt, rt, false) + " }";
+      }
       default: break;
     }
     for (Obj* s : seen)
@@ -399,13 +419,15 @@ struct Inspector {
     std::vector<uint32_t> fields;  // visible fields of an instance, in JavaScript property order
     switch (o->type) {
       case OT::Array: {
-        if (static_cast<ArrObj*>(o)->len == 0 && !showHidden) return "[]";
+        if (static_cast<ArrObj*>(o)->len == 0 && !showHidden && !hasMatchExtra(o)) return "[]";
         brace0 = "[", brace1 = "]", ctor = "Array", arrayLike = true;
         break;
       }
       case OT::Bytes: {
-        uint32_t len = static_cast<BytesObj*>(o)->len;
-        brace0 = "Uint8Array(" + std::to_string(len) + ") [", brace1 = "]", ctor = "Uint8Array", arrayLike = true;
+        auto* bo = static_cast<BytesObj*>(o);
+        uint32_t len = taLength(bo);
+        std::string nm = taName(taKind(bo));
+        brace0 = nm + "(" + std::to_string(len) + ") [", brace1 = "]", ctor = nm, arrayLike = true;
         if (len == 0 && !showHidden) return brace0 + "]";
         break;
       }
@@ -428,12 +450,11 @@ struct Inspector {
           brace0 = "[", brace1 = "]", ctor = "Array", arrayLike = true;
           break;
         }
-        Slot* fv = static_cast<InstObj*>(o)->fields();
         bool numericKeys = false;
         for (uint32_t i = 0; i < c->nfields; i++) {
           // a record field holding undefined is a missing optional property (JSON.stringify and spread
           // treat it the same way); class fields are always own properties in JavaScript
-          if (c->isRecord && c->fieldVT[i] == VT_REF && fv[i].r == vm.undef()) continue;
+          if (!fieldPresent(static_cast<InstObj*>(o), i, vm.undef())) continue;
           if (privateField(c, i)) continue;  // #private fields are not shown (as in Node.js)
           fields.push_back(i);
           if (!c->fieldNames[i].empty() && c->fieldNames[i][0] >= '0' && c->fieldNames[i][0] <= '9') numericKeys = true;
@@ -451,9 +472,9 @@ struct Inspector {
           for (auto& e : idx) fields.push_back(e.second);
           fields.insert(fields.end(), rest.begin(), rest.end());
         }
-        std::string prefix = c->isRecord ? "" : c->name + " ";
+        std::string prefix = c->nullProto ? "[Object: null prototype] " : c->isRecord ? "" : c->name + " ";
         if (fields.empty()) return prefix + "{}";
-        brace0 = prefix + "{", ctor = c->isRecord ? "Object" : c->name;
+        brace0 = prefix + "{", ctor = c->nullProto ? "Object: null prototype" : c->isRecord ? "Object" : c->name;
         break;
       }
       default: return "[object]";
@@ -471,18 +492,29 @@ struct Inspector {
         for (uint32_t i = 0; i < shown; i++) out.push_back(item(a->data[i], a->vt, rt));
         if (a->len > shown) out.push_back(remainingText(a->len - shown));
         if (showHidden) out.push_back("[length]: " + std::to_string(a->len));
+        if (hasMatchExtra(a)) {
+          // a regular expression match: index, input, groups (and indices with the d flag), as Node.js
+          const MatchExtra* x = matchExtra(a);
+          if (a->flags & kArrFlagMatch) {
+            out.push_back("index: " + formatNumber(x->index));
+            out.push_back("input: " + item(slotR(x->input), VT_REF, rt));
+          }
+          out.push_back("groups: " + item(slotR(x->groups), VT_REF, rt));
+          if (x->indices) out.push_back("indices: " + item(slotR(x->indices), VT_REF, rt));
+        }
         numeric = true;
         for (size_t i = 0; i < out.size() && numeric; i++) numeric = i < a->len && numericSlot(a->data[i], a->vt);
         break;
       }
       case OT::Bytes: {
         auto* b = static_cast<BytesObj*>(o);
-        uint32_t shown = std::min(b->len, kMaxArrayLength);
-        for (uint32_t i = 0; i < shown; i++) out.push_back(std::to_string(b->ptr()[i]));
-        if (b->len > shown) out.push_back(remainingText(b->len - shown));
+        uint32_t n = taLength(b);
+        uint32_t shown = std::min(n, kMaxArrayLength);
+        for (uint32_t i = 0; i < shown; i++) out.push_back(taKind(b) == TA_U8 ? std::to_string(b->ptr()[i]) : taElemText(b, i));
+        if (n > shown) out.push_back(remainingText(n - shown));
         if (showHidden) {
-          out.push_back("[BYTES_PER_ELEMENT]: 1");
-          out.push_back("[length]: " + std::to_string(b->len));
+          out.push_back("[BYTES_PER_ELEMENT]: " + std::to_string(taSize(taKind(b))));
+          out.push_back("[length]: " + std::to_string(n));
           out.push_back("[byteLength]: " + std::to_string(b->len));
           out.push_back("[byteOffset]: " + std::to_string(b->off));
           indent += 2;
@@ -1000,11 +1032,140 @@ E7_NATIVE(n_objectKeys) {
   for (uint32_t i : jsFieldOrder(in->cls)) {
     // a record (object literal) property holding undefined is a missing optional property; the fields
     // of a class instance are always own properties (also when undefined), as in JavaScript
-    if (in->cls->isRecord && in->cls->fieldVT[i] == VT_REF && in->fields()[i].r == vm.undef()) continue;
+    if (!fieldPresent(in, i, vm.undef())) continue;
     if (privateField(in->cls, i)) continue;
     vm.arrayPush(arr, slotR(vm.newStringUtf8(in->cls->fieldNames[i])));
   }
   r->r = arr;
+}
+
+// Object.has(obj, name): whether the object has an own property of that name (fields of class
+// instances always; record fields unless absent, D7). Used by object spread.
+E7_NATIVE(n_objectHas) {
+  (void)n;
+  (void)ud;
+  Obj* o = a[0].r;
+  r->i = 0;
+  if (!o || o->type != OT::Instance) return;
+  auto* in = static_cast<InstObj*>(o);
+  auto it = in->cls->fieldIndex.find(strUtf8(asStr(vm, a[1])));
+  if (it != in->cls->fieldIndex.end()) r->i = fieldPresent(in, it->second, vm.undef());
+}
+
+// structuredClone(v): a deep copy that keeps shared and cyclic references (the compiler rejects values
+// it cannot copy: class instances, functions, ...)
+namespace {
+struct Cloner {
+  VM& vm;
+  std::unordered_map<Obj*, Obj*> done;
+  std::vector<Obj*> roots;  // the copies (kept reachable while copying)
+  int depth = 0;            // nesting (the C++ stack), bounded as JSON's
+  struct Deeper {
+    int& d;
+    explicit Deeper(int& x) : d(x) { d++; }
+    ~Deeper() { d--; }
+  };
+  Obj* copy(Obj* o) {
+    if (!o || o == vm.undef()) return o;
+    auto it = done.find(o);
+    if (it != done.end()) return it->second;
+    Deeper deeper(depth);
+    if (depth > 256) vm.error("DataCloneError: the value is nested too deeply to clone (more than 256 levels)");
+    vm.chargeWork(1);
+    switch (o->type) {
+      case OT::String: case OT::BigInt: return o;  // immutable
+      case OT::Box: {
+        auto* b = static_cast<BoxObj*>(o);
+        BoxObj* c = vm.newBox(b->vt, b->v);
+        c->flags = b->flags;  // a Date
+        return keep(o, c);
+      }
+      case OT::Array: {
+        auto* a = static_cast<ArrObj*>(o);
+        // a regular expression match keeps its index, input, groups and indices (own properties in JavaScript)
+        ArrObj* c = hasMatchExtra(a) ? vm.newMatchArray(a->vt, a->len, a->flags & (kArrFlagMatch | kArrFlagIndices))
+                                     : vm.newArray(a->vt, a->len);
+        keep(o, c);
+        c->flags = a->flags;  // an Error, a match
+        for (uint32_t i = 0; i < a->len; i++) {
+          Slot v = a->data[i];
+          if (a->vt == VT_REF) v.r = copy(v.r);
+          c->data[i] = v;
+          c->len = i + 1;
+        }
+        if (hasMatchExtra(a)) {
+          const MatchExtra* x = matchExtra(a);
+          MatchExtra* y = matchExtra(c);
+          y->index = x->index;
+          y->input = x->input;
+          y->groups = copy(x->groups);
+          y->indices = x->indices ? copy(x->indices) : nullptr;
+        }
+        return c;
+      }
+      case OT::Instance: {
+        auto* in = static_cast<InstObj*>(o);
+        if (!in->cls->isRecord) vm.error("DataCloneError: a class instance cannot be cloned");
+        // the groups of a match become a plain object (the clone has Object.prototype)
+        InstObj* c = vm.newInstance(in->cls->nullProto ? vm.groupsClass(in->cls->fieldNames, false) : in->cls);
+        keep(o, c);
+        if (in->cls->presence) memcpy(c->mask(), in->mask(), presenceWords(in->cls->nfields) * 8);
+        for (uint32_t i = 0; i < in->cls->nfields; i++) {
+          Slot v = in->fields()[i];
+          if (in->cls->fieldVT[i] == VT_REF) v.r = copy(v.r);
+          c->fields()[i] = v;
+        }
+        return c;
+      }
+      case OT::RegExp: {
+        // the pattern and flags (lastIndex is not copied, as in JavaScript)
+        auto* r = static_cast<RegExpObj*>(o);
+        return keep(o, vm.newRegExp(r->prog, static_cast<StrObj*>(r->source), r->progBytes, false));
+      }
+      case OT::Bytes: {
+        auto* b = static_cast<BytesObj*>(o);
+        BytesObj* c = vm.newBytesFrom(b->ptr(), b->len);
+        c->flags = b->flags;  // the element kind of a typed array
+        return keep(o, c);
+      }
+      case OT::Buffer: {
+        auto* b = static_cast<BufObj*>(o);
+        BufObj* c = vm.newBuffer(b->len);
+        if (b->len) memcpy(c->data, b->data, b->len);
+        return keep(o, c);
+      }
+      case OT::Map: {
+        auto* m = static_cast<MapObj*>(o);
+        MapObj* c = vm.newMap(m->kvt, m->vvt, m->km, m->isSet);
+        keep(o, c);
+        vm.accountExternal((int64_t)(m->entries.capacity() * sizeof(MapEntry) + m->buckets.capacity() * 4));
+        c->entries = m->entries;
+        c->buckets = m->buckets;
+        c->count = m->count;
+        c->nextSeq = m->nextSeq;
+        for (auto& e : c->entries) {
+          if (!e.live) continue;
+          if (c->kvt == VT_REF) e.k.r = copy(e.k.r);
+          if (c->vvt == VT_REF) e.v.r = copy(e.v.r);
+        }
+        return c;
+      }
+      default:
+        vm.error("DataCloneError: the value cannot be cloned");
+    }
+  }
+  Obj* keep(Obj* from, Obj* to) {
+    done[from] = to;
+    roots.push_back(to);
+    return to;
+  }
+};
+}  // namespace
+E7_NATIVE(n_structuredClone) {
+  E7_UNUSED;
+  Cloner c{vm, {}, {}};
+  VM::GCPause noCollect(vm);  // the copies live in C++ only until the result is returned
+  r->r = c.copy(a[0].r);
 }
 
 E7_NATIVE(n_textEncode) {
@@ -1072,6 +1233,55 @@ E7_NATIVE(n_errorNew) {
   e->flags |= kArrFlagError;
   r->r = e;
 }
+// new Error(message, { cause }): [name, message, cause]
+E7_NATIVE(n_errorNewCause) {
+  E7_UNUSED;
+  StrObj* name = S(vm, a[0]);
+  StrObj* msg = S(vm, a[1]);
+  ArrObj* e = vm.newArray(VT_REF, 3);
+  e->data[0].r = name;
+  e->data[1].r = msg;
+  e->data[2].r = a[2].r ? a[2].r : vm.undef();
+  e->len = 3;
+  e->flags |= kArrFlagError;
+  r->r = e;
+}
+// new AggregateError(errors, message): [name, message, undefined, errors (a copy)]
+E7_NATIVE(n_errorNewAggregate) {
+  E7_UNUSED;
+  ArrObj* src = A(vm, a[0]);
+  if (src->vt != VT_REF) vm.error("AggregateError: expected an array of errors");
+  StrObj* msg = S(vm, a[1]);
+  ArrObj* errs = vm.newArray(VT_REF, src->len);
+  VM::TempRoot keep(vm, errs);
+  if (src->len) memcpy(errs->data, src->data, (size_t)src->len * sizeof(Slot));
+  errs->len = src->len;
+  StrObj* name = vm.newStringAscii("AggregateError");
+  VM::TempRoot keepN(vm, name);
+  ArrObj* e = vm.newArray(VT_REF, 4);
+  e->data[0].r = name;
+  e->data[1].r = msg;
+  e->data[2].r = vm.undef();
+  e->data[3].r = errs;
+  e->len = 4;
+  e->flags |= kArrFlagError;
+  r->r = e;
+}
+E7_NATIVE(n_errorCause) {
+  E7_UNUSED;
+  StrObj *nm, *m;
+  errParts(vm, a[0], &nm, &m);
+  auto* e = static_cast<ArrObj*>(a[0].r);
+  r->r = e->len >= 3 && e->data[2].r ? e->data[2].r : vm.undef();
+}
+E7_NATIVE(n_errorErrors) {
+  E7_UNUSED;
+  StrObj *nm, *m;
+  errParts(vm, a[0], &nm, &m);
+  auto* e = static_cast<ArrObj*>(a[0].r);
+  if (e->len >= 4 && e->data[3].r && e->data[3].r->type == OT::Array) { r->r = e->data[3].r; return; }
+  r->r = vm.newArray(VT_REF, 0);  // not an AggregateError
+}
 E7_NATIVE(n_errorName) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = nm; }
 E7_NATIVE(n_errorMessage) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = m; }
 E7_NATIVE(n_errorToString) {  // String(e): "Name: message", or "Name" when the message is empty
@@ -1092,6 +1302,10 @@ E7_NATIVE(n_errorIs) {  // x instanceof Error / TypeError / ...: false for anyth
 
 void registerCoreNatives(VM& vm) {
   vm.registerNative("Error.new", "RR>R", n_errorNew);
+  vm.registerNative("Error.newCause", "RRR>R", n_errorNewCause);
+  vm.registerNative("Error.newAggregate", "RR>R", n_errorNewAggregate);
+  vm.registerNative("Error.cause", "R>R", n_errorCause);
+  vm.registerNative("Error.errors", "R>R", n_errorErrors);
   vm.registerNative("Error.name", "R>R", n_errorName);
   vm.registerNative("Error.message", "R>R", n_errorMessage);
   vm.registerNative("Error.toString", "R>R", n_errorToString);
@@ -1119,6 +1333,8 @@ void registerCoreNatives(VM& vm) {
   vm.registerNative("Int.toStringRadix", "IFF>R", n_intToStringRadix);
   vm.registerNative("Date.now", ">F", n_dateNow);
   vm.registerNative("Object.keys", "R>R", n_objectKeys);
+  vm.registerNative("Object.has", "RR>I", n_objectHas);
+  vm.registerNative("Global.structuredClone", "R>R", n_structuredClone);
   vm.registerNative("Text.encode", "R>R", n_textEncode);
   vm.registerNative("Text.decode", "R>R", n_textDecode);
 }
@@ -1137,7 +1353,7 @@ void applyNativeCosts(VM& vm) {
       "encoding.base64Encode", "encoding.base64Decode", "encoding.base64UrlEncode", "encoding.base64UrlDecode",
       "encoding.base32Encode", "encoding.base32Decode", "encoding.utf8Encode", "encoding.utf8Decode",
       "encoding.pemDecode", "encoding.pemEncode", "encoding.concatBytes", "encoding.bytesEqual", "JSON.stringify",
-      "JSON.stringifyIndent", "JSON.stringifyIndentStr", "JSON.parse", "JSON.tryParse", "Map.fromEntries", "Set.fromArray",
+      "JSON.stringifyIndent", "JSON.stringifyIndentStr", "JSON.parse", "JSON.tryParse", "JSON.parseRec", "JSON.tryParseRec", "Map.fromEntries", "Set.fromArray",
       "Map.copy", "Math.minArray", "Math.maxArray", "Math.hypotArray", "String.indexOf", "String.lastIndexOf",
       "String.includes", "String.startsWith", "String.endsWith", "String.toUpperCase", "String.toLowerCase",
       "String.trim", "String.trimStart", "String.trimEnd", "String.split", "String.replace", "String.replaceAll",
@@ -1146,6 +1362,7 @@ void applyNativeCosts(VM& vm) {
   };
   static const char* out[] = {
       "Array.slice", "Array.splice", "Array.concat", "Array.newLen", "Array.setLength", "Bytes.new", "Bytes.slice",
+      "Array.toReversed", "Array.toSpliced", "Array.withI", "Array.withF", "Array.withR",
       "Buffer.new", "Buffer.slice", "Map.keys", "Map.values", "Map.entries", "Object.keys", "String.slice",
       "String.substring", "String.substr", "String.padStart", "String.padEnd", "String.repeat",
       "crypto.randomBytes", "crypto.hkdf",
@@ -1162,6 +1379,7 @@ void applyNativeCosts(VM& vm) {
   for (const char* n : hash) vm.setNativeCost(n, NC_HASH);
   for (const char* n : bigq) vm.setNativeCost(n, NC_BIGQ);
   vm.setNativeCost("Array.sort", NC_SORT);
+  vm.setNativeCost("Array.toSorted", NC_SORT);
   static const char* hashes[] = {"md5", "sha1", "sha224", "sha256", "sha384", "sha512",
                                  "sha3_224", "sha3_256", "sha3_384", "sha3_512", "keccak256"};
   for (const char* h : hashes) vm.setNativeCost(std::string("crypto.hash.") + h, NC_HASH);

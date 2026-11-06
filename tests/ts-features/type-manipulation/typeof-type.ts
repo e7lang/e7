@@ -1,7 +1,7 @@
 // @feature: `typeof` in type positions
 // @category: Type Manipulation
 // @status: unsupported
-// @why: not implemented yet: types are written out, not derived from values
+// @why: types known at compile time: types derived from values (`typeof x`) are excluded (SPEC 0.1); write the type out
 // @instead: name the type with an interface or a type alias
 // @error: 'typeof' types are not supported
 const defaults = { host: "localhost", port: 80 };

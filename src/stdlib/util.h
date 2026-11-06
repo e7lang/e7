@@ -90,6 +90,8 @@ BigObj* bigParse(VM& vm, const std::string& s, bool literal);  // nullptr on syn
 double bigToDouble(const BigObj* b);
 // Map helpers (map.cpp)
 int32_t mapFind(VM& vm, MapObj* m, Slot k);
+// "/source/flags" of a regular expression (regexp.cpp)
+std::u16string regexpToString(const RegExpObj* re);
 // current module of the executing script function
 ModuleRT* currentModule(VM& vm);
 
@@ -97,4 +99,20 @@ void jsonMapSet(VM& vm, MapObj* m, Slot k, Slot v);  // map.cpp
 struct ClassRT;
 std::vector<uint32_t> jsFieldOrder(const ClassRT* c);  // JavaScript property order (core.cpp)
 
+}  // namespace e7
+
+namespace e7 {
+// ---- typed arrays (0.3): a byte view whose Obj::flags bits 0-3 give the element kind (0: Uint8Array)
+enum TAKind : uint8_t { TA_U8, TA_I8, TA_U8C, TA_I16, TA_U16, TA_I32, TA_U32, TA_F32, TA_F64, TA_BI64, TA_BU64, TA__COUNT };
+inline uint32_t taSize(uint8_t k) {
+  static const uint8_t s[TA__COUNT] = {1, 1, 1, 2, 2, 4, 4, 4, 8, 8, 8};
+  return k < TA__COUNT ? s[k] : 1;
+}
+inline uint8_t taKind(const BytesObj* b) { return (uint8_t)(b->flags & 0xF); }
+inline uint32_t taLength(const BytesObj* b) { return b->len / taSize(taKind(b)); }
+inline bool taIsBig(uint8_t k) { return k == TA_BI64 || k == TA_BU64; }
+const char* taName(uint8_t k);
+double taGetNum(const BytesObj* b, uint32_t i);              // element i of a number kind
+uint64_t taGetRaw64(const BytesObj* b, uint32_t i);          // element i of a bigint kind (bits)
+std::string taElemText(const BytesObj* b, uint32_t i);       // "1", "1.5", "5n" (console.log, join)
 }  // namespace e7

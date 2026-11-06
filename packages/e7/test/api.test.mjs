@@ -311,3 +311,53 @@ test("large source and output", async () => {
   assert.equal(r.output.length, 20000);
   assert.equal(r.output[19999], "line 19999");
 });
+
+// async / await (0.3): async exports and top-level await finish within run(); e7:test's later() /
+// laterReject() are host-like operations the VM settles itself (this package has no async host functions)
+const ASYNC = `import { later, laterReject } from "e7:test";
+console.log("init");
+const base = await later(40);
+console.log("base " + base);
+export async function main(): Promise<number> { return base + (await later(2)); }
+export async function both(a: string, b: string): Promise<string> {
+  const order: string[] = [];
+  const pa = later(a).then((x) => { order.push(x); return x; });
+  const pb = later(b).then((x) => { order.push(x); return x; });
+  const all = await Promise.all([pa, pb]);
+  return all.join("") + ":" + order.join("");
+}
+export async function caught(): Promise<string> {
+  try {
+    await laterReject(new Error("no such key"));
+    return "not reached";
+  } catch (e) {
+    return e instanceof Error ? "caught " + e.message : "?";
+  }
+}
+export async function uncaught(): Promise<number> { await laterReject(new Error("gone")); return 1; }
+export async function forever(): Promise<number> { await new Promise<number>(() => {}); return 1; }
+export async function big(x: u64): Promise<u64> { return (await later(x)) * 2; }
+`;
+
+test("run: async exports and top-level await", async () => {
+  const { bytecode, diagnostics } = await compile(ASYNC, { fileName: "async.ts" });
+  assert.deepEqual(diagnostics, []);
+  let r = await run(bytecode);
+  assert.equal(r.status, "ok", r.error);
+  assert.equal(r.result, 42, "main(): Promise<number> gives the promise's value");
+  assert.deepEqual(r.output, ["init", "base 40"], "top-level await finished before main()");
+  r = await run(bytecode, { call: "both", args: ["a", "b"] });
+  assert.equal(r.result, "ab:ab");
+  r = await run(bytecode, { call: "caught" });
+  assert.equal(r.result, "caught no such key");
+  r = await run(bytecode, { call: "uncaught" });
+  assert.equal(r.status, "runtime_error");
+  assert.equal(r.code, 2);
+  assert.match(r.error, /gone/);
+  r = await run(bytecode, { call: "forever" });
+  assert.equal(r.status, "runtime_error");
+  assert.match(r.error, /never finishes/);
+  r = await run(bytecode, { call: "big", args: [2n ** 63n + 1n] });
+  assert.equal(r.result, 2n, "u64 wraps; i64 / u64 promise values are bigint");
+  assert.deepEqual((await listExports(bytecode)).find((e) => e.name === "main"), { name: "main", params: [], returns: "number" });
+});

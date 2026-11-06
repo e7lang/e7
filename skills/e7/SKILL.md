@@ -1,14 +1,14 @@
 ---
 name: e7
-description: Write, fix and review code in E7, the strict TypeScript subset that runs on the e7vm bytecode VM (github.com/e7lang/e7). Use this skill whenever the user works on E7 scripts, .e7 files, .ts files that import "e7:crypto", "e7:encoding", "e7:json" or "e7:test", code compiled with e7c or run with e7 / e7vm / @e7lang/e7, scripts embedded in Android/iOS/Windows/macOS/Linux apps through e7vm, or asks for signing / verification / algorithm scripts "for E7" — even if they just say "TypeScript". E7 looks like TypeScript but rejects many TypeScript features (any, regex, async, union types, index signatures...), so code written as ordinary TypeScript usually fails to compile; this skill explains what to write instead and how to check it.
+description: Write, fix and review code in E7, the strict TypeScript subset that runs on the e7vm bytecode VM (github.com/e7lang/e7). Use this skill whenever the user works on E7 scripts, .e7 files, .ts files that import "e7:crypto", "e7:encoding", "e7:json" or "e7:test", code compiled with e7c or run with e7 / e7vm / @e7lang/e7, scripts embedded in Android/iOS/Windows/macOS/Linux apps through e7vm, or asks for signing / verification / algorithm scripts "for E7" — even if they just say "TypeScript". E7 looks like TypeScript but rejects many TypeScript features (any, union types, index signatures...), so code written as ordinary TypeScript usually fails to compile; this skill explains what to write instead and how to check it.
 ---
 
 # Writing E7
 
 E7 is a **strict subset of TypeScript** compiled to bytecode and run inside apps by e7vm. Every valid E7
 program is also valid TypeScript, but most TypeScript is *not* valid E7. Write code for E7 deliberately:
-the compiler resolves every name and type statically, so anything dynamic (`any`, runtime type tests,
-exceptions, regex, promises, dynamic keys) is rejected.
+the compiler resolves every name and type statically, so anything dynamic (`any`, general unions, runtime type
+tests, dynamic keys) is rejected.
 
 Typical E7 code is an algorithm a host app calls: request signing, signature/webhook verification, license
 checks, price or rule calculations, data transforms. Scripts are compiled on a server (`e7c`), shipped as
@@ -25,16 +25,16 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | generic methods in interfaces, `<K extends keyof T>`, `x instanceof Box` (generic class) | generic functions, classes, interfaces and aliases work (compiled per type argument list); use a generic class or function instead |
 | `string \| number`, discriminated unions | one interface with a `kind` field (string or enum) and optional fields |
 | `{ [key: string]: V }`, `Record<K, V>`, `Partial`, `Pick` | `Map<string, V>`, or write the interface out |
-| regex `/.../`, `RegExp` | string methods: `split`, `indexOf`, `startsWith`, `slice`, `charCodeAt`, `replaceAll` (string patterns) |
-| `async`/`await`, `Promise`, `setTimeout`, `fetch` | synchronous code; the host does I/O and passes data in |
+| regex `/.../`, `RegExp` | supported (0.3): literals are checked when compiling; named groups of a literal are typed (`m.groups?.year`); a pattern from `new RegExp(s)` has only indexed groups (`m[1]`); no `v` flag |
+| `setTimeout`, `fetch`, `fs` | no timers or I/O: an async host function (`declare function f(): Promise<T>`, settled by the host) or data passed in (`async`/`await`, `Promise` and generators work as in Node.js) |
 | `for (k in obj)`, `delete`, `in` | `Object.keys(obj)`, or use a `Map` |
 | `class A { get x() }` implementing `interface I { x: number }` | declare the accessor in the interface: `get x(): number` (interfaces read properties as fields) |
-| `JSON.parse(text) as Tree` with a recursive `Tree` | parse into a non-recursive type and build the tree (recursive interfaces themselves are fine) |
 | `var`, `==` | `let`/`const`, `===` (`x == null` is allowed: null or undefined) |
 | `JSON.parse(text)` | `JSON.parse(text) as T` (validated against `T`; a shape mismatch ends the call and cannot be caught, a syntax error is a catchable `SyntaxError`); for untrusted input `tryParse(text) as T \| null` from `e7:json` (`null` on bad input, `lastError()` says why) |
 | `arr.map(obj.method)` | `arr.map(x => obj.method(x))` (methods are not values) |
 | `Buffer`, `crypto.subtle`, `require("crypto")`, `fs`, `process` | `Uint8Array`, `e7:crypto`, `e7:encoding`, or a host function |
-| `Int32Array`, `Float64Array` | `number[]`, `u32[]`, or `DataView` |
+| `async function*` (async generators) | an `async` function returning an array, or `for await` over an array of promises |
+| `{ get x() { ... } }` (accessors in object literals) | a class with `get x()`, or a plain property |
 
 Behaviour that differs from JavaScript at run time:
 
@@ -42,8 +42,29 @@ Behaviour that differs from JavaScript at run time:
 - **`number` is exactly JavaScript's double.** Machine integers `i8 u8 i16 u16 i32 u32 i64 u64` (and `int` = `i64`)
   are opt-in: they wrap on overflow, `/` truncates, and they never mix implicitly with `number` — convert with
   `u32(x)`, `i64(x)`, `Number(x)`. Write `u32(a + b)` style when the same code must also run on Node.
-- `Date` uses UTC only; only `setTime` of the `set*` methods exists.
+- `Date` uses UTC only (all `get*` / `set*` methods; no locale formatting).
 - `typeof x` is a compile-time constant (no runtime type tests); narrow with `!== null`, truthiness or `instanceof`.
+
+## Supported and not supported at a glance (E7 0.3)
+
+**Supported** (behaves as on Node.js): classes (inheritance, abstract, accessors, `#private`, static blocks),
+interfaces and type aliases (also recursive and generic), generics, enums, literal types (`"GET" | "POST"`, `0 | 1`)
+with narrowing and exhaustive `switch`, `T | null | undefined`, type predicates (`x is T`) and assertion functions,
+destructuring, spread, optional chaining, `??`, template literals and tagged templates, closures, `try` / `catch` /
+`finally`, generators (`function*`, `yield*`, `[Symbol.iterator]`), `async` / `await`, `Promise` (`then`, `all`,
+`allSettled`, `any`, `race`, `new Promise`), top-level `await`, `for await` over arrays, regular expressions
+(literals, `RegExp`, `match` / `matchAll` / `replace` / `split`), `Map`, `Set`, `Date`, `JSON` (typed with
+`as T`), `BigInt`, typed arrays (`Uint8Array` ... `Float64Array`, `BigInt64Array`), `DataView`, `structuredClone`,
+ES modules (named, default, namespace imports, re-exports), and E7's machine integers and `e7:crypto` /
+`e7:encoding` / `e7:json` / `e7:test` modules.
+
+**Not supported** (compile errors with a hint): `any` / `unknown` as declared types, unions of different types
+(`string | number`, discriminated unions of objects), intersections, index signatures / `Record` / mapped,
+conditional, `keyof`, `typeof` and template literal types, `Symbol` values, `Proxy` / `Reflect` / `eval`,
+`for...in` / `delete` / `in`, `var`, class expressions and mixins, decorators, namespaces, JSX, `WeakMap` /
+`WeakSet`, `Intl` and locale formatting, timers and I/O (`setTimeout`, `fetch`: the host does them), async
+generators, accessors in object literals, methods used as values. The full table with a reason and a replacement
+for each of 250 TypeScript features: [docs/TYPESCRIPT.md](https://github.com/e7lang/e7/blob/main/docs/TYPESCRIPT.md).
 
 For the complete list (destructuring limits, class rules, operators, every standard-library method) read
 [references/language.md](references/language.md). For the built-in modules read

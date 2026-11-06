@@ -59,7 +59,10 @@ def main():
                     continue
                 orc, oout, oerr = run([a.old_e7, out])
                 nrc, nout, nerr = run([a.e7, out])
-                if orc == 1 and "requires e7vm" in oerr and "AddressSanitizer" not in oerr:
+                # a 0.2.x VM checks the format before `requires`: a format-3 module (0.3) is refused as
+                # "e7b format 3 is not supported", also E7_ERR_VERSION
+                clean = "requires e7vm" in oerr or ("e7b format" in oerr and "is not supported" in oerr)
+                if orc == 1 and clean and "AddressSanitizer" not in oerr:
                     rejected += 1
                     needs_newer.append(f"{name} ({cerr.strip().splitlines()[0][:160] if cerr.strip() else 'newer target'})")
                 elif orc == 0 and (orc, oout, oerr) == (nrc, nout, nerr):

@@ -229,36 +229,57 @@ console.log(JSON.stringify(patch({ name: "Ann", age: 30 }, { age: 31 })));
 
 `JSON.parse(text) as Map<string, V>` reads a JSON object with arbitrary keys.
 
-### Regular expressions
+### Regular expressions (0.3)
 
-```ts e7-reject
-const digitsOnly = /^[0-9]+$/.test("123");
-```
-
-Use string methods (`split`, `replace`/`replaceAll` with string patterns, `indexOf`, `startsWith`,
-`endsWith`, `trim`, `charCodeAt`):
+ES2024 regular expressions work as in Node.js (no `v` flag): literals are checked when compiling, the named
+groups of a literal are typed, and matching counts against the instruction budget.
 
 ```ts
-function isDigits(s: string): boolean {
-  if (s.length === 0) return false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c < 48 || c > 57) return false;
-  }
-  return true;
-}
-console.log(isDigits("123"), isDigits("12a"), "a-b-c".replaceAll("-", "+"), "k=v".split("="));
+const date = /(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})/;
+const m = date.exec("released 2024-11-06");
+if (m) console.log(m[0], m.index, m.groups?.year);
+console.log("a1b22c".replace(/\d+/g, (d) => `<${d}>`), "a, b ,c".split(/\s*,\s*/));
+for (const x of "k=v; a=b".matchAll(/(\w)=(\w)/g)) console.log(x[1], x[2]);
+const dyn = new RegExp("(\\w+)@(\\w+)", "i");
+console.log(dyn.exec("Mail: Bob@Example")?.[2], /^\p{Lu}/u.test("Émile"));
 ```
 
-### `async`, `await`, `Promise`, timers, I/O
+A pattern built at run time (`new RegExp(s)`) has no typed `groups`: read its indexed groups (`m[1]`), and its
+`replace` callback is `(match) => string`. A `/` right after `)` is a division: parenthesize a pattern there.
 
 ```ts e7-reject
-async function load(): Promise<string> { return "x"; }
+const m = new RegExp("(?<year>\\d{4})").exec("2024");
+console.log(m?.groups);
 ```
 
-Scripts are synchronous. The host app does networking and storage and passes data in (as arguments, or
-through host functions declared with `declare function`). Long computations can be time-sliced by the host
-with an instruction budget.
+### `async`, `await`, `Promise`, generators (0.3)
+
+```ts
+async function double(x: number): Promise<number> {
+  return x * 2;
+}
+function* range(n: number): Generator<number> {
+  for (let i = 0; i < n; i++) yield i;
+}
+async function main(): Promise<void> {
+  const xs = await Promise.all([...range(3)].map(double));
+  console.log(xs);
+  try {
+    await Promise.reject(new Error("no"));
+  } catch (e) {
+    if (e instanceof Error) console.log("caught", e.message);
+  }
+}
+main();
+```
+
+`async` functions, methods and arrows, `await`, top-level `await` (entry module), `for await`, `Promise`
+(`then` / `catch` / `finally`, `new Promise<T>(...)`, `Promise.all` / `allSettled` / `any` / `race` over
+promises of one type) and generators (`function*`, `yield`, `yield*`, `[Symbol.iterator]` generator methods)
+work as in Node.js, callbacks in the same order. There are no timers and no I/O: the host does networking
+and storage through async host functions (`declare function fetchKey(id: string): Promise<Uint8Array>`,
+settled by the host; see EMBEDDING.md) or passes data in as arguments. Async generators (`async function*`)
+are not supported yet.
 
 ### `for...in`, `in`, `delete`, `var`, `==`
 
@@ -347,11 +368,12 @@ const list: List<number> = { head: 1, tail: { head: 2, tail: null } };
 console.log(size(root), list.tail?.head);
 ```
 
-`JSON.parse(text) as T` into a recursive type is not supported yet (planned for e7vm 0.3):
+`JSON.parse(text) as T` into a recursive type works too (e7vm 0.3):
 
-```ts e7-reject
+```ts
 interface TreeNode { label: string; children: TreeNode[] }
-const t = JSON.parse('{"label":"x","children":[]}') as TreeNode;
+const t = JSON.parse('{"label":"x","children":[{"label":"y","children":[]}]}') as TreeNode;
+console.log(t.children[0].label);
 ```
 
 ### Destructuring assignments
@@ -378,9 +400,10 @@ const r = ({ a } = { a: 1 });
 
 ### Other rejected syntax
 
-`with`, the comma operator, `void`, `delete`, `in`, `new.target`, tagged templates, `eval`, `Symbol`,
-`keyof`/`typeof` in type positions, conditional and mapped types, intersection types, and typed arrays other than
-`Uint8Array` (use `number[]`, `u32[]` or `DataView`). Identifiers are ASCII only.
+`with`, `delete`, `in`, `new.target`, `eval`, `Symbol` values, `keyof`/`typeof` in type positions, conditional,
+mapped and template literal types, intersection types, accessors in object literals, async generators.
+Identifiers are ASCII only. (The comma operator, `void`, tagged templates, `String.raw`, `<T>x` assertions and
+all typed arrays are supported.)
 
 ## 3. Statements and expressions
 

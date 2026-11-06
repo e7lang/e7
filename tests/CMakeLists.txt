@@ -98,6 +98,10 @@ endif()
 
 # try/catch handler tables: the verifier rejects malformed ones
 if(E7_WITH_COMPILER)
+  add_executable(verify_coroutines_test verify_coroutines_test.cpp)
+  target_link_libraries(verify_coroutines_test PRIVATE e7vm_static)
+  target_include_directories(verify_coroutines_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  add_test(NAME verify_coroutines_test COMMAND verify_coroutines_test)
   add_executable(verify_handlers_test verify_handlers_test.cpp)
   target_link_libraries(verify_handlers_test PRIVATE e7vm_static)
   target_include_directories(verify_handlers_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -195,4 +199,20 @@ if(E7_WITH_COMPILER)
   # soak: one VM, 100,000 calls; heap after a full collection, GC statistics and process heap flat
   # (`soak_test --calls 10000000 -v` for a long run)
   add_test(NAME soak_test COMMAND soak_test --calls ${E7_SOAK_CALLS})
+endif()
+
+# regular expression engine (src/regexp): unit tests, and the driver of the differential test against
+# Node.js (tests/regexp/diff.mjs: a hand-written corpus and seeded random patterns)
+find_package(Threads REQUIRED)
+add_executable(regexp_test regexp/regexp_test.cpp)
+target_link_libraries(regexp_test PRIVATE e7vm_static Threads::Threads)
+target_include_directories(regexp_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME regexp_test COMMAND regexp_test)
+add_executable(regexp_cli regexp/regexp_cli.cpp)
+target_link_libraries(regexp_cli PRIVATE e7vm_static)
+target_include_directories(regexp_cli PRIVATE ${CMAKE_SOURCE_DIR}/src)
+find_program(NODE_EXECUTABLE node)
+if(NODE_EXECUTABLE)
+  add_test(NAME regexp_diff COMMAND ${NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/regexp/diff.mjs
+           --cli $<TARGET_FILE:regexp_cli> --seed 1 --count 3000)
 endif()

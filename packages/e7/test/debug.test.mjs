@@ -147,7 +147,8 @@ test("pause an infinite loop (in a call and in top-level code), terminate", asyn
   const out = [];
   top.on("output", (l) => out.push(l));
   const p = top.launch();
-  await new Promise((r) => setTimeout(r, 50));
+  // wait until the top-level code has printed (a slow machine may need longer than one wait)
+  for (let i = 0; i < 100 && out.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
   top.pause();
   const pe = await p;
   assert.equal(pe.reason, "pause");

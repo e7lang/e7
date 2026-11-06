@@ -13,12 +13,13 @@ namespace e7 {
 
 namespace {
 
-enum class TK { Eof, Ident, Num, BigInt, Str, TmplFull, TmplHead, TmplMid, TmplTail, Punct, PrivateName };
+enum class TK { Eof, Ident, Num, BigInt, Str, TmplFull, TmplHead, TmplMid, TmplTail, Punct, PrivateName, Regex };
 
 struct Tok {
   TK k = TK::Eof;
   std::string text;      // identifier / punctuator / number raw
   std::u16string str;    // string / template cooked value
+  std::string flags;     // Regex: the flags (text: the pattern source, as written)
   double num = 0;
   bool isInt = false;
   bool nl = false;       // newline before this token
@@ -36,6 +37,9 @@ class Lexer {
   Lexer(const std::string& src) : s(src) {}
   std::vector<Tok> run() {
     std::vector<Tok> out;
+    // a hashbang line (#!/usr/bin/env ...) at the very start is a comment
+    if (s.size() >= 2 && s[0] == '#' && s[1] == '!')
+      while (p < s.size() && s[p] != '\n') p++;
     std::vector<int> tmplDepth;  // brace depth stack for template substitutions
     int braceDepth = 0;
     while (true) {
@@ -73,6 +77,7 @@ class Lexer {
         continue;
       }
       if (c == '"' || c == '\'') { lexString(t, c); out.push_back(t); continue; }
+      if (c == '/' && regexAllowed(out)) { lexRegex(t); out.push_back(t); continue; }
       lexPunct(t);
       if (t.text == "{") braceDepth++;
       else if (t.text == "}") braceDepth--;
@@ -292,16 +297,33 @@ class Lexer {
     }
   }
 
+  // the raw text of a template part (String.raw, tagged templates): CR LF and CR read as LF
+  void templateRaw(Tok& t, size_t from, size_t to) {
+    std::string r;
+    for (size_t k = from; k < to; k++) {
+      if (s[k] == '\r') {
+        r += '\n';
+        if (k + 1 < to && s[k + 1] == '\n') k++;
+      } else {
+        r += s[k];
+      }
+    }
+    t.text = r;
+  }
+
   void lexTemplate(Tok& t, bool start) {
+    size_t rawStart = p;
     while (true) {
       if (p >= s.size()) fail("unterminated template literal");
       char c = s[p];
       if (c == '`') {
+        templateRaw(t, rawStart, p);
         p++; col++;
         t.k = start ? TK::TmplFull : TK::TmplTail;
         return;
       }
       if (c == '$' && p + 1 < s.size() && s[p + 1] == '{') {
+        templateRaw(t, rawStart, p);
         p += 2; col += 2;
         t.k = start ? TK::TmplHead : TK::TmplMid;
         return;
@@ -311,6 +333,71 @@ class Lexer {
       if (c == '\n') { p++; t.str.push_back('\n'); line++; col = 1; continue; }
       appendUtf8Char(t.str);
     }
+  }
+
+  // A '/' starts a regular expression literal where an expression can start: decided by the previous
+  // token, as JavaScript tools do (after a value, an identifier, ')' or ']' it is a division)
+  static bool regexAllowed(const std::vector<Tok>& out) {
+    if (out.empty()) return true;
+    const Tok& pv = out.back();
+    switch (pv.k) {
+      case TK::Punct:
+        return !(pv.text == ")" || pv.text == "]" || pv.text == "++" || pv.text == "--");
+      case TK::TmplHead:
+      case TK::TmplMid:
+        return true;
+      case TK::Ident: {
+        static const char* const kw[] = {"return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+                                         "throw", "case", "do", "else", "yield", "await"};
+        for (const char* k : kw)
+          if (pv.text == k) return true;
+        return false;
+      }
+      default:
+        return false;
+    }
+  }
+
+  // /pattern/flags: the pattern is kept as written (the compiler checks it with the regular expression
+  // engine); only its end is found here
+  void lexRegex(Tok& t) {
+    t.k = TK::Regex;
+    p++; col++;
+    size_t start = p;
+    bool inClass = false;
+    auto lineEnd = [this](size_t q) {
+      if (q >= s.size() || s[q] == '\n' || s[q] == '\r') return true;
+      // U+2028 / U+2029
+      return (unsigned char)s[q] == 0xE2 && q + 2 < s.size() && (unsigned char)s[q + 1] == 0x80 &&
+             ((unsigned char)s[q + 2] == 0xA8 || (unsigned char)s[q + 2] == 0xA9);
+    };
+    while (true) {
+      if (lineEnd(p)) fail("unterminated regular expression literal");
+      char c = s[p];
+      if (c == '\\') {
+        p++; col++;
+        if (lineEnd(p)) fail("unterminated regular expression literal");
+        skipUtf8Char();
+        continue;
+      }
+      if (c == '/' && !inClass) break;
+      if (c == '[') inClass = true;
+      else if (c == ']') inClass = false;
+      skipUtf8Char();
+    }
+    t.text = s.substr(start, p - start);
+    p++; col++;
+    while (p < s.size() && (isIdPart(s[p]) || (unsigned char)s[p] >= 0x80)) {
+      size_t q = p;
+      skipUtf8Char();
+      t.flags += s.substr(q, p - q);
+    }
+  }
+  void skipUtf8Char() {
+    unsigned char c = (unsigned char)s[p];
+    size_t n = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : 4;
+    p = p + n > s.size() ? s.size() : p + n;
+    col++;
   }
 
   void lexPunct(Tok& t) {
@@ -385,6 +472,7 @@ class Parser {
     switch (tk.k) {
       case TK::Eof: return "end of file";
       case TK::Str: return "string";
+      case TK::Regex: return "regular expression";
       case TK::Num: return tk.text;
       default: return tk.text;
     }
@@ -411,6 +499,18 @@ class Parser {
     fail("expected property name");
   }
   // class member names: property names and private names (#x)
+  // `[Symbol.iterator]` / `[Symbol.asyncIterator]` at the current position (a method name)
+  bool symbolIteratorKey() {
+    return isP("[") && i + 4 < t.size() && t[i + 1].k == TK::Ident && t[i + 1].text == "Symbol" &&
+           t[i + 2].k == TK::Punct && t[i + 2].text == "." && t[i + 3].k == TK::Ident &&
+           (t[i + 3].text == "iterator" || t[i + 3].text == "asyncIterator") && t[i + 4].k == TK::Punct && t[i + 4].text == "]";
+  }
+  std::string symbolIteratorName() {
+    std::string n = "[Symbol." + t[i + 3].text + "]";
+    i += 5;
+    return n;
+  }
+
   std::string memberName() {
     if (cur().k == TK::PrivateName) return "#" + t[i++].text;
     return propName();
@@ -449,10 +549,26 @@ class Parser {
   }
   // a return type: type predicates and assertion signatures are reported by name
   TypeNode* parseRetType() {
-    if (isKw("asserts") && peek().k == TK::Ident)
-      fail("assertion functions ('asserts x is T') are not supported; throw if the check fails and narrow at the call site");
-    if (cur().k == TK::Ident && peek().k == TK::Ident && peek().text == "is")
-      fail("type predicates ('x is T') are not supported; return boolean and narrow at the call site (typeof, instanceof, comparisons)");
+    Loc l = loc();
+    // type predicates `x is T` (a boolean) and assertion functions `asserts x is T` / `asserts x` (void)
+    bool asserts = isKw("asserts") && peek().k == TK::Ident && !peek().nl;
+    if (asserts) i++;
+    if (cur().k == TK::Ident && peek().k == TK::Ident && peek().text == "is" && !peek().nl) {
+      TypeNode* r = A.type(TNK::Ref, l);
+      r->name = asserts ? "void" : "boolean";
+      r->predParam = t[i].text;
+      r->asserts = asserts;
+      i += 2;
+      r->predType = parseType();
+      return r;
+    }
+    if (asserts) {
+      TypeNode* r = A.type(TNK::Ref, l);
+      r->name = "void";
+      r->predParam = ident();
+      r->asserts = true;
+      return r;
+    }
     return parseType();
   }
   bool looksLikeFunctionType() {
@@ -525,7 +641,16 @@ class Parser {
       lt->literal = utf16ToUtf8(t[i++].str);
       return lt;
     }
-    if (cur().k == TK::Num || isP("-")) fail("numeric literal types are not supported");
+    if (cur().k == TK::Num || (isP("-") && peek().k == TK::Num)) {
+      bool neg = eatP("-");
+      if (cur().k != TK::Num) fail("expected a number");
+      if (!cur().text.empty() && cur().text.back() == 'n') fail("bigint literal types are not supported");
+      TypeNode* lt = A.type(TNK::Literal, l);
+      lt->numLiteral = true;
+      lt->num = neg ? -t[i].num : t[i].num;
+      i++;
+      return lt;
+    }
     if (cur().k != TK::Ident) fail("expected type");
     TypeNode* r = A.type(TNK::Ref, l);
     r->name = t[i++].text;
@@ -560,6 +685,21 @@ class Parser {
     while (!isP("}")) {
       TypeNode::Member m;
       if (isKw("readonly") && peek().k == TK::Ident) { i++; m.readonly = true; }
+      if (isP("[") && !(peek().k == TK::Ident && ((peek(2).k == TK::Punct && peek(2).text == ":") ||
+                                               (peek(2).k == TK::Ident && peek(2).text == "in")))) {
+        // a computed member name `[K]: T` (K a constant)
+        i++;
+        m.computed = parseAssign();
+        expectP("]");
+        m.name = "[computed]";
+        if (eatP("?")) m.optional = true;
+        if (isP("(")) fail("computed method signatures are not supported; use a property of a function type");
+        expectP(":");
+        m.type = parseType();
+        o->members.push_back(m);
+        if (!eatP(";") && !eatP(",") && !isP("}") && !cur().nl) fail("expected ';'");
+        continue;
+      }
       if (isP("[")) fail("index signatures are not supported; use Map<K, V>");
       if ((isKw("get") || isKw("set")) && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num) &&
           peek(2).k == TK::Punct && peek(2).text == "(") {
@@ -738,8 +878,11 @@ class Parser {
         return s;
       }
       if (w == "function") return parseFunction();
-      if (w == "async") {
-        if (peek().k == TK::Ident && peek().text == "function") fail("async functions are not supported yet (reserved for coroutines); use a synchronous function (the host can run long work in slices with an instruction budget)");
+      if (w == "async" && peek().k == TK::Ident && peek().text == "function" && !peek().nl) {
+        i++;
+        Stmt* s = parseFunction();
+        s->isAsync = true;
+        return s;
       }
       if (w == "abstract" && peek().k == TK::Ident && peek().text == "class" && !peek().nl) {
         i++;
@@ -1019,6 +1162,10 @@ class Parser {
     Stmt* s = nullptr;
     if (isKw("function")) {
       s = parseFunction(true);
+    } else if (isKw("async") && peek().k == TK::Ident && peek().text == "function" && !peek().nl) {
+      i++;
+      s = parseFunction(true);
+      s->isAsync = true;
     } else if (isKw("class")) {
       s = parseClass(true);
     } else if (isKw("abstract") && peek().k == TK::Ident && peek().text == "class" && !peek().nl) {
@@ -1028,8 +1175,6 @@ class Parser {
     } else if (isKw("interface") && peek().k == TK::Ident) {
       s = parseInterface();
     } else {
-      if (isKw("async") && peek().k == TK::Ident && peek().text == "function" && !peek().nl)
-        fail("async functions are not supported yet (reserved for coroutines); use a synchronous function (the host can run long work in slices with an instruction budget)");
       // export default <expression>: evaluated once, at this point, into a hidden const named "default"
       // ('default' is a reserved word, so no other declaration can have that name)
       s = A.stmt(SK::Var, l);
@@ -1104,8 +1249,9 @@ class Parser {
   Stmt* parseFunction(bool anonymous = false) {
     Loc l = loc();
     expectKw("function");
-    if (isP("*")) fail("generator functions are not supported yet (reserved for coroutines)");
+    bool gen = eatP("*");
     Stmt* s = A.stmt(SK::Func, l);
+    s->isGenerator = gen;
     s->name = anonymous && (isP("(") || isP("<")) ? "default" : ident();
     parseTypeParams(s->typeParams);
     parseParams(s->params, false);
@@ -1181,7 +1327,8 @@ class Parser {
           if (isKw("static")) m.isStatic = true;
           if (isKw("readonly")) m.readonly = true;
           if (isKw("abstract")) m.isAbstract = true;
-          if (isKw("declare")) fail("'declare' fields are not supported");
+          // `declare x: T`: a field declared for the type checker (set elsewhere, e.g. by the constructor)
+          if (isKw("declare")) m.isDeclare = true;
           i++;
           any = true;
         } else if ((isKw("public") || isKw("private") || isKw("protected") || isKw("readonly") || isKw("static") || isKw("override")) &&
@@ -1194,9 +1341,36 @@ class Parser {
         m.accessor = isKw("get") ? 1 : 2;
         i++;
       }
-      if (isKw("async")) fail("async methods are not supported yet (reserved for coroutines); use a synchronous method (the host can run long work in slices with an instruction budget)");
-      if (isP("*")) fail("generator methods are not supported");
-      if (isP("[")) fail("computed members / index signatures are not supported");
+      if (!m.accessor && isKw("async") && !peek().nl &&
+          !(peek().k == TK::Punct && (peek().text == "(" || peek().text == "<" || peek().text == ":" || peek().text == "=" ||
+                                      peek().text == ";" || peek().text == "?" || peek().text == "!"))) {
+        m.isAsync = true;
+        i++;
+      }
+      if (!m.accessor && eatP("*")) m.isGenerator = true;
+      if (isP("[") && symbolIteratorKey()) {
+        Loc nameLoc = loc();
+        m.name = symbolIteratorName();
+        m.kind = ClassMember::Method;
+        if (m.isStatic) failAt(nameLoc, "a static [Symbol.iterator] method is not supported");
+        if (isP("<")) failAt(nameLoc, "[Symbol.iterator] cannot have type parameters");
+        parseParams(m.params, false);
+        if (eatP(":")) m.retType = parseRetType();
+        if (!isP("{")) fail("method overloads are not supported");
+        m.body = parseBlock();
+        Expr* none = nullptr;
+        applyPatterns(m.params, m.body, none);
+        s->members.push_back(m);
+        continue;
+      }
+      Expr* computedName = nullptr;
+      if (isP("[") && !(peek().k == TK::Ident && peek(2).k == TK::Punct && peek(2).text == ":")) {
+        // a computed member name `[K]` (K a constant known at compile time)
+        i++;
+        computedName = parseAssign();
+        expectP("]");
+      }
+      if (isP("[")) fail("index signatures are not supported; use Map<K, V>");
       if (!m.accessor && isKw("constructor") && peek().k == TK::Punct && peek().text == "(") {
         i++;
         m.kind = ClassMember::Ctor;
@@ -1213,7 +1387,12 @@ class Parser {
         continue;
       }
       Loc nameLoc = loc();
-      m.name = memberName();
+      if (computedName) {
+        m.computed = computedName;
+        m.name = "[computed]";
+      } else {
+        m.name = memberName();
+      }
       if (m.name == "#constructor") failAt(nameLoc, "'#constructor' is a reserved word");
       if (eatP("?")) m.optional = true;
       if (eatP("!")) {}
@@ -1399,7 +1578,11 @@ class Parser {
   Stmt* parseFor() {
     Loc l = loc();
     expectKw("for");
-    if (isKw("await")) fail("for await is not supported");
+    bool isAwait = false;
+    if (isKw("await")) {
+      i++;
+      isAwait = true;
+    }
     expectP("(");
     Stmt* init = nullptr;
     if (isKw("let") || isKw("const") || isKw("var")) {
@@ -1414,6 +1597,7 @@ class Parser {
         if (isIn) fail("for...in is not supported; use for...of over an array, a Map (for (const [k, v] of map)) or Object.keys(obj)");
         Stmt* s = A.stmt(SK::ForOf, l);
         s->isConst = isConst;
+        s->isAwait = isAwait;
         s->decls.push_back(d);
         s->expr = parseAssign();
         expectP(")");
@@ -1432,6 +1616,7 @@ class Parser {
       if (isKw("of") || isKw("in")) fail("for...of requires a 'const' or 'let' declaration");
       init = es;
     }
+    if (isAwait) fail("'for await' needs a 'const' or 'let' declaration and 'of'");
     Stmt* s = A.stmt(SK::For, l);
     s->init = init;
     expectP(";");
@@ -1494,12 +1679,16 @@ class Parser {
   // Try parsing an arrow function at the current position.
   Expr* tryArrow() {
     Loc l = loc();
-    if (isKw("async") && (peek().k == TK::Ident || (peek().k == TK::Punct && peek().text == "(")) && !peek().nl) {
+    if (isKw("async") && (peek().k == TK::Ident || (peek().k == TK::Punct && (peek().text == "(" || peek().text == "<"))) &&
+        !peek().nl && !(peek().k == TK::Ident && peek().text == "function")) {
       // async arrow
       size_t save = i;
       i++;
       Expr* e = tryArrow();
-      if (e) fail("async functions are not supported yet (reserved for coroutines); use a synchronous function (the host can run long work in slices with an instruction budget)");
+      if (e) {
+        e->isAsync = true;
+        return e;
+      }
       i = save;
       return nullptr;
     }
@@ -1516,15 +1705,20 @@ class Parser {
     if (isP("(") || isP("<")) {
       size_t save = i;
       if (isP("<")) {
-        // generic arrow function <T>(x: T) => ... (a '<' cannot start any other expression)
-        Expr* f = A.expr(EK::Arrow, l);
-        parseTypeParams(f->typeParams);
-        parseParams(f->params, false);
-        if (eatP(":")) f->retType = parseRetType();
-        if (!isP("=>") || cur().nl) fail("expected '=>' (generic arrow function)");
-        i++;
-        parseArrowBody(f);
-        return f;
+        // generic arrow function <T>(x: T) => ..., or else a type assertion <T>expr (parsed by parseUnary)
+        try {
+          Expr* f = A.expr(EK::Arrow, l);
+          parseTypeParams(f->typeParams);
+          parseParams(f->params, false);
+          if (eatP(":")) f->retType = parseRetType();
+          if (!isP("=>") || cur().nl) { i = save; return nullptr; }
+          i++;
+          parseArrowBody(f);
+          return f;
+        } catch (ParseError&) {
+          i = save;
+          return nullptr;
+        }
       }
       try {
         Expr* f = A.expr(EK::Arrow, l);
@@ -1586,8 +1780,23 @@ class Parser {
   Expr* parseAssign() {
     Nest guard(*this);
     if (Expr* arrow = tryArrow()) return arrow;
-    if (isKw("yield")) fail("'yield' is not supported yet (reserved for coroutines)");
     Loc l = loc();
+    if (isKw("yield")) {
+      // yield [expr] / yield* expr (an AssignmentExpression); the checker allows it in generators only
+      i++;
+      Expr* e = A.expr(EK::Yield, l);
+      if (!cur().nl && isP("*")) {
+        i++;
+        e->delegate = true;
+        e->a = parseAssign();
+        return e;
+      }
+      bool none = cur().nl || cur().k == TK::Eof ||
+                  (cur().k == TK::Punct && (cur().text == ")" || cur().text == "]" || cur().text == "}" || cur().text == "," ||
+                                            cur().text == ";" || cur().text == ":"));
+      if (!none) e->a = parseAssign();
+      return e;
+    }
     Expr* lhs = parseConditional();
     if (isAssignOp()) {
       std::string op = t[i++].text;
@@ -1659,10 +1868,16 @@ class Parser {
       Tok op = t[i];
       if (op.k == TK::Ident && (op.text == "as" || op.text == "satisfies")) {
         i++;
-        if (isKw("const")) fail("'as const' is not supported (readonly literal types); annotate the type instead, such as const t: [number, string] = [1, \"x\"]");
         Expr* e = A.expr(EK::As, l);
         e->a = lhs;
-        e->asType = parseType();
+        if (op.text == "as" && isKw("const")) {
+          // `x as const`: literal types, readonly tuples and objects (the type node is the name "const")
+          e->asType = A.type(TNK::Ref, loc());
+          e->asType->name = "const";
+          i++;
+        } else {
+          e->asType = parseType();
+        }
         if (op.text == "satisfies") e->raw = "satisfies";
         lhs = e;
         continue;
@@ -1706,7 +1921,6 @@ class Parser {
         e->a = parseUnary();
         return e;
       }
-      if (o == "<") fail("angle-bracket type assertions are not supported; use 'as'");
     }
     if (cur().k == TK::Ident) {
       const std::string& w = cur().text;
@@ -1724,7 +1938,21 @@ class Parser {
         return e;
       }
       if (w == "delete") fail("'delete' is not supported; use Map for dynamic keys");
-      if (w == "await") fail("'await' is not supported yet (reserved for coroutines); use a synchronous function (the host can run long work in slices with an instruction budget)");
+      if (w == "await") {
+        i++;
+        Expr* e = A.expr(EK::Await, l);
+        e->a = parseUnary();
+        return e;
+      }
+    }
+    if (isP("<")) {
+      // <T>expr: the old form of `expr as T`
+      i++;
+      Expr* e = A.expr(EK::As, l);
+      e->asType = parseType();
+      expectP(">");
+      e->a = parseUnary();
+      return e;
     }
     return parsePostfix();
   }
@@ -1884,7 +2112,14 @@ class Parser {
         nn->a = e;
         e = nn;
       } else if (cur().k == TK::TmplFull || cur().k == TK::TmplHead) {
-        fail("tagged templates are not supported");
+        // a tagged template: tag`a${x}b` is tag(["a", "b"], x) (the parts' raw text is kept for String.raw)
+        Expr* call = A.expr(EK::Call, ml);
+        call->a = e;
+        call->tagged = true;
+        Expr* tpl = parseTemplate();
+        call->list.push_back(tpl);
+        for (Expr* x : tpl->list) call->list.push_back(x);
+        e = call;
       } else {
         break;
       }
@@ -1895,18 +2130,23 @@ class Parser {
   Expr* parseTemplate() {
     Loc l = loc();
     Expr* e = A.expr(EK::Template, l);
+    auto part = [&]() {
+      e->quasis.push_back(t[i].str);
+      e->rawQuasis.push_back(utf8ToUtf16(t[i].text));
+      i++;
+    };
     if (cur().k == TK::TmplFull) {
-      e->quasis.push_back(t[i++].str);
+      part();
       return e;
     }
-    e->quasis.push_back(t[i++].str);  // head
+    part();  // head
     while (true) {
       int saved = noIn;
       noIn = 0;
       e->list.push_back(parseExpr());
       noIn = saved;
-      if (cur().k == TK::TmplMid) { e->quasis.push_back(t[i++].str); continue; }
-      if (cur().k == TK::TmplTail) { e->quasis.push_back(t[i++].str); break; }
+      if (cur().k == TK::TmplMid) { part(); continue; }
+      if (cur().k == TK::TmplTail) { part(); break; }
       fail("expected '}' in template literal");
     }
     return e;
@@ -1939,6 +2179,13 @@ class Parser {
       case TK::TmplFull:
       case TK::TmplHead:
         return parseTemplate();
+      case TK::Regex: {
+        Expr* e = A.expr(EK::RegExp, l);
+        e->raw = tk.text;
+        e->regexFlags = tk.flags;
+        i++;
+        return e;
+      }
       case TK::Ident: {
         const std::string& w = tk.text;
         if (w == "true" || w == "false") { Expr* e = A.expr(EK::Bool, l); e->bval = w == "true"; i++; return e; }
@@ -1946,11 +2193,18 @@ class Parser {
         if (w == "undefined") { i++; return A.expr(EK::Undefined, l); }
         if (w == "this") { i++; return A.expr(EK::This, l); }
         if (w == "super") { i++; return A.expr(EK::Super, l); }
+        if (w == "async" && peek().k == TK::Ident && peek().text == "function" && !peek().nl) {
+          i++;
+          Expr* f = parsePrimary();
+          f->isAsync = true;
+          return f;
+        }
         if (w == "function") {
           // function expression -> arrow-like closure (no own 'this')
           i++;
-          if (isP("*")) fail("generator functions are not supported");
+          bool gen = eatP("*");
           Expr* f = A.expr(EK::Arrow, l);
+          f->isGenerator = gen;
           if (cur().k == TK::Ident && !isP("(")) f->raw = ident();
           parseParams(f->params, false);
           if (eatP(":")) f->retType = parseRetType();
@@ -2014,16 +2268,49 @@ class Parser {
               if (!eatP(",")) break;
               continue;
             }
-            if (isP("[")) fail("computed property names are not supported");
-            if ((isKw("get") || isKw("set") || isKw("async")) && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num))
-              fail("accessor / async properties are not supported in object literals; use a plain property or a method");
-            if (isP("*")) fail("generator methods are not supported");
-            bool wasIdent = cur().k == TK::Ident;
+            Expr* computedKey = nullptr;
+            if (isP("[")) {
+              // { [K]: v } with K a constant known at compile time (resolved by the checker)
+              i++;
+              computedKey = parseAssign();
+              expectP("]");
+              pr.computed = computedKey;
+              pr.key = "[computed]";
+              if (isP("(")) {
+                Expr* f = A.expr(EK::Arrow, pr.loc);
+                parseParams(f->params, false);
+                if (eatP(":")) f->retType = parseRetType();
+                f->body = parseBlock();
+                applyPatterns(f->params, f->body, f->exprBody);
+                f->intrinsic = IN_OBJ_METHOD;
+                pr.value = f;
+                pr.method = true;
+              } else {
+                expectP(":");
+                pr.value = parseAssign();
+              }
+              e->props.push_back(pr);
+              if (!eatP(",")) break;
+              continue;
+            }
+            if ((isKw("get") || isKw("set")) && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num))
+              fail("accessor properties are not supported in object literals; use a plain property or a method");
+            bool asyncM = false, genM = false;
+            if (isKw("async") && !peek().nl && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num ||
+                                                (peek().k == TK::Punct && peek().text == "*"))) {
+              i++;
+              asyncM = true;
+            }
+            if (eatP("*")) genM = true;
+            bool wasIdent = cur().k == TK::Ident && !asyncM && !genM;
             pr.key = propName();
+            if ((asyncM || genM) && !isP("(")) fail("expected '(' (method)");
             if (isP("(") || isP("<")) {
               // method shorthand: name(params): T { body }  (has its own 'this': the object)
               if (isP("<")) fail("generic methods in object literals are not supported; use a generic function");
               Expr* f = A.expr(EK::Arrow, pr.loc);
+              f->isAsync = asyncM;
+              f->isGenerator = genM;
               f->raw = pr.key;
               parseParams(f->params, false);
               if (eatP(":")) f->retType = parseRetType();
@@ -2063,7 +2350,6 @@ class Parser {
           expectP("}");
           return e;
         }
-        if (tk.text == "/" || tk.text == "/=") fail("regular expressions are not supported; use string methods such as indexOf, includes, startsWith, split or replaceAll");
         break;
       }
       case TK::PrivateName:

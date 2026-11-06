@@ -1,6 +1,8 @@
 // Checker: expressions.
 #include <cmath>
 
+#include "../core/numfmt.h"
+#include "../regexp/regexp.h"
 #include "checker.h"
 #include "intrinsics.h"
 #include "suggest.h"
@@ -67,6 +69,9 @@ Type* Checker::checkInner(Expr* e, Type* expected) {
     case EK::As: return checkAs(e);
     case EK::Arrow: return checkArrow(e, expected);
     case EK::Spread: return errT(e->loc, "spread is not allowed here");
+    case EK::Yield: return checkYield(e);
+    case EK::Await: return checkAwait(e);
+    case EK::RegExp: return checkRegExpLit(e);
     case EK::Paren: return check(e->a, expected);
     case EK::Conv: return e->type;
     case EK::TypeOf: {
@@ -92,6 +97,34 @@ Type* Checker::checkInner(Expr* e, Type* expected) {
 }
 
 // ------------------------------------------------------------------ literals
+// A regular expression literal (D4): checked with the engine (a syntax error is a compile error with
+// V8's message) and stored in the module's table; its type knows the groups
+Type* Checker::checkRegExpLit(Expr* e) {
+  std::string err;
+  re::ProgramPtr p = re::compile(utf8ToUtf16(e->raw), e->regexFlags, err);
+  if (!p) {
+    if (err.rfind("Invalid flags", 0) == 0) return errT(e->loc, "Invalid regular expression flags");
+    return errT(e->loc, err);
+  }
+  int idx = -1;
+  for (size_t i = 0; i < P.regexps.size() && idx < 0; i++)
+    if (P.regexps[i].first == e->raw && P.regexps[i].second == e->regexFlags) idx = (int)i;
+  if (idx < 0) {
+    idx = (int)P.regexps.size();
+    P.regexps.push_back({e->raw, e->regexFlags});
+  }
+  e->ival = idx;
+  std::vector<std::string> names;
+  for (auto& g : re::namedGroups(*p)) names.push_back(g.name);
+  return T.regexp((int32_t)re::captureCount(*p), names);
+}
+
+Type* Checker::regexpGroupsType(Type* re) {
+  std::vector<ObjShape::Prop> props;
+  for (auto& n : re->reNames) props.push_back({n, T.optional(T.string(), false, true), false, true, false});
+  return T.anonObject(props);
+}
+
 static bool parseUnsigned(const std::string& raw, uint64_t& out) {
   // raw is decimal digits or 0x / 0o / 0b prefixed digits (no separators)
   int radix = 10;
@@ -200,7 +233,11 @@ Type* Checker::checkIdent(Expr* e, Type* expected) {
         if (f->checking) return errT(e->loc, "'" + f->name + "' is referenced recursively; add an explicit return type");
         checkFunction(f);
       }
-      if (f->hasDefaults) return errT(e->loc, "functions with default parameters cannot be used as values; wrap it in an arrow function");
+      if (f->hasDefaults) {
+        // a function with default values as a value: an arrow function that calls it
+        if (Type* t = etaExpand(e, expected, (int)f->type->params.size())) return t;
+        return errT(e->loc, "functions with default parameters can be used as values only where a function type is expected; wrap it in an arrow function");
+      }
       e->callee = f;
       if (f->selfVar) markCapture(f->selfVar);
       return f->type;
@@ -220,8 +257,14 @@ Type* Checker::checkIdent(Expr* e, Type* expected) {
     }
     case SymK::Class: return errT(e->loc, "class '" + e->raw + "' cannot be used as a value");
     case SymK::Enum: return errT(e->loc, "enum '" + e->raw + "' cannot be used as a value");
-    case SymK::Namespace: return errT(e->loc, "'" + e->raw + "' cannot be used as a value");
-    case SymK::Builtin: return errT(e->loc, "builtin function '" + e->raw + "' cannot be used as a value; wrap it in an arrow function");
+    case SymK::Namespace:
+      // String / Number / Boolean / BigInt as conversion functions: arr.map(String), arr.filter(Boolean)
+      if (static_cast<NamespaceSym*>(s)->builtin && (e->raw == "String" || e->raw == "Number" || e->raw == "Boolean" || e->raw == "BigInt"))
+        if (Type* t = etaExpand(e, expected, 1)) return t;
+      return errT(e->loc, "'" + e->raw + "' cannot be used as a value");
+    case SymK::Builtin:
+      if (Type* t = etaExpand(e, expected, builtinArity(static_cast<BuiltinSym*>(s)->id))) return t;
+      return errT(e->loc, "builtin function '" + e->raw + "' can be used as a value only where a function type is expected; wrap it in an arrow function");
     default:
       if (s->k == SymK::Alias && static_cast<AliasSym*>(s)->typeOnlyImport)
         return errT(e->loc, "'" + e->raw + "' cannot be used as a value because it was imported using 'import type'");
@@ -241,7 +284,11 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
       if (c->fields[i].name != fields[i].first || vtOf(c->fields[i].type) != vtOf(fields[i].second)) same = false;
     for (size_t i = 0; i < nm && same; i++)
       if (c->vtable[i].name != (*methods)[i].first || c->vtable[i].fn->type != (*methods)[i].second) same = false;
-    if (same) return c->type;
+    if (same) {
+      if (!tuple && P.presenceMasks)
+        for (auto& f : fields) c->presence = c->presence || (f.second->t == TT::Optional && f.second->hasUndef) || f.second->t == TT::Undefined;
+      return c->type;
+    }
   }
   ClassSym* c = P.make<ClassSym>();
   c->name = "{";
@@ -253,6 +300,7 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
   for (auto& f : fields) {
     c->fieldIdx[f.first] = (int)c->fields.size();
     c->fields.push_back({f.first, f.second, nullptr, false, c, Loc()});
+    if (!tuple && P.presenceMasks) c->presence = c->presence || (f.second->t == TT::Optional && f.second->hasUndef) || f.second->t == TT::Undefined;
   }
   c->type = T.classType(c);
   // methods of an object literal (method shorthand, or function properties implementing an
@@ -298,9 +346,159 @@ Type* Checker::elemTypeForIter(Expr* e, Type* t, Loc l) {
     case TT::String: return T.string();
     case TT::Bytes: return T.number();
     case TT::Map: return T.tuple({t->key, t->val});
+    case TT::Generator: return t->elem;
+    case TT::TypedArray: return taElem(t);
+    case TT::Class:
+      if (Type* g = iteratorMethodType(t, l)) return g->elem;
+      return errT(l, "type '" + typeName(t) + "' is not iterable");
     case TT::Unknown: return T.unknown();
     default: return errT(l, "type '" + typeName(t) + "' is not iterable");
   }
+}
+
+// The iterator a class instance's [Symbol.iterator]() method returns (a Generator type), or null.
+Type* Checker::iteratorMethodType(Type* t, Loc l) {
+  if (t->t != TT::Class) return nullptr;
+  ClassSym* c = t->cls;
+  resolveClass(c);
+  auto it = c->methodIdx.find("[Symbol.iterator]");
+  if (it == c->methodIdx.end()) return nullptr;
+  FuncSym* f = c->vtable[it->second].fn;
+  resolveSig(f);
+  if (f->inferRet) checkFunction(f);
+  Type* r = f->type->ret;
+  if (r->t != TT::Generator || !f->type->params.empty()) {
+    err(l, "the [Symbol.iterator]() method of '" + c->name + "' must take no arguments and return a Generator, Iterator or IterableIterator");
+    return nullptr;
+  }
+  return r;
+}
+
+// await p: the value of a Promise<T> (another value is awaited as Promise.resolve(value))
+Type* Checker::checkAwait(Expr* e) {
+  FuncSym* f = curFn;
+  if (!f || (!f->isAsync && !f->isInit)) return errT(e->loc, "'await' is only allowed in async functions and at the top level of the entry module");
+  if (f->isInit) {
+    if (P.files.empty() || curFile != P.files.back()->path)
+      return errT(e->loc, "top-level 'await' is only supported in the entry module (this module is imported)");
+    if (!f->isAsync) {
+      f->isAsync = true;
+      f->type = T.func({}, T.promise(T.voidT()));
+    }
+  }
+  Type* t = check(e->a, nullptr);
+  if (t->t == TT::Promise) return t->elem;
+  if (t->t == TT::Void) return errT(e->a->loc, "cannot await a void value");
+  return t;
+}
+
+Expr* Checker::intLit(int64_t v, Loc l) {
+  Expr* x = P.arena.expr(EK::Num, l);
+  x->num = (double)v;
+  x->isIntLit = true;
+  x->ival = v;
+  x->type = T.intT(VT_I64);
+  return x;
+}
+
+// The number of arguments a builtin function takes (-1: any number)
+int Checker::builtinArity(const std::string& id) {
+  static const char* const one[] = {
+      "parseFloat", "isNaN", "isFinite", "encodeURIComponent", "decodeURIComponent", "encodeURI", "decodeURI",
+      "Math.abs", "Math.acos", "Math.acosh", "Math.asin", "Math.asinh", "Math.atan", "Math.atanh", "Math.cbrt",
+      "Math.ceil", "Math.clz32", "Math.cos", "Math.cosh", "Math.exp", "Math.expm1", "Math.floor", "Math.fround",
+      "Math.log", "Math.log10", "Math.log1p", "Math.log2", "Math.round", "Math.sign", "Math.sin", "Math.sinh",
+      "Math.sqrt", "Math.tan", "Math.tanh", "Math.trunc", "Number.isInteger", "Number.isFinite", "Number.isNaN",
+      "Number.isSafeInteger", "Number.parseFloat", "Array.isArray", "i8", "u8", "i16", "u16", "i32", "u32", "i64",
+      "u64", "int", "clz32", "clz64", "ctz32", "ctz64", "popcnt", "bswap16", "bswap32", "bswap64"};
+  static const char* const two[] = {"parseInt", "Number.parseInt", "Math.atan2", "Math.pow", "Math.imul", "rotl32",
+                                    "rotr32", "rotl64", "rotr64", "mulhi64", "imulhi64", "idiv", "imod"};
+  for (const char* n : one)
+    if (id == n) return 1;
+  for (const char* n : two)
+    if (id == n) return 2;
+  return -1;
+}
+
+bool Checker::isNamespaceConstant(const std::string& ns, const std::string& name) {
+  if (ns == "Math") return name == "PI" || name == "E" || name == "LN2" || name == "LN10" || name == "LOG2E" || name == "LOG10E" || name == "SQRT2" || name == "SQRT1_2";
+  if (ns == "Number") return name == "MAX_SAFE_INTEGER" || name == "MIN_SAFE_INTEGER" || name == "EPSILON" || name == "MAX_VALUE" || name == "MIN_VALUE" || name == "NaN" || name == "POSITIVE_INFINITY" || name == "NEGATIVE_INFINITY";
+  return false;
+}
+
+// A function used as a value where a function type is expected, when it is not a closure itself (a
+// builtin, a function with default values): rewritten to the arrow function (a, b) => f(a, b) with
+// the expected function's parameters (at most `arity` of them; -1: all), then checked as one
+Type* Checker::etaExpand(Expr* e, Type* expected, int arity) {
+  Type* ft = expected ? baseOf(expected) : nullptr;
+  if (!ft || ft->t != TT::Func) return nullptr;
+  size_t n = ft->params.size();
+  if (arity >= 0 && (size_t)arity < n) n = (size_t)arity;
+  Expr* callee = P.arena.expr(e->k, e->loc);
+  *callee = *e;
+  Expr* call = P.arena.expr(EK::Call, e->loc);
+  call->a = callee;
+  std::vector<Param> ps;
+  for (size_t i = 0; i < n; i++) {
+    Param p;
+    p.name = "$arg" + std::to_string(i);
+    p.loc = e->loc;
+    ps.push_back(p);
+    Expr* id = P.arena.expr(EK::Ident, e->loc);
+    id->raw = p.name;
+    call->list.push_back(id);
+  }
+  Loc l = e->loc;
+  *e = Expr();
+  e->k = EK::Arrow;
+  e->loc = l;
+  e->params = ps;
+  e->exprBody = call;
+  return checkArrow(e, expected);
+}
+
+// yield v / yield* iterable (in the body of a generator)
+Type* Checker::checkYield(Expr* e) {
+  FuncSym* f = curFn;
+  if (!f || !f->isGenerator) return errT(e->loc, "'yield' is only allowed in the body of a generator function (function*)");
+  Type* g = f->inferRet ? nullptr : f->type->ret;
+  if (g && g->t != TT::Generator) g = nullptr;
+  if (e->delegate) {
+    Type* it = check(e->a, nullptr);
+    Type* et;
+    Type* res = T.voidT();
+    if (it->t == TT::Generator) {
+      et = it->elem;
+      res = it->ret && it->ret->t != TT::Void ? it->ret : T.voidT();
+      Type* outerNext = g && g->val ? g->val : T.voidT();
+      Type* innerNext = it->val ? it->val : T.voidT();
+      if (innerNext->t != TT::Void && innerNext != outerNext)
+        err(e->loc, "yield* of '" + typeName(it) + "': its next() values must have the type of this generator's ('" +
+                        typeName(outerNext) + "')");
+    } else if (Type* mt = iteratorMethodType(it, e->a->loc)) {
+      et = mt->elem;
+    } else {
+      et = elemTypeForIter(e->a, it, e->a->loc);
+    }
+    if (g) {
+      if (!assignable(et, g->elem)) err(e->loc, "type '" + typeName(et) + "' is not assignable to the yielded type '" + typeName(g->elem) + "'");
+    } else {
+      f->yieldTypes.push_back(et);
+    }
+    e->innerType = et;
+    return res;
+  }
+  if (e->a) {
+    Type* t = check(e->a, g ? g->elem : nullptr);
+    if (g) coerce(e->a, g->elem, "yield");
+    else f->yieldTypes.push_back(t);
+  } else {
+    if (g && !assignable(T.undef(), g->elem))
+      err(e->loc, "'yield' without a value yields undefined, which is not assignable to '" + typeName(g->elem) + "'");
+    if (!g) f->yieldTypes.push_back(T.undef());
+  }
+  Type* next = g && g->val ? g->val : T.voidT();
+  return next->t == TT::Void ? T.undef() : next;
 }
 
 Type* Checker::checkArray(Expr* e, Type* expected) {
@@ -350,6 +548,9 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
       else if (st->t == TT::String) t = T.string();
       else if (st->t == TT::Bytes) t = T.number();
       else if (st->t == TT::Map) t = T.tuple({st->key, st->val});
+      else if (st->t == TT::Generator) t = st->elem;
+      else if (st->t == TT::TypedArray) t = taElem(st);
+      else if (Type* gt = st->t == TT::Class ? iteratorMethodType(st, x->loc) : nullptr) t = gt->elem;
       else { err(x->loc, "type '" + typeName(st) + "' cannot be spread into an array"); t = T.unknown(); }
       if (elemExp && t != elemExp && !(t->t == TT::Unknown) && !(kindOf(t) == K_R && kindOf(elemExp) == K_R && assignable(t, elemExp)))
         err(x->loc, "spread element type '" + typeName(t) + "' is not assignable to '" + typeName(elemExp) + "'");
@@ -465,8 +666,32 @@ void Checker::spreadOrders() {
   }
 }
 
+// The property name a computed key `[K]` stands for: K must be a constant known at compile time (a string
+// or number literal, a const of a literal type, an enum member)
+bool Checker::constKey(Expr* k, std::string& out) {
+  Type* t = check(k, nullptr);
+  Expr* x = strip(k);
+  if (x->intrinsic == IN_CONST_STR) { out = utf16ToUtf8(x->str); return true; }
+  if (x->intrinsic == IN_CONST_NUM) { out = numberToString(x->num); return true; }
+  Type* lt = constLit(k);
+  if (!lt && t && t->lit) lt = t;
+  if (lt && lt->strLits.size() == 1 && lt->numLits.empty()) { out = utf16ToUtf8(lt->strLits[0]); return true; }
+  if (lt && lt->numLits.size() == 1 && lt->strLits.empty()) { out = numberToString(lt->numLits[0]); return true; }
+  err(k->loc, "a computed property name must be a constant known at compile time (a string or number literal, a const of a literal type, or an enum member)");
+  return false;
+}
+
 Type* Checker::checkObject(Expr* e, Type* expected) {
   Type* exp = expected ? baseOf(expected) : nullptr;
+  for (auto& p : e->props)
+    if (p.computed) {
+      std::string key;
+      if (!constKey(p.computed, key)) return T.unknown();
+      p.key = key;
+      p.computed = nullptr;
+      for (auto& q : e->props)
+        if (&q != &p && !q.spread && q.key == key && !q.computed) return errT(p.loc, "duplicate property '" + key + "'");
+    }
   bool anySpread = false, anyMethod = false;
   for (auto& p : e->props) {
     anySpread |= p.spread;
@@ -936,8 +1161,8 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
     Expr* r = strip(e->b);
     if (r->k != EK::Ident) return errT(e->b->loc, "right side of 'instanceof' must be a class name");
     if ((r->raw == "Error" || r->raw == "TypeError" || r->raw == "RangeError" || r->raw == "SyntaxError" ||
-         r->raw == "URIError") && (!lookup(r->raw) || lookup(r->raw)->k == SymK::Namespace)) {
-      if (lt->t != TT::Caught && lt->t != TT::Error && lt->t != TT::Unknown)
+         r->raw == "URIError" || r->raw == "AggregateError") && (!lookup(r->raw) || lookup(r->raw)->k == SymK::Namespace)) {
+      if (lt->t != TT::Caught && lt->t != TT::Error && lt->t != TT::Unknown && !(lt->t == TT::Optional && lt->elem->t == TT::Error))
         return errT(e->a->loc, "'instanceof " + r->raw + "' applies to a caught value or an Error");
       e->intrinsic = IN_ERROR_IS;
       e->str = utf8ToUtf16(r->raw);
@@ -1162,6 +1387,9 @@ Type* Checker::checkAssign(Expr* e) {
         return errT(e->loc, "'" + op + "' on an array length is not supported; write 'a.length = a.length " +
                                 op.substr(0, op.size() - 1) + " ...' instead");
       target->intrinsic = IN_ARR_LENGTH_SET;
+    } else if (target->k == EK::Member && target->intrinsic == IN_NATIVE && target->native == "RegExp.lastIndex") {
+      if (op != "=") return errT(e->loc, "'" + op + "' on lastIndex is not supported; write 're.lastIndex = re.lastIndex " + op.substr(0, op.size() - 1) + " ...' instead");
+      target->intrinsic = IN_LASTINDEX_SET;
     } else if (target->k == EK::Member) {
       std::string werr = memberWriteError(target);
       if (!werr.empty()) return errT(e->loc, werr);
@@ -1300,6 +1528,25 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
   if (c->k == EK::Binary && (c->raw == "===" || c->raw == "!==" || c->raw == "==" || c->raw == "!=")) {
     Expr* l = strip(c->a);
     Expr* r = strip(c->b);
+    // a literal-typed path compared with a constant: x === "a" narrows x to "a", x !== "a" to the others
+    for (int side = 0; side < 2; side++) {
+      Expr* path = side == 0 ? l : r;
+      Expr* other = side == 0 ? r : l;
+      Type* pt = path->type;
+      if (!pt || !pt->lit) continue;
+      Type* v = constLit(other);
+      if (!v) continue;
+      std::string key = pathKey(path);
+      if (key.empty()) continue;
+      bool eq = c->raw[0] == '=';
+      if (eq == whenTrue) {
+        if (v->lit && baseLit(v) == baseLit(pt) && v->strLits.size() + v->numLits.size() + (v->boolLits ? 1 : 0) == 1) out.push_back({key, v});
+      } else if (v->strLits.size() + v->numLits.size() + (v->boolLits == 1 || v->boolLits == 2 ? 1 : 0) == 1) {
+        Type* rest = litMinus(pt, v);
+        out.push_back({key, rest ? rest : T.never()});
+      }
+      return;
+    }
     Expr* path = nullptr;
     Expr* lit = nullptr;
     if (r->k == EK::Null || r->k == EK::Undefined) { path = l; lit = r; }
@@ -1330,6 +1577,42 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
     if (!key.empty()) out.push_back({key, c->cls->type});
     return;
   }
+  // r.done of an IteratorResult { value: T | undefined; done: boolean }: false means r.value is a T
+  if (!whenTrue && c->k == EK::Member && c->raw == "done" && c->a->type && c->a->type->t == TT::Object) {
+    const ObjShape* sh = c->a->type->shape;
+    if (sh->props.size() == 2 && sh->props[0].name == "value" && sh->props[1].name == "done" &&
+        sh->props[0].type->t == TT::Optional && sh->name.empty()) {
+      std::string base = pathKey(c->a);
+      if (!base.empty()) out.push_back({base + ".value", sh->props[0].type->elem});
+    }
+    return;
+  }
+  // a call of a type predicate `x is T`: true means the argument is a T (false: for a nullable
+  // argument and its base type, null / undefined)
+  if (c->k == EK::Call && c->callee && c->callee->predParam == -2 && c->callee->predType && !c->callee->asserts &&
+      strip(c->a)->k == EK::Member) {
+    // `this is T`: the receiver
+    if (!whenTrue) return;
+    std::string key = pathKey(strip(c->a)->a);
+    if (!key.empty()) out.push_back({key, c->callee->predType});
+    return;
+  }
+  if (c->k == EK::Call && c->callee && c->callee->predParam >= 0 && c->callee->predType && !c->callee->asserts &&
+      (size_t)c->callee->predParam < c->list.size()) {
+    Expr* arg = c->list[(size_t)c->callee->predParam];
+    while (arg->k == EK::Conv || arg->k == EK::Paren) arg = arg->a;
+    std::string key = pathKey(arg);
+    Type* at = arg->type;
+    Type* pt = c->callee->predType;
+    if (key.empty() || !at) return;
+    if (whenTrue) out.push_back({key, pt});
+    else if (at->t == TT::Optional && baseOf(pt) == at->elem && pt->t != TT::Optional)
+      out.push_back({key, at->hasNull && at->hasUndef ? T.optional(T.nullT(), true, true) : at->hasNull ? T.nullT() : T.undef()});
+    else if (at->lit && pt->lit && baseLit(at) == baseLit(pt)) {
+      if (Type* rest = litMinus(at, pt)) out.push_back({key, rest});
+    }
+    return;
+  }
   // truthiness of a nullable reference
   if (whenTrue && c->type && c->type->t == TT::Optional) {
     std::string key = pathKey(c);
@@ -1349,6 +1632,8 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
   if (!f) {
     std::string nm = e->raw.empty() ? "<anonymous>" : e->raw;
     f = newFunc(nm, &e->params, e->retType, e->body, e->exprBody);
+    f->isGenerator = e->isGenerator;
+    f->isAsync = e->isAsync;
     f->arrow = e;
     f->parent = curFn;
     f->defScope = scope;
@@ -1434,8 +1719,9 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
     }
   Type* ret = nullptr;
   if (e->retType) ret = resolveType(e->retType);
-  else if (exp && exp->ret->t == TT::Void) ret = T.voidT();
-  else if (exp && exp->ret->t != TT::Unknown) ret = exp->ret;
+  else if (exp && exp->ret->t == TT::Void && !e->isGenerator && !e->isAsync) ret = T.voidT();
+  else if (exp && exp->ret->t != TT::Unknown && exp->ret->t != TT::Void) ret = exp->ret;
+  if (ret) checkCoroutineRet(f, ret, e->loc);
   f->sigResolved = true;
   f->inferRet = ret == nullptr;
   f->type = T.func(ps, ret ? ret : T.unknown(), opt, rest);
@@ -1541,7 +1827,13 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
   // static / namespace access
   if (obj->k == EK::Ident) {
     Sym* s = lookup(obj->raw);
-    if (s && s->k == SymK::Namespace) return checkNamespaceMember(e, static_cast<NamespaceSym*>(s), name, false, expected);
+    if (s && s->k == SymK::Namespace) {
+      // Math.sqrt, Number.isInteger, ... as a value where a function is expected: an arrow function
+      NamespaceSym* ns = static_cast<NamespaceSym*>(s);
+      if (ns->builtin && expected && baseOf(expected)->t == TT::Func && !isNamespaceConstant(ns->module, name))
+        if (Type* t = etaExpand(e, expected, builtinArity(ns->module + "." + name))) return t;
+      return checkNamespaceMember(e, ns, name, false, expected);
+    }
     if (s && s->k == SymK::Enum) {
       EnumSym* en = static_cast<EnumSym*>(s);
       resolveEnum(en);
@@ -1690,6 +1982,26 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
 
 Type* Checker::checkIndex(Expr* e) {
   Type* ot = check(e->a, nullptr);
+  // obj[K] with K a constant known at compile time: the property K (obj.K)
+  Type* bo = baseOf(ot);
+  if ((bo->t == TT::Object || bo->t == TT::Class) && e->b) {
+    Expr* k = strip(e->b);
+    bool constant = k->k == EK::Str || (k->k == EK::Ident) || k->k == EK::Member || k->k == EK::Num;
+    if (constant) {
+      std::string key;
+      if (!constKey(e->b, key)) return T.unknown();
+      Expr* obj = e->a;
+      bool opt = e->optional;
+      e->k = EK::Member;
+      e->a = obj;
+      e->b = nullptr;
+      e->raw = key;
+      e->nameLoc = k->loc;
+      e->optional = opt;
+      e->a->type = nullptr;  // checked again as the member's object
+      return check(e, nullptr);
+    }
+  }
   if (ot->t == TT::Optional) {
     if (!e->optional || chainedOnNullable(e)) return errT(e->loc, "object is possibly null or undefined; use '?.[' or a check");
     // a?.[i]: undefined when a is null or undefined (the index is not evaluated then)
@@ -1715,6 +2027,11 @@ Type* Checker::checkIndexOn(Expr* e, Type* ot) {
       if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "index must be a number or integer");
       return T.number();
     }
+    case TT::TypedArray: {
+      Type* it = check(e->b, nullptr);
+      if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "index must be a number or integer");
+      return taElem(ot);
+    }
     case TT::String: {
       Type* it = check(e->b, nullptr);
       if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "index must be a number");
@@ -1739,7 +2056,48 @@ Type* Checker::checkIndexOn(Expr* e, Type* ot) {
   }
 }
 
+// The type `e as const` gives: a literal type for a constant, a readonly tuple for an array literal and
+// an object type with readonly properties for an object literal, of those recursively (null: e is
+// something else)
+Type* Checker::asConstType(Expr* e) {
+  e = strip(e);
+  if (e->k == EK::Str || e->k == EK::Bool || (e->k == EK::Template && e->list.empty())) return constLit(e);
+  if (e->k == EK::Num || (e->k == EK::Unary && e->raw == "-" && strip(e->a)->k == EK::Num)) {
+    if (e->k == EK::Num) return T.numLit({e->num});
+    return T.numLit({-strip(e->a)->num});
+  }
+  if (e->k == EK::Array) {
+    std::vector<Type*> es;
+    for (Expr* x : e->list) {
+      if (x->k == EK::Spread) return nullptr;
+      Type* t = asConstType(x);
+      if (!t) return nullptr;
+      es.push_back(t);
+    }
+    if (es.empty()) return nullptr;
+    return T.tuple(es, true);
+  }
+  if (e->k == EK::Object) {
+    std::vector<ObjShape::Prop> props;
+    for (auto& p : e->props) {
+      if (p.spread || p.method || p.shorthand) return nullptr;
+      Type* t = asConstType(p.value);
+      if (!t) return nullptr;
+      props.push_back({p.key, t, false, false, true});
+    }
+    return T.anonObject(props);
+  }
+  return nullptr;
+}
+
 Type* Checker::checkAs(Expr* e) {
+  if (e->asType && e->asType->k == TNK::Ref && e->asType->name == "const" && e->asType->args.empty() && !lookup("const")) {
+    Type* t = asConstType(e->a);
+    if (!t) return errT(e->loc, "'as const' is supported for literals and for arrays and objects of literals");
+    check(e->a, t);
+    coerce(e->a, t, "as const");
+    return t;
+  }
   Type* target = resolveType(e->asType);
   Expr* inner = strip(e->a);
   if (inner->k == EK::Call && inner->a->k == EK::Member && strip(inner->a->a)->k == EK::Ident &&

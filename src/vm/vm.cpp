@@ -1,6 +1,7 @@
 #include "vm.h"
 
 #include "debug.h"
+#include "../regexp/regexp.h"
 
 #include <chrono>
 #include <cmath>
@@ -67,6 +68,9 @@ VM::VM(const VMConfig& cfg) : cfg_(cfg) {
   registerCryptoNatives(*this);
   registerDateNatives(*this);
   registerTestNatives(*this);
+  registerPromiseNatives(*this);
+  registerTypedArrayNatives(*this);
+  registerRegExpNatives(*this);
   applyNativeCosts(*this);
 }
 
@@ -170,7 +174,7 @@ double VM::randomDouble() {
 // Errors that Node.js throws as catchable exceptions carry the JavaScript error name as a message
 // prefix ("RangeError: invalid count value: -1"); see docs/SPEC.md (try/catch).
 static bool jsErrorName(const std::string& msg, std::string& name, std::string& text) {
-  static const char* const kNames[] = {"Error", "TypeError", "RangeError", "SyntaxError", "URIError"};
+  static const char* const kNames[] = {"Error", "TypeError", "RangeError", "SyntaxError", "URIError", "AggregateError"};
   for (const char* n : kNames) {
     size_t l = strlen(n);
     if (msg.size() > l + 1 && msg.compare(0, l, n) == 0 && msg[l] == ':' && msg[l + 1] == ' ') {
@@ -232,7 +236,8 @@ ArrObj* VM::newErrorObject(const std::string& name, const std::string& message) 
 bool VM::errorParts(Obj* o, StrObj** name, StrObj** message) const {
   if (!o || o->type != OT::Array) return false;
   auto* a = static_cast<ArrObj*>(o);
-  if (!(a->flags & kArrFlagError) || a->vt != VT_REF || a->len != 2) return false;
+  // [name, message], [name, message, cause] or [name, message, cause, errors] (AggregateError)
+  if (!(a->flags & kArrFlagError) || a->vt != VT_REF || a->len < 2 || a->len > 4) return false;
   Obj* n = a->data[0].r;
   Obj* m = a->data[1].r;
   if (!n || n->type != OT::String || !m || m->type != OT::String) return false;
@@ -257,8 +262,11 @@ const HandlerDesc* VM::handlerAt(size_t k) const {
 
 bool VM::willBeCaught() const {
   if (catchDepth_ > 0) return true;
-  for (size_t k = frames_.size(); k-- > 0;)
+  for (size_t k = frames_.size(); k-- > 0;) {
     if (handlerAt(k)) return true;
+    // an async function turns an error into the rejection of its promise
+    if (frames_[k].coro && fflagsKind(frames_[k].coro->fflags) == FK_ASYNC && frames_[k].coro->promise) return true;
+  }
   return false;
 }
 
@@ -269,7 +277,33 @@ bool VM::willBeCaught() const {
 int VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
   for (size_t k = frames_.size(); k-- > entryDepth;) {
     const HandlerDesc* h = handlerAt(k);
-    if (!h) continue;
+    if (!h) {
+      CoroObj* co = frames_[k].coro;
+      if (!co || fflagsKind(co->fflags) != FK_ASYNC || !co->promise) continue;
+      // the error leaves an async function: its promise is rejected and the function returns it
+      budget_ -= (int64_t)(frames_.size() - k);
+      nativeDepth_ = st.nativeDepth;
+      gcBlockers_ = st.gcBlockers;
+      curNative_ = st.curNative;
+      callbackNatives_.resize(st.callbacks);
+      tempRoots_.resize(st.tempRoots);
+      gcInhibit_ = st.gcInhibit;
+      Obj* v = errorValue(e);  // may collect: the frames are still in place
+      TempRoot keep(*this, v);
+      PromiseObj* p = co->promise;
+      bool ent = frames_[k].entry;
+      uint16_t dst = frames_[k].retDst;
+      dropFrames(k);
+      rejectPromise(p, v);
+      if (ent) {
+        result_.r = p;
+        resultKind_ = 'R';
+        return 3;
+      }
+      Frame& c = frames_.back();
+      if (dst != kNoReg) stack_[c.base + dst].r = p;
+      return 1;
+    }
     // a debugger in pause-to-host mode that stops on caught errors: stop before the handler runs,
     // with the frames of the throw still in place; resume() completes the catch (only from the
     // top level: the C++ frames of a native cannot be kept for a pause)
@@ -290,7 +324,7 @@ int VM::catchError(E7Error& e, size_t entryDepth, const ExecState& st) {
     // unwinding is charged like the calls it undoes (one tick per dropped frame, one for the catch);
     // an exhausted budget is reported at the next safepoint in the handler's code
     budget_ -= (int64_t)(frames_.size() - k);
-    frames_.resize(k + 1);
+    dropFrames(k + 1);
     nativeDepth_ = st.nativeDepth;
     gcBlockers_ = st.gcBlockers;
     curNative_ = st.curNative;
@@ -315,24 +349,37 @@ void VM::finishPendingCatch() {
   PendingCatch pc = pendingCatch_;
   pendingCatch_ = PendingCatch{};
   budget_ -= (int64_t)(frames_.size() - pc.frame);
-  frames_.resize(pc.frame + 1);
+  dropFrames(pc.frame + 1);
   Frame& g = frames_[pc.frame];
   g.ip = g.fn->code + pc.handler->handler;  // the Error object is already in the handler's register
+}
+// A message cut at the buffer's end must not end inside a UTF-8 sequence (a long SyntaxError message
+// quotes the pattern): drop an incomplete last character
+static void trimUtf8(char* buf, int written, size_t size) {
+  if (written < (int)size) return;
+  size_t len = size - 1, i = len;
+  while (i > 0 && ((unsigned char)buf[i - 1] & 0xC0) == 0x80) i--;  // the start of the last character
+  if (i == 0) return;
+  unsigned char lead = (unsigned char)buf[i - 1];
+  size_t need = lead < 0x80 ? 1 : (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : 4;
+  if (len - (i - 1) < need) buf[i - 1] = 0;
 }
 void VM::error(const char* fmt, ...) {
   char buf[512];
   va_list ap;
   va_start(ap, fmt);
-  vsnprintf(buf, sizeof buf, fmt, ap);
+  int n = vsnprintf(buf, sizeof buf, fmt, ap);
   va_end(ap);
+  trimUtf8(buf, n, sizeof buf);
   raise(ERR_RUNTIME, buf);
 }
 void VM::errorCode(int code, const char* fmt, ...) {
   char buf[512];
   va_list ap;
   va_start(ap, fmt);
-  vsnprintf(buf, sizeof buf, fmt, ap);
+  int n = vsnprintf(buf, sizeof buf, fmt, ap);
   va_end(ap);
+  trimUtf8(buf, n, sizeof buf);
   raise(code, buf);
 }
 
@@ -567,10 +614,12 @@ BytesObj* VM::newBytesFrom(const uint8_t* p, size_t len) {
 }
 
 InstObj* VM::newInstance(ClassRT* cls) {
-  size_t sz = sizeof(InstObj) + (size_t)cls->nfields * sizeof(Slot);
+  size_t words = cls->presence ? presenceWords(cls->nfields) : 0;
+  size_t sz = sizeof(InstObj) + (size_t)cls->nfields * sizeof(Slot) + words * 8;
   auto* o = static_cast<InstObj*>(allocRaw(OT::Instance, sz));
   o->cls = cls;
   memset(o->fields(), 0, (size_t)cls->nfields * sizeof(Slot));
+  if (words) memset(o->mask(), 0xFF, words * 8);  // every property present until FIELD_ABSENT
   return o;
 }
 CellObj* VM::newCell(uint8_t vt) {
@@ -618,6 +667,111 @@ HandleObj* VM::newHandle(int64_t id) {
   return h;
 }
 
+CoroObj* VM::newCoro(FuncRT* fn, CloObj* closure) {
+  size_t sz = sizeof(CoroObj) + (size_t)fn->nregs * sizeof(Slot);
+  auto* c = static_cast<CoroObj*>(allocRaw(OT::Coro, sz));
+  c->fn = fn;
+  c->closure = closure;
+  c->promise = nullptr;
+  c->items = nullptr;
+  c->pc = 0;
+  c->nregs = fn->nregs;
+  c->fflags = fn->d ? fn->d->fflags : 0;
+  c->state = CO_START;
+  memset(c->regs(), 0, (size_t)fn->nregs * sizeof(Slot));
+  return c;
+}
+
+CoroObj* VM::newNativeIterator(ArrObj* items) {
+  auto* c = static_cast<CoroObj*>(allocRaw(OT::Coro, sizeof(CoroObj)));
+  c->fn = nullptr;
+  c->closure = nullptr;
+  c->promise = nullptr;
+  c->items = items;
+  c->pc = 0;
+  c->nregs = 0;
+  c->fflags = (uint8_t)(FK_GENERATOR | (3 << 2));  // yields references; next / return take nothing
+  c->state = CO_START;
+  return c;
+}
+
+RegExpObj* VM::newRegExp(std::shared_ptr<const re::Program> prog, StrObj* source, uint64_t progBytes, bool fresh) {
+  if (fresh && progBytes) accountExternal((int64_t)progBytes);
+  void* mem;
+  try {
+    mem = allocRaw(OT::RegExp, sizeof(RegExpObj));
+  } catch (...) {
+    if (fresh && progBytes) accountExternalUnchecked(-(int64_t)progBytes);
+    throw;
+  }
+  Obj hdr = *static_cast<Obj*>(mem);
+  auto* r = new (mem) RegExpObj();
+  *static_cast<Obj*>(r) = hdr;
+  r->prog = std::move(prog);
+  r->source = source;
+  r->lastIndex = 0;
+  r->progBytes = progBytes;
+  return r;
+}
+
+re::Limits VM::regexpLimits() {
+  re::Limits lim;
+  lim.charge = [this](uint64_t n) { chargeWork(n); };
+  lim.reserve = [this](size_t bytes) { checkTemp(bytes); };
+  return lim;
+}
+
+ArrObj* VM::newMatchArray(uint8_t vt, uint32_t cap, uint16_t flag) {
+  NoGC ng(*this);
+  auto* a = static_cast<ArrObj*>(allocRaw(OT::Array, sizeof(ArrObj) + sizeof(MatchExtra)));
+  a->flags = flag;
+  a->vt = vt;
+  a->len = 0;
+  a->cap = 0;
+  a->data = nullptr;
+  MatchExtra* x = matchExtra(a);
+  x->index = 0;
+  x->input = nullptr;
+  x->groups = undef_;
+  x->indices = nullptr;
+  if (cap) arrayReserve(a, cap);
+  return a;
+}
+
+ClassRT* VM::groupsClass(const std::vector<std::string>& names, bool nullProto) {
+  std::string key = nullProto ? "n:" : "o:";
+  for (auto& n : names) key += n + ",";
+  auto it = groupsClasses_.find(key);
+  if (it != groupsClasses_.end()) return it->second.get();
+  // kept for the VM's lifetime (inline caches compare ClassRT pointers), so not part of a call's heap: their
+  // number and their size (at most a quarter of the memory limit) are bounded instead
+  uint64_t bytes = sizeof(ClassRT) + 3 * key.size() + names.size() * 96;
+  if (groupsClasses_.size() >= kMaxGroupsClasses || groupsBytes_ + bytes > cfg_.memoryLimit / 4)
+    errorCode(ERR_MEMORY, "out of memory (%zu sets of regular expression group names, %llu bytes)", groupsClasses_.size(),
+              (unsigned long long)groupsBytes_);
+  groupsBytes_ += bytes;
+  auto c = std::make_unique<ClassRT>();
+  c->isRecord = true;
+  c->presence = true;  // every group is an own property, also when it did not participate
+  c->nullProto = nullProto;
+  c->nfields = (uint32_t)names.size();
+  for (size_t k = 0; k < names.size(); k++) {
+    c->fieldVT.push_back(VT_REF);
+    c->fieldNames.push_back(names[k]);
+    c->fieldIndex[names[k]] = (uint32_t)k;
+    c->refFields.push_back((uint16_t)k);
+  }
+  ClassRT* p = c.get();
+  groupsClasses_[key] = std::move(c);
+  return p;
+}
+
+void VM::dropFrames(size_t n) {
+  for (size_t i = n; i < frames_.size(); i++)
+    if (frames_[i].coro) frames_[i].coro->state = CO_DONE;
+  frames_.resize(n);
+}
+
 void VM::pin(Obj* o) {
   if (o) pins_[o]++;
 }
@@ -647,6 +801,13 @@ void VM::freeObj(Obj* o) {
     case OT::Buffer: free(static_cast<BufObj*>(o)->data); break;
     case OT::Map: static_cast<MapObj*>(o)->~MapObj(); break;
     case OT::BigInt: static_cast<BigObj*>(o)->~BigObj(); break;
+    case OT::Promise: static_cast<PromiseObj*>(o)->reactions.~vector(); break;
+    case OT::RegExp: {
+      auto* r = static_cast<RegExpObj*>(o);
+      if (r->progBytes && r->prog.use_count() == 1) bytes_ -= r->progBytes;  // the last holder of the program
+      r->prog.~shared_ptr();
+      break;
+    }
     default: break;
   }
   free(o);
@@ -658,11 +819,17 @@ bool VM::checkHeap(std::string* why) const {
     return false;
   };
   std::unordered_set<const Obj*> all;
+  std::unordered_set<const void*> programs;  // run-time regular expression programs, counted once
   size_t sum = 0;
+  for (auto& mp : modules) sum += mp->regexpBytes;
   for (const Obj* o = objects_; o; o = o->gcNext) {
     if (!all.insert(o).second) return fail("the object list has a cycle");
     if (o->marked) return fail("an object is left marked outside a collection");
     sum += o->size + externalBytes(o);
+    if (o->type == OT::RegExp) {
+      auto* r = static_cast<const RegExpObj*>(o);
+      if (r->progBytes && programs.insert(r->prog.get()).second) sum += r->progBytes;
+    }
   }
   if (sum != bytes_)
     return fail("heap accounting: bytesAllocated() = " + std::to_string(bytes_) +
@@ -678,8 +845,17 @@ bool VM::checkHeap(std::string* why) const {
         if (a->vt == VT_REF)
           for (uint32_t i = 0; i < a->len; i++)
             if (!ref(a->data[i].r, "an array element")) return false;
+        if (hasMatchExtra(a)) {
+          const MatchExtra* x = matchExtra(a);
+          if (!ref(x->input, "a match's input") || !ref(x->groups, "a match's groups") || !ref(x->indices, "a match's indices"))
+            return false;
+        }
         break;
       }
+      case OT::RegExp:
+        if (!static_cast<const RegExpObj*>(o)->prog) return fail("regular expression without a program");
+        if (!ref(static_cast<const RegExpObj*>(o)->source, "a regular expression's source")) return false;
+        break;
       case OT::Buffer:
         if (!static_cast<const BufObj*>(o)->data && static_cast<const BufObj*>(o)->len) return fail("buffer without data");
         break;
@@ -714,6 +890,28 @@ bool VM::checkHeap(std::string* why) const {
         if (b->vt == VT_REF && !ref(b->v.r, "a box")) return false;
         break;
       }
+      case OT::Promise: {
+        auto* p = static_cast<const PromiseObj*>(o);
+        if ((p->state == PS_REJECTED || (p->state == PS_FULFILLED && p->vt == VT_REF)) && !ref(p->value.r, "a promise's value"))
+          return false;
+        for (auto& r : p->reactions)
+          if (!ref(r.a, "a promise reaction") || !ref(r.b, "a promise reaction") || !ref(r.derived, "a promise reaction") ||
+              !ref(r.agg, "a promise reaction") || (r.capturedVT == VT_REF && !ref(r.captured.r, "a promise reaction")))
+            return false;
+        break;
+      }
+      case OT::Coro: {
+        auto* c = static_cast<const CoroObj*>(o);
+        if (!ref(c->closure, "a coroutine's closure")) return false;
+        if (!ref(c->promise, "a coroutine's promise")) return false;
+        if (!ref(c->items, "a native iterator's items")) return false;
+        if (c->fn && (c->state == CO_START || c->state == CO_SUSPENDED)) {
+          const Slot* rs = reinterpret_cast<const Slot*>(c + 1);
+          for (uint16_t r : c->fn->refRegs)
+            if (!ref(rs[r].r, "a coroutine's register")) return false;
+        }
+        break;
+      }
       case OT::Map: {
         auto* m = static_cast<const MapObj*>(o);
         uint32_t live = 0;
@@ -741,6 +939,7 @@ bool VM::checkHeap(std::string* why) const {
     for (uint16_t r : fr.fn->refRegs)
       if (!ref(R[r].r, "a register")) return false;
     if (!ref(fr.closure, "a frame's closure")) return false;
+    if (!ref(fr.coro, "a frame's coroutine")) return false;
   }
   for (auto& kv : pins_)
     if (!ref(kv.first, "a pinned object")) return false;
@@ -765,8 +964,30 @@ void VM::markRoots() {
     Slot* R = stack_ + fr.base;
     for (uint16_t r : fr.fn->refRegs) mark(R[r].r);
     mark(fr.closure);
+    mark(fr.coro);
   }
   if (resultKind_ == 'R') mark(result_.r);
+  // promises: queued jobs, host tickets, rejections to report, the running job, the entry call's result
+  auto markReaction = [&](const Reaction& r) {
+    mark(r.a);
+    mark(r.b);
+    mark(r.derived);
+    mark(r.agg);
+    if (r.capturedVT == VT_REF || r.capturedRejected) mark(r.captured.r);
+  };
+  for (const Job& j : microtasks_) {
+    markReaction(j.r);
+    if (j.argVT == VT_REF || j.rejected) mark(j.arg.r);
+  }
+  for (auto& kv : tickets_) mark(kv.second.first);
+  for (auto& at : autoTickets_)
+    if (at.vt == VT_REF || !at.ok) mark(at.v.r);
+  for (PromiseObj* p : unhandled_) mark(p);
+  mark(curDerived_);
+  markReaction(curReaction_);
+  if (curArgVT_ == VT_REF || curRejected_) mark(curArg_.r);
+  if (entryKind_ == 'R') mark(entryResult_.r);
+  mark(pendingThrow_);
   for (Obj* o : tempRoots_) mark(o);
   for (auto& kv : pins_) mark(kv.first);
 }
@@ -780,8 +1001,15 @@ void VM::traceAll() {
         auto* a = static_cast<ArrObj*>(o);
         if (a->vt == VT_REF)
           for (uint32_t i = 0; i < a->len; i++) mark(a->data[i].r);
+        if (hasMatchExtra(a)) {
+          MatchExtra* x = matchExtra(a);
+          mark(x->input);
+          mark(x->groups);
+          mark(x->indices);
+        }
         break;
       }
+      case OT::RegExp: mark(static_cast<RegExpObj*>(o)->source); break;
       case OT::Bytes: mark(static_cast<BytesObj*>(o)->buf); break;
       case OT::Instance: {
         auto* in = static_cast<InstObj*>(o);
@@ -801,6 +1029,28 @@ void VM::traceAll() {
       case OT::Box: {
         auto* b = static_cast<BoxObj*>(o);
         if (b->vt == VT_REF) mark(b->v.r);
+        break;
+      }
+      case OT::Promise: {
+        auto* p = static_cast<PromiseObj*>(o);
+        if (p->state == PS_REJECTED || (p->state == PS_FULFILLED && p->vt == VT_REF)) mark(p->value.r);
+        for (auto& r : p->reactions) {
+          mark(r.a);
+          mark(r.b);
+          mark(r.derived);
+          mark(r.agg);
+          if (r.capturedVT == VT_REF || r.capturedRejected) mark(r.captured.r);
+        }
+        break;
+      }
+      case OT::Coro: {
+        auto* c = static_cast<CoroObj*>(o);
+        mark(c->closure);
+        mark(reinterpret_cast<Obj*>(c->promise));
+        mark(c->items);
+        // while running, the registers are in the frame (traced there); the saved copy is stale
+        if (c->fn && (c->state == CO_START || c->state == CO_SUSPENDED))
+          for (uint16_t r : c->fn->refRegs) mark(c->regs()[r].r);
         break;
       }
       case OT::Map: {
@@ -908,6 +1158,7 @@ ModuleRT* VM::loadModule(Module&& mod) {
     c.name = d.name;
     c.isRecord = d.isRecord != 0;
     c.isTuple = d.isRecord == 2;
+    c.presence = (d.cflags & kClassFlagPresence) != 0;
     c.parent = d.parent >= 0 ? &M->classes[d.parent] : nullptr;
     c.nfields = (uint32_t)d.fields.size();
     for (size_t k = 0; k < d.fields.size(); k++) {
@@ -922,6 +1173,29 @@ ModuleRT* VM::loadModule(Module&& mod) {
       c.methodIndex[d.methodNames[k]] = (uint32_t)k;
     }
   }
+  // regular expression literals (D4): compiled once, shared by the RegExp objects made from them. The
+  // compilation is bounded (kLoadRegExpWork steps for the module, the memory limit) and the programs are
+  // counted in the heap while the module is loaded
+  {
+    uint64_t work = 0;
+    re::Limits lim;
+    lim.charge = [this, &work](uint64_t n) {
+      work += n;
+      if (work > kLoadRegExpWork) errorCode(ERR_LOAD, "the module's regular expressions are too large to compile");
+    };
+    lim.reserve = [this](size_t bytes) { checkTemp(bytes); };
+    uint64_t bytes = 0;
+    for (auto& rd : m.regexps) {
+      std::string rerr;
+      re::ProgramPtr p = re::compile(utf8ToUtf16(rd.source), rd.flags, rerr, &lim);
+      if (!p) errorCode(ERR_LOAD, "%s", rerr.c_str());
+      bytes += re::programSize(*p);
+      checkTemp((size_t)bytes);
+      M->regexps.push_back(std::shared_ptr<const re::Program>(std::move(p)));
+    }
+    if (bytes) accountExternal((int64_t)bytes);
+    M->regexpBytes = bytes;
+  }
   // string constants (rooted through the module)
   modules.push_back(std::move(mrt));
   try {
@@ -929,6 +1203,7 @@ ModuleRT* VM::loadModule(Module&& mod) {
     for (auto& s : m.strs) M->strs.push_back(newString(s));
     M->globals.assign(m.globals.size(), Slot{});
   } catch (...) {
+    accountExternalUnchecked(-(int64_t)M->regexpBytes);
     modules.pop_back();  // out of memory: the constants made so far become garbage
     throw;
   }
@@ -944,10 +1219,12 @@ int VM::runInit(ModuleRT* mod) {
 }
 
 void VM::unloadModule(ModuleRT* mod) {
-  if (!frames_.empty() || suspended_) return;
+  // not while a call runs, is suspended or waits: its promises, jobs and coroutines may refer to the module
+  if (!frames_.empty() || suspended_ || pending_ || !microtasks_.empty() || !tickets_.empty()) return;
   for (size_t i = modules.size(); i-- > 0;) {
     if (modules[i].get() != mod) continue;
     if (dbg_) dbg_->moduleUnloading(mod);
+    accountExternalUnchecked(-(int64_t)mod->regexpBytes);
     modules.erase(modules.begin() + (std::ptrdiff_t)i);
     // its objects are unreachable now, but instances and closures still point to its class and
     // function descriptions, which are gone: free them at once, while nothing can run
@@ -958,7 +1235,7 @@ void VM::unloadModule(ModuleRT* mod) {
 
 // ------------------------------------------------------------------ entry
 int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
-  if (suspended_ || !frames_.empty()) errorCode(ERR_STATE, "VM is busy (suspended or running)");
+  if (suspended_ || pending_ || !frames_.empty()) errorCode(ERR_STATE, "VM is busy (suspended, waiting for host operations, or running)");
   if (nargs != f->nparams) errorCode(ERR_ARGS, "function '%s' expects %u arguments, got %u", f->name.c_str(), f->nparams, nargs);
   if (f->nregs > cfg_.stackSlots) errorCode(ERR_STACK, "stack overflow");
   Slot* R = stack_;
@@ -966,6 +1243,9 @@ int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
   for (uint16_t r : f->refInit) R[r].r = nullptr;
   frames_.push_back(Frame{f, f->code, nullptr, 0, kNoReg, true});
   resultKind_ = 'V';
+  curJob_ = JOB_ENTRY;
+  entryFn_ = f;
+  entryKind_ = 'V';
   if (gcRequested_ || kGCStress) collectGarbage();
   return runFrames();
 }
@@ -974,10 +1254,69 @@ int VM::callEntry(FuncRT* f, const Slot* args, uint32_t nargs) {
 // debugger pauses it (ERR_PAUSED: the frames are kept for inspection).
 int VM::runFrames() {
   try {
-    int st = execute(0);
-    if (st == ERR_SUSPENDED || st == ERR_PAUSED) suspended_ = true;
-    else frames_.clear();
-    return st;
+    // the call's frames, then the microtasks they queued (each one a short call), until none is left
+    for (;;) {
+      if (!frames_.empty()) {
+        int st;
+        try {
+          st = execute(0);
+        } catch (E7Error& e) {
+          if (failCallbackJob(e)) continue;  // a then-callback threw: its promise is rejected
+          if (curJob_ == JOB_ENTRY && !e.jsName.empty() && !microtasks_.empty() && !(dbg_ && dbg_->errorPending())) {
+            // an uncaught error of the call itself: run what it queued first, as JavaScript does
+            entryError_.reset(new E7Error(e));
+            entryError_->value = nullptr;
+            dropFrames(0);
+            nativeDepth_ = 0;
+            gcBlockers_ = 0;
+            gcInhibit_ = 0;
+            tempRoots_.clear();
+            curNative_ = nullptr;
+            callbackNatives_.clear();
+            curJob_ = JOB_NONE;
+            entryFn_ = nullptr;
+            continue;
+          }
+          throw;
+        }
+        if (st == ERR_SUSPENDED || st == ERR_PAUSED) {
+          suspended_ = true;
+          return st;
+        }
+        JobKind jk = curJob_;
+        curJob_ = JOB_NONE;
+        if (jk == JOB_ENTRY) {
+          entryResult_ = result_;
+          entryKind_ = resultKind_;
+        } else if (jk == JOB_CALLBACK) {
+          curJob_ = JOB_CALLBACK;
+          finishCallbackJob(result_, resultKind_);
+        }
+        dropFrames(0);
+      }
+      if (microtasks_.empty()) {
+        // the next turn: a ticket the VM settles itself (e7:test's later())
+        if (!entryError_ && settleNextAutoTicket()) continue;  // an uncaught error ends the program (no later turns)
+        break;
+      }
+      // a job is charged like a call
+      if (--budget_ < 0 && budgetStart_ != INT64_MAX) {
+        if (cfg_.suspendOnBudget) {
+          suspended_ = true;
+          return ERR_SUSPENDED;
+        }
+        budget_ = 0;
+        errorCode(ERR_BUDGET, "instruction budget exhausted");
+      }
+      Job j = microtasks_.front();
+      microtasks_.pop_front();
+      // the job's objects are only here now: keep them while it starts
+      TempRoot k1(*this, j.r.a), k2(*this, j.r.b), k3(*this, j.r.derived), k4(*this, j.r.agg),
+          k5(*this, (j.argVT == VT_REF || j.rejected) ? j.arg.r : nullptr),
+          k6(*this, (j.r.capturedVT == VT_REF || j.r.capturedRejected) ? j.r.captured.r : nullptr);
+      startJob(j);
+    }
+    return finishTurn();
   } catch (E7Error&) {
     if (dbg_ && dbg_->takeErrorPause()) {
       // a debugger in pause-to-host mode reports the error first: keep the frames for inspection,
@@ -1000,6 +1339,11 @@ int VM::runFrames() {
 }
 
 int VM::resume() {
+  if (pending_ && !suspended_) {
+    // host tickets were settled: run what they queued
+    pending_ = false;
+    return runFrames();
+  }
   if (!suspended_) errorCode(ERR_STATE, "VM is not suspended");
   if (dbg_ && dbg_->errorPending()) {
     // the error reported to the debugger now terminates the call
@@ -1015,7 +1359,24 @@ int VM::resume() {
 
 void VM::resetExecution() {
   pendingCatch_ = PendingCatch{};
-  frames_.clear();
+  dropFrames(0);
+  microtasks_.clear();
+  tickets_.clear();
+  autoTickets_.clear();
+  unhandled_.clear();
+  curJob_ = JOB_NONE;
+  curDerived_ = nullptr;
+  curReaction_ = Reaction{};
+  curArg_.u = 0;
+  curArgVT_ = 0;
+  curRejected_ = false;
+  entryFn_ = nullptr;
+  entryKind_ = 'V';
+  pending_ = false;
+  pendingThrow_ = nullptr;
+  entryError_.reset();
+  resultKind_ = 'V';  // an abandoned call has no result (an async entry frame may have left its promise)
+  result_.u = 0;
   gcInhibit_ = 0;
   suspended_ = false;
   nativeDepth_ = 0;
@@ -1089,7 +1450,7 @@ bool VM::callClosureCatching(CloObj* c, std::string& errorMessage) {
     return true;
   } catch (E7Error& e) {
     if (e.code != ERR_RUNTIME) throw;
-    frames_.erase(frames_.begin() + (std::ptrdiff_t)depth, frames_.end());
+    dropFrames(depth);
     nativeDepth_ = nd;
     gcBlockers_ = blockers;
     curNative_ = cn;

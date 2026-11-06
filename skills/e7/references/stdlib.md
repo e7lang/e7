@@ -37,9 +37,19 @@ console.log(fnv1a(new TextEncoder().encode("hello")).toString(16)); // 4f9f2cab
 
 `length charAt charCodeAt codePointAt at indexOf lastIndexOf includes startsWith endsWith slice substring substr
 toUpperCase toLowerCase trim trimStart trimEnd padStart padEnd repeat split replace replaceAll concat
-localeCompare`, `String.fromCharCode/fromCodePoint`, template strings. `split` / `replace` take string
-patterns only (no regex); the replacement of `replace` / `replaceAll` can be a function
-`(match, offset, string) => string`. Strings are UTF-16 like JavaScript; `for (const ch of s)` iterates code points.
+localeCompare match matchAll search`, `String.fromCharCode/fromCodePoint`, template strings. `split` /
+`replace` / `replaceAll` take a string or a regular expression; with a string pattern the replacement can be a
+function `(match, offset, string) => string`. Strings are UTF-16 like JavaScript; `for (const ch of s)` iterates code points.
+
+## Regular expressions (0.3)
+
+ES2024 regular expressions without the `v` flag, as in Node.js: literals `/.../dgimsuy` (checked when compiling),
+`new RegExp(pattern, flags?)` (a bad pattern throws a catchable `SyntaxError`), `test exec lastIndex source flags
+global ...`, and `s.match / matchAll / replace / replaceAll / split / search` with a `RegExp`. `exec` gives
+`RegExpExecArray | null`: a `string[]` with `index`, `input`, `groups`. The named groups of a **literal** are typed
+(`/(?<y>\d{4})/.exec(s)?.groups?.y` is `string | undefined`); a pattern from `new RegExp` has only the indexed groups
+`m[1]`. A replacement function gets `(match, p1, ..., pn, offset, input, groups)` for a literal, `(match)` for a
+pattern built at run time. Matching steps count against the instruction budget (ReDoS ends the call).
 
 ## Arrays, Map, Set
 
@@ -63,8 +73,13 @@ patterns only (no regex); the replacement of `replace` / `replaceAll` can be a f
 - `JSON.stringify(value, null, indent?)`; `JSON.parse(text) as T` validates against `T`
   (`T` may be an object type, array, tuple, primitive, nullable/optional fields, or `Map<string, V>`); a mismatch
   ends the call. For untrusted input use `tryParse(text) as T | null` from `e7:json` (below).
-- `Date` (UTC): `Date.now/parse/UTC`, constructors, all `get*`/`getUTC*`, `getTime`, `setTime`,
-  `toISOString`, `toJSON`, `toString`, `toUTCString`. Other `set*` methods are missing: compute with `Date.UTC`.
+- `Date` (UTC): `Date.now/parse/UTC`, constructors, all `get*`/`getUTC*` and `set*`/`setUTC*`, `getTime`,
+  `setTime`, `toISOString`, `toJSON`, `toString`, `toUTCString`. No locale formatting (`toLocaleDateString`).
+- `structuredClone(v)`: a deep copy of arrays, object literals, `Map`, `Set`, `Date`, typed arrays and errors
+  (not of class instances or functions; at most 256 levels deep).
+- Arrays also have the ES2023 copying methods `toSorted`, `toReversed`, `toSpliced`, `with`. Typed arrays:
+  `Int8Array` ... `Float64Array`, `Uint8ClampedArray`, `BigInt64Array`, `BigUint64Array` (constructors from a length,
+  an array or a buffer, indexing, `subarray`, `slice`, `set`, `fill`, the array callbacks).
 
 ## `e7:json`
 

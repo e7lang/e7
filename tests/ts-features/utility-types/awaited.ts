@@ -1,9 +1,7 @@
 // @feature: `Awaited<T>`
 // @category: Utility Types
-// @status: unsupported
-// @why: not implemented yet: no Promises
-// @instead: synchronous values
-// @error: unknown type 'Awaited'
+// @status: supported
+// @note: `Awaited<Promise<T>>` is `T`
 type A = Awaited<Promise<string>>;
 const a: A = "done";
 console.log(a);

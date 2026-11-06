@@ -267,9 +267,50 @@ dispatch:
   CASE(ISUNDEF) R[A].i = R[B].r == undef_; DISPATCH();
   CASE(ISNULLISH) { Obj* o = R[B].r; R[A].i = !o || o == undef_; DISPATCH(); }
 
+// returning from a coroutine's frame: a generator is done (the value and done = 1 go to the resumer)
+#define CORO_RET(rv, kc)                                                     \
+  do {                                                                       \
+    CoroObj* co_ = fr->coro;                                                 \
+    if (fflagsKind(co_->fflags) == FK_ASYNC) ASYNC_RET(rv, kc);              \
+    co_->state = CO_DONE;                                                    \
+    bool ent_ = fr->entry;                                                   \
+    uint16_t dst_ = fr->retDst, dd_ = fr->doneDst;                           \
+    frames_.pop_back();                                                      \
+    if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS); \
+    if (ent_) { result_ = rv; resultKind_ = kc; return ERR_OK; }             \
+    LOAD_FRAME();                                                            \
+    if (dst_ != kNoReg && kc != 'V') R[dst_] = rv;                           \
+    if (dd_ != kNoReg) R[dd_].i = 1;                                         \
+    DISPATCH();                                                              \
+  } while (0)
+
+// returning from an async function's frame: its promise is resolved with the value; the caller (the
+// first part of the call) or the job loop (a continuation after an await) gets the promise
+#define ASYNC_RET(rv, kc)                                                    \
+  do {                                                                       \
+    CoroObj* co_ = fr->coro;                                                 \
+    PromiseObj* p_ = co_->promise;                                           \
+    Slot v_ = (rv);                                                          \
+    if (kc == 'V') v_.r = undef_;                                            \
+    fr->ip = ip;                                                             \
+    co_->state = CO_DONE;                                                    \
+    if (kc == 'R' && v_.r && v_.r->type == OT::Promise) adoptPromise(p_, static_cast<PromiseObj*>(v_.r)); \
+    else if (kc != 'V' && kindChar(kindOfVT(p_->vt)) != kc) THROW("async function returned a value of the wrong type"); \
+    else resolvePromise(p_, v_); /* before the frame is popped: its registers keep the value alive */ \
+    bool ent_ = fr->entry;                                                   \
+    uint16_t dst_ = fr->retDst;                                              \
+    frames_.pop_back();                                                      \
+    if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS); \
+    if (ent_) { result_.r = p_; resultKind_ = 'R'; return ERR_OK; }         \
+    LOAD_FRAME();                                                            \
+    if (dst_ != kNoReg) R[dst_].r = p_;                                      \
+    DISPATCH();                                                              \
+  } while (0)
+
 #define DO_RET(val, kc)                         \
   do {                                          \
     Slot rv = (val);                            \
+    if (E7_UNLIKELY(fr->coro != nullptr)) CORO_RET(rv, kc); \
     bool ent = fr->entry;                       \
     uint16_t dst = fr->retDst;                  \
     frames_.pop_back();                         \
@@ -439,9 +480,12 @@ dispatch:
   CASE(GETF_I) { Obj* o = R[B].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, C, K_I); R[A] = in->fields()[C]; DISPATCH(); }
   CASE(GETF_F) { Obj* o = R[B].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, C, K_F); R[A] = in->fields()[C]; DISPATCH(); }
   CASE(GETF_R) { Obj* o = R[B].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, C, K_R); R[A] = in->fields()[C]; DISPATCH(); }
-  CASE(SETF_I) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_I); in->fields()[B] = R[C]; DISPATCH(); }
-  CASE(SETF_F) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_F); in->fields()[B] = R[C]; DISPATCH(); }
-  CASE(SETF_R) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_R); in->fields()[B] = R[C]; DISPATCH(); }
+  // a write makes the property present again (records with a presence mask, D7)
+#define MARK_PRESENT(in, idx) \
+  if (E7_UNLIKELY((in)->cls->presence)) setFieldPresent(in, idx, true);
+  CASE(SETF_I) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_I); in->fields()[B] = R[C]; MARK_PRESENT(in, B); DISPATCH(); }
+  CASE(SETF_F) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_F); in->fields()[B] = R[C]; MARK_PRESENT(in, B); DISPATCH(); }
+  CASE(SETF_R) { Obj* o = R[A].r; INST_CHECK(o); auto* in = static_cast<InstObj*>(o); FIELD_CHECK(in, B, K_R); in->fields()[B] = R[C]; MARK_PRESENT(in, B); DISPATCH(); }
 
 #define IC_FIELD(in, slot, K, outIdx)                                                   \
   {                                                                                     \
@@ -476,6 +520,7 @@ dispatch:
     uint32_t idx;
     IC_FIELD(in, B, k, idx);
     in->fields()[idx] = R[C];
+    MARK_PRESENT(in, idx);
     DISPATCH();
   }
   CASE(INSTOF) {
@@ -610,6 +655,25 @@ dispatch:
   CASE(SCAT) {
     Obj* x = R[B].r;
     Obj* y = R[C].r;
+    if (E7_UNLIKELY(x == undef_ || y == undef_)) {
+      // a string-typed value that is undefined at run time (a regular expression group that did not
+      // participate, typed string as TypeScript types it): "undefined", as in JavaScript
+      fr->ip = ip;
+      StrObj* u = newStringAscii("undefined");
+      if (x == undef_) x = u;
+      if (y == undef_) y = u;
+      STR_CHECK(x);
+      STR_CHECK(y);
+      auto* ux = static_cast<StrObj*>(x);
+      auto* uy = static_cast<StrObj*>(y);
+      tempRoots_.push_back(u);  // the allocation below may collect (an error resets the temporary roots)
+      StrObj* us = allocString((size_t)ux->len + uy->len);
+      tempRoots_.pop_back();
+      memcpy(us->chars(), ux->chars(), (size_t)ux->len * 2);
+      memcpy(us->chars() + ux->len, uy->chars(), (size_t)uy->len * 2);
+      R[A].r = us;
+      DISPATCH();
+    }
     STR_CHECK(x);
     STR_CHECK(y);
     auto* sx = static_cast<StrObj*>(x);
@@ -668,6 +732,168 @@ dispatch:
   }
   // `debugger;`: the debug interpreter has already stopped here (DF_DEBUGGER) when appropriate
   CASE(DEBUGGER) DISPATCH();
+
+  // ---- coroutines (DESIGN-0.3.md D1)
+  // first instruction of a generator: save the frame (arguments in place) into a new coroutine and
+  // return it without running the body
+  CASE(GEN_START) {
+    fr->ip = ip;
+    CoroObj* co = newCoro(fn, fr->closure);  // may collect: the frame's registers are roots
+    R = stack_ + fr->base;
+    co->pc = (uint32_t)(ip - fn->code);
+    memcpy(co->regs(), R, (size_t)fn->nregs * sizeof(Slot));
+    co->state = CO_START;
+    Slot cv;
+    cv.r = co;
+    DO_RET(cv, 'R');
+  }
+  CASE(YIELD) {
+    ip++;  // the extra word (read on resumption)
+    CoroObj* co = fr->coro;
+    if (E7_UNLIKELY(!co)) THROW("yield outside a running generator");
+    Slot v = R[A];
+    co->pc = (uint32_t)(ip - 2 - fn->code);
+    memcpy(co->regs(), R, (size_t)fn->nregs * sizeof(Slot));
+    co->state = CO_SUSPENDED;
+    bool ent = fr->entry;
+    uint16_t dst = fr->retDst, dd = fr->doneDst;
+    frames_.pop_back();
+    if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS);
+    if (ent) { result_ = v; resultKind_ = 'R'; return ERR_OK; }
+    LOAD_FRAME();
+    if (dst != kNoReg) R[dst] = v;
+    if (dd != kNoReg) R[dd].i = 0;
+    DISPATCH();
+  }
+  // resume a generator: A coroutine, B its value (kind of the variant), C the done flag; the extra
+  // word: bits 0-15 the sent value's register, 16-17 the mode (0 next, 1 throw, 2 return), 18-19 the
+  // sent value's kind (0 none, 1 I, 2 F, 3 R)
+  CASE(RESUME_I) CASE(RESUME_F) CASE(RESUME_R) {
+    uint64_t ex = *ip++;
+    uint16_t sent = (uint16_t)ex;
+    uint32_t mode = (uint32_t)(ex >> 16) & 3, sentKind = (uint32_t)(ex >> 18) & 3;
+    uint16_t op = (uint16_t)ins;
+    uint8_t want = op == OP_RESUME_I ? 1 : op == OP_RESUME_F ? 2 : 3;
+    Obj* o = R[A].r;
+    if (E7_UNLIKELY(!o || o->type != OT::Coro)) THROW(o ? "value is not a generator" : "cannot resume null or undefined");
+    auto* co = static_cast<CoroObj*>(o);
+    uint8_t ff = co->fflags;
+    if (E7_UNLIKELY(fflagsKind(ff) != FK_GENERATOR || fflagsYield(ff) != want)) THROW("generator type mismatch");
+    uint8_t expect = mode == 0 ? fflagsNext(ff) : mode == 2 ? fflagsReturn(ff) : 3;
+    if (E7_UNLIKELY(sentKind != 0 && sentKind != expect)) THROW("generator type mismatch");
+    if (E7_UNLIKELY(co->state == CO_RUNNING)) THROW("TypeError: Generator is already running");
+    if (co->state == CO_DONE || (co->state == CO_START && mode != 0)) {
+      // not started (return / throw finish it without running the body) or already finished
+      co->state = CO_DONE;
+      if (mode == 1) { fr->ip = ip; raiseThrown(R[sent].r); }
+      if (mode == 2 && sentKind == want) R[B] = R[sent];
+      else if (fflagsReturn(ff)) {
+        // a finished generator gives undefined (a number NaN, an integer 0: the register's kind is fixed)
+        if (want == 3) R[B].r = undef_;
+        else if (want == 2) R[B].f = std::nan("");
+        else R[B].i = 0;
+      }
+      R[C].i = 1;
+      DISPATCH();
+    }
+    if (!co->fn) {
+      // a native iterator (String.prototype.matchAll): the next element of its array
+      auto* items = static_cast<ArrObj*>(co->items);
+      if (mode == 0 && co->pc < items->len) {
+        co->state = CO_SUSPENDED;
+        R[B] = items->data[co->pc++];
+        R[C].i = 0;
+        DISPATCH();
+      }
+      co->state = CO_DONE;
+      if (mode == 1) { fr->ip = ip; raiseThrown(R[sent].r); }
+      R[B].r = mode == 2 && sentKind == want ? R[sent].r : undef_;
+      R[C].i = 1;
+      DISPATCH();
+    }
+    FuncRT* cf = co->fn;
+    uint32_t nb = fr->base + fn->nregs;
+    if (E7_UNLIKELY((size_t)nb + cf->nregs > cfg_.stackSlots || frames_.size() >= cfg_.maxFrames))
+      THROWC(ERR_STACK, "stack overflow");
+    Slot* NR = stack_ + nb;
+    memcpy(NR, co->regs(), (size_t)cf->nregs * sizeof(Slot));
+    const uint64_t* cip = cf->code + co->pc;
+    Obj* thrown = nullptr;
+    if (co->state == CO_SUSPENDED) {
+      uint64_t yw = cip[0], yx = cip[1];
+      uint16_t recv = insB(yw), modeReg = insC(yw), retReg = (uint16_t)yx;
+      NR[modeReg].i = mode;
+      uint16_t into = mode == 0 ? recv : mode == 2 ? retReg : kNoReg;
+      if (into != kNoReg) {
+        if (sentKind != 0) NR[into] = R[sent];
+        else {
+          uint8_t k = mode == 0 ? fflagsNext(ff) : fflagsReturn(ff);
+          if (k == 3) NR[into].r = undef_;
+          else if (k == 2) NR[into].f = std::nan("");
+          else NR[into].i = 0;
+        }
+      }
+      if (mode == 1) thrown = R[sent].r;
+      cip += 2;
+    }
+    co->state = CO_RUNNING;
+    fr->ip = ip;
+    frames_.push_back(Frame{cf, cip, co->closure, nb, B, false, co, C});
+    LOAD_FRAME();
+    if (mode == 1) {
+      budget_ -= 1;
+      raiseThrown(thrown);  // raised at the YIELD (its handlers apply)
+    }
+    TICK(1);
+    DISPATCH();
+  }
+  // D7: field B of the record in A is not an own property (an object literal leaves it out)
+  CASE(FIELD_ABSENT) {
+    Obj* o = R[A].r;
+    INST_CHECK(o);
+    auto* in = static_cast<InstObj*>(o);
+    if (E7_UNLIKELY(!in->cls->presence || B >= in->cls->nfields)) THROW("invalid field access");
+    setFieldPresent(in, B, false);
+    DISPATCH();
+  }
+  // first instruction of an async function: its coroutine (owning this frame) and its promise, of
+  // value type A; the body runs on until the first await
+  CASE(ASYNC_START) {
+    fr->ip = ip;
+    CoroObj* co = newCoro(fn, fr->closure);
+    co->state = CO_RUNNING;
+    fr->coro = co;  // rooted by the frame
+    co->promise = newPromise((uint8_t)A);
+    DISPATCH();
+  }
+  // await the promise in B; the value goes to A (or the rejection is raised here) when a job resumes
+  // the function. Leaving the frame gives the caller the function's promise (first await) or ends
+  // the job.
+  CASE(AWAIT) {
+    CoroObj* co = fr->coro;
+    if (E7_UNLIKELY(!co || fflagsKind(co->fflags) != FK_ASYNC || !co->promise)) THROW("await outside a running async function");
+    Obj* po = R[B].r;
+    if (E7_UNLIKELY(!po || po->type != OT::Promise)) THROW("await: the value is not a promise");
+    auto* awaited = static_cast<PromiseObj*>(po);
+    if (E7_UNLIKELY(A != kNoReg && kindOfVT(awaited->vt) != fn->d->regKinds[A])) THROW("await: promise value type mismatch");
+    fr->ip = ip;
+    co->pc = (uint32_t)(ip - 1 - fn->code);
+    memcpy(co->regs(), R, (size_t)fn->nregs * sizeof(Slot));
+    co->state = CO_SUSPENDED;
+    Reaction rr;
+    rr.kind = RK_AWAIT;
+    rr.a = co;
+    promiseThen(awaited, rr);
+    PromiseObj* pr = co->promise;
+    bool ent = fr->entry;
+    uint16_t dst = fr->retDst;
+    frames_.pop_back();
+    if (DBG && E7_UNLIKELY(frames_.size() < dbgRetDepth_)) dbgMask_.fetch_or(DF_ALWAYS);
+    if (ent) { result_.r = pr; resultKind_ = 'R'; return ERR_OK; }
+    LOAD_FRAME();
+    if (dst != kNoReg) R[dst].r = pr;
+    DISPATCH();
+  }
 
 #if !E7_COMPUTED_GOTO
   default:

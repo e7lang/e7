@@ -18,6 +18,12 @@ static Expr* mkNum(Program& P, Types& T, double v, Loc l) {
   e->type = T.number();
   return e;
 }
+static Expr* mkStr(Program& P, Types& T, const std::u16string& v, Loc l) {
+  Expr* e = P.arena.expr(EK::Str, l);
+  e->str = v;
+  e->type = T.string();
+  return e;
+}
 static Expr* mkNull(Program& P, Types& T, Loc l) {
   Expr* e = P.arena.expr(EK::Null, l);
   e->type = T.nullT();
@@ -269,6 +275,113 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       e->raw = (name == "warn" || name == "error") ? "error" : "log";
       return T.voidT();
     }
+    return bad();
+  }
+  if (int tk = typedArrayKind(M)) {
+    // Int32Array.from(array | iterable) / Int32Array.of(...values) / Int32Array.BYTES_PER_ELEMENT
+    Type* tat = T.typedArray((uint8_t)tk);
+    Type* et = taElem(tat);
+    if (!isCall && name == "BYTES_PER_ELEMENT") {
+      static const int sz[11] = {1, 1, 1, 2, 2, 4, 4, 4, 8, 8, 8};
+      e->intrinsic = IN_CONST_NUM;
+      e->num = sz[tk];
+      return num;
+    }
+    if (isCall && (name == "of" || name == "from")) {
+      Expr* arr;
+      if (name == "of") {
+        arr = P.arena.expr(EK::Array, l);
+        arr->list = args;
+        check(arr, T.array(et));
+      } else {
+        if (args.size() != 1) return errT(l, M + ".from takes one argument (mapping functions are not supported; map the array first)");
+        Type* t = check(args[0], T.array(et));
+        if (t->t == TT::Array) {
+          if (baseLit(t->elem) != et) return errT(args[0]->loc, M + ".from needs an array of " + typeName(et) + "s");
+          arr = args[0];
+        } else if (t->t == TT::TypedArray || t->t == TT::Bytes) {
+          arr = args[0];
+        } else {
+          // an iterable: Array.from it first
+          Expr* af = P.arena.expr(EK::Call, l);
+          Expr* mem = P.arena.expr(EK::Member, l);
+          Expr* id = P.arena.expr(EK::Ident, l);
+          id->raw = "Array";
+          mem->a = id;
+          mem->raw = "from";
+          af->a = mem;
+          af->list = {args[0]};
+          args[0]->type = nullptr;
+          Type* at = check(af, T.array(et));
+          if (at->t != TT::Array || baseLit(at->elem) != et) return errT(args[0]->loc, M + ".from needs values of type " + typeName(et));
+          arr = af;
+        }
+      }
+      args.clear();
+      args.push_back(intLit(tk, l));
+      args.push_back(arr);
+      nat("TA.from");
+      return tat;
+    }
+    return bad();
+  }
+  if (M == "Promise") {
+    Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : nullptr;
+    e->intrinsic = IN_PROMISE_STATIC;
+    e->raw = name;
+    if (isCall && name == "resolve") {
+      if (args.empty()) return T.promise(T.voidT());
+      if (args.size() != 1) return errT(l, "Promise.resolve takes one argument");
+      Type* t = check(args[0], expElem);
+      if (t->t == TT::Promise) return t;  // the promise itself
+      if (t->t == TT::Void) return errT(args[0]->loc, "cannot resolve a promise with a void value");
+      if (expElem && t != expElem) {
+        coerce(args[0], expElem, "Promise.resolve");
+        t = expElem;
+      }
+      if (t->t == TT::Undefined) t = T.voidT();
+      return T.promise(t);
+    }
+    if (isCall && name == "reject") {
+      if (args.size() != 1) return errT(l, "Promise.reject takes one argument (an Error)");
+      if (!argsMatch(e, args, {T.error()}, 1, "Promise.reject")) return T.unknown();
+      e->intrinsic = IN_PROMISE_STATIC;
+      e->raw = name;
+      return T.promise(expElem ? expElem : T.voidT());
+    }
+    if (isCall && (name == "all" || name == "allSettled" || name == "any" || name == "race")) {
+      if (args.size() != 1) return errT(l, "Promise." + name + " takes one array of promises");
+      Type* want = nullptr;
+      if (expElem && name == "all" && expElem->t == TT::Array) want = T.array(T.promise(expElem->elem));
+      if (expElem && (name == "any" || name == "race")) want = T.array(T.promise(expElem));
+      Type* t = check(args[0], want);
+      if (t->t == TT::Tuple) {
+        // [p1, p2]: promises of one type
+        Type* et = nullptr;
+        for (Type* x : t->elems) et = !et || et == x ? x : nullptr;
+        if (!et && !t->elems.empty()) return errT(args[0]->loc, "Promise." + name + " over promises of different types is not supported (E7 types are static); give them one type");
+        t = T.array(et ? et : T.promise(T.voidT()));
+        Expr* arr = P.arena.expr(EK::Array, args[0]->loc);
+        arr->list = strip(args[0])->k == EK::Array ? strip(args[0])->list : std::vector<Expr*>{};
+        if (strip(args[0])->k != EK::Array) return errT(args[0]->loc, "Promise." + name + " expects an array of promises");
+        args[0] = arr;
+        check(arr, t);
+      }
+      if (t->t != TT::Array || t->elem->t != TT::Promise) return errT(args[0]->loc, "Promise." + name + " expects an array of promises, not '" + typeName(t) + "'");
+      e->intrinsic = IN_PROMISE_STATIC;
+      e->raw = name;
+      Type* vt = t->elem->elem;
+      if (name == "all") return T.promise(T.array(vt->t == TT::Void ? T.undef() : vt));
+      if (name == "allSettled") {
+        Type* vopt = T.optional(vt->t == TT::Void ? T.undef() : vt, false, true);
+        Type* ropt = T.optional(T.error(), false, true);
+        e->cls = recordFor({{"status", T.string()}, {"value", vopt}, {"reason", ropt}})->cls;
+        Type* rec = T.anonObject({{"status", T.string(), false}, {"value", vopt, true}, {"reason", ropt, true}});
+        return T.promise(T.array(rec));
+      }
+      return T.promise(vt);
+    }
+    e->intrinsic = 0;
     return bad();
   }
   if (M == "Object") {
@@ -550,6 +663,37 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     nat("Global.parseInt");
     return num;
   }
+  if (id == "structuredClone") {
+    // a deep copy (shared and cyclic references kept); classes, functions, generators and promises
+    // cannot be cloned (in JavaScript a class instance would become a plain object)
+    if (args.size() != 1) return errT(l, "structuredClone takes one argument");
+    Type* t = check(args[0], expected);
+    std::set<const void*> seen;
+    std::function<const char*(Type*)> bad = [&](Type* x) -> const char* {
+      if (!x || !seen.insert(x).second) return nullptr;
+      switch (x->t) {
+        case TT::Class: return x->cls->isRecord ? nullptr : "a class instance (it would become a plain object)";
+        case TT::Func: return "a function";
+        case TT::Generator: return "a generator";
+        case TT::Promise: return "a promise";
+        case TT::Handle: return "a KeyHandle";
+        case TT::TextEncoder: case TT::TextDecoder: return "a TextEncoder / TextDecoder";
+        case TT::Array: case TT::Set: case TT::Optional: return bad(x->elem);
+        case TT::Map: { const char* k = bad(x->key); return k ? k : bad(x->val); }
+        case TT::Tuple: for (Type* el : x->elems) if (const char* r = bad(el)) return r; return nullptr;
+        case TT::Object:
+          if (!x->shape->methods.empty()) return "an object with methods";
+          for (auto& p : x->shape->props) if (const char* r = bad(p.type)) return r;
+          return nullptr;
+        default: return nullptr;
+      }
+    };
+    if (const char* why = bad(t)) return errT(args[0]->loc, std::string("structuredClone cannot copy ") + why + " ('" + typeName(t) + "')");
+    nat("Global.structuredClone");
+    if (kindOf(t) != K_R) e->native = "";  // a primitive is its own copy
+    if (kindOf(t) != K_R) e->intrinsic = IN_NUMBER, e->raw = "identity";
+    return t;
+  }
   if (id == "parseFloat") {
     if (!argsMatch(e, args, {str}, 1, "parseFloat")) return T.unknown();
     nat("Global.parseFloat");
@@ -639,6 +783,34 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
       if (!argsMatch(e, args, {optStr}, 1, "fail")) return T.unknown();
       nat("test.fail");
       return T.never();
+    }
+    if (n == "later") {
+      // later(v): a promise of v settled in a later turn (each one after the previous, as
+      // setImmediate does in Node.js): tests of async ordering
+      if (args.size() != 1) return errT(l, "'later' expects one argument");
+      Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : nullptr;
+      Type* t = check(args[0], expElem);
+      if (expElem && t != expElem) { coerce(args[0], expElem, "later"); t = expElem; }
+      if (t->t == TT::Void || t->t == TT::Promise) return errT(args[0]->loc, "'later' needs a value");
+      Type* vt = t->t == TT::Undefined ? T.voidT() : t;
+      args.push_back(N((double)(t->t == TT::Undefined ? VT_REF : vtOf(t))));
+      args.back()->type = T.intT(VT_I64);
+      args.back()->k = EK::Num;
+      args.back()->isIntLit = true;
+      args.back()->ival = t->t == TT::Undefined ? VT_REF : vtOf(t);
+      nat(std::string("test.later") + kindChar(kindOf(t)));
+      return T.promise(vt);
+    }
+    if (n == "laterReject") {
+      if (args.size() != 1) return errT(l, "'laterReject' expects one argument (an Error)");
+      Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : T.voidT();
+      if (!argsMatch(e, args, {T.error()}, 1, "laterReject")) return T.unknown();
+      args.push_back(N((double)(expElem->t == TT::Void ? VT_REF : vtOf(expElem))));
+      args.back()->type = T.intT(VT_I64);
+      args.back()->isIntLit = true;
+      args.back()->ival = expElem->t == TT::Void ? VT_REF : vtOf(expElem);
+      nat("test.laterReject");
+      return T.promise(expElem);
     }
     if (n == "assertClose") {
       if (args.size() < 2 || args.size() > 4)
@@ -1085,10 +1257,40 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     e->intrinsic = IN_CONST_NUM;
     return T.textDecoder();
   }
+  if (name == "AggregateError") {
+    // new AggregateError(errors, message?)
+    if (args.empty() || args.size() > 2) return errT(l, "AggregateError takes an array of errors and a message");
+    if (args.size() == 1) { Expr* sx = P.arena.expr(EK::Str, l); sx->type = T.string(); args.push_back(sx); }
+    if (!argsMatch(e, args, {T.array(T.error()), T.string()}, 2, "AggregateError")) return T.unknown();
+    nat("Error.newAggregate");
+    return T.error();
+  }
   if (name == "Error" || name == "TypeError" || name == "RangeError" || name == "SyntaxError" || name == "URIError") {
+    Expr* cause = nullptr;
+    if (args.size() == 2) {
+      // new Error(message, { cause })
+      Expr* o = strip(args[1]);
+      if (o->k != EK::Object || o->props.size() != 1 || o->props[0].key != "cause" || o->props[0].spread)
+        return errT(args[1]->loc, name + " options must be an object literal { cause: error }");
+      cause = o->props[0].value;
+      Type* ct = check(cause, T.error());
+      if (ct->t != TT::Error && ct->t != TT::Caught && ct->t != TT::Unknown)
+        return errT(cause->loc, "the cause of an Error must be an Error (or a caught value), not '" + typeName(ct) + "'");
+      args.pop_back();
+    } else if (args.size() > 2) {
+      return errT(l, name + " takes a message and options { cause }");
+    }
     if (args.size() == 1) { check(args[0], T.string()); coerce(args[0], T.string()); }
-    else if (!args.empty()) return errT(l, name + " takes at most one argument (options such as { cause } are not supported)");
     if (args.empty()) { Expr* sx = P.arena.expr(EK::Str, l); sx->type = T.string(); args.push_back(sx); }
+    if (cause) {
+      Expr* nx = P.arena.expr(EK::Str, l);
+      nx->type = T.string();
+      nx->str = utf8ToUtf16(name);
+      args.insert(args.begin(), nx);
+      args.push_back(cause);
+      nat("Error.newCause");
+      return T.error();
+    }
     Expr* nx = P.arena.expr(EK::Str, l);
     nx->type = T.string();
     nx->str = utf8ToUtf16(name);
@@ -1112,7 +1314,78 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     nat("Date.fromParts");
     return T.date();
   }
-  if (name == "RegExp" || name == "Promise" || name == "WeakMap" || name == "WeakSet" || name == "Proxy")
+  if (int tk = typedArrayKind(name)) {
+    // new Int32Array(length | array | typed array | buffer [, byteOffset [, length]])
+    Type* tat = T.typedArray((uint8_t)tk);
+    Type* et = taElem(tat);
+    if (args.empty()) args.push_back(mkNum(P, T, 0, l));
+    if (args.size() == 1) {
+      Type* t = check(args[0], nullptr);
+      if (t->t == TT::Number || t->t == TT::Int) {
+        if (!coerce(args[0], num)) return T.unknown();
+        nat("TA.new");
+      } else if (t->t == TT::ArrayBuffer) {
+        args.push_back(mkNum(P, T, 0, l));
+        args.push_back(mkNum(P, T, -1, l));
+        nat("TA.fromBuffer");
+      } else if (t->t == TT::Array || t->t == TT::TypedArray || t->t == TT::Bytes) {
+        if (t->t == TT::Array && baseLit(t->elem) != et) return errT(args[0]->loc, name + " needs an array of " + typeName(et) + "s, not '" + typeName(t) + "'");
+        nat("TA.from");
+      } else {
+        return errT(args[0]->loc, "cannot make a " + name + " from '" + typeName(t) + "'");
+      }
+    } else {
+      // (buffer, byteOffset, length?)
+      if (args.size() == 2) args.push_back(mkNum(P, T, -1, l));
+      if (!argsMatch(e, args, {T.arrayBuffer(), num, num}, 3, name.c_str())) return T.unknown();
+      nat("TA.fromBuffer");
+    }
+    args.insert(args.begin(), intLit(tk, l));
+    return tat;
+  }
+  if (name == "Promise") {
+    // new Promise<T>((resolve, reject) => { ... })
+    Type* vt = nullptr;
+    if (!e->typeArgs.empty()) vt = resolveType(e->typeArgs[0]);
+    else if (exp && exp->t == TT::Promise) vt = exp->elem;
+    if (!vt) return errT(l, "write the promise's value type: new Promise<T>((resolve, reject) => ...)");
+    if (vt->t == TT::Undefined) vt = T.voidT();
+    if (args.size() != 1) return errT(l, "new Promise takes one executor function");
+    std::vector<Type*> rp;
+    if (vt->t != TT::Void) rp.push_back(vt);
+    Type* resolveT = T.func(rp, T.voidT());
+    Type* rejectT = T.func({T.error()}, T.voidT());
+    Type* ft = check(args[0], T.func({resolveT, rejectT}, T.voidT()));
+    if (ft->t != TT::Func) return errT(args[0]->loc, "new Promise expects an executor function");
+    coerce(args[0], T.func({resolveT, rejectT}, T.voidT()), "executor");
+    e->intrinsic = IN_NEW_PROMISE;
+    return T.promise(vt);
+  }
+  if (name == "RegExp") {
+    // new RegExp(pattern, flags?) with a string or a RegExp: a pattern known at run time (groups unknown); a
+    // syntax error is a catchable SyntaxError
+    if (args.empty() || args.size() > 2) return errT(l, "new RegExp takes a pattern and optional flags");
+    for (Expr* a : args)
+      if (a->k == EK::Spread) return errT(a->loc, "spread is not supported here");
+    Type* t = check(args[0], nullptr);
+    Type* bt = baseOf(t);
+    if (t->t == TT::Optional || (bt->t != TT::String && bt->t != TT::RegExp))
+      return errT(args[0]->loc, "new RegExp needs a string or a RegExp, not '" + typeName(t) + "'");
+    if (args.size() == 2) {
+      check(args[1], T.string());
+      if (!coerce(args[1], T.string())) return T.unknown();
+      nat(bt->t == TT::RegExp ? "RegExp.newRe" : "RegExp.new");
+      return T.regexp();
+    }
+    if (bt->t == TT::RegExp) {
+      nat("RegExp.copy");
+      return t;
+    }
+    args.push_back(mkStr(P, T, u"", l));
+    nat("RegExp.new");
+    return T.regexp();
+  }
+  if (name == "WeakMap" || name == "WeakSet" || name == "Proxy")
     return errT(l, "'" + name + "' is not supported in E7");
   return errT(l, "cannot find class '" + name + "'");
 }
