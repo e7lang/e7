@@ -215,7 +215,7 @@ jobs:
           | Swift (SwiftPM) | \`.package(url: "https://github.com/e7lang/e7.git", from: "${TAG#v}")\` |
           | Android (AAR) / JVM (jar) | \`org.e7vm:e7vm-android:${TAG#v}\` / \`org.e7vm:e7vm:${TAG#v}\` (GitHub Packages; \`.aar\` / \`.jar\` attached) |
           | .NET (NuGet) | \`E7VM\` \`${TAG#v}\` (\`.nupkg\` attached) |
-          | JavaScript (npm) | \`@e7lang/e7@${TAG#v}\` (WebAssembly; \`.tgz\` attached) |
+          | JavaScript (Node.js, browsers) | \`e7lang-e7-${TAG#v}.tgz\` attached (WebAssembly; not on the npm registry: \`npm install ./e7lang-e7-${TAG#v}.tgz\`) |
           | VS Code | *E7 Language* extension (\`.vsix\` attached) |
           | AI assistants | Claude Code: \`/plugin marketplace add e7lang/e7\`, then \`/plugin install e7@e7lang\`; other tools: \`e7-skill.zip\` |
 
