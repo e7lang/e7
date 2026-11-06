@@ -182,6 +182,16 @@ class Checker {
   bool isNamespaceConstant(const std::string& ns, const std::string& name);
   Type* etaExpand(Expr* e, Type* expected, int arity);
   bool constKey(Expr* k, std::string& out);
+  static int typedArrayKind(const std::string& name) {  // TAKind of a typed array class (0: not one / Uint8Array)
+    static const char* const n[11] = {"Uint8Array", "Int8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
+                                      "Int32Array", "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array",
+                                      "BigUint64Array"};
+    for (int k = 1; k < 11; k++)
+      if (name == n[k]) return k;
+    return 0;
+  }
+  Type* taElem(Type* t) { return t->vt == 9 || t->vt == 10 ? T.bigint() : T.number(); }
+  Expr* intLit(int64_t v, Loc l);
   Type* genTypeArg(TypeNode* n);
   Type* iterResultType(Type* g, Loc l);
   Type* resolveNamedType(const std::string& name, const std::vector<TypeNode*>& args, Loc l);

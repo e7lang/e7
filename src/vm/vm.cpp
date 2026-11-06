@@ -68,6 +68,7 @@ VM::VM(const VMConfig& cfg) : cfg_(cfg) {
   registerDateNatives(*this);
   registerTestNatives(*this);
   registerPromiseNatives(*this);
+  registerTypedArrayNatives(*this);
   applyNativeCosts(*this);
 }
 

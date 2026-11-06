@@ -354,7 +354,9 @@ void Checker::declareBuiltins() {
   globalScope = pushScope(false);
   const char* namespaces[] = {"Math", "JSON", "console", "Number", "String", "Array", "Uint8Array", "BigInt",
                               "Object", "Map", "Set", "DataView", "TextEncoder", "TextDecoder", "Error",
-                              "ArrayBuffer", "Boolean", "Date", "Symbol", "Promise", "RegExp", "Reflect", "globalThis"};
+                              "ArrayBuffer", "Boolean", "Date", "Symbol", "Promise", "RegExp", "Reflect", "globalThis",
+                              "Int8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+                              "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array"};
   for (const char* n : namespaces) {
     NamespaceSym* ns = P.make<NamespaceSym>();
     ns->name = n;
@@ -1079,9 +1081,7 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
     if (e->t == TT::Promise) e = e->elem;  // Promise<Promise<T>> is Promise<T>
     return T.promise(e);
   }
-  if (name == "Int32Array" || name == "Uint32Array" || name == "Float64Array" || name == "Uint16Array" ||
-      name == "Int8Array" || name == "Int16Array" || name == "Float32Array" || name == "Uint8ClampedArray")
-    return errT(l, "'" + name + "' is not supported; use Uint8Array, DataView or typed arrays like u32[]");
+  if (int k = typedArrayKind(name)) { noArgs(); return T.typedArray((uint8_t)k); }
   return errT(l, "unknown type '" + name + "'" + suggestName(name, true));
 }
 

@@ -165,15 +165,18 @@ struct Stringifier {
       out += u'}';
     } else if (o->type == OT::Bytes) {
       auto* b = static_cast<BytesObj*>(o);
+      if (taIsBig(taKind(b))) vm.error("TypeError: Do not know how to serialize a BigInt");
       out += u'{';
-      for (uint32_t i = 0; i < b->len; i++) {
+      uint32_t n = taLength(b);
+      for (uint32_t i = 0; i < n; i++) {
         if (i) out += u',';
         nl(inner);
-        std::string k = "\"" + std::to_string(i) + (gap.empty() ? "\":" : "\": ") + std::to_string(b->ptr()[i]);
+        double ev = taKind(b) == TA_U8 ? (double)b->ptr()[i] : taGetNum(b, i);
+        std::string k = "\"" + std::to_string(i) + (gap.empty() ? "\":" : "\": ") + (std::isfinite(ev) ? numberToString(ev) : std::string("null"));
         out.append(k.begin(), k.end());
         checkOut();
       }
-      if (b->len) nl(indent);
+      if (n) nl(indent);
       out += u'}';
     } else {
       out += u"{}";

@@ -1823,6 +1823,10 @@ void Gen::genForOf(Stmt* s) {
   Type* t = s->expr->type;
   uint16_t coll = temp(K_R);
   genInto(s->expr, coll);
+  if (t->t == TT::TypedArray) {  // over its elements as an array
+    callNative("TA.toArray", {coll}, coll, 'R');
+    t = T.array(t->vt >= 9 ? T.bigint() : T.number());
+  }
   if (t->t == TT::Generator || t->t == TT::Class) {
     Type* gt = nullptr;
     uint16_t it = iteratorOf(coll, t, &gt);
@@ -3262,7 +3266,14 @@ void Gen::storeTo(Expr* target, uint16_t v) {
       }
       uint16_t idx = gen(t->b);
       bool intIdx = t->b->type->t == TT::Int;
-      if (ot->t == TT::Bytes) {
+      if (ot->t == TT::TypedArray) {
+        if (intIdx) {
+          uint16_t f = temp(K_F);
+          intToNum(f, idx, t->b->type);
+          idx = f;
+        }
+        callNative(ot->vt >= 9 ? "TA.setBig" : "TA.set", {obj, idx, v}, kNoReg, 'V');
+      } else if (ot->t == TT::Bytes) {
         if (intIdx) {
           uint16_t f = temp(K_F);
           intToNum(f, idx, t->b->type);
@@ -3430,7 +3441,10 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
       idx = temp(K(target->b->type));
       genInto(target->b, idx);
       bool ii = target->b->type->t == TT::Int;
-      if (ot->t == TT::Bytes) {
+      if (ot->t == TT::TypedArray) {
+        if (ii) { uint16_t f = temp(K_F); intToNum(f, idx, target->b->type); idx = f; }
+        callNative(ot->vt >= 9 ? "TA.getBig" : "TA.get", {obj, idx}, cur, ot->vt >= 9 ? 'R' : 'F');
+      } else if (ot->t == TT::Bytes) {
         if (ii) { uint16_t t8 = temp(K_I); emit(OP_BGETI, t8, obj, idx); emit(OP_I2F, cur, t8); }
         else emit(OP_BGET, cur, obj, idx);
       } else if (ii) emit(op3(k, OP_AGETI_I, OP_AGETI_F, OP_AGETI_R), cur, obj, idx);
@@ -3462,7 +3476,10 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
     if (ot->t == TT::Tuple) emit(op3(k, OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)target->field, res);
     else {
       bool ii = target->b->type->t == TT::Int;
-      if (ot->t == TT::Bytes) {
+      if (ot->t == TT::TypedArray) {
+        if (ii && kindOfReg(idx) == K_I) { uint16_t f = temp(K_F); intToNum(f, idx, target->b->type); idx = f; }
+        callNative(ot->vt >= 9 ? "TA.setBig" : "TA.set", {obj, idx, res}, kNoReg, 'V');
+      } else if (ot->t == TT::Bytes) {
         if (ii) { uint16_t f = temp(K_F); intToNum(f, idx, target->b->type); idx = f; }
         emit(OP_BSET, obj, idx, res);
       } else if (ii) emit(op3(k, OP_ASETI_I, OP_ASETI_F, OP_ASETI_R), obj, idx, res);
@@ -4177,6 +4194,7 @@ void Gen::spreadInto(uint16_t arr, Expr* sp, Type* elemT) {
   if (st->t == TT::Set) { tmpArr = temp(K_R); callNative("Map.keys", {src}, tmpArr, 'R'); }
   else if (st->t == TT::String) { tmpArr = temp(K_R); callNative("String.chars", {src}, tmpArr, 'R'); }
   else if (st->t == TT::Bytes) { tmpArr = temp(K_R); callNative("Bytes.toArray", {src}, tmpArr, 'R'); }
+  else if (st->t == TT::TypedArray) { tmpArr = temp(K_R); callNative("TA.toArray", {src}, tmpArr, 'R'); }
   else if (st->t == TT::Map) {
     ClassSym* rc = C.tupleRecord(T.tuple({st->key, st->val}));
     uint16_t lc = temp(K_I);
@@ -4409,6 +4427,7 @@ void Gen::genCallbackLoop(Expr* e, uint16_t dst) {
     } else if (st->t == TT::Set) callNative("Map.keys", {s}, d, 'R');
     else if (st->t == TT::String) callNative("String.chars", {s}, d, 'R');
     else if (st->t == TT::Bytes) callNative("Bytes.toArray", {s}, d, 'R');
+    else if (st->t == TT::TypedArray) callNative("TA.toArray", {s}, d, 'R');
     else if (st->t == TT::Map) {
       ClassSym* rc = e->cls ? e->cls : C.tupleRecord(T.tuple({st->key, st->val}));
       uint16_t cidx = temp(K_F);
@@ -5017,6 +5036,15 @@ void Gen::genIndex(Expr* e, uint16_t d) {
     Kind k = K(ot->elem);
     if (ii) emit(op3(k, OP_AGETI_I, OP_AGETI_F, OP_AGETI_R), d, obj, idx);
     else emit(op3(k, OP_AGET_I, OP_AGET_F, OP_AGET_R), d, obj, idx);
+    return;
+  }
+  if (ot->t == TT::TypedArray) {
+    if (ii) {
+      uint16_t f = temp(K_F);
+      intToNum(f, idx, e->b->type);
+      idx = f;
+    }
+    callNative(ot->vt >= 9 ? "TA.getBig" : "TA.get", {obj, idx}, d, ot->vt >= 9 ? 'R' : 'F');
     return;
   }
   if (ot->t == TT::Bytes) {

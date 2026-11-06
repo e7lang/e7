@@ -317,6 +317,7 @@ Type* Checker::elemTypeForIter(Expr* e, Type* t, Loc l) {
     case TT::Bytes: return T.number();
     case TT::Map: return T.tuple({t->key, t->val});
     case TT::Generator: return t->elem;
+    case TT::TypedArray: return taElem(t);
     case TT::Class:
       if (Type* g = iteratorMethodType(t, l)) return g->elem;
       return errT(l, "type '" + typeName(t) + "' is not iterable");
@@ -359,6 +360,15 @@ Type* Checker::checkAwait(Expr* e) {
   if (t->t == TT::Promise) return t->elem;
   if (t->t == TT::Void) return errT(e->a->loc, "cannot await a void value");
   return t;
+}
+
+Expr* Checker::intLit(int64_t v, Loc l) {
+  Expr* x = P.arena.expr(EK::Num, l);
+  x->num = (double)v;
+  x->isIntLit = true;
+  x->ival = v;
+  x->type = T.intT(VT_I64);
+  return x;
 }
 
 // The number of arguments a builtin function takes (-1: any number)
@@ -509,6 +519,7 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
       else if (st->t == TT::Bytes) t = T.number();
       else if (st->t == TT::Map) t = T.tuple({st->key, st->val});
       else if (st->t == TT::Generator) t = st->elem;
+      else if (st->t == TT::TypedArray) t = taElem(st);
       else if (Type* gt = st->t == TT::Class ? iteratorMethodType(st, x->loc) : nullptr) t = gt->elem;
       else { err(x->loc, "type '" + typeName(st) + "' cannot be spread into an array"); t = T.unknown(); }
       if (elemExp && t != elemExp && !(t->t == TT::Unknown) && !(kindOf(t) == K_R && kindOf(elemExp) == K_R && assignable(t, elemExp)))
@@ -1982,6 +1993,11 @@ Type* Checker::checkIndexOn(Expr* e, Type* ot) {
       Type* it = check(e->b, nullptr);
       if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "index must be a number or integer");
       return T.number();
+    }
+    case TT::TypedArray: {
+      Type* it = check(e->b, nullptr);
+      if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "index must be a number or integer");
+      return taElem(ot);
     }
     case TT::String: {
       Type* it = check(e->b, nullptr);

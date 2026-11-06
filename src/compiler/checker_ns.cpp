@@ -271,6 +271,54 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
     }
     return bad();
   }
+  if (int tk = typedArrayKind(M)) {
+    // Int32Array.from(array | iterable) / Int32Array.of(...values) / Int32Array.BYTES_PER_ELEMENT
+    Type* tat = T.typedArray((uint8_t)tk);
+    Type* et = taElem(tat);
+    if (!isCall && name == "BYTES_PER_ELEMENT") {
+      static const int sz[11] = {1, 1, 1, 2, 2, 4, 4, 4, 8, 8, 8};
+      e->intrinsic = IN_CONST_NUM;
+      e->num = sz[tk];
+      return num;
+    }
+    if (isCall && (name == "of" || name == "from")) {
+      Expr* arr;
+      if (name == "of") {
+        arr = P.arena.expr(EK::Array, l);
+        arr->list = args;
+        check(arr, T.array(et));
+      } else {
+        if (args.size() != 1) return errT(l, M + ".from takes one argument (mapping functions are not supported; map the array first)");
+        Type* t = check(args[0], T.array(et));
+        if (t->t == TT::Array) {
+          if (baseLit(t->elem) != et) return errT(args[0]->loc, M + ".from needs an array of " + typeName(et) + "s");
+          arr = args[0];
+        } else if (t->t == TT::TypedArray || t->t == TT::Bytes) {
+          arr = args[0];
+        } else {
+          // an iterable: Array.from it first
+          Expr* af = P.arena.expr(EK::Call, l);
+          Expr* mem = P.arena.expr(EK::Member, l);
+          Expr* id = P.arena.expr(EK::Ident, l);
+          id->raw = "Array";
+          mem->a = id;
+          mem->raw = "from";
+          af->a = mem;
+          af->list = {args[0]};
+          args[0]->type = nullptr;
+          Type* at = check(af, T.array(et));
+          if (at->t != TT::Array || baseLit(at->elem) != et) return errT(args[0]->loc, M + ".from needs values of type " + typeName(et));
+          arr = af;
+        }
+      }
+      args.clear();
+      args.push_back(intLit(tk, l));
+      args.push_back(arr);
+      nat("TA.from");
+      return tat;
+    }
+    return bad();
+  }
   if (M == "Promise") {
     Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : nullptr;
     e->intrinsic = IN_PROMISE_STATIC;
@@ -1259,6 +1307,35 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     if (!argsMatch(e, args, {num, num, num, num, num, num, num}, 7, "Date")) return T.unknown();
     nat("Date.fromParts");
     return T.date();
+  }
+  if (int tk = typedArrayKind(name)) {
+    // new Int32Array(length | array | typed array | buffer [, byteOffset [, length]])
+    Type* tat = T.typedArray((uint8_t)tk);
+    Type* et = taElem(tat);
+    if (args.empty()) args.push_back(mkNum(P, T, 0, l));
+    if (args.size() == 1) {
+      Type* t = check(args[0], nullptr);
+      if (t->t == TT::Number || t->t == TT::Int) {
+        if (!coerce(args[0], num)) return T.unknown();
+        nat("TA.new");
+      } else if (t->t == TT::ArrayBuffer) {
+        args.push_back(mkNum(P, T, 0, l));
+        args.push_back(mkNum(P, T, -1, l));
+        nat("TA.fromBuffer");
+      } else if (t->t == TT::Array || t->t == TT::TypedArray || t->t == TT::Bytes) {
+        if (t->t == TT::Array && baseLit(t->elem) != et) return errT(args[0]->loc, name + " needs an array of " + typeName(et) + "s, not '" + typeName(t) + "'");
+        nat("TA.from");
+      } else {
+        return errT(args[0]->loc, "cannot make a " + name + " from '" + typeName(t) + "'");
+      }
+    } else {
+      // (buffer, byteOffset, length?)
+      if (args.size() == 2) args.push_back(mkNum(P, T, -1, l));
+      if (!argsMatch(e, args, {T.arrayBuffer(), num, num}, 3, name.c_str())) return T.unknown();
+      nat("TA.fromBuffer");
+    }
+    args.insert(args.begin(), intLit(tk, l));
+    return tat;
   }
   if (name == "Promise") {
     // new Promise<T>((resolve, reject) => { ... })

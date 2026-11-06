@@ -32,7 +32,7 @@ static bool deepEq(VM& vm, Slot a, Slot b, uint8_t vt, int depth) {
       auto* bx = static_cast<BytesObj*>(x);
       auto* by = static_cast<BytesObj*>(y);
       vm.chargeWork(bx->len);
-      return bx->len == by->len && (bx->len == 0 || memcmp(bx->ptr(), by->ptr(), bx->len) == 0);
+      return taKind(bx) == taKind(by) && bx->len == by->len && (bx->len == 0 || memcmp(bx->ptr(), by->ptr(), bx->len) == 0);
     }
     case OT::Array: {
       auto* ax = static_cast<ArrObj*>(x);

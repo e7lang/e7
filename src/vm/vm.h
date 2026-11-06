@@ -547,6 +547,7 @@ void registerCryptoNatives(VM& vm);
 void registerDateNatives(VM& vm);
 void registerTestNatives(VM& vm);
 void registerPromiseNatives(VM& vm);  // promise.cpp
+void registerTypedArrayNatives(VM& vm);  // stdlib/typed.cpp
 void applyNativeCosts(VM& vm);  // core.cpp
 
 }  // namespace e7

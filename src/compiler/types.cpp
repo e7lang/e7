@@ -167,6 +167,14 @@ Type* Types::generator(Type* y, Type* r, Type* n, uint8_t gk) {
   t->gk = gk;
   return interned_[k] = t;
 }
+Type* Types::typedArray(uint8_t kind) {
+  std::string k = "TA" + std::to_string(kind);
+  auto it = interned_.find(k);
+  if (it != interned_.end()) return it->second;
+  Type* t = mk(TT::TypedArray);
+  t->vt = kind;
+  return interned_[k] = t;
+}
 Type* Types::promise(Type* e) {
   std::string k = "P" + ptrKey(e);
   auto it = interned_.find(k);
@@ -345,6 +353,12 @@ static std::string typeNameB(const Type* t, int& budget) {
       return s + ">";
     }
     case TT::Promise: return "Promise<" + typeNameB(t->elem, budget) + ">";
+    case TT::TypedArray: {
+      static const char* const n[11] = {"Uint8Array", "Int8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
+                                        "Int32Array", "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array",
+                                        "BigUint64Array"};
+      return t->vt < 11 ? n[t->vt] : "TypedArray";
+    }
   }
   return "?";
 }

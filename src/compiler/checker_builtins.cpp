@@ -1035,6 +1035,93 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       return noSuch();
     }
+    case TT::TypedArray: {
+      Type* et = taElem(bt);
+      bool big = et->t == TT::BigInt;
+      if (prop("length")) { native("TA.length"); return num; }
+      if (prop("byteLength")) { e->intrinsic = IN_ARR_LEN; return num; }
+      if (prop("byteOffset")) { native("Bytes.byteOffset"); return num; }
+      if (prop("buffer")) { native("TA.buffer"); return T.arrayBuffer(); }
+      if (prop("BYTES_PER_ELEMENT")) {
+        static const int sz[11] = {1, 1, 1, 2, 2, 4, 4, 4, 8, 8, 8};
+        e->intrinsic = IN_CONST_NUM;
+        e->num = sz[bt->vt];
+        return num;
+      }
+      if (meth("subarray") || meth("slice")) {
+        if (args.empty()) args.push_back(N(0));
+        if (args.size() == 1) args.push_back(N(INFINITY));
+        if (!argsMatch(e, args, {num, num}, 2, name.c_str())) return T.unknown();
+        native(name == "slice" ? "TA.slice" : "TA.subarray");
+        return bt;
+      }
+      if (meth("fill")) {
+        if (args.size() == 1) args.push_back(N(0));
+        if (args.size() == 2) args.push_back(N(INFINITY));
+        if (!argsMatch(e, args, {et, num, num}, 3, "fill")) return T.unknown();
+        native(big ? "TA.fillBig" : "TA.fill");
+        return bt;
+      }
+      if (meth("set")) {
+        if (args.size() == 1) args.push_back(N(0));
+        if (args.size() != 2) return errT(l, "set takes a source and an offset");
+        Type* st = check(args[0], T.array(et));
+        if (!(st->t == TT::TypedArray || st->t == TT::Bytes || (st->t == TT::Array && baseLit(st->elem) == et)))
+          return errT(args[0]->loc, "set needs an array of " + typeName(et) + "s or a typed array");
+        Expr* src = args[0];
+        args.erase(args.begin());
+        if (!argsMatch(e, args, {num}, 1, "set")) return T.unknown();
+        args.insert(args.begin(), src);
+        native("TA.setFrom");
+        return T.voidT();
+      }
+      if (!big && (meth("indexOf") || meth("includes"))) {
+        if (name == "indexOf" && args.size() == 1) args.push_back(N(0));
+        if (!argsMatch(e, args, name == "indexOf" ? std::vector<Type*>{num, num} : std::vector<Type*>{num}, name == "indexOf" ? 2 : 1, name.c_str()))
+          return T.unknown();
+        native(name == "indexOf" ? "TA.indexOf" : "TA.includes");
+        return name == "indexOf" ? num : boo;
+      }
+      if (meth("join") || meth("toString")) {
+        if (name == "toString" && !args.empty()) return errT(l, "toString takes no arguments");
+        if (args.empty()) args.push_back(S(u","));
+        if (!argsMatch(e, args, {str}, 1, "join")) return T.unknown();
+        native("TA.join");
+        return str;
+      }
+      if (meth("reverse") || (meth("sort") && args.empty())) {
+        if (!argsMatch(e, args, {}, 0, name.c_str())) return T.unknown();
+        native(name == "reverse" ? "TA.reverse" : "TA.sort");
+        return bt;
+      }
+      // the other methods (callbacks, at, ...): on the elements as an array; map / filter / toSorted /
+      // toReversed give the typed array again
+      {
+        Expr* recv = m->a;
+        Expr* conv = P.arena.expr(EK::Call, recv->loc);
+        conv->list = {recv};
+        conv->native = "TA.toArray";
+        conv->intrinsic = IN_NATIVE_NORECV;
+        conv->type = T.array(et);
+        m->a = conv;
+        bool wrap = isCall && (name == "map" || name == "filter" || name == "toSorted" || name == "toReversed" || name == "with" ||
+                               (name == "sort" && !args.empty()));
+        Type* r = checkBuiltinMethod(e, m, T.array(et), wrap ? T.array(et) : expected);
+        if (!wrap || r->t == TT::Unknown) return r;
+        if (r->t != TT::Array || baseLit(r->elem) != et) return errT(l, "'" + name + "' on a " + typeName(bt) + " must give " + typeName(et) + "s");
+        // e becomes TA.from(kind, <the array call>)
+        Expr* inner = P.arena.expr(EK::Call, e->loc);
+        *inner = *e;
+        inner->type = r;
+        Expr saved = *e;
+        e->list = {intLit(bt->vt, l), inner};
+        e->a = nullptr;
+        e->native = "TA.from";
+        e->intrinsic = IN_NATIVE_NORECV;
+        (void)saved;
+        return bt;
+      }
+    }
     case TT::Promise: {
       Type* vt = bt->elem;
       std::vector<Type*> valueParams;

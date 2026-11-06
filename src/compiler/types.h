@@ -16,7 +16,8 @@ enum class TT : uint8_t {
   Handle, TextEncoder, TextDecoder, Error, Date, Unknown,
   Caught,  // a catch variable: 'unknown' in TypeScript; narrow with instanceof Error
   Generator,  // 0.3: Generator<T, TReturn, TNext> / Iterator<T> / IterableIterator<T> (elem, ret, val; gk)
-  Promise     // 0.3: Promise<T> (elem)
+  Promise,    // 0.3: Promise<T> (elem)
+  TypedArray  // 0.3: Int8Array ... Float64Array, BigInt64Array, BigUint64Array (vt: the element kind, TAKind)
 };
 
 struct ObjShape;
@@ -324,6 +325,7 @@ class Types {
   // the union of two literal types of one base
   Type* litUnion(Type* a, Type* b);
   Type* promise(Type* t);
+  Type* typedArray(uint8_t kind);
   std::vector<std::unique_ptr<ObjShape>> shapes;
 
  private:

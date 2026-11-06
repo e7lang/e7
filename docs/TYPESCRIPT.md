@@ -27,7 +27,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **143 supported**, **16 partial**, **91 unsupported** (266 sample programs).
+250 features: **143 supported**, **17 partial**, **90 unsupported** (267 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -52,10 +52,10 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Type Compatibility and Inference](#type-compatibility-and-inference) | 5 | 1 | 0 |
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 23 | 1 | 7 |
-| [JavaScript: Standard Library](#javascript-standard-library) | 11 | 5 | 10 |
-| **Total** | **143** | **16** | **91** |
+| [JavaScript: Standard Library](#javascript-standard-library) | 11 | 6 | 9 |
+| **Total** | **143** | **17** | **90** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 42, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 44.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 43, verifiable bytecode 16, JavaScript-identical behaviour 5, not implemented yet 43.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -407,14 +407,14 @@ Within each category, supported features come first, then partial and unsupporte
 | Error types (`Error`, `TypeError`, `RangeError`, `SyntaxError`, `URIError`) | **partial** | **Works:** construction (also with `{ cause }`), `name` / `message` / `cause`, `AggregateError` and its `errors`, `instanceof`, catching errors raised by the standard library. **Not supported:** `stack` (stack traces differ between engines) (*JavaScript-identical behaviour*). **Instead:** log `e.message` (the host gets the e7 stack trace of an uncaught error) | [errors.ok.ts](../tests/ts-features/js-stdlib/errors.ok.ts), [errors.no.ts](../tests/ts-features/js-stdlib/errors.no.ts) |
 | `JSON.stringify` / `JSON.parse` | **partial** | **Works:** `JSON.parse(text) as T` validates the text against `T` while parsing. **Not supported:** `JSON.parse` returns `any`; reviver functions see untyped values (*types known at compile time*). **Instead:** `JSON.parse(text) as T` (or `tryParse(text) as T \| null` from `e7:json`) | [json.ok.ts](../tests/ts-features/js-stdlib/json.ok.ts), [json.no.ts](../tests/ts-features/js-stdlib/json.no.ts) |
 | `Object` static methods | **partial** | **Works:** `Object.keys`, `values`, `entries`, `assign`, `freeze`. **Not supported:** methods that create, inspect or change object layouts and prototypes at run time (`create`, `defineProperty`, `getPrototypeOf`, `setPrototypeOf`, `fromEntries`, `groupBy`) (*verifiable bytecode*). **Instead:** classes, object literals and `Map` | [object-static.ok.ts](../tests/ts-features/js-stdlib/object-static.ok.ts), [object-static.no.ts](../tests/ts-features/js-stdlib/object-static.no.ts) |
-| Typed arrays, `ArrayBuffer`, `DataView` | **partial** | **Works:** `Uint8Array`, `ArrayBuffer` and `DataView` (all getters and setters, both byte orders). **Not supported:** typed arrays other than `Uint8Array` (`Int32Array`, `Float64Array`, ...), `SharedArrayBuffer`, `Atomics` (*not implemented yet*). **Instead:** `number[]`, fixed-width integer arrays such as `u32[]`, or a `DataView` | [typed-arrays.ok.ts](../tests/ts-features/js-stdlib/typed-arrays.ok.ts), [typed-arrays.no.ts](../tests/ts-features/js-stdlib/typed-arrays.no.ts) |
+| `structuredClone` | **partial** | **Works:** deep copies of arrays, object literals, `Map`, `Set`, `Date`, typed arrays and errors (shared and cyclic references kept). **Not supported:** a clone of a class instance is a plain object in JavaScript, which its static type would not describe (*types known at compile time*). **Instead:** a `clone()` method on the class | [structured-clone.ok.ts](../tests/ts-features/js-stdlib/structured-clone.ok.ts), [structured-clone.no.ts](../tests/ts-features/js-stdlib/structured-clone.no.ts) |
+| Typed arrays, `ArrayBuffer`, `DataView` | **partial** | **Works:** `Uint8Array`, `Int8Array` ... `Float64Array`, `BigInt64Array`, `BigUint64Array` (elements little-endian), `ArrayBuffer` and `DataView` (all getters and setters, both byte orders). **Not supported:** `SharedArrayBuffer` and `Atomics` (no threads in a script) (*not implemented yet*). **Instead:** an `ArrayBuffer`; the host shares data through calls | [typed-arrays.ok.ts](../tests/ts-features/js-stdlib/typed-arrays.ok.ts), [typed-arrays.no.ts](../tests/ts-features/js-stdlib/typed-arrays.no.ts) |
 | `Array.isArray` | **unsupported** | **Why:** whether a value is an array is known statically (*types known at compile time*). **Instead:** nothing (the static type says it) | [array-isarray.ts](../tests/ts-features/js-stdlib/array-isarray.ts) |
 | `globalThis` and global object properties | **unsupported** | **Why:** there is no global object; names are resolved at compile time (*verifiable bytecode*). **Instead:** module-level variables | [global-this.ts](../tests/ts-features/js-stdlib/global-this.ts) |
 | `Intl` and `toLocaleString` | **unsupported** | **Why:** locale data differs between platforms (*JavaScript-identical behaviour*). **Instead:** format with `toFixed`, `padStart` and your own tables, or let the host format | [intl.ts](../tests/ts-features/js-stdlib/intl.ts) |
 | `Proxy` and `Reflect` | **unsupported** | **Why:** property access is compiled for a fixed layout and cannot be intercepted (*verifiable bytecode*). **Instead:** explicit wrapper classes or methods | [proxy-reflect.ts](../tests/ts-features/js-stdlib/proxy-reflect.ts) |
 | `RegExp` | **unsupported** | **Why:** *not implemented yet*. **Instead:** string methods and character code tests | [regexp.ts](../tests/ts-features/js-stdlib/regexp.ts) |
 | `String.prototype.normalize`, `localeCompare` with locales, `toLocaleUpperCase` | **unsupported** | **Why:** no Unicode normalization tables or locale data (*not implemented yet*). **Instead:** compare normalized input prepared by the host; `toUpperCase()` / `toLowerCase()` | [string-unsupported.ts](../tests/ts-features/js-stdlib/string-unsupported.ts) |
-| `structuredClone` | **unsupported** | **Why:** *not implemented yet*. **Instead:** object spread `{ ...o }` / `[...xs]`, or `JSON.parse(JSON.stringify(o)) as T` | [structured-clone.ts](../tests/ts-features/js-stdlib/structured-clone.ts) |
 | Timers (`setTimeout`, `setInterval`, `queueMicrotask`) | **unsupported** | **Why:** no event loop (*not implemented yet*). **Instead:** the host schedules calls to exported functions | [timers.ts](../tests/ts-features/js-stdlib/timers.ts) |
 | `WeakMap` and `WeakSet` | **unsupported** | **Why:** the collector has no weak (ephemeron) tables (*not implemented yet*). **Instead:** `Map` / `Set` with explicit removal, or a field on the key object | [weak-collections.ts](../tests/ts-features/js-stdlib/weak-collections.ts) |
 | `WeakRef` and `FinalizationRegistry` | **unsupported** | **Why:** their results depend on when the garbage collector runs (*JavaScript-identical behaviour*). **Instead:** explicit ownership: remove entries when the owner is done with them | [weak-references.ts](../tests/ts-features/js-stdlib/weak-references.ts) |

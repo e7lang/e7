@@ -75,9 +75,12 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Bytes: {
       auto* b = static_cast<BytesObj*>(o);
       std::u16string out;
-      for (uint32_t i = 0; i < b->len; i++) {
+      uint32_t n = taLength(b);
+      for (uint32_t i = 0; i < n; i++) {
         if (i) out += u',';
-        out += ascii(std::to_string(b->ptr()[i]));
+        std::string t = taKind(b) == TA_U8 ? std::to_string(b->ptr()[i]) : taElemText(b, i);
+        if (taIsBig(taKind(b))) t.pop_back();
+        out += ascii(t);
       }
       return out;
     }
@@ -419,8 +422,10 @@ struct Inspector {
         break;
       }
       case OT::Bytes: {
-        uint32_t len = static_cast<BytesObj*>(o)->len;
-        brace0 = "Uint8Array(" + std::to_string(len) + ") [", brace1 = "]", ctor = "Uint8Array", arrayLike = true;
+        auto* bo = static_cast<BytesObj*>(o);
+        uint32_t len = taLength(bo);
+        std::string nm = taName(taKind(bo));
+        brace0 = nm + "(" + std::to_string(len) + ") [", brace1 = "]", ctor = nm, arrayLike = true;
         if (len == 0 && !showHidden) return brace0 + "]";
         break;
       }
@@ -492,12 +497,13 @@ struct Inspector {
       }
       case OT::Bytes: {
         auto* b = static_cast<BytesObj*>(o);
-        uint32_t shown = std::min(b->len, kMaxArrayLength);
-        for (uint32_t i = 0; i < shown; i++) out.push_back(std::to_string(b->ptr()[i]));
-        if (b->len > shown) out.push_back(remainingText(b->len - shown));
+        uint32_t n = taLength(b);
+        uint32_t shown = std::min(n, kMaxArrayLength);
+        for (uint32_t i = 0; i < shown; i++) out.push_back(taKind(b) == TA_U8 ? std::to_string(b->ptr()[i]) : taElemText(b, i));
+        if (n > shown) out.push_back(remainingText(n - shown));
         if (showHidden) {
-          out.push_back("[BYTES_PER_ELEMENT]: 1");
-          out.push_back("[length]: " + std::to_string(b->len));
+          out.push_back("[BYTES_PER_ELEMENT]: " + std::to_string(taSize(taKind(b))));
+          out.push_back("[length]: " + std::to_string(n));
           out.push_back("[byteLength]: " + std::to_string(b->len));
           out.push_back("[byteOffset]: " + std::to_string(b->off));
           indent += 2;
@@ -1083,7 +1089,9 @@ struct Cloner {
       }
       case OT::Bytes: {
         auto* b = static_cast<BytesObj*>(o);
-        return keep(o, vm.newBytesFrom(b->ptr(), b->len));
+        BytesObj* c = vm.newBytesFrom(b->ptr(), b->len);
+        c->flags = b->flags;  // the element kind of a typed array
+        return keep(o, c);
       }
       case OT::Buffer: {
         auto* b = static_cast<BufObj*>(o);
