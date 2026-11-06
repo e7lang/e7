@@ -399,13 +399,37 @@ if (cfg === null) console.log("bad config: " + lastError());  // e.g. "expected 
 
 ## 7. Modules
 
-- `import { a, b as c } from "./x"`, `import * as ns from "./x"` (functions and constants through `ns.`; import
-  classes, types and enums by name), `import type {...}`, `export function/const/class/interface/type/enum`,
-  `export { a, b as c }`. Paths are relative to the current file and the extension may be omitted (tries `.ts`, `.e7`, `/index.ts`). Circular dependencies are forbidden.
+- Imports: `import { a, b as c } from "./x"`; `import x from "./x"` (the default export; also
+  `import x, { a } from`, `import x, * as ns from` and `import { default as x } from`); `import * as ns from "./x"`;
+  `import type ...` and inline `type` modifiers; `import "./x"`, which binds nothing and only makes x run. Imported
+  bindings are live (an imported `let` shows the exporting module's assignments) and cannot be assigned.
+- Namespace imports: through `ns`, every export of the module is available as in TypeScript: functions and
+  constants (`ns.f()`, `ns.PI`), classes (`new ns.C()`, `ns.C.staticMember`, `x instanceof ns.C`,
+  `class D extends ns.C`), enums (`ns.E.A`) and types in type positions (`ns.T`, `ns.I`, `ns.E`, `ns.Box<number>`),
+  and namespaces that the module re-exports (`ns.inner.f()`). The members of a namespace cannot be assigned (a
+  class's static fields can: `ns.C.count = 0`). A local declaration with the same name shadows the namespace.
+- Exports: `export function/const/let/class/interface/type/enum`, `export { a, b as c }` (also
+  `export { a as default }`), and `export default` followed by a function or class declaration, an interface, or an
+  expression. An anonymous `export default function` / `class` is named `default`, as in JavaScript.
+  `export default <expression>` evaluates the expression once, at its place in the module's top-level code, into a
+  hidden constant; when the expression is just the name of a declaration of the module (a function, class, enum,
+  type, `const` or import) that declaration is exported, and a `let` is exported with its value at that point
+  (not as a live binding), as in JavaScript. A module has at most one default export, and cannot export one name for two different bindings.
+- Re-exports: `export { a, b as c } from "./x"` (`default` may appear on either side of `as`),
+  `export type { T } from "./x"`, `export * as ns from "./x"`, and `export * from "./x"`, which re-exports every
+  export of x except its default export. Re-exports create no local bindings. A module's own exports
+  (declarations, export lists and named re-exports) take precedence over `export *`; a name that two `export *`
+  provide with different bindings is a compile error, as in TypeScript (JavaScript leaves such a name out of the
+  module), while the same binding reached through two `export *` is not a conflict. Functions of the built-in
+  modules can be re-exported too (`export { sha256 } from "e7:crypto"`, `export * from "e7:encoding"`).
+- Initialization order: each module's top-level code runs once, after the modules it depends on (its imports,
+  side-effect imports and re-exports, in source order, depth first), so the entry file runs last; this is
+  JavaScript's evaluation order.
+- Paths are relative to the current file and the extension may be omitted (tries `.ts`, `.e7`, `/index.ts`). Circular dependencies are forbidden.
 - Built-in modules: `e7:crypto`, `e7:encoding`, `e7:json`, `e7:test` (API in `lib/e7.d.ts`; `e7:json` is described in section 6.5, `e7:test` in section 7.1).
 - Host functions: `declare function name(a: string, n: number): string;`; parameters/return values are limited to
   `number boolean string`, fixed-width integers, `Uint8Array KeyHandle void`, and are checked against the signature registered by the host when the module is loaded.
-- `export function`s in the entry file can be called by the host (only parameters and return values of the types above can cross the boundary). Top-level code runs once at load time,
+- The functions that the entry file exports (declared there or re-exported; a default export under the name `default`) can be called by the host (only parameters and return values of the types above can cross the boundary). Top-level code runs once at load time,
   and module-level variables persist across calls.
 
 ### 7.1 `e7:test` (assertions)

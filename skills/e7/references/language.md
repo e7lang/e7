@@ -470,8 +470,10 @@ console.log(ok(42), ok("s").value);
 
 ## 5. Modules and host functions
 
-- `import { a, b as c } from "./x"` (extension optional), `import * as ns from "./x"`, `import type`,
-  `export function/const/class/interface/type/enum`, `export { a, b as c }`. No circular imports.
+- `import { a, b as c } from "./x"` (extension optional), `import x from "./x"` (default), `import * as ns from "./x"`
+  (functions, constants, classes, enums and types through `ns.`), `import type`, `import "./x"` (side effects only).
+- `export function/const/class/interface/type/enum`, `export { a, b as c }`, `export default ...`, re-exports
+  (`export { a } from "./x"`, `export * from "./x"`, `export * as ns from "./x"`). No circular imports.
 - Built-in modules: `e7:crypto`, `e7:encoding`, `e7:json`, `e7:test` (see stdlib.md and testing.md).
 - Host functions: `declare function name(a: string, n: number): string;` with host types only
   (`number boolean string`, `i8`..`u64`, `Uint8Array`, `KeyHandle`, `void` result).
