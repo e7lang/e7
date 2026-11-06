@@ -275,7 +275,7 @@ try {
 - `typeof x` is evaluated at compile time to a constant string (not supported for nullable types).
 - `x as T`: same type, upcast, removing nullability (runtime-checked), class downcast (runtime-checked, terminates on failure), `JSON.parse(text) as T` (§6.4).
 - `x!` non-null assertion: runtime-checked, terminates on null/undefined.
-- Not supported: the comma operator, `void`, `delete`, `in`, `new.target`, tagged templates, `eval`.
+- Not supported: `delete`, `in`, `new.target`, tagged templates, `eval`.
 
 ## 5. Functions and classes
 
