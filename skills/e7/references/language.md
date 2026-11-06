@@ -400,9 +400,10 @@ const r = ({ a } = { a: 1 });
 
 ### Other rejected syntax
 
-`with`, the comma operator, `void`, `delete`, `in`, `new.target`, tagged templates, `eval`, `Symbol`,
-`keyof`/`typeof` in type positions, conditional and mapped types, intersection types, and typed arrays other than
-`Uint8Array` (use `number[]`, `u32[]` or `DataView`). Identifiers are ASCII only.
+`with`, `delete`, `in`, `new.target`, `eval`, `Symbol` values, `keyof`/`typeof` in type positions, conditional,
+mapped and template literal types, intersection types, accessors in object literals, async generators.
+Identifiers are ASCII only. (The comma operator, `void`, tagged templates, `String.raw`, `<T>x` assertions and
+all typed arrays are supported.)
 
 ## 3. Statements and expressions
 

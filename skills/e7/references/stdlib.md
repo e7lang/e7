@@ -73,8 +73,13 @@ pattern built at run time. Matching steps count against the instruction budget (
 - `JSON.stringify(value, null, indent?)`; `JSON.parse(text) as T` validates against `T`
   (`T` may be an object type, array, tuple, primitive, nullable/optional fields, or `Map<string, V>`); a mismatch
   ends the call. For untrusted input use `tryParse(text) as T | null` from `e7:json` (below).
-- `Date` (UTC): `Date.now/parse/UTC`, constructors, all `get*`/`getUTC*`, `getTime`, `setTime`,
-  `toISOString`, `toJSON`, `toString`, `toUTCString`. Other `set*` methods are missing: compute with `Date.UTC`.
+- `Date` (UTC): `Date.now/parse/UTC`, constructors, all `get*`/`getUTC*` and `set*`/`setUTC*`, `getTime`,
+  `setTime`, `toISOString`, `toJSON`, `toString`, `toUTCString`. No locale formatting (`toLocaleDateString`).
+- `structuredClone(v)`: a deep copy of arrays, object literals, `Map`, `Set`, `Date`, typed arrays and errors
+  (not of class instances or functions; at most 256 levels deep).
+- Arrays also have the ES2023 copying methods `toSorted`, `toReversed`, `toSpliced`, `with`. Typed arrays:
+  `Int8Array` ... `Float64Array`, `Uint8ClampedArray`, `BigInt64Array`, `BigUint64Array` (constructors from a length,
+  an array or a buffer, indexing, `subarray`, `slice`, `set`, `fill`, the array callbacks).
 
 ## `e7:json`
 
