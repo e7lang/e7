@@ -609,6 +609,37 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     nat("Global.parseInt");
     return num;
   }
+  if (id == "structuredClone") {
+    // a deep copy (shared and cyclic references kept); classes, functions, generators and promises
+    // cannot be cloned (in JavaScript a class instance would become a plain object)
+    if (args.size() != 1) return errT(l, "structuredClone takes one argument");
+    Type* t = check(args[0], expected);
+    std::set<const void*> seen;
+    std::function<const char*(Type*)> bad = [&](Type* x) -> const char* {
+      if (!x || !seen.insert(x).second) return nullptr;
+      switch (x->t) {
+        case TT::Class: return x->cls->isRecord ? nullptr : "a class instance (it would become a plain object)";
+        case TT::Func: return "a function";
+        case TT::Generator: return "a generator";
+        case TT::Promise: return "a promise";
+        case TT::Handle: return "a KeyHandle";
+        case TT::TextEncoder: case TT::TextDecoder: return "a TextEncoder / TextDecoder";
+        case TT::Array: case TT::Set: case TT::Optional: return bad(x->elem);
+        case TT::Map: { const char* k = bad(x->key); return k ? k : bad(x->val); }
+        case TT::Tuple: for (Type* el : x->elems) if (const char* r = bad(el)) return r; return nullptr;
+        case TT::Object:
+          if (!x->shape->methods.empty()) return "an object with methods";
+          for (auto& p : x->shape->props) if (const char* r = bad(p.type)) return r;
+          return nullptr;
+        default: return nullptr;
+      }
+    };
+    if (const char* why = bad(t)) return errT(args[0]->loc, std::string("structuredClone cannot copy ") + why + " ('" + typeName(t) + "')");
+    nat("Global.structuredClone");
+    if (kindOf(t) != K_R) e->native = "";  // a primitive is its own copy
+    if (kindOf(t) != K_R) e->intrinsic = IN_NUMBER, e->raw = "identity";
+    return t;
+  }
   if (id == "parseFloat") {
     if (!argsMatch(e, args, {str}, 1, "parseFloat")) return T.unknown();
     nat("Global.parseFloat");

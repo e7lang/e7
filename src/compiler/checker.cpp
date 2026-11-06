@@ -363,7 +363,7 @@ void Checker::declareBuiltins() {
     globalScope->names[n] = ns;
   }
   const char* fns[] = {"parseInt", "parseFloat", "isNaN", "isFinite", "encodeURIComponent", "decodeURIComponent",
-                       "encodeURI", "decodeURI", "print", "abort",
+                       "encodeURI", "decodeURI", "print", "abort", "structuredClone",
                        "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "int",
                        "rotl32", "rotr32", "rotl64", "rotr64", "clz32", "clz64", "ctz32", "ctz64", "popcnt",
                        "bswap16", "bswap32", "bswap64", "mulhi64", "imulhi64", "idiv", "imod"};

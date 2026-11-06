@@ -1035,6 +1035,96 @@ E7_NATIVE(n_objectHas) {
   if (it != in->cls->fieldIndex.end()) r->i = fieldPresent(in, it->second, vm.undef());
 }
 
+// structuredClone(v): a deep copy that keeps shared and cyclic references (the compiler rejects values
+// it cannot copy: class instances, functions, ...)
+namespace {
+struct Cloner {
+  VM& vm;
+  std::unordered_map<Obj*, Obj*> done;
+  std::vector<Obj*> roots;  // the copies (kept reachable while copying)
+  Obj* copy(Obj* o) {
+    if (!o || o == vm.undef()) return o;
+    auto it = done.find(o);
+    if (it != done.end()) return it->second;
+    vm.chargeWork(1);
+    switch (o->type) {
+      case OT::String: case OT::BigInt: return o;  // immutable
+      case OT::Box: {
+        auto* b = static_cast<BoxObj*>(o);
+        BoxObj* c = vm.newBox(b->vt, b->v);
+        c->flags = b->flags;  // a Date
+        return keep(o, c);
+      }
+      case OT::Array: {
+        auto* a = static_cast<ArrObj*>(o);
+        ArrObj* c = vm.newArray(a->vt, a->len);
+        keep(o, c);
+        c->flags = a->flags;  // an Error
+        for (uint32_t i = 0; i < a->len; i++) {
+          Slot v = a->data[i];
+          if (a->vt == VT_REF) v.r = copy(v.r);
+          c->data[i] = v;
+          c->len = i + 1;
+        }
+        return c;
+      }
+      case OT::Instance: {
+        auto* in = static_cast<InstObj*>(o);
+        if (!in->cls->isRecord) vm.error("DataCloneError: a class instance cannot be cloned");
+        InstObj* c = vm.newInstance(in->cls);
+        keep(o, c);
+        if (in->cls->presence) memcpy(c->mask(), in->mask(), presenceWords(in->cls->nfields) * 8);
+        for (uint32_t i = 0; i < in->cls->nfields; i++) {
+          Slot v = in->fields()[i];
+          if (in->cls->fieldVT[i] == VT_REF) v.r = copy(v.r);
+          c->fields()[i] = v;
+        }
+        return c;
+      }
+      case OT::Bytes: {
+        auto* b = static_cast<BytesObj*>(o);
+        return keep(o, vm.newBytesFrom(b->ptr(), b->len));
+      }
+      case OT::Buffer: {
+        auto* b = static_cast<BufObj*>(o);
+        BufObj* c = vm.newBuffer(b->len);
+        if (b->len) memcpy(c->data, b->data, b->len);
+        return keep(o, c);
+      }
+      case OT::Map: {
+        auto* m = static_cast<MapObj*>(o);
+        MapObj* c = vm.newMap(m->kvt, m->vvt, m->km, m->isSet);
+        keep(o, c);
+        vm.accountExternal((int64_t)(m->entries.capacity() * sizeof(MapEntry) + m->buckets.capacity() * 4));
+        c->entries = m->entries;
+        c->buckets = m->buckets;
+        c->count = m->count;
+        c->nextSeq = m->nextSeq;
+        for (auto& e : c->entries) {
+          if (!e.live) continue;
+          if (c->kvt == VT_REF) e.k.r = copy(e.k.r);
+          if (c->vvt == VT_REF) e.v.r = copy(e.v.r);
+        }
+        return c;
+      }
+      default:
+        vm.error("DataCloneError: the value cannot be cloned");
+    }
+  }
+  Obj* keep(Obj* from, Obj* to) {
+    done[from] = to;
+    roots.push_back(to);
+    return to;
+  }
+};
+}  // namespace
+E7_NATIVE(n_structuredClone) {
+  E7_UNUSED;
+  Cloner c{vm, {}, {}};
+  VM::GCPause noCollect(vm);  // the copies live in C++ only until the result is returned
+  r->r = c.copy(a[0].r);
+}
+
 E7_NATIVE(n_textEncode) {
   E7_UNUSED;
   StrObj* s = S(vm, a[0]);
@@ -1201,6 +1291,7 @@ void registerCoreNatives(VM& vm) {
   vm.registerNative("Date.now", ">F", n_dateNow);
   vm.registerNative("Object.keys", "R>R", n_objectKeys);
   vm.registerNative("Object.has", "RR>I", n_objectHas);
+  vm.registerNative("Global.structuredClone", "R>R", n_structuredClone);
   vm.registerNative("Text.encode", "R>R", n_textEncode);
   vm.registerNative("Text.decode", "R>R", n_textDecode);
 }
