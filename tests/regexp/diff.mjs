@@ -21,6 +21,10 @@ if (!cli) {
   console.error('usage: diff.mjs --cli path/to/regexp_cli [--seed N] [--count N] [--show N] [--corpus-only]');
   process.exit(2);
 }
+if (Number(process.versions.node.split('.')[0]) < 22) {
+  console.log(`regexp diff: skipped, needs Node.js 22 or later (this is ${process.version})`);
+  process.exit(0);
+}
 const seed = Number(opt('--seed', '1'));
 const count = args.includes('--corpus-only') ? 0 : Number(opt('--count', '5000'));
 const show = Number(opt('--show', '30'));
@@ -206,7 +210,20 @@ function generator(random) {
     return { pattern: pattern.startsWith('(') ? pattern : `^.(?:${pattern})$`.replace('^.', u ? '^.' : '^[^]'), flags, inputs };
   }
 
-  return () => (random() < 0.15 ? unicodeCase() : makeCase());
+  // syntax soup: mostly errors, which must be V8's
+  function soup() {
+    const parts = ['(', ')', '[', ']', '{', '}', '*', '+', '?', '|', '\\', '^', '$', '-', '.', ',', ':', '=', '!', '<', '>',
+      'k', 'p', 'P', 'u', 'x', 'c', 'b', 'B', 'd', 'w', '0', '1', '2', '8', 'a', 'A', '_', '(?', '(?<', '(?<a>', '\\k<a>',
+      '\\u{', '\\p{', 'L}', '\u{1F600}', '\ud83d', 'é', '{1}', '{1,2}', '{2,1}', '{,}', '[^', '\\c'];
+    let p = '';
+    for (let n = 1 + int(10); n > 0; n--) p += pick(parts);
+    return { pattern: p, flags: chance(0.5) ? 'u' : pick(['', 'i', 'm', 's']), inputs: ['', 'a(b)c', '\u{1F600}k<a>'] };
+  }
+
+  return () => {
+    const r = random();
+    return r < 0.15 ? unicodeCase() : r < 0.22 ? soup() : makeCase();
+  };
 }
 
 // code points with case mappings (and what they map to): the inputs of the case-folding cases

@@ -12,7 +12,7 @@ namespace e7::re {
 
 constexpr uint32_t kMaxCodePoint = 0x10FFFF;
 constexpr int32_t kInfinity = INT32_MAX;  // an unbounded quantifier maximum, as V8's kInfinity
-constexpr uint32_t kMaxCaptures = 1u << 16;
+constexpr uint32_t kMaxCaptures = (1u << 15) - 1;  // as V8: more groups are "Too many captures"
 
 inline bool isLead(uint32_t c) { return c >= 0xD800 && c <= 0xDBFF; }
 inline bool isTrail(uint32_t c) { return c >= 0xDC00 && c <= 0xDFFF; }

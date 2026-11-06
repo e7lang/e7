@@ -377,6 +377,19 @@ export const CORPUS = [
   ['', 'ug', ['\u{1F600}'], [1]],
   ['(?<=(.))', 'ug', ['\u{1F600}'], [1]],
   ['x', 'g', ['axbx'], [4]],
+  // V8 tries every code unit position with u: empty matches happen inside surrogate pairs
+  ['\\B', 'u', ['A\u{1F600}c', 'A\u{1F600}\u{1F600}c']],
+  ['\\B', 'uy', ['A\u{1F600}c'], [1, 2]],
+  ['(?!^)', 'ug', ['\u{1F600}'], [0, 1]],
+  ['(?!x)', 'ug', ['\u{1F600}'], [1]],
+  ['(?=.)\\B', 'u', ['A\u{1F600}c']],
+  ['(?<=\\ud83d)', 'u', ['\u{1F600}']],
+  ['(?=\\ude00)', 'u', ['\u{1F600}']],
+  ['(\\B)\\1', 'u', ['A\u{1F600}c']],
+  ['(?:)\\B(?:\\ude00)?', 'u', ['A\u{1F600}c']],
+  // the number of groups
+  ['()'.repeat(32768), '', []],
+  ['(a)'.repeat(3) + '\\32768', '', ['aaaÊ8']],
   // ---- the u flag and Annex B
   ['\\u{110000}', '', ['u']],
   ['a{2}{3}', '', ['a']],
