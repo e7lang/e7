@@ -434,6 +434,57 @@ void Checker::collectAssigned(Stmt* s, std::set<std::string>& out) {
   }
 }
 
+// Narrowing by assignment that ends a branch: after `if (x === null) x = [];` (or `x ??= []`, or an else
+// branch that assigns too) x is non-null on both paths, as in tsc. A branch that does not assign the path
+// keeps what its condition says about it.
+Type* Checker::branchEndNarrow(Stmt* b, std::string& key) {
+  while (b && b->k == SK::Block && !b->stmts.empty()) b = b->stmts.back();
+  if (!b || b->k != SK::Expr || !b->expr || b->expr->k != EK::Assign) return nullptr;
+  Expr* a = b->expr;
+  if (a->raw != "=" && a->raw != "??=") return nullptr;
+  Type* lt = a->a->type;
+  Expr* rhs = a->b;
+  while (rhs && rhs->k == EK::Conv) rhs = rhs->a;  // the value before its conversion to the target type
+  Type* rt = rhs ? rhs->type : nullptr;
+  if (!lt || !rt || lt->t != TT::Optional) return nullptr;
+  key = pathKey(a->a);
+  if (key.empty()) return nullptr;
+  if (a->raw == "??=") return lt->elem;
+  if (rt->t == TT::Optional || isNullish(rt) || rt->t == TT::Unknown || rt->t == TT::Never) return nullptr;
+  return lt->elem;
+}
+
+bool Checker::assignsPath(Stmt* b, const std::string& key) {
+  std::set<std::string> names;
+  collectAssigned(b, names);
+  for (auto& n : names) {
+    std::string root = n.substr(0, n.find('.'));
+    Sym* s = lookup(root);
+    if (!s || s->k != SymK::Var) continue;
+    std::string k = varKey(static_cast<VarSym*>(s));
+    if (n.size() > root.size()) k += n.substr(root.size());
+    if (k == key || key.compare(0, k.size() + 1, k + ".") == 0) return true;
+  }
+  return false;
+}
+
+void Checker::joinBranchNarrowing(Stmt* s, const std::vector<Fact>& tf, const std::vector<Fact>& ff) {
+  std::string k1, k2;
+  Type* t1 = branchEndNarrow(s->then, k1);
+  Type* t2 = s->els ? branchEndNarrow(s->els, k2) : nullptr;
+  auto fact = [](const std::vector<Fact>& fs, const std::string& key) -> Type* {
+    for (auto& f : fs) if (f.key == key) return f.t;
+    return nullptr;
+  };
+  for (const std::string* kp : {&k1, &k2}) {
+    const std::string& key = *kp;
+    if (key.empty() || (kp == &k2 && key == k1)) continue;
+    Type* a = key == k1 && t1 ? t1 : assignsPath(s->then, key) ? nullptr : fact(tf, key);
+    Type* b = key == k2 && t2 ? t2 : s->els && assignsPath(s->els, key) ? nullptr : fact(ff, key);
+    if (a && b && a == b && a->t != TT::Optional) setNarrow(key, a);
+  }
+}
+
 void Checker::invalidateAssigned(Stmt* body, Expr* extra) {
   std::set<std::string> names;
   collectAssigned(body, names);
@@ -835,6 +886,7 @@ void Checker::checkStmt(Stmt* s) {
       bool te = exits(s->then), ee = s->els && exits(s->els);
       if (te && !ee) applyFacts(ff);
       else if (ee && !te) applyFacts(tf);
+      else if (!te && !ee) joinBranchNarrowing(s, tf, ff);
       break;
     }
     case SK::While: {

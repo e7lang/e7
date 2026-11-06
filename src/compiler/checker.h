@@ -186,6 +186,8 @@ class Checker {
   void checkClassBodies(ClassSym* c);
   bool exits(Stmt* s);
   bool switchCoversEnum(Stmt* s);
+  Type* branchEndNarrow(Stmt* b, std::string& key);
+  bool assignsPath(Stmt* b, const std::string& key);
   void collectAssigned(Stmt* s, std::set<std::string>& out);
   void collectAssignedExpr(Expr* e, std::set<std::string>& out);
   void invalidateAssigned(Stmt* body, Expr* extra = nullptr);
@@ -231,6 +233,7 @@ class Checker {
 
   // narrowing facts from conditions
   struct Fact { std::string key; Type* t; };
+  void joinBranchNarrowing(Stmt* s, const std::vector<Fact>& tf, const std::vector<Fact>& ff);
   void factsFrom(Expr* cond, bool whenTrue, std::vector<Fact>& out);
   void applyFacts(const std::vector<Fact>& facts);
 
