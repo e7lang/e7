@@ -91,6 +91,9 @@ class Gen:
         self.lines = []
         self.loop_depth = 0
         self.in_fn = False
+        # an async generator statement was emitted: its jobs run for many ticks, and how many of them
+        # Node.js runs after an uncaught top-level error is up to Node (the program does not end with one)
+        self.long_jobs = False
         # nullable / class variables tested in an enclosing condition: tsc narrows them there (to `never`
         # in a dead branch, where `x?.m()` or `x instanceof C` are errors), so they are used there only in
         # comparisons with null and `??` (vars(narrowed_ok=True))
@@ -1241,7 +1244,7 @@ class Gen:
     # ---------------------------------------------------------------- generators, async, literal types (0.3)
     def stmt_coroutine(self, ind, d):
         r = self.r
-        k = r.randrange(7)
+        k = r.randrange(10)
         n = r.randrange(0, 5)
         if k == 0:
             # a generator over its range, left early or not; return() runs its finally block
@@ -1268,9 +1271,22 @@ class Gen:
             self.emit(ind, f"Promise.all([aStep(\"p\", {self.num(d - 1)}, 1), later({self.num(d - 1)})]).then(v => console.log(\"all\", v));")
             if r.random() < 0.5:
                 self.emit(ind, f"Promise.allSettled([aFail({r.randrange(0, 3)}), aStep(\"q\", 1, 0)]).then(rs => console.log(rs.map(x => x.status)));")
-        else:
+        elif k == 6:
             sz = r.choice(["\"s\"", "\"m\"", "\"l\""])
             self.emit(ind, f"console.log(sizeName({sz}), sizeName(pickSize({self.num(d - 1)})));")
+        elif k == 7:
+            # async generators (0.3.1): for await left early or not, interleaved with the other jobs
+            self.long_jobs = True
+            self.emit(ind, f"agDrain(\"{self.fresh('ad')}\", {n}, {r.randrange(0, 6)}).then(s => console.log(\"drained\", s));")
+        elif k == 8:
+            # requests queued without awaiting, with return / throw among them
+            self.long_jobs = True
+            sends = ", ".join(str(r.randrange(-3, 9)) for _ in range(r.randrange(0, 5)))
+            self.emit(ind, f"agQueue(\"{self.fresh('aq')}\", [{sends}], {r.randrange(0, 3)});")
+        else:
+            # yield* of an async generator
+            self.long_jobs = True
+            self.emit(ind, f"agPrintAll({n}, \"{self.fresh('ao')}\");")
 
     # ---------------------------------------------------------------- declarations
     def gen_classes(self):
@@ -1373,6 +1389,37 @@ class Gen:
             "  for (let i = 0; i < n; i++) await null;",
             "  throw new Error(\"failed \" + n);",
             "}",
+            "async function* agRange(n: number, tag: string): AsyncGenerator<number> {",
+            "  try {",
+            "    for (let i = 0; i < n; i++) { if (i % 2 === 1) await null; yield i; }",
+            "  } finally { console.log(\"aclosed\", tag); }",
+            "}",
+            "async function* agAcc(tag: string): AsyncGenerator<number, void, number> {",
+            "  let t = 0;",
+            "  try {",
+            "    while (t < 20) { const v = yield t; t += v; await Promise.resolve(); console.log(tag, \"acc\", t); }",
+            "  } finally { console.log(tag, \"acc finally\", t); }",
+            "}",
+            "async function* agOuter(n: number, tag: string): AsyncGenerator<number> {",
+            "  yield -1;",
+            "  yield* agRange(n, tag);",
+            "  yield -2;",
+            "}",
+            "async function agDrain(tag: string, n: number, stop: number): Promise<number> {",
+            "  let s = 0;",
+            "  for await (const x of agRange(n, tag)) { if (x >= stop) break; console.log(tag, x); s += x; }",
+            "  return s;",
+            "}",
+            "function agQueue(tag: string, sends: number[], op: number): void {",
+            "  const g = agAcc(tag);",
+            "  for (const v of sends) g.next(v).then(r => console.log(tag, \"next\", r.value, r.done));",
+            "  if (op === 1) g.return(undefined).then(r => console.log(tag, \"ret\", r.value, r.done));",
+            "  if (op === 2) g.throw(new Error(\"x\")).then(r => console.log(tag, \"thr\", r.value), (e: unknown) => console.log(tag, \"rejected\", e instanceof Error));",
+            "  g.next(1).then(r => console.log(tag, \"last\", r.value, r.done));",
+            "}",
+            "async function agPrintAll(n: number, tag: string): Promise<void> {",
+            "  for await (const x of agOuter(n, tag)) console.log(tag, \"outer\", x);",
+            "}",
             "type Size = \"s\" | \"m\" | \"l\";",
             "function sizeName(z: Size): string {",
             "  switch (z) { case \"s\": return \"small\"; case \"m\": return \"medium\"; case \"l\": return \"large\"; }",
@@ -1463,7 +1510,7 @@ class Gen:
         self.gen_classes()
         for _ in range(nstmts):
             self.stmt(0, 3)
-        if self.chance(0.03):
+        if self.chance(0.03) and not self.long_jobs:
             self.lines.append("throw new Error(\"final uncaught\");")
         return "\n".join(self.lines) + "\n"
 
