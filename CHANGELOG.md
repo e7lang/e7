@@ -34,6 +34,10 @@ features supported (129 in 0.2.7), 17 partial, 81 unsupported.
   (Kotlin: `callAsync(...).await()`); Swift `registerAsyncNative` with `callAsync` / `loadAsync` (`async`, on the
   caller's actor); C# `RegisterAsyncNative` with `CallAsync` / `LoadAsync` (`Task`); the JavaScript package reports
   the `pending` status. The module managers run async exports (Java also awaits top-level code and `selfTest`).
+- C# `E7ModuleManager` (in the `E7VM` NuGet package): signed manifests, staged rollout, kill switch, `minVm`,
+  `selfTest`, last-known-good with rollback after consecutive failures, as the Java and Swift managers
+  (docs/DEPLOYMENT.md); `ActiveModule.Call` / `CallAsync` / `CallAwait`. `E7VM.CallAwait` / `LoadAwait` block
+  until an async call finishes (the manager uses them for top-level code and `selfTest`).
 - Literal types: string, numeric and boolean literal types and unions of literals of one base type, narrowing by
   `===` / `!==` / `switch`, exhaustive switches whose `default` sees `never`, `as const`, `const` declarations with
   literal types; `Awaited`, `NonNullable`, `NoInfer`, `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize`.
