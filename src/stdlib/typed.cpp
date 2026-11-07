@@ -322,7 +322,9 @@ TA_NATIVE(ta_sort) {
     std::vector<uint64_t> v(n);
     for (uint32_t i = 0; i < n; i++) v[i] = taGetRaw64(b, i);
     if (k == TA_BI64) std::sort(v.begin(), v.end(), [](uint64_t x, uint64_t y) { return (int64_t)x < (int64_t)y; });
-    else std::sort(v.begin(), v.end());
+    // an explicit comparator: std::sort with the default one on a built-in type uses libc++'s prebuilt
+    // instantiations, which pull in its whole algorithm.cpp (about 85 KB on Android)
+    else std::sort(v.begin(), v.end(), [](uint64_t x, uint64_t y) { return x < y; });
     for (uint32_t i = 0; i < n; i++) storeLE(b->ptr() + (size_t)i * 8, 8, v[i]);
   } else {
     std::vector<double> v(n);
