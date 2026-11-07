@@ -1,7 +1,9 @@
-// e7:encoding natives: hex, base64, base64url, base32, utf8, PEM, byte helpers.
+// e7:encoding natives: hex, base64, base64url, base32, utf8, PEM, CRC-32, byte helpers.
 #include "util.h"
 
 namespace e7 {
+
+uint32_t crc32(const uint8_t* p, size_t n);  // core/serialize.cpp
 
 static std::u16string a16(const std::string& s) { return std::u16string(s.begin(), s.end()); }
 static std::string asciiOf(VM& vm, StrObj* s) {
@@ -208,6 +210,8 @@ E7_NATIVE(e_bytesEqual) {
   r->i = x->len == y->len && (x->len == 0 || memcmp(x->ptr(), y->ptr(), x->len) == 0);
 }
 
+E7_NATIVE(e_crc32) { E7_UNUSED; BytesObj* d = B(vm, a[0]); r->f = crc32(d->ptr(), d->len); }
+
 void registerEncodingNatives(VM& vm) {
   vm.registerNative("encoding.hexEncode", "R>R", e_hexEncode);
   vm.registerNative("encoding.hexDecode", "R>R", e_hexDecode);
@@ -223,6 +227,7 @@ void registerEncodingNatives(VM& vm) {
   vm.registerNative("encoding.pemEncode", "RR>R", e_pemEncode);
   vm.registerNative("encoding.concatBytes", "R>R", e_concatBytes);
   vm.registerNative("encoding.bytesEqual", "RR>I", e_bytesEqual);
+  vm.registerNative("encoding.crc32", "R>F", e_crc32);
 }
 
 }  // namespace e7

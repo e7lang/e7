@@ -111,23 +111,26 @@ const o = tryParse("{}") as Order; // error: write tryParse(text) as Order | nul
 ## `e7:encoding`
 
 `hexEncode/hexDecode`, `base64Encode/base64Decode`, `base64UrlEncode/base64UrlDecode`, `base32Encode/base32Decode`,
-`utf8Encode/utf8Decode`, `pemDecode/pemEncode`, `concatBytes(...parts)`, `bytesEqual(a, b)`.
+`utf8Encode/utf8Decode`, `pemDecode/pemEncode`, `crc32(data)` (a checksum, not a hash), `concatBytes(...parts)`,
+`bytesEqual(a, b)`.
 
 ## `e7:crypto`
 
-All algorithms run as native code (BearSSL, Monocypher); scripts only prepare inputs.
+All algorithms run as native code (BearSSL, Monocypher); scripts only prepare inputs. Only modern algorithms
+are provided: there is no MD5, SHA-1, SHA-3/Keccak, AES-CBC/CTR, RSA or ECDSA (importing one is a compile error).
+When a protocol needs one, the app registers a host function for it (`declare function rsaSign(...)`).
 
 | Purpose | Functions |
 |---|---|
-| Hashes | `md5 sha1 sha224 sha256 sha384 sha512 sha3_224 sha3_256 sha3_384 sha3_512 keccak256`, `hash(name, data)` |
+| Hashes | `sha256 sha384 sha512`, `hash(name, data)` |
 | MAC / KDF | `hmac(name, key, data)` (key may be a `KeyHandle`), `hkdf`, `pbkdf2` |
-| AEAD / ciphers | `aesGcmEncrypt/Decrypt`, `chacha20Poly1305Encrypt/Decrypt` (decrypt returns `null` on auth failure), `aesCbcEncrypt/Decrypt`, `aesCtr` |
-| Signatures | `ed25519PublicKey/Sign/Verify`, `ecdsaSign/Verify/PublicKey` (P-256/384/521), `rsaSign/Verify` (PKCS#1 v1.5, PSS) |
+| AEAD | `aesGcmEncrypt/Decrypt`, `chacha20Poly1305Encrypt/Decrypt` (decrypt returns `null` on auth failure) |
+| Signatures | `ed25519PublicKey/Sign/Verify` |
 | Key agreement | `x25519` |
-| Misc | `randomBytes(n)`, `timingSafeEqual(a, b)`, `crc32` |
+| Misc | `randomBytes(n)`, `timingSafeEqual(a, b)` |
 | Types | `KeyHandle` (a key held by the host), `HashName` (a string such as `"sha256"`) |
 
-Hash names: `"md5" "sha1" "sha224" "sha256" "sha384" "sha512" "sha3-224" "sha3-256" "sha3-384" "sha3-512" "keccak256"`.
+Hash names: `"sha256" "sha384" "sha512"` (`"SHA-256"` style spellings are accepted too).
 
 ```ts
 import { hmac, sha256, ed25519PublicKey, ed25519Sign, ed25519Verify, timingSafeEqual } from "e7:crypto";

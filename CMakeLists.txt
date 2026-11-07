@@ -115,7 +115,7 @@ set(E7_VM_SRC
   src/stdlib/core.cpp src/stdlib/string.cpp src/stdlib/array.cpp src/stdlib/map.cpp src/stdlib/math.cpp
   src/stdlib/bytes.cpp src/stdlib/bigint.cpp src/stdlib/json.cpp src/stdlib/encoding.cpp src/stdlib/date.cpp
   src/stdlib/test.cpp src/stdlib/typed.cpp
-  src/crypto/crypto.cpp src/crypto/keccak.cpp src/crypto/sign.cpp
+  src/crypto/crypto.cpp src/crypto/sign.cpp
   src/capi/capi.cpp)
 set(E7_COMPILER_SRC
   src/compiler/parser.cpp src/compiler/types.cpp src/compiler/checker.cpp src/compiler/checker_stmt.cpp

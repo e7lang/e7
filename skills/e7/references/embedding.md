@@ -30,7 +30,7 @@ Guidelines:
 - Pass structured input as a JSON string and parse it with `JSON.parse(text) as Input`; return structured
   output with `JSON.stringify(result)`.
 - Never take secrets as `string`/`Uint8Array` arguments when the app can keep them: take a `KeyHandle` and pass it
-  to `hmac`, `ecdsaSign`, `rsaSign`, ... The script can use the key but never read it.
+  to `hmac`. The script can use the key but never read it.
 - Report expected failures in the result (e.g. `{"ok":false,"error":"..."}`); reserve `throw` for broken invariants.
 
 ## Host functions

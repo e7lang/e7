@@ -61,7 +61,8 @@ re-exports), and E7's machine integers and `e7:crypto` / `e7:encoding` / `e7:jso
 conditional, `keyof`, `typeof` and template literal types, `Symbol` values, `Proxy` / `Reflect` / `eval`, `for...in` /
 `delete` / `in`, `var`, class expressions and mixins, decorators, namespaces, JSX, regular expressions (`/.../`,
 `RegExp`, `match` / `matchAll` / `search`), `WeakMap` / `WeakSet`, `Intl` and locale formatting, timers and I/O
-(`setTimeout`, `fetch`: the host does them), methods used as values. The full table with a reason and a replacement
+(`setTimeout`, `fetch`: the host does them), methods used as values, and legacy crypto in `e7:crypto` (MD5, SHA-1,
+SHA-3, AES-CBC/CTR, RSA, ECDSA: only modern algorithms are built in; a host function covers a legacy protocol). The full table with a reason and a replacement
 for each of 250 TypeScript features: [docs/TYPESCRIPT.md](https://github.com/e7lang/e7/blob/main/docs/TYPESCRIPT.md).
 
 For the complete list (destructuring limits, class rules, operators, every standard-library method) read
@@ -90,7 +91,7 @@ export function main(): string {
 - Use objects, arrays, classes and `Map`s freely *inside* the script; only exported signatures are limited to host types.
   To pass structured data across the boundary, use a JSON string and `JSON.parse(text) as T`.
 - Secrets: accept a `KeyHandle` (from `e7:crypto`) instead of key bytes when the key lives in the app's Keychain/Keystore;
-  `hmac`, `ecdsaSign`, etc. accept it directly.
+  `hmac` accepts it directly.
 - Host functions are declared, not imported: `declare function deviceId(): string;` (the app registers it).
 - Top-level code runs once when the module loads; module-level variables keep their values between calls.
 

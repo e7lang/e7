@@ -1373,10 +1373,8 @@ void applyNativeCosts(VM& vm) {
       "crypto.randomBytes", "crypto.hkdf",
   };
   static const char* hash[] = {
-      "crypto.hash", "crypto.hmac", "crypto.hmacKey", "crypto.crc32", "crypto.aesGcmEncrypt", "crypto.aesGcmDecrypt",
-      "crypto.chacha20Poly1305Encrypt", "crypto.chacha20Poly1305Decrypt", "crypto.aesCbcEncrypt",
-      "crypto.aesCbcDecrypt", "crypto.aesCtr", "crypto.ed25519Sign", "crypto.ed25519Verify", "crypto.ecdsaSign",
-      "crypto.ecdsaVerify", "crypto.rsaVerify", "crypto.rsaSign",
+      "crypto.hash", "crypto.hmac", "crypto.hmacKey", "encoding.crc32", "crypto.aesGcmEncrypt", "crypto.aesGcmDecrypt",
+      "crypto.chacha20Poly1305Encrypt", "crypto.chacha20Poly1305Decrypt", "crypto.ed25519Sign", "crypto.ed25519Verify",
   };
   static const char* bigq[] = {"BigInt.mul", "BigInt.div", "BigInt.mod", "BigInt.pow", "BigInt.toString"};
   for (const char* n : scan) vm.setNativeCost(n, NC_SCAN);
@@ -1385,8 +1383,7 @@ void applyNativeCosts(VM& vm) {
   for (const char* n : bigq) vm.setNativeCost(n, NC_BIGQ);
   vm.setNativeCost("Array.sort", NC_SORT);
   vm.setNativeCost("Array.toSorted", NC_SORT);
-  static const char* hashes[] = {"md5", "sha1", "sha224", "sha256", "sha384", "sha512",
-                                 "sha3_224", "sha3_256", "sha3_384", "sha3_512", "keccak256"};
+  static const char* hashes[] = {"sha256", "sha384", "sha512"};
   for (const char* h : hashes) vm.setNativeCost(std::string("crypto.hash.") + h, NC_HASH);
 }
 

@@ -14,6 +14,4 @@ constexpr size_t kSigTrailer = 76;
 std::vector<uint8_t> signModuleBytes(const uint8_t* data, size_t len, const uint8_t seed[32]);
 // Returns 1 if a valid trailer by a trusted key is present (payloadLen set), 0 if unsigned, -1 if invalid/untrusted.
 int checkModuleSignature(const uint8_t* data, size_t len, const uint8_t* keys, size_t nkeys, size_t* payloadLen);
-// Keccak / SHA-3 (keccak.cpp)
-void sha3(const uint8_t* p, size_t n, uint8_t* out, size_t outLen, bool keccakPadding);
 }  // namespace e7
