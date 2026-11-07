@@ -99,7 +99,9 @@ E7_NATIVE(a_splice) {
   int64_t newLen = len - dc + ni;
   if (newLen > 0x7FFFFFF) vm.error("array too large");
   vm.arrayReserve(arr, (uint32_t)newLen);
-  memmove(arr->data + start + ni, arr->data + start + dc, (size_t)(len - start - dc) * sizeof(Slot));
+  // nothing to move when no element follows the removed ones (data is null for an empty array: memmove of null is UB)
+  if (len - start - dc > 0)
+    memmove(arr->data + start + ni, arr->data + start + dc, (size_t)(len - start - dc) * sizeof(Slot));
   if (ni) memcpy(arr->data + start, ins.data(), ni * sizeof(Slot));
   arr->len = (uint32_t)newLen;
   r->r = removed;
