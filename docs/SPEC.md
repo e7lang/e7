@@ -36,8 +36,9 @@ three references that can each be checked mechanically:
    - **Behaviour equals JavaScript.** If E7 cannot reproduce JavaScript's behaviour exactly, the construct is a
      compile error rather than something that runs differently (section 9 lists the exceptions that remain).
 
-   Features that satisfy the rules but are not implemented yet (auto-accessors, ...) are listed as such. [TYPESCRIPT.md](TYPESCRIPT.md) lists every TypeScript feature with its status, the reason and
-   what to write instead; each row is a sample program that CI compiles (and, for supported features, compares with
+   Features that satisfy the rules but are not implemented yet (auto-accessors, ...) are listed as such. Regular
+   expressions satisfy them too but are left out to keep the runtime small (section 6.6).
+   [TYPESCRIPT.md](TYPESCRIPT.md) lists every TypeScript feature with its status, the reason and what to write instead; each row is a sample program that CI compiles (and, for supported features, compares with
    Node.js), so the table always matches the compiler.
 
 ---

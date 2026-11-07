@@ -330,6 +330,14 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 - **Bindings.** C API ([`include/e7/e7.h`](include/e7/e7.h)), Java/Kotlin (JNI), Swift, C#, and
   JavaScript/WebAssembly ([`@e7lang/e7`](packages/e7)).
 
+**Not supported** (each is a compile error with a hint): `any`, `unknown` and `object` as types; unions of different
+types and intersections; index signatures, `Record`, `Partial` and the other utility types; mapped, conditional,
+`keyof` and template literal types; regular expressions (`/.../`, `RegExp`, `match`; use string methods); `eval`,
+`Proxy`, `Reflect`, `Symbol()` values, `for...in`, `delete`; function overloads, `call` / `apply` / `bind`, methods
+used as values; class expressions, mixins and decorators; namespaces, `var`, JSX, dynamic `import()`; timers and I/O
+(the host does those); `Intl` and locale formatting; `WeakMap` / `WeakSet` / `WeakRef`. The
+[supported / not supported summary](https://e7lang.github.io/docs/supported) groups them with what to write instead.
+
 The full language reference is in [docs/SPEC.md](docs/SPEC.md). [docs/TYPESCRIPT.md](docs/TYPESCRIPT.md) lists
 TypeScript feature by feature (the handbook chapters plus the JavaScript syntax and library a TypeScript program
 uses) with what E7 supports, why the rest is left out and what to write instead; every row is a sample program
