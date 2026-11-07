@@ -85,7 +85,9 @@ published test vectors.
 - **Only modern algorithms.** `e7:crypto` has no MD5, SHA-1, SHA-3 / Keccak, AES-CBC / CTR, RSA or ECDSA, and no
   Chinese national algorithms (SM2/3/4). A smaller set is less to audit, fuzz and keep constant-time, and new
   protocols do not need the rest. An app that must speak a legacy protocol registers a host function for that
-  algorithm (backed by the platform's own crypto library), so the legacy code stays in the host.
+  algorithm (backed by the platform's own crypto library), so the legacy code stays in the host. Only the 16
+  BearSSL source files these primitives use are vendored (`third_party/bearssl/VENDORED.txt`): there is no RSA,
+  EC, big-integer, MD5 or SHA-1 code in the tree.
 
 - **Bytes.** `Uint8Array` is the one byte-string type; `DataView` gives endian-aware reads and writes;
   `e7:encoding` has hex, Base64, Base64url, Base32, PEM and CRC-32.

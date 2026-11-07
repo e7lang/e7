@@ -43,7 +43,8 @@ delivered from a server, signed, verified at load time and run in a sandbox.
   typed arrays, `structuredClone`, `Error` with `cause` and `AggregateError`, `console.log` formatted as Node.js does.
 - `e7:crypto`, modern algorithms only: SHA-256/384/512, HMAC, HKDF, PBKDF2, AES-GCM, ChaCha20-Poly1305, Ed25519,
   X25519, secure random, `timingSafeEqual`; keys can stay in the host as `KeyHandle`s (BearSSL and Monocypher
-  underneath). No MD5, SHA-1, SHA-3, AES-CBC/CTR, RSA or ECDSA: a host function covers a legacy protocol.
+  underneath, with only the 16 BearSSL source files these use vendored). No MD5, SHA-1, SHA-3, AES-CBC/CTR, RSA or
+  ECDSA: a host function covers a legacy protocol.
 - `e7:encoding` (hex, Base64, Base64url, Base32, PEM, UTF-8, CRC-32), `e7:json`, and `e7:test` for unit tests run by
   `e7 test`.
 

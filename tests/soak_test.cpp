@@ -157,8 +157,9 @@ int main(int argc, char** argv) {
         failures++;
       }
       if (verbose)
-        printf("call %7ld: heap after GC %zu, peak %zu, collections %llu, max pause %.3f ms\n", i, heap.back(),
-               gs.peak_heap_bytes, (unsigned long long)gs.collections, gs.max_pause_ns / 1e6);
+        printf("call %7ld: heap after GC %zu, peak %zu, process heap %zu, collections %llu, max pause %.3f ms\n", i,
+               heap.back(), gs.peak_heap_bytes, process.back(), (unsigned long long)gs.collections,
+               gs.max_pause_ns / 1e6);
     }
   }
   size_t lo = heap[0], hi = heap[0];
@@ -182,9 +183,16 @@ int main(int argc, char** argv) {
   }
   // the peak heap may still rise when an unlucky collection threshold is hit late, but it must stay
   // within the GC growth factor of the live heap
-  // the process heap (C++ side): no growth beyond allocator noise
-  if (process.front() && process.back() > process.front() + (256u << 10)) {
-    fprintf(stderr, "FAIL process heap grows from %zu to %zu bytes\n", process.front(), process.back());
+  // the process heap (C++ side): no growth beyond allocator noise. The system allocator may still grow its
+  // regions for the first ~150k calls (seen with macOS 27's malloc: about 350 KB in steps of 16-64 KB, then
+  // flat for a million calls), so compare the halves like the VM heap above instead of the first sample: a
+  // leak of a few bytes per call still shows up as growth between the halves.
+  size_t procFirst = 0, procSecond = 0;
+  for (size_t i = 0; i < n / 2; i++) procFirst = process[i] > procFirst ? process[i] : procFirst;
+  for (size_t i = n / 2; i < n; i++) procSecond = process[i] > procSecond ? process[i] : procSecond;
+  if (procFirst && procSecond > procFirst + (256u << 10)) {
+    fprintf(stderr, "FAIL process heap grows: max %zu in the first half of the samples, %zu in the second\n",
+            procFirst, procSecond);
     failures++;
   }
   if (peaks.back() > 4 * hi + (2u << 20)) {
