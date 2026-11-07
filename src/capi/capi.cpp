@@ -270,7 +270,7 @@ e7_status e7_compile_ex(const char* source, size_t len, const char* file_name, c
     return E7_ERR_MEMORY;
   }
 #else
-  (void)source; (void)len; (void)file_name;
+  (void)source; (void)len; (void)file_name; (void)opts;
   if (errors) {
     const char* m = "compiler not included in this build (E7_WITH_COMPILER=OFF)";
     *errors = (char*)malloc(strlen(m) + 1);
@@ -991,3 +991,15 @@ e7_status e7_verify_detached(const uint8_t* data, size_t len, const uint8_t sig[
 
 // ---------------------------------------------------------------- testing hooks (src/capi/testing.h)
 e7::VM* e7_testing_vm(e7_vm* v) { return v ? v->vm.get() : nullptr; }
+
+#if defined(__ANDROID__) && defined(_LIBCPP_VERSION)
+// On Android libc++ is linked statically into libe7vm.so (ANDROID_STL=c++_static). Its default terminate
+// handler prints the type of an uncaught exception through __cxa_demangle, which drags in the whole
+// Itanium demangler (about 135 KB, an eighth of the library) for a message nobody sees in an app. E7
+// catches its own exceptions at the C API, so this stub only makes such a crash message show the mangled
+// name. Hidden: it never replaces the demangler of the app or of other libraries.
+extern "C" __attribute__((visibility("hidden"))) char* __cxa_demangle(const char*, char*, size_t*, int* status) {
+  if (status) *status = -2;  // "not a valid mangled name": callers fall back to the raw name
+  return nullptr;
+}
+#endif

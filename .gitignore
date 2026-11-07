@@ -19,3 +19,7 @@ dist/
 .gradle/
 local.properties
 .cxx/
+
+# .NET build output (platform/dotnet, platform/windows tests)
+platform/**/bin/
+platform/**/obj/
