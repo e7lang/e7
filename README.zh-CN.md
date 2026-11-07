@@ -317,6 +317,12 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 - **绑定。** C API（[`include/e7/e7.h`](include/e7/e7.h)）、Java/Kotlin（JNI）、Swift、C#，以及
   JavaScript/WebAssembly（[`@e7lang/e7`](packages/e7)）。
 
+**不支持**（都会在编译时报错并给出替代写法）：`any`、`unknown`、`object` 作为类型；不同类型的联合类型和交叉类型；
+索引签名、`Record`、`Partial` 等工具类型；映射类型、条件类型、`keyof` 和模板字面量类型；正则表达式（`/.../`、`RegExp`、
+`match`，请改用字符串方法）；`eval`、`Proxy`、`Reflect`、`Symbol()` 值、`for...in`、`delete`；函数重载、`call` / `apply` /
+`bind`、把方法当作值；类表达式、mixin 和装饰器；命名空间、`var`、JSX、动态 `import()`；定时器和 I/O（由宿主负责）；`Intl`
+和本地化格式；`WeakMap` / `WeakSet` / `WeakRef`。[支持 / 不支持一览](https://e7lang.github.io/docs/supported)（英文）按类别列出了这些特性和替代写法。
+
 完整的语言规范见 [docs/SPEC.md](docs/SPEC.md)。[docs/TYPESCRIPT.md](docs/TYPESCRIPT.md)（英文）逐项列出 TypeScript 的特性
 （TypeScript 手册的各章，以及 TypeScript 程序会用到的 JavaScript 语法与标准库）：E7 支持哪些、其余为何不支持、应改用什么写法；
 每一项都对应一个示例程序，并由编译器、Node.js 和 `tsc` 验证。
