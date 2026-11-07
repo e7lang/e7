@@ -1,4 +1,4 @@
-// Natives no other test called (0.2.5 coverage report, scripts/coverage.py), compared with Node.js.
+// Natives no other test called (coverage report, scripts/coverage.py), compared with Node.js.
 // Math results are printed rounded: the last bit of a libm result may differ between platforms.
 const r = (x: number): string => x.toFixed(9);
 console.log(r(Math.sin(0.5)), r(Math.cos(0.5)), r(Math.tan(0.5)), r(Math.asin(0.5)), r(Math.acos(0.5)), r(Math.atan(0.5)));

@@ -1,11 +1,13 @@
 // Versions: the e7vm release, and the release that introduced each opcode and native function.
 //
 // A module's `requires` header field is the newest "since" version of anything it uses, so a VM
-// can reject a module it cannot run with E7_ERR_VERSION (instead of a confusing verifier error)
-// and `e7c --target` can refuse to emit features an older VM lacks.
+// can reject a module it cannot run with E7_ERR_VERSION (instead of a confusing verifier error).
 //
-// When you add an opcode or a native function after 0.2.0, add it to opSince() / kNativeSince
-// with the version that introduces it. Everything else counts as kBaselineVersion.
+// Everything in 0.1.0 counts as kBaselineVersion, so the tables below are empty. When a later
+// release adds an opcode, add a case to opSince() returning the version that introduces it; when it
+// adds a native function, add { "Name.fn", makeVersion(x, y, z) } to nativeSinceTable(). A feature
+// that is neither (a new class or function flag, a new instruction operand bit) gets a check in
+// moduleRequires().
 #pragma once
 #include <cstdint>
 #include <cstdio>
@@ -20,8 +22,8 @@ constexpr uint32_t makeVersion(uint32_t major, uint32_t minor, uint32_t patch) {
   return (major << 16) | (minor << 8) | patch;
 }
 constexpr uint32_t kVmVersion = makeVersion(E7_VERSION_MAJOR, E7_VERSION_MINOR, E7_VERSION_PATCH);
-// Oldest VM that can run format-2 modules.
-constexpr uint32_t kBaselineVersion = makeVersion(0, 2, 0);
+// The version of everything that has no entry below: the first release.
+constexpr uint32_t kBaselineVersion = makeVersion(0, 1, 0);
 
 inline std::string versionString(uint32_t v) {
   char b[32];
@@ -29,94 +31,18 @@ inline std::string versionString(uint32_t v) {
   return b;
 }
 
-// Parses "0.2", "0.2.1" or "v0.2"; returns false on malformed input.
-inline bool parseVersion(const std::string& s, uint32_t& out) {
-  unsigned a = 0, b = 0, c = 0;
-  const char* p = s.c_str();
-  if (*p == 'v') p++;
-  int n = 0;
-  char tail = 0;
-  int got = sscanf(p, "%u.%u%n", &a, &b, &n);
-  if (got != 2) return false;
-  p += n;
-  if (*p == '.') {
-    int m = 0;
-    if (sscanf(p, ".%u%n", &c, &m) != 1) return false;
-    p += m;
-  }
-  if (sscanf(p, "%c", &tail) == 1) return false;
-  if (a > 255 || b > 255 || c > 255) return false;
-  out = makeVersion(a, b, c);
-  return true;
-}
-
 inline uint32_t opSince(uint16_t op) {
-  switch (op) {
-    case OP_GEN_START: case OP_ASYNC_START: case OP_YIELD: case OP_RESUME_I: case OP_RESUME_F: case OP_RESUME_R:
-    case OP_AWAIT: case OP_FIELD_ABSENT:
-      return makeVersion(0, 3, 0);
-    default: return kBaselineVersion;
-  }
+  (void)op;  // no entries yet; e.g. if (op == OP_SOMETHING_NEW) return makeVersion(x, y, z);
+  return kBaselineVersion;
 }
 
 struct NativeSince { const char* name; uint32_t since; };
-// Natives added after the baseline, e.g. { "json.somethingNew", makeVersion(0, 3, 0) }.
+// Natives added after the baseline, e.g. { "JSON.somethingNew", makeVersion(x, y, z) }.
 inline const NativeSince* nativeSinceTable(size_t& n) {
   static const NativeSince kTable[] = {
-      {"Object.has", makeVersion(0, 3, 0)},
-      {"RegExp.lit", makeVersion(0, 3, 0)}, {"RegExp.new", makeVersion(0, 3, 0)}, {"RegExp.copy", makeVersion(0, 3, 0)},
-      {"RegExp.newRe", makeVersion(0, 3, 0)}, {"RegExp.exec", makeVersion(0, 3, 0)}, {"RegExp.test", makeVersion(0, 3, 0)},
-      {"RegExp.lastIndex", makeVersion(0, 3, 0)}, {"RegExp.setLastIndex", makeVersion(0, 3, 0)},
-      {"RegExp.source", makeVersion(0, 3, 0)}, {"RegExp.flags", makeVersion(0, 3, 0)}, {"RegExp.toString", makeVersion(0, 3, 0)},
-      {"RegExp.global", makeVersion(0, 3, 0)}, {"RegExp.ignoreCase", makeVersion(0, 3, 0)},
-      {"RegExp.multiline", makeVersion(0, 3, 0)}, {"RegExp.sticky", makeVersion(0, 3, 0)},
-      {"RegExp.unicode", makeVersion(0, 3, 0)}, {"RegExp.dotAll", makeVersion(0, 3, 0)},
-      {"RegExp.hasIndices", makeVersion(0, 3, 0)},
-      {"Match.index", makeVersion(0, 3, 0)}, {"Match.indexOpt", makeVersion(0, 3, 0)}, {"Match.input", makeVersion(0, 3, 0)},
-      {"Match.groups", makeVersion(0, 3, 0)}, {"Match.indices", makeVersion(0, 3, 0)},
-      {"String.matchRe", makeVersion(0, 3, 0)}, {"String.matchAllRe", makeVersion(0, 3, 0)},
-      {"String.replaceRe", makeVersion(0, 3, 0)}, {"String.replaceAllRe", makeVersion(0, 3, 0)},
-      {"String.replaceReFn", makeVersion(0, 3, 0)}, {"String.splitRe", makeVersion(0, 3, 0)},
-      {"String.searchRe", makeVersion(0, 3, 0)},
-      {"TA.new", makeVersion(0, 3, 0)},
-      {"TA.from", makeVersion(0, 3, 0)},
-      {"TA.fromBuffer", makeVersion(0, 3, 0)},
-      {"TA.length", makeVersion(0, 3, 0)},
-      {"TA.get", makeVersion(0, 3, 0)},
-      {"TA.set", makeVersion(0, 3, 0)},
-      {"TA.getBig", makeVersion(0, 3, 0)},
-      {"TA.setBig", makeVersion(0, 3, 0)},
-      {"TA.subarray", makeVersion(0, 3, 0)},
-      {"TA.slice", makeVersion(0, 3, 0)},
-      {"TA.fill", makeVersion(0, 3, 0)},
-      {"TA.fillBig", makeVersion(0, 3, 0)},
-      {"TA.toArray", makeVersion(0, 3, 0)},
-      {"TA.setFrom", makeVersion(0, 3, 0)},
-      {"TA.indexOf", makeVersion(0, 3, 0)},
-      {"TA.includes", makeVersion(0, 3, 0)},
-      {"TA.join", makeVersion(0, 3, 0)},
-      {"TA.reverse", makeVersion(0, 3, 0)},
-      {"TA.sort", makeVersion(0, 3, 0)},
-      {"TA.buffer", makeVersion(0, 3, 0)},
-      {"Date.set", makeVersion(0, 3, 0)}, {"Global.structuredClone", makeVersion(0, 3, 0)},
-      {"JSON.parseRec", makeVersion(0, 3, 0)}, {"JSON.tryParseRec", makeVersion(0, 3, 0)},
-      {"Error.newCause", makeVersion(0, 3, 0)}, {"Error.newAggregate", makeVersion(0, 3, 0)},
-      {"Error.cause", makeVersion(0, 3, 0)}, {"Error.errors", makeVersion(0, 3, 0)},
-      {"Array.toReversed", makeVersion(0, 3, 0)}, {"Array.toSorted", makeVersion(0, 3, 0)},
-      {"Array.toSortedCmp", makeVersion(0, 3, 0)}, {"Array.toSpliced", makeVersion(0, 3, 0)},
-      {"Array.withI", makeVersion(0, 3, 0)}, {"Array.withF", makeVersion(0, 3, 0)}, {"Array.withR", makeVersion(0, 3, 0)},
-      {"Promise.resolveI", makeVersion(0, 3, 0)}, {"Promise.resolveF", makeVersion(0, 3, 0)},
-      {"Promise.resolveR", makeVersion(0, 3, 0)}, {"Promise.reject", makeVersion(0, 3, 0)},
-      {"Promise.new", makeVersion(0, 3, 0)}, {"Promise.resolveFnI", makeVersion(0, 3, 0)},
-      {"Promise.resolveFnF", makeVersion(0, 3, 0)}, {"Promise.resolveFnR", makeVersion(0, 3, 0)},
-      {"Promise.rejectFn", makeVersion(0, 3, 0)}, {"Promise.then", makeVersion(0, 3, 0)},
-      {"Promise.finally", makeVersion(0, 3, 0)}, {"Promise.all", makeVersion(0, 3, 0)},
-      {"Promise.allSettled", makeVersion(0, 3, 0)}, {"Promise.any", makeVersion(0, 3, 0)},
-      {"Promise.race", makeVersion(0, 3, 0)},
-      {"test.laterI", makeVersion(0, 3, 0)}, {"test.laterF", makeVersion(0, 3, 0)},
-      {"test.laterR", makeVersion(0, 3, 0)}, {"test.laterReject", makeVersion(0, 3, 0)},
+      {nullptr, 0},  // placeholder (C++ has no empty arrays); not an entry
   };
-  n = sizeof kTable / sizeof kTable[0];
+  n = sizeof kTable / sizeof kTable[0] - 1;
   return kTable;
 }
 
@@ -132,58 +58,10 @@ inline uint32_t nativeSince(const std::string& name) {
 // extra words: see docs/BYTECODE.md).
 inline size_t instructionWords(uint64_t w) { return insWords(w); }
 
-// Features that are not an opcode or a native function but change how a VM must treat a module.
-// #private class fields: a class (not a record) field named "#x". Since 0.2.5 Object.keys,
-// JSON.stringify and console.log skip them (as JavaScript does); older VMs would list them.
-constexpr uint32_t kPrivateFieldsSince = makeVersion(0, 2, 5);
-// Getters and setters in object literals: records with kClassFlagAccessors (module.h). Since 0.3.1
-// Object.keys, JSON.stringify, console.log, structuredClone and e7:test's deepEqual treat their accessor
-// properties as JavaScript does; older VMs reject the class flag.
-constexpr uint32_t kRecordAccessorsSince = makeVersion(0, 3, 1);
-
 // The minimum VM version for a module; `why` names the newest feature used (empty for the baseline).
 inline uint32_t moduleRequires(const Module& m, std::string* why = nullptr) {
   uint32_t req = kBaselineVersion;
   if (why) why->clear();
-  for (const ClassDesc& c : m.classes) {
-    if (c.isRecord) continue;
-    for (const FieldDesc& f : c.fields)
-      if (!f.name.empty() && f.name[0] == '#' && kPrivateFieldsSince > req) {
-        req = kPrivateFieldsSince;
-        if (why) *why = "#private class fields";
-      }
-  }
-  // format 3 (0.3): coroutines, records with a presence mask, regular expressions
-  constexpr uint32_t v030 = makeVersion(0, 3, 0);
-  if (req < v030) {
-    for (const ClassDesc& c : m.classes)
-      if (c.cflags && req < v030) { req = v030; if (why) *why = "objects with optional properties (presence mask)"; }
-    for (const FuncDesc& f : m.funcs)
-      if (f.fflags && req < v030) { req = v030; if (why) *why = fflagsKind(f.fflags) == FK_GENERATOR ? "generators" : "async functions"; }
-    if (!m.regexps.empty() && req < v030) { req = v030; if (why) *why = "regular expressions"; }
-  }
-  for (const ClassDesc& c : m.classes)
-    if ((c.cflags & kClassFlagAccessors) && req < kRecordAccessorsSince) {
-      req = kRecordAccessorsSince;
-      if (why) *why = "getters and setters in object literals";
-    }
-  // 0.3.1: async generators (function kind 3, requests to them: RESUME_R with kResumeAsync)
-  constexpr uint32_t v031 = makeVersion(0, 3, 1);
-  if (req < v031) {
-    for (const FuncDesc& f : m.funcs) {
-      if (req >= v031) break;
-      if (fflagsKind(f.fflags) == FK_ASYNC_GENERATOR) { req = v031; if (why) *why = "async generators"; break; }
-      for (size_t pc = 0; pc < f.code.size(); pc += instructionWords(f.code[pc])) {
-        uint16_t op = insOp(f.code[pc]);
-        if (op >= OP__COUNT) break;
-        if (op == OP_RESUME_R && pc + 1 < f.code.size() && (f.code[pc + 1] & kResumeAsync)) {
-          req = v031;
-          if (why) *why = "async generators";
-          break;
-        }
-      }
-    }
-  }
   for (const NativeImport& n : m.natives) {
     uint32_t s = nativeSince(n.name);
     if (s > req) { req = s; if (why) *why = "native function " + n.name; }

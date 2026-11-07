@@ -31,8 +31,8 @@ extern "C" {
 #endif
 
 #define E7_VERSION_MAJOR 0
-#define E7_VERSION_MINOR 3
-#define E7_VERSION_PATCH 1
+#define E7_VERSION_MINOR 1
+#define E7_VERSION_PATCH 0
 
 typedef struct e7_vm e7_vm;
 typedef struct e7_module e7_module;
@@ -103,20 +103,20 @@ E7_API void e7_config_init(e7_config* cfg);
 /* cfg may be NULL (defaults). Returns NULL on allocation failure or an invalid cfg->struct_size. */
 E7_API e7_vm* e7_vm_new(const e7_config* cfg);
 E7_API void e7_vm_free(e7_vm* vm);
-E7_API const char* e7_version(void);            /* e.g. "0.3.1" */
+E7_API const char* e7_version(void);            /* e.g. "0.1.0" */
 E7_API uint32_t e7_version_number(void);        /* major << 16 | minor << 8 | patch */
 
 /* ---- modules ---- */
 /* Verifies (signature, structure, types), links natives and runs the module initializer.
- * E7_ERR_VERSION: the module has another bytecode format or needs a newer e7vm (recompile it, or
- * deliver a build made with `e7c --target <this VM's version>`). */
+ * E7_ERR_VERSION: the module has another bytecode format or needs a newer e7vm (its `requires`
+ * header field; see e7_inspect). */
 E7_API e7_status e7_load(e7_vm* vm, const uint8_t* data, size_t len, e7_module** out);
 
 /* Reads a module's header without loading it (for example to pick a module the app's VM can run).
  * Checks the magic and the checksum; fills *info even when it returns E7_ERR_VERSION. */
 typedef struct e7_module_info {
   size_t struct_size;          /* sizeof(e7_module_info); set by the caller */
-  uint32_t format;             /* bytecode format version (this VM: 2) */
+  uint32_t format;             /* bytecode format identifier (this VM reads 3) */
   uint32_t requires_version;   /* minimum e7vm version, major << 16 | minor << 8 | patch */
   int is_signed;               /* 1: an Ed25519 signature trailer is present (not verified here) */
   uint8_t key_id[8];           /* first 8 bytes of SHA-256(public key) of the signing key */
@@ -140,8 +140,6 @@ typedef struct e7_compile_options {
   uint32_t flags;
   int (*read_file)(void* user, const char* path, char** data, size_t* len);
   void* read_user;
-  uint32_t target_version; /* oldest e7vm that must run the module (major << 16 | minor << 8 | patch);
-                              0 = this library's version. Features newer than the target are errors. */
 } e7_compile_options;
 E7_API void e7_compile_options_init(e7_compile_options* opts);
 E7_API e7_status e7_compile_ex(const char* source, size_t len, const char* file_name, const e7_compile_options* opts,
@@ -179,7 +177,7 @@ E7_API e7_status e7_register_native(e7_vm* vm, const char* name, const char* sig
 /* From inside a native: set the error message reported when the native returns E7_ERR_RUNTIME. */
 E7_API void e7_native_error(e7_vm* vm, const char* message);
 
-/* ---- async host functions (0.3) ----
+/* ---- async host functions ----
  * `declare function fetchKey(id: string): Promise<Uint8Array>` is an async native: the signature is
  * written as for e7_register_native with the promise's value type as the return type ("s>y"). When the
  * script calls it, the VM creates a pending promise and calls `fn` with the arguments and a ticket. The

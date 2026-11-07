@@ -136,14 +136,14 @@ Within each category, supported features come first, then partial and unsupporte
 | Assigning objects with more properties than the target type | supported | An object with extra properties can be assigned to a narrower type (fresh literals with unknown properties are errors, as in tsc) | [excess-properties.ts](../tests/ts-features/objects/excess-properties.ts) |
 | Extending interfaces (single and multiple) | supported |  | [extending-interfaces.ts](../tests/ts-features/objects/extending-interfaces.ts) |
 | Accessors declared in interfaces (`get x(): T`) | supported | An interface *property* is read as a field, so a class implements it with a field; declare accessors as `get` / `set` in the interface | [interface-accessors.ts](../tests/ts-features/objects/interface-accessors.ts) |
-| Getters and setters in object literals | supported | Needs e7vm 0.3.1; the accessors are part of the literal's type (`get x(): T`), so it is assignable to interfaces that declare them, not to ones that declare `x` as a property (read as a field); a getter and its setter have one type | [object-literal-accessors.ts](../tests/ts-features/objects/object-literal-accessors.ts) |
+| Getters and setters in object literals | supported | The accessors are part of the literal's type (`get x(): T`), so it is assignable to interfaces that declare them, not to ones that declare `x` as a property (read as a field); a getter and its setter have one type | [object-literal-accessors.ts](../tests/ts-features/objects/object-literal-accessors.ts) |
 | Methods in object literals | supported |  | [object-literal-methods.ts](../tests/ts-features/objects/object-literal-methods.ts) |
 | Optional methods in interfaces (`m?(): T`) | supported | An optional method is an optional property of function type: call it with `obj.m?.()`, or after checking it | [optional-methods.ts](../tests/ts-features/objects/optional-methods.ts) |
 | Optional properties | supported |  | [optional-properties.ts](../tests/ts-features/objects/optional-properties.ts) |
 | Property access, nested objects and arrays of objects | supported |  | [property-access.ts](../tests/ts-features/objects/property-access.ts) |
 | `readonly T[]` and `ReadonlyArray<T>` | supported | `ReadonlyMap` and `ReadonlySet` too; mutating methods, index and `length` writes are compile errors | [readonly-arrays.ts](../tests/ts-features/objects/readonly-arrays.ts) |
 | `readonly` properties | supported |  | [readonly-properties.ts](../tests/ts-features/objects/readonly-properties.ts) |
-| Recursive types | supported | Recursive interfaces (also mutually recursive and generic) and object type aliases; `JSON.parse(text) as T` into a recursive type comes with e7vm 0.3 | [recursive-types.ts](../tests/ts-features/objects/recursive-types.ts) |
+| Recursive types | supported | Recursive interfaces (also mutually recursive and generic) and object type aliases, also as the target of `JSON.parse(text) as T` | [recursive-types.ts](../tests/ts-features/objects/recursive-types.ts) |
 | Shorthand properties | supported |  | [shorthand-properties.ts](../tests/ts-features/objects/shorthand-properties.ts) |
 | Tuple types (including labeled and readonly tuples) | supported |  | [tuples.ts](../tests/ts-features/objects/tuples.ts) |
 | Computed property names | **partial** | **Works:** keys known at compile time: string and number literals, consts of literal types, enum members (in object literals, classes and interfaces, and `obj[KEY]`). **Not supported:** property names must be known to fix the object layout (*types known at compile time*). **Instead:** `Map<string, V>` for keys computed at run time | [computed-property-names.ok.ts](../tests/ts-features/objects/computed-property-names.ok.ts), [computed-property-names.no.ts](../tests/ts-features/objects/computed-property-names.no.ts) |
@@ -290,7 +290,7 @@ Within each category, supported features come first, then partial and unsupporte
 
 | Feature | Status | Notes / what to write instead | Sample |
 |---|---|---|---|
-| Async iteration (`for await`, async generators) | supported | Async generators need e7vm 0.3.1; `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (as for generators) | [async-iteration.ts](../tests/ts-features/iterators/async-iteration.ts) |
+| Async iteration (`for await`, async generators) | supported | `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (as for generators) | [async-iteration.ts](../tests/ts-features/iterators/async-iteration.ts) |
 | `for...of` over arrays, `entries()`, `keys()`, `values()` | supported | An array's `entries()` / `keys()` / `values()` are used directly in `for...of` (they are not iterator objects) | [for-of-arrays.ts](../tests/ts-features/iterators/for-of-arrays.ts) |
 | Iterating `Map` and `Set` | supported |  | [for-of-map-set.ts](../tests/ts-features/iterators/for-of-map-set.ts) |
 | `for...of` over strings (by code point) | supported |  | [for-of-strings.ts](../tests/ts-features/iterators/for-of-strings.ts) |

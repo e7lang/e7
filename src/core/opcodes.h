@@ -105,11 +105,11 @@ namespace e7 {
   X(DEBUGGER, "___", '-') \
   /* throw R[A] (an Error object); try/catch handlers are in the function's handler table */ \
   X(THROW, "R__", '-') \
-  /* 0.3: coroutines (generators, async functions; see BYTECODE.md section 6) */ \
+  /* coroutines (generators, async functions; see BYTECODE.md section 6) */ \
   X(GEN_START, "___", '-') X(ASYNC_START, "v__", '-') \
   X(YIELD, "***", '-') X(RESUME_I, "***", '-') X(RESUME_F, "***", '-') X(RESUME_R, "***", '-') \
   X(AWAIT, "***", '-') \
-  /* 0.3: records with a presence mask (D7) */ \
+  /* records with a presence mask (D7) */ \
   X(FIELD_ABSENT, "Re_", '-')
 
 enum Op : uint16_t {
@@ -149,7 +149,7 @@ inline size_t insWords(uint64_t w) {
 }
 
 // The extra word of RESUME_*: bits 0-15 the sent value's register, 16-17 the mode, 18-19 the sent
-// value's kind. Bit 20 (0.3.1, RESUME_R only): a request to an async generator; B receives the request's
+// value's kind. Bit 20 (RESUME_R only): a request to an async generator; B receives the request's
 // promise, which is resolved with an IteratorResult record of class bits 21-36 whose primitive value
 // is boxed with the value type in bits 37-44 (the yielded type T). The other bits are 0.
 constexpr uint64_t kResumeAsync = 1ull << 20;
@@ -159,7 +159,7 @@ inline uint64_t resumeAsyncBits(uint32_t cls, uint8_t elemVT) {
   return kResumeAsync | ((uint64_t)(cls & 0xFFFF) << 21) | ((uint64_t)elemVT << 37);
 }
 
-// Function flags (format 3, FuncDesc::fflags): bits 0-1 the function kind, bits 2-3 / 4-5 / 6-7 the
+// Function flags (FuncDesc::fflags): bits 0-1 the function kind, bits 2-3 / 4-5 / 6-7 the
 // kinds of the yielded value, of the value next(v) sends and of the return value (generators only).
 enum FuncKind : uint8_t { FK_PLAIN = 0, FK_GENERATOR = 1, FK_ASYNC = 2, FK_ASYNC_GENERATOR = 3 };
 // value kinds in fflags: 0 none, 1 I, 2 F, 3 R (Kind + 1)

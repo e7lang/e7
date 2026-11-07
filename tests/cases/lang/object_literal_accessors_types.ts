@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // Object literals with accessors and types: a literal implements the accessors an interface declares
 // (`get x(): T` / `set x(v: T)`), so it can be passed to functions typed with the interface, stored
 // with class instances implementing it, and used through generic interfaces and functions.

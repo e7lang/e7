@@ -1258,7 +1258,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       return noSuch();
     }
     case TT::AsyncGenerator: {
-      // 0.3.1: g.next(v?) / g.return(v?) / g.throw(e): a promise of an IteratorResult record. Its class
+      // g.next(v?) / g.return(v?) / g.throw(e): a promise of an IteratorResult record. Its class
       // has a presence mask also when `value` is a reference T: a finished generator's value is
       // undefined, a property that is there (printed `value: undefined`, as in JavaScript)
       auto asyncIterResultClass = [&](Type* rt) {

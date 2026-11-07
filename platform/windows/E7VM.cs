@@ -15,7 +15,7 @@
 //
 // Thread safety: like the C API, one E7VM must be used by one thread at a time.
 //
-// Async host functions (0.3): `declare function fetchKey(id: string): Promise<Uint8Array>;` in the script,
+// Async host functions: `declare function fetchKey(id: string): Promise<Uint8Array>;` in the script,
 //   vm.RegisterAsyncNative("fetchKey", "s>y", async args => await keys.FetchAsync((string)args[0]!));
 //   var sig = await vm.CallAsync(module, "sign", "k1", payload);
 using System;
@@ -66,7 +66,7 @@ namespace E7
         public byte[] KeyId { get; }
         public bool HasDebugInfo { get; }
         public bool CanRun => Status == E7Status.Ok;
-        /// <summary>RequiresVersion as text, e.g. "0.2.0".</summary>
+        /// <summary>RequiresVersion as text, e.g. "0.1.0".</summary>
         public string RequiresVersionString => E7VM.VersionString(RequiresVersion);
 
         internal E7ModuleInfo(E7Status status, uint format, uint requires, bool signed, byte[] keyId, bool debug)
@@ -447,7 +447,7 @@ namespace E7
             run?.Cancel.Cancel();
         }
 
-        // ------------------------------------------------------------------ async host functions (0.3)
+        // ------------------------------------------------------------------ async host functions
         /// <summary>Number of async host operations the VM waits for (e7_open_tickets).</summary>
         public long OpenTickets => (long)(ulong)e7_open_tickets(Handle);
 

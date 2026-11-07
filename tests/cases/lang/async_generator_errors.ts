@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // errors in async generators: thrown by the body, a yielded rejected promise, a rejected await,
 // errors in finally blocks, errors from next() of a generator that is already done
 async function* failing(n: number): AsyncGenerator<number> {

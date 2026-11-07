@@ -1216,7 +1216,7 @@ class Gen:
         else:
             self.stmt_accessors(ind, max(d, 1))
 
-    # ---------------------------------------------------------------- regular expressions (0.3)
+    # ---------------------------------------------------------------- regular expressions
     REGEXPS = [r"/\d+/", r"/(\w)(\w)?/", r"/(?<w>[a-z]+)/i", r"/\s+/", r"/^./u", r"/(?<=a)b/", r"/x*/",
                r"/[😀-😁]/u", r"/(a|b)+c?/", r"/(?<p>.)\k<p>/", r"/[^\w\s]/", r"/$/m"]
 
@@ -1243,7 +1243,7 @@ class Gen:
         else:
             self.emit(ind, f"console.log(new RegExp({src}, \"g\").exec({s}));")
 
-    # ---------------------------------------------------------------- getters and setters in object literals (0.3.1)
+    # ---------------------------------------------------------------- getters and setters in object literals
     def stmt_accessors(self, ind, d):
         r = self.r
         k = r.randrange(6)
@@ -1286,7 +1286,7 @@ class Gen:
             self.emit(ind, f"const {v} = {{ ok: {self.num(d - 1)}, get bad(): number {{ if (this.ok > {self.num(d - 1)}) throw new RangeError(\"bad \" + this.ok); return this.ok; }} }};")
             self.emit(ind, f"try {{ console.log({v}.bad, JSON.stringify({v})); }} catch (e) {{ if (e instanceof RangeError) console.log(\"caught\", e.message); }}")
 
-    # ---------------------------------------------------------------- generators, async, literal types (0.3)
+    # ---------------------------------------------------------------- generators, async, literal types
     def stmt_coroutine(self, ind, d):
         r = self.r
         k = r.randrange(10)
@@ -1320,7 +1320,7 @@ class Gen:
             sz = r.choice(["\"s\"", "\"m\"", "\"l\""])
             self.emit(ind, f"console.log(sizeName({sz}), sizeName(pickSize({self.num(d - 1)})));")
         elif k == 7:
-            # async generators (0.3.1): for await left early or not, interleaved with the other jobs
+            # async generators: for await left early or not, interleaved with the other jobs
             self.long_jobs = True
             self.emit(ind, f"agDrain(\"{self.fresh('ad')}\", {n}, {r.randrange(0, 6)}).then(s => console.log(\"drained\", s));")
         elif k == 8:

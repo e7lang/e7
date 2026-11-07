@@ -1,2 +1,0 @@
-# Programs whose output changed because a later e7vm fixed library behaviour (the bytecode runs on 0.2.6 too;
-# only the old VM's library prints something else). One path per line; '#' starts a comment.

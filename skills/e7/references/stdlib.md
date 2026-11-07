@@ -41,7 +41,7 @@ localeCompare match matchAll search`, `String.fromCharCode/fromCodePoint`, templ
 `replace` / `replaceAll` take a string or a regular expression; with a string pattern the replacement can be a
 function `(match, offset, string) => string`. Strings are UTF-16 like JavaScript; `for (const ch of s)` iterates code points.
 
-## Regular expressions (0.3)
+## Regular expressions
 
 ES2024 regular expressions without the `v` flag, as in Node.js: literals `/.../dgimsuy` (checked when compiling),
 `new RegExp(pattern, flags?)` (a bad pattern throws a catchable `SyntaxError`), `test exec lastIndex source flags

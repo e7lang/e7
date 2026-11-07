@@ -244,27 +244,15 @@ test("listExports", async () => {
   assert.deepEqual(t.find((e) => e.name === "add"), { name: "add", params: ["i32", "i32"], returns: "i32" });
 });
 
-test("compile: target version", async () => {
-  const e7 = await init();
-  const [major, minor] = e7.version.split(".").map(Number);
-  assert.equal((await compile(SIGN, { target: `${major}.${minor}` })).ok, true);
-  assert.equal((await compile(SIGN, { target: (major << 16) | (minor << 8) })).ok, true);
-  const old = await compile(SIGN, { target: "0.1" });
-  assert.equal(old.ok, false);
-  assert.match(old.diagnostics[0].message, /--target 0\.1\.0 is not supported/);
-  await assert.rejects(compile(SIGN, { target: "zero.two" }), (e) => e instanceof E7Error && /invalid target version/.test(e.message));
-  await assert.rejects(compile(SIGN, { target: {} }), TypeError);
-});
-
 test("inspect", async () => {
   const e7 = await init();
   const { bytecode } = await compile(SIGN);
   const info = await inspect(bytecode);
   assert.equal(info.ok, true);
   assert.equal(info.status, "ok");
-  assert.equal(info.format, 2);
-  assert.equal(info.requiresVersion, "0.2.0");
-  assert.equal(info.requiresVersionNumber, 0x000200);
+  assert.equal(info.format, 3);
+  assert.equal(info.requiresVersion, "0.1.0");
+  assert.equal(info.requiresVersionNumber, 0x000100);
   assert.equal(info.signed, false);
   assert.equal(info.keyId, null);
   assert.equal(info.debugInfo, false);
@@ -312,7 +300,7 @@ test("large source and output", async () => {
   assert.equal(r.output[19999], "line 19999");
 });
 
-// async / await (0.3): async exports and top-level await finish within run(); e7:test's later() /
+// async / await: async exports and top-level await finish within run(); e7:test's later() /
 // laterReject() are host-like operations the VM settles itself (this package has no async host functions)
 const ASYNC = `import { later, laterReject } from "e7:test";
 console.log("init");

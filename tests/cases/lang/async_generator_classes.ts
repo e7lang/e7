@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // async generator methods in class hierarchies (overrides through the vtable), generic classes, a loop
 // whose body throws while the generator's return() throws too, return from a for await inside an async
 // generator, many queued requests, a deep chain of yield*

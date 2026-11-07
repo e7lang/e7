@@ -1,7 +1,7 @@
 // @feature: Recursive types
 // @category: Object Types
 // @status: supported
-// @note: recursive interfaces (also mutually recursive and generic) and object type aliases; `JSON.parse(text) as T` into a recursive type comes with e7vm 0.3
+// @note: recursive interfaces (also mutually recursive and generic) and object type aliases, also as the target of `JSON.parse(text) as T`
 interface Tree { label: string; children: Tree[] }
 interface List<T> { head: T; tail: List<T> | null }
 type Node = { name: string; next?: Node | undefined };

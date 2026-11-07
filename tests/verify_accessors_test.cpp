@@ -1,7 +1,7 @@
-// Getters and setters in object literals (0.3.1): records with the accessors class flag. The verifier
+// Getters and setters in object literals: records with the accessors class flag. The verifier
 // rejects the flag on classes that are not records and accessor fields that are not references; the
 // natives that call getters (JSON.stringify, e7:test's deepEqual) check the accessor pair at run time,
-// so a malformed one is a clean runtime error; the module requires e7vm 0.3.1 (--target 0.3.0 refuses it).
+// so a malformed one is a clean runtime error.
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -59,10 +59,6 @@ int main() {
   CHECK(run(co.module, &err, &v) == E7_OK);
   // {"a":1,"double":2,"flag":true}: 30 characters; double 2; size 2 + 5
   CHECK(v == 30 * 1000 + 2 * 100 + 7);
-  std::string why;
-  CHECK(e7::moduleRequires(co.module, &why) == e7::makeVersion(0, 3, 1));
-  CHECK(why == "getters and setters in object literals");
-  CHECK(e7::neededFormat(co.module) == 3);
   // the records with accessors, and the accessor pair class of `double` ([getter, setter, number])
   int rec = -1, pairNum = -1;
   for (size_t i = 0; i < co.module.classes.size(); i++) {
@@ -95,12 +91,6 @@ int main() {
   // run time: the accessor pair is not a tuple
   expectReject("accessor pair that is not a tuple",
                [&](e7::Module& m) { m.classes[(size_t)pairNum].isRecord = 1; }, "malformed accessor property");
-
-  // --target 0.3.0 refuses the feature
-  e7::CompileOptions opts;
-  opts.target = e7::makeVersion(0, 3, 0);
-  e7::CompileOutput old = e7::compileSource("a.ts", kSrc, opts);
-  CHECK(!old.ok && old.errorText().find("getters and setters in object literals") != std::string::npos);
 
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);

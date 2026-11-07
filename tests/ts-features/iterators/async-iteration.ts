@@ -1,7 +1,7 @@
 // @feature: Async iteration (`for await`, async generators)
 // @category: Iterators and Generators
 // @status: supported
-// @note: async generators need e7vm 0.3.1; `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (as for generators)
+// @note: `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (as for generators)
 async function sum(xs: Promise<number>[]): Promise<number> {
   let t = 0;
   for await (const x of xs) t += x;

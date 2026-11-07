@@ -31,7 +31,7 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
-  # Stability (docs/ROADMAP.md 0.2.5, P0; CONTRIBUTING.md, "Testing"). The equivalence runs
+  # Stability (CONTRIBUTING.md, "Testing"). The equivalence runs
   # (equiv_slice, equiv_step), allocation-failure injection (alloc_fail_test), the soak test and the
   # threads test are ctest tests and run in every job above; switch dispatch is linux-gcc-switch-dispatch.
 
@@ -65,81 +65,6 @@ jobs:
       - name: Test
         env: { TSAN_OPTIONS: "halt_on_error=1 second_deadlock_stack=1" }
         run: ctest --test-dir build --output-on-failure -R "threads_test|debug_test|capi_test|capi_reentry_test|soak_test"
-
-  # Forward compatibility (docs/BYTECODE.md section 5): modules compiled by the current e7c with
-  # --target 0.2 run on the e7 of earlier releases with the same output; modules that need a newer VM
-  # are rejected with E7_ERR_VERSION. `base` (E7_COMPAT_BASE) is the previous release: bump it after
-  # each release. Programs whose output changed only because a newer VM fixed library behaviour are listed
-  # with the reason in tests/compat/forward-allow/<base>.txt.
-  forward-compat:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { base: v0.2.6 }
-          - { base: v0.2.5 }
-          - { base: v0.2.1 }
-          - { base: v0.2.0 }
-    name: forward-compat (${{ matrix.base }})
-    runs-on: ubuntu-24.04
-    env:
-      E7_COMPAT_BASE: ${{ matrix.base }}
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - name: Build the current e7 / e7c
-        run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_TESTS=OFF
-          cmake --build build --target e7 e7c
-      - name: Build e7 ${{ env.E7_COMPAT_BASE }}
-        run: |
-          mkdir ../e7-base
-          git archive "$E7_COMPAT_BASE" | tar -x -C ../e7-base
-          cmake -S ../e7-base -B build-base -G Ninja -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_TESTS=OFF
-          cmake --build build-base --target e7
-      - name: Run current modules on ${{ env.E7_COMPAT_BASE }}
-        run: |
-          python3 tests/compat/forward_compat.py --old-e7 build-base/e7 --e7 build/e7 --e7c build/e7c \
-            --base "$E7_COMPAT_BASE" --summary "$GITHUB_STEP_SUMMARY" \
-            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/^[[:space:]]*/--allow /' "tests/compat/forward-allow/$E7_COMPAT_BASE.txt") \
-            tests/cases/lang/*.ts tests/cases/lib/*.ts tests/cases/modules/main_*.ts examples/*.ts
-
-  # Backward compatibility (DESIGN-0.3.md D3): modules compiled by the compiler of an earlier release
-  # run on the current VM with identical output (tests/compat/backward_compat.py)
-  backward-compat:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { base: v0.2.6 }
-    name: backward-compat (${{ matrix.base }})
-    runs-on: ubuntu-24.04
-    env:
-      E7_COMPAT_BASE: ${{ matrix.base }}
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - name: Build the current e7
-        run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_TESTS=OFF
-          cmake --build build --target e7
-      - name: Build e7 / e7c ${{ env.E7_COMPAT_BASE }}
-        run: |
-          mkdir ../e7-base
-          git archive "$E7_COMPAT_BASE" | tar -x -C ../e7-base
-          cmake -S ../e7-base -B build-base -G Ninja -DCMAKE_BUILD_TYPE=Release -DE7_BUILD_TESTS=OFF
-          cmake --build build-base --target e7 e7c
-      - name: Run ${{ env.E7_COMPAT_BASE }} modules on the current VM
-        run: |
-          allow=""
-          if [ -f "tests/compat/backward-allow/$E7_COMPAT_BASE.txt" ]; then
-            allow=$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/^[[:space:]]*/--allow /' "tests/compat/backward-allow/$E7_COMPAT_BASE.txt")
-          fi
-          python3 tests/compat/backward_compat.py --old-e7 build-base/e7 --old-e7c build-base/e7c --e7 build/e7 \
-            --base "$E7_COMPAT_BASE" --summary "$GITHUB_STEP_SUMMARY" $allow \
-            tests/cases/lang/*.ts tests/cases/lib/*.ts tests/cases/modules/main_*.ts examples/*.ts
 
   # Coverage of the VM, stdlib, crypto, C API and compiler over the whole ctest suite (clang
   # source-based coverage, scripts/coverage.py): a job summary and the coverage artifact

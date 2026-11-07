@@ -58,7 +58,6 @@ These run in CI (`.github/workflows/ci.yml`); the ctest ones run in every build 
 | Equivalence runs | `tests/equiv_test.cpp` (ctest `equiv_slice`, `equiv_step`): every `tests/cases` program with a budget slice of 1 (suspend / resume at every budget check) and under a debugger that single-steps through everything and inspects all scopes and variables at each stop; output, status and error message must equal a normal run. Switch dispatch: the `linux-gcc-switch-dispatch` job | every job |
 | Soak | `tests/soak_test.cpp` (ctest `soak_test`): one VM, 100,000 calls of a mix of exported functions; the heap after a full collection, the GC statistics and the process heap stay flat. Long run: `build/tests/soak_test --calls 10000000 -v` | every job |
 | Threads | `tests/threads_test.cpp` (ctest `threads_test`): several VMs on several threads (compiling, running, sliced, one paused from another thread). ThreadSanitizer: `-DE7_TSAN=ON` (clang; on Linux with LLVM 18 also `sudo sysctl vm.mmap_rnd_bits=28`) | `tsan` |
-| Forward compatibility | `tests/compat/forward_compat.py`: modules compiled by the current `e7c --target 0.2` run on the `e7` of the previous release (the `base` of the `forward-compat` matrix in `ci.yml`, bump it after each release; v0.2.0 runs too) with the same output; modules that need a newer VM must be rejected with `E7_ERR_VERSION`. Locally: build `e7` from `git archive <tag>` and pass it as `--old-e7` | `forward-compat` |
 | Coverage | `python3 scripts/coverage.py` (clang, `-DE7_COVERAGE=ON`, llvm-cov): `build-cov/coverage.md` (summary, natives never called), `coverage.txt`, `coverage.lcov`, `html/` | `coverage` (job summary + artifact) |
 
 Release builds check every injection point; sanitizer, coverage, GC-stress and Debug builds thin out the
@@ -92,6 +91,15 @@ benchmark), update the baseline in the same pull request and say why in the desc
 
 An Ir number more than 3% *below* the baseline passes with a note; update the baseline to lock in the
 gain. Wall-clock timings (`e7 --time`, `bench/gc_pause.cpp`) are reported but never gated.
+
+## Versions and the `requires` field
+
+Every `.e7b` module carries a `requires` header field: the oldest e7vm that can run it, and a VM rejects a module
+whose `requires` is newer than itself with `E7_ERR_VERSION`. The field is computed from the "since" tables in
+[`src/core/since.h`](src/core/since.h). In 0.1.0 everything is baseline and the tables are empty. Once a version
+has been released, a new opcode or native function must get an entry there with the version that introduces it
+(and a feature that is neither, such as a new class or function flag, a check in `moduleRequires()`), so that older
+VMs reject modules that use it instead of failing in the verifier.
 
 ## Adding a language test
 

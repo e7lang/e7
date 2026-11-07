@@ -25,7 +25,7 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | generic methods in interfaces, `<K extends keyof T>`, `x instanceof Box` (generic class) | generic functions, classes, interfaces and aliases work (compiled per type argument list); use a generic class or function instead |
 | `string \| number`, discriminated unions | one interface with a `kind` field (string or enum) and optional fields |
 | `{ [key: string]: V }`, `Record<K, V>`, `Partial`, `Pick` | `Map<string, V>`, or write the interface out |
-| regex `/.../`, `RegExp` | supported (0.3): literals are checked when compiling; named groups of a literal are typed (`m.groups?.year`); a pattern from `new RegExp(s)` has only indexed groups (`m[1]`); no `v` flag |
+| regex `/.../`, `RegExp` | supported: literals are checked when compiling; named groups of a literal are typed (`m.groups?.year`); a pattern from `new RegExp(s)` has only indexed groups (`m[1]`); no `v` flag |
 | `setTimeout`, `fetch`, `fs` | no timers or I/O: an async host function (`declare function f(): Promise<T>`, settled by the host) or data passed in (`async`/`await`, `Promise` and generators work as in Node.js) |
 | `for (k in obj)`, `delete`, `in` | `Object.keys(obj)`, or use a `Map` |
 | `class A { get x() }` implementing `interface I { x: number }` | declare the accessor in the interface: `get x(): number` (interfaces read properties as fields) |
@@ -33,7 +33,7 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | `JSON.parse(text)` | `JSON.parse(text) as T` (validated against `T`; a shape mismatch ends the call and cannot be caught, a syntax error is a catchable `SyntaxError`); for untrusted input `tryParse(text) as T \| null` from `e7:json` (`null` on bad input, `lastError()` says why) |
 | `arr.map(obj.method)` | `arr.map(x => obj.method(x))` (methods are not values) |
 | `Buffer`, `crypto.subtle`, `require("crypto")`, `fs`, `process` | `Uint8Array`, `e7:crypto`, `e7:encoding`, or a host function |
-| an object literal `{ get x() { ... } }` passed as `interface I { x: number }` | declare the accessor in the interface: `get x(): number` (object literal accessors need e7vm 0.3.1) |
+| an object literal `{ get x() { ... } }` passed as `interface I { x: number }` | declare the accessor in the interface: `get x(): number` |
 
 Behaviour that differs from JavaScript at run time:
 
@@ -44,7 +44,7 @@ Behaviour that differs from JavaScript at run time:
 - `Date` uses UTC only (all `get*` / `set*` methods; no locale formatting).
 - `typeof x` is a compile-time constant (no runtime type tests); narrow with `!== null`, truthiness or `instanceof`.
 
-## Supported and not supported at a glance (E7 0.3)
+## Supported and not supported at a glance
 
 **Supported** (behaves as on Node.js): classes (inheritance, abstract, accessors, `#private`, static blocks),
 interfaces and type aliases (also recursive and generic), generics, enums, literal types (`"GET" | "POST"`, `0 | 1`)
@@ -52,7 +52,7 @@ with narrowing and exhaustive `switch`, `T | null | undefined`, type predicates 
 destructuring, spread, optional chaining, `??`, template literals and tagged templates, closures, `try` / `catch` /
 `finally`, generators (`function*`, `yield*`, `[Symbol.iterator]`), `async` / `await`, `Promise` (`then`, `all`,
 `allSettled`, `any`, `race`, `new Promise`), top-level `await`, async generators (`async function*`, `for await`
-over them; e7vm 0.3.1), `for await` over arrays, regular expressions (literals, `RegExp`, `match` / `matchAll` /
+over them), `for await` over arrays, regular expressions (literals, `RegExp`, `match` / `matchAll` /
 `replace` / `split`), `Map`, `Set`, `Date`, `JSON` (typed with `as T`), `BigInt`, typed arrays (`Uint8Array` ...
 `Float64Array`, `BigInt64Array`), `DataView`, `structuredClone`, ES modules (named, default, namespace imports,
 re-exports), and E7's machine integers and `e7:crypto` / `e7:encoding` / `e7:json` / `e7:test` modules.
@@ -118,7 +118,7 @@ playground at https://e7lang.github.io/playground to verify the code.
 
 ## Error handling patterns
 
-`try`/`catch` exists (since 0.2), but it only catches errors that Node.js also throws: `throw`, `JSON.parse`
+`try`/`catch` exists, but it only catches errors that Node.js also throws: `throw`, `JSON.parse`
 syntax errors, `RangeError`s and the like from the standard library. E7's own checks — out-of-bounds reads,
 `as T` / `JSON.parse(...) as T` shape mismatches, integer division by zero — and budget / memory limits still end
 the call. The catch variable is `unknown`; narrow it before use:

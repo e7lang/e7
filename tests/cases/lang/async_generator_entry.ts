@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // An exported async entry function (called by the host: `e7` calls main and prints its result) that
 // consumes async generators; the expected output (.out) is Node's with `main().then(console.log)`.
 import { later } from "e7:test";

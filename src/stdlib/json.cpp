@@ -713,9 +713,6 @@ void registerJsonNatives(VM& vm) {
   vm.registerNative("JSON.stringifyIndentStr", "RR>R", j_stringifyIndentStr);
   vm.registerNative("JSON.parse", "RR>R", j_parse);
   vm.registerNative("JSON.tryParse", "RR>R", j_tryParse);
-  // the same with descriptors of recursive types ("@<n>" back-references, e7vm 0.3)
-  vm.registerNative("JSON.parseRec", "RR>R", j_parse);
-  vm.registerNative("JSON.tryParseRec", "RR>R", j_tryParse);
   vm.registerNative("JSON.lastError", ">R", j_lastError);
 }
 

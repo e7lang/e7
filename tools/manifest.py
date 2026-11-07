@@ -14,7 +14,7 @@ Manifest fields (see docs/DEPLOYMENT.md):
   sha256          hex SHA-256 of the module file (the signed .e7b as served)
   rolloutPercent  0..100: clients whose bucket (SHA-256 of "<version>:<userId>") is below it take the module
   killSwitch      true: clients drop downloaded modules and run the bundled fallback
-  minVm           oldest e7vm that can run the module ("0.2.0"); read from the module header by default
+  minVm           oldest e7vm that can run the module ("0.1.0"); read from the module header by default
   serial          increasing number; clients reject manifests older than the newest they accepted
                   (default: the current Unix time), so an old manifest cannot be replayed to undo a kill switch
 
@@ -23,6 +23,7 @@ Only the Python standard library is used; signing runs `e7c --sign-file` (pass -
 import argparse, hashlib, json, os, shutil, struct, subprocess, sys, time
 
 MAGIC = b"E7B\0"
+FORMAT = 3  # the e7b format identifier (docs/BYTECODE.md)
 SIG_TRAILER = 76  # "E7S1" | key id (8) | Ed25519 signature (64)
 
 
@@ -32,7 +33,7 @@ def module_header(data):
         return None
     fmt, _flags, requires = struct.unpack_from("<III", data, 4)
     signed = len(data) >= SIG_TRAILER and data[-SIG_TRAILER:-SIG_TRAILER + 4] == b"E7S1"
-    return fmt, (requires if fmt >= 2 else 0), signed
+    return fmt, requires, signed
 
 
 def version_text(v):
@@ -43,7 +44,7 @@ def parse_version(s):
     s = s[1:] if s.startswith("v") else s
     parts = s.split(".")
     if len(parts) not in (2, 3) or not all(p.isdigit() and int(p) < 256 for p in parts):
-        raise ValueError("invalid version %r (expected e.g. 0.2 or 0.2.1)" % s)
+        raise ValueError("invalid version %r (expected e.g. 1.2 or 1.2.3)" % s)
     a, b, c = (list(map(int, parts)) + [0])[:3]
     return "%d.%d.%d" % (a, b, c)
 
@@ -91,8 +92,8 @@ def main():
         if hdr is None:
             sys.exit("manifest.py: %s is not an e7b module" % a.module)
         fmt, requires, signed = hdr
-        if fmt < 2:
-            sys.exit("manifest.py: %s has bytecode format %d; e7vm 0.2+ needs format 2 (recompile it)" % (a.module, fmt))
+        if fmt != FORMAT:
+            sys.exit("manifest.py: %s has bytecode format %d; e7vm reads format %d (recompile it)" % (a.module, fmt, FORMAT))
         if not signed and not a.allow_unsigned:
             sys.exit("manifest.py: %s is not signed (e7c --sign <seed>); clients only load signed modules" % a.module)
         try:

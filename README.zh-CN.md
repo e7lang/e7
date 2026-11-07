@@ -73,7 +73,7 @@ Linux（x64、arm64）、macOS（通用二进制）、Windows（x64）。压缩�
 什么都不想装：[Playground](https://e7lang.github.io/playground) 直接在浏览器里运行编译器和虚拟机（WebAssembly）。
 **Node.js / 浏览器：** [packages/e7](packages/e7) 是同一套编译器和虚拟机的 WebAssembly 版本，提供 JavaScript API
 （`compile`、`check`、`run`、`disassemble`）和 `e7-js` 命令行。它不发布到 npm 仓库（E7 面向原生 App），需要时从 GitHub
-Release 下载 [`e7lang-e7-0.3.1.tgz`](https://github.com/e7lang/e7/releases/download/v0.3.1/e7lang-e7-0.3.1.tgz)，再运行 `npm install ./e7lang-e7-0.3.1.tgz`。
+Release 下载 [`e7lang-e7-0.1.0.tgz`](https://github.com/e7lang/e7/releases/download/v0.1.0/e7lang-e7-0.1.0.tgz)，再运行 `npm install ./e7lang-e7-0.1.0.tgz`。
 
 **从源码构建：** 需要 CMake ≥ 3.16 和支持 C++17 的编译器（GCC、Clang、MSVC），Ninja 可选。
 
@@ -173,7 +173,7 @@ Kotlin、Swift、C# 的流程相同：创建 VM（可选地配置受信公钥）
 Swift 项目可直接通过 Swift Package Manager 引入：
 
 ```swift
-// Package.swift：.package(url: "https://github.com/e7lang/e7.git", from: "0.3.1")
+// Package.swift：.package(url: "https://github.com/e7lang/e7.git", from: "0.1.0")
 //                .product(name: "E7VM", package: "e7")
 import E7VM
 
@@ -187,7 +187,7 @@ Android 直接从 Maven 引入 AAR：
 
 ```kotlin
 dependencies {
-    implementation("org.e7vm:e7vm-android:0.3.1")   // 桌面 JVM 用 org.e7vm:e7vm:0.3.1
+    implementation("org.e7vm:e7vm-android:0.1.0")   // 桌面 JVM 用 org.e7vm:e7vm:0.1.0
 }
 ```
 
@@ -285,6 +285,8 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
   - 类型：接口、类型别名、枚举、元组，以及**泛型**（函数、类、接口、类型别名；按类型参数分别编译）。
   - 语法：带默认值和剩余元素的解构、对象展开、`?.`（整条链短路）、`??`/`??=`、模板字符串、`for...of`、`switch`、标签语句。
   - 错误处理：`try`/`catch`/`finally`，捕获 Node.js 也会抛出的错误。
+  - 生成器、`async`/`await`、`Promise`（宿主充当事件循环；宿主函数可以是异步的）、异步生成器与 `for await`。
+  - 正则表达式（字面量在编译期检查，命名分组有类型；匹配受指令预算约束）、对象字面量的 getter/setter、字面量类型、递归接口。
   - 多文件 `import`/`export`，以及类型收窄。
 - **输出与 Node.js 一致。** 每个测试程序的输出都与 Node.js 逐字节比对；`console.log` 的格式与 Node 的 `util.inspect`
   相同，Math 函数在所有平台上逐位一致（采用 V8 的 fdlibm）。
@@ -298,7 +300,8 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 - **标准库。**
   - `Math`、`Number`、`String`、`Array`（`map`/`filter`/`reduce`/`sort` …）、`Map`、`Set`、`bigint`、`Date`（UTC）。
   - `JSON`：`JSON.parse(text) as T` 会按类型 `T` **校验**结果。
-  - `Uint8Array`/`ArrayBuffer`/`DataView`、`TextEncoder`/`TextDecoder`、`encodeURIComponent`。
+  - 类型化数组（`Uint8Array` … `Float64Array`、`BigInt64Array`）/`ArrayBuffer`/`DataView`、`TextEncoder`/`TextDecoder`、
+    `structuredClone`、`encodeURIComponent`。
 - **`e7:crypto`。**
   - 哈希：MD5、SHA-1、SHA-2、SHA-3、Keccak。
   - 密钥派生与消息认证：HMAC、HKDF、PBKDF2。
@@ -325,7 +328,7 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
 | Linux / macOS | `cmake -S . -B build && cmake --build build && ctest --test-dir build` | C/C++ |
 | Android | Maven `org.e7vm:e7vm-android`（AAR），或 `cd platform/android && ./gradlew :library:assembleRelease`，或 `ANDROID_NDK_HOME=... platform/android/build_android.sh` | Java/Kotlin：`platform/java/org/e7vm` |
 | JVM（桌面） | Maven `org.e7vm:e7vm`（jar 内含 Linux、macOS、Windows 的 JNI 库） | Java/Kotlin：`platform/java/org/e7vm` |
-| iOS / macOS（Swift） | Swift Package Manager：`.package(url: "https://github.com/e7lang/e7.git", from: "0.3.1")`，或 `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`.product(name: "E7VM", package: "e7")`（`platform/ios/E7VM/E7VM.swift`） |
+| iOS / macOS（Swift） | Swift Package Manager：`.package(url: "https://github.com/e7lang/e7.git", from: "0.1.0")`，或 `platform/ios/build_xcframework.sh` → `build-ios/e7vm.xcframework` | Swift：`.product(name: "E7VM", package: "e7")`（`platform/ios/E7VM/E7VM.swift`） |
 | Windows | `platform/windows/build_windows.ps1 [-ClangCl] [-Shared]`（VS 2022） | C/C++、C#：`platform/windows/E7VM.cs` |
 | .NET（Windows / Linux / macOS） | `dotnet add package E7VM` | C#：NuGet 包 [`E7VM`](https://www.nuget.org/packages/E7VM) |
 | WebAssembly（Node.js、浏览器） | `emcmake cmake -S . -B build-wasm && cmake --build build-wasm` → `e7wasm.js` + `e7wasm.wasm` | JavaScript：npm `@e7lang/e7`（[packages/e7](packages/e7)） |
@@ -342,10 +345,10 @@ CMake 选项：
 
 ## 安全与当前状态
 
-e7vm 就是为运行从网络下发的代码而设计的。发布前经过了 4 轮安全审查（每轮由单独运行的 AI 审查代理完成，尚未做第三方审计）、
+e7vm 就是为运行从网络下发的代码而设计的。发布前经过了 8 轮安全审查（每轮由单独运行的 AI 审查代理完成，尚未做第三方审计）、
 与 Node.js/OpenSSL 的差分测试、sanitizer 和模糊测试，所有发现的问题都已修复并配有回归测试。证据见 [docs/PRODUCTION.md](docs/PRODUCTION.md)。
-E7 目前是 **0.x** 版本：已完成全面测试和安全加固，但还没有在生产环境中运行过；次版本升级可能改动语言、C API 或字节码格式
-（见 [CHANGELOG.md](CHANGELOG.md)）。对 App 的建议：
+E7 0.1.0 是第一个版本：已完成全面测试和安全加固，但还没有在生产环境中运行过；1.0 之前的版本可能改动语言、C API 或字节码格式
+（通往 1.0 的计划见 [docs/ROADMAP.md](docs/ROADMAP.md)）。对 App 的建议：
 
 1. **如果脚本是在运行时从网络下载的，开启签名校验**（`require_signature` + 内置在 App 里的公钥），私钥只放在构建服务器上。
 2. **设置指令预算和内存上限**（例如 16–64 MiB）。
@@ -427,10 +430,11 @@ tests/ bench/ docs/                            third_party/     BearSSL（MIT）
 - [docs/SPEC.md](docs/SPEC.md)：语言规范（语法、类型系统、数值语义、标准库、与 TS 的差异）
 - [docs/TYPESCRIPT.md](docs/TYPESCRIPT.md)：TypeScript 特性支持对照表（支持、部分支持、不支持，以及 E7 中的替代写法）
 - [docs/EMBEDDING.md](docs/EMBEDDING.md)：C API、Android/iOS/Windows 集成、安全建议
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)：向 App 下发模块：密钥管理与轮换、签名清单（manifest）、灰度发布、紧急开关（kill switch）、回滚、按客户端 VM 版本使用 `--target`、依据实测设定指令预算和内存上限、错误上报、上线前的影子运行（shadow run）
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)：向 App 下发模块：密钥管理与轮换、签名清单（manifest）、灰度发布、紧急开关（kill switch）、回滚、客户端 VM 版本、依据实测设定指令预算和内存上限、错误上报、上线前的影子运行（shadow run）
 - [docs/BYTECODE.md](docs/BYTECODE.md)：`.e7b` 格式、指令集、验证规则、签名格式
 - [docs/DEBUGGING.md](docs/DEBUGGING.md)：`e7 debug`、调试信息、C 调试 API 与 WebAssembly JSON 协议
-- [docs/DESIGN.md](docs/DESIGN.md)：设计方案与决策记录
+- [docs/DESIGN.md](docs/DESIGN.md)：设计决策
+- [docs/ROADMAP.md](docs/ROADMAP.md)：0.1.0 包含的内容与后续计划（生产试点、1.0）
 - [docs/PRODUCTION.md](docs/PRODUCTION.md)：验证记录（测试、审查与证据）
 
 ## 许可

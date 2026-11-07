@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // async generators: generic pipelines, closures, object literal methods, default parameters, return
 // inside try / finally, a generator calling its own next() while it runs, optional and integer values
 async function* map<T, U>(src: AsyncIterable<T>, f: (x: T) => U): AsyncGenerator<U> {

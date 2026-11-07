@@ -17,11 +17,10 @@
 static int usage() {
   fprintf(stderr,
           "usage:\n"
-          "  e7c <entry.ts|.e7> [-o out.e7b] [--debug] [--target <version>] [--sign <seed-hex-file>] [--disasm]\n"
+          "  e7c <entry.ts|.e7> [-o out.e7b] [--debug] [--sign <seed-hex-file>] [--disasm]\n"
           "      [--check] [--no-excerpt]\n"
           "      (default output: <entry>.e7b; with --disasm, a file is written only if -o is given)\n"
           "      --debug: include debug information (variable names, columns; see docs/DEBUGGING.md)\n"
-          "      --target 0.2: the module must run on e7vm 0.2 (features of newer VMs are errors)\n"
           "  e7c --keygen <name>        writes <name>.seed (secret) and <name>.pub (public key, hex)\n"
           "  e7c --disasm-file <file.e7b>\n"
           "  e7c --info <file.e7b>       format, required e7vm version, signature, exports\n"
@@ -91,7 +90,6 @@ int main(int argc, char** argv) {
   std::string input, output, signFile, detachedFile, verifyFile, sigFile;
   std::vector<std::string> trustFiles;
   bool disasm = false, checkOnly = false, excerpt = true, debugInfo = false;
-  uint32_t target = 0;
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
     if (a == "--version" || a == "-v") { printf("e7c %s\n", E7_VERSION); return 0; }
@@ -104,9 +102,6 @@ int main(int argc, char** argv) {
     else if (a == "--disasm") disasm = true;
     else if (a == "--check") checkOnly = true;
     else if (a == "--debug" || a == "-g") debugInfo = true;
-    else if (a == "--target" && i + 1 < argc) {
-      if (!e7::parseVersion(argv[++i], target)) { fprintf(stderr, "e7c: invalid --target %s (expected e.g. 0.2)\n", argv[i]); return 2; }
-    }
     else if (a == "--no-excerpt") excerpt = false;
     else if (a == "--keygen" && i + 1 < argc) {
       std::string name = argv[++i];
@@ -139,8 +134,8 @@ int main(int argc, char** argv) {
       info.struct_size = sizeof info;
       e7_status st = e7_inspect((const uint8_t*)data.data(), data.size(), &info);
       if (st == E7_ERR_LOAD || st == E7_ERR_ARGS) { fprintf(stderr, "e7c: %s is not a valid e7b module\n", argv[i]); return 1; }
-      printf("format:   %u%s\n", info.format, (info.format >= e7::kMinFormatVersion && info.format <= e7::kFormatVersion) ? "" : " (not supported by this e7vm)");
-      if (info.format >= 2) printf("requires: e7vm %s\n", e7::versionString(info.requires_version).c_str());
+      printf("format:   %u%s\n", info.format, info.format == e7::kFormatVersion ? "" : " (not supported by this e7vm)");
+      if (info.format == e7::kFormatVersion) printf("requires: e7vm %s\n", e7::versionString(info.requires_version).c_str());
       printf("debug:    %s\n", info.has_debug_info ? "yes" : "no");
       if (info.is_signed) printf("signed:   key id %s\n", toHex(info.key_id, 8).c_str());
       else printf("signed:   no\n");
@@ -162,7 +157,6 @@ int main(int argc, char** argv) {
   if (input.empty()) return usage();
   e7::CompileOptions copts;
   copts.debugInfo = debugInfo;
-  copts.target = target;
   e7::CompileOutput co = e7::compileProgram(input, e7::readFileFromDisk, copts);
   if (!co.ok) {
     fprintf(stderr, "%s", formatCompileErrors(co, excerpt).c_str());

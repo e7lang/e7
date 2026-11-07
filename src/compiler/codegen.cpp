@@ -252,7 +252,7 @@ struct Gen {
   size_t pc() const { return D->code.size(); }
   // Source-file segments of the current function (pc, string-constant index of the file name).
   // Only recorded when code comes from a file other than the entry (multi-file programs), so that
-  // stack traces can name the right file; appended to the line table as a backward-compatible
+  // stack traces can name the right file; appended to the line table as an
   // extension (see kLineExtMarker in core/module.h).
   std::vector<std::pair<uint32_t, uint32_t>> fileSegs;
   std::string segFileRaw, segFileDisp;
@@ -456,7 +456,6 @@ struct Gen {
   std::string jsonDescriptor(Type* t);
   std::string jsonDescriptorOf(Type* t);
   std::vector<Type*> jsonStack_;  // object types being described (a recursive type refers back: "@<depth>")
-  bool jsonRecursive_ = false;    // the descriptor has a back-reference (natives of e7vm 0.3)
   Loc jsonLoc_;  // the JSON.parse / tryParse expression whose descriptor is being built (errors)
   void loadInt(uint16_t dst, int64_t v) {
     if (v >= INT32_MIN && v <= INT32_MAX) emitBx(OP_LOADI, dst, (uint32_t)(int32_t)v);
@@ -535,7 +534,7 @@ struct Gen {
   // for await: the awaited element (a value is awaited as Promise.resolve(value)); two promise ticks as
   // for the AsyncFromSyncIterator of the specification
   uint16_t forAwaitValue(uint16_t v, Type* et, Type** outT);
-  // generators (0.3)
+  // generators
   static uint8_t kindCode(Type* t) { return !t || t->t == TT::Void ? 0 : (uint8_t)(kindOf(t) + 1); }
   Type* bodyRet(FuncSym* f) {
     if (f->isGenerator)
@@ -560,7 +559,7 @@ struct Gen {
   // run to its end is closed (return())
   uint16_t iterToArray(uint16_t coll, Type* t, int maxN, Type* elemT);
   void genGenMethod(Expr* e, uint16_t dst);
-  // async generators (0.3.1)
+  // async generators
   // awaits the value v of type t (a Promise<X>, or a value awaited as Promise.resolve(v); t void: v is
   // unused and undefined is awaited) into dst of type dstT (kNoReg: the value is dropped)
   void awaitValue(uint16_t v, Type* t, uint16_t dst, Type* dstT);
@@ -589,7 +588,7 @@ struct Gen {
       args.push_back(r);
     }
   }
-  // promises (0.3)
+  // promises
   void genAwait(Expr* e, uint16_t dst);
   void genPromiseCall(Expr* e, uint16_t dst);
   void genNewPromise(Expr* e, uint16_t dst);
@@ -1090,7 +1089,7 @@ void Gen::genFunctionOnce(FuncSym* f) {
                       typeName(g->elem) + "'");
       rk = 0;
     }
-    // an async generator (0.3.1) starts like a generator: its requests are answered by the VM's queue
+    // an async generator starts like a generator: its requests are answered by the VM's queue
     D->fflags = makeFflags(g->t == TT::AsyncGenerator ? FK_ASYNC_GENERATOR : FK_GENERATOR, yk, nk, rk);
     emit(OP_GEN_START);
   }
@@ -1670,7 +1669,7 @@ void Gen::genStmt(Stmt* s) {
           emit(OP_LOADUNDEF, r);
         }
       } else if (fn->isAsync && fn->isGenerator) {
-        // `return v` in an async generator awaits v (0.3.1); then finally blocks run
+        // `return v` in an async generator awaits v; then finally blocks run
         Type* t = s->expr->type ? s->expr->type : T.voidT();
         uint16_t v = kNoReg;
         if (t->t == TT::Void) genDiscard(s->expr);
@@ -1887,7 +1886,7 @@ void Gen::genForOf(Stmt* s) {
     t = T.array(t->vt >= 9 ? T.bigint() : T.number());
   }
   if (s->isAwait && (t->t == TT::AsyncGenerator || (t->t == TT::Class && t->cls->methodIdx.count("[Symbol.asyncIterator]")))) {
-    // for await over an async iterable (0.3.1)
+    // for await over an async iterable
     Type* gt = nullptr;
     uint16_t it = asyncIteratorOf(coll, t, &gt);
     if (gt) genForAwaitIter(s, label, it, gt);
@@ -2019,7 +2018,7 @@ void Gen::genForOf(Stmt* s) {
   release(m0);
 }
 
-// ======================================================================= generators (0.3)
+// ======================================================================= generators
 uint16_t Gen::iteratorOf(uint16_t coll, Type* t, Type** gt) {
   if (t->t == TT::Generator) {
     *gt = t;
@@ -2280,7 +2279,7 @@ void Gen::genYield(Expr* e, uint16_t dst) {
   release(m0);
 }
 
-// ======================================================================= async generators (0.3.1)
+// ======================================================================= async generators
 void Gen::awaitValue(uint16_t v, Type* t, uint16_t dst, Type* dstT) {
   size_t m0 = mark();
   uint16_t p;
@@ -2500,7 +2499,7 @@ void Gen::genAsyncYield(Expr* e, uint16_t dst) {
     emit(OP_AWAIT, res, req);
     emit(OP_GETF_I, done, res, 1);
     jump(OP_JF, done, yieldIt);
-    // (the value is not awaited again: the current specification and V8, see docs/DESIGN-0.3.md)
+    // (the value is not awaited again: the current specification and V8, see docs/DESIGN.md)
     if (rk != K_V && kindCode(gt->ret) && rk == ik) {
       emit(op3(ik, OP_GETF_I, OP_GETF_F, OP_GETF_R), iv, res, 0);
       boxIfNeeded(retReg, iv, gt->elem, g->ret);
@@ -2722,7 +2721,7 @@ void Gen::genGenMethod(Expr* e, uint16_t dst) {
     if (mode == 1) sk = 3;
   }
   if (gt->t == TT::AsyncGenerator) {
-    // an async generator (0.3.1): a promise of the IteratorResult record (built by the VM)
+    // an async generator: a promise of the IteratorResult record (built by the VM)
     uint16_t p = dst != kNoReg && kindOfReg(dst) == K_R ? dst : temp(K_R);
     emitAsyncRequest(gt, it, p, sent, sk, mode, e->cls);
     if (dst != kNoReg) mov(dst, p, K_R);
@@ -2760,14 +2759,14 @@ void Gen::genGenMethod(Expr* e, uint16_t dst) {
   release(m0);
 }
 
-// ======================================================================= promises (0.3)
+// ======================================================================= promises
 void Gen::emitSynthFns() {
   for (int kind : synthKinds) {
     FuncDesc fd;
     D = &fd;
     if (kind >= 5) {
       // (reason) => { iterator.return() (its errors dropped); throw reason }: the async-from-sync
-      // iterator's closeIterator (0.3.1); the sync generator is upvalue 0, kind - 5 its yielded kind
+      // iterator's closeIterator; the sync generator is upvalue 0, kind - 5 its yielded kind
       Kind k = (Kind)(kind - 5);
       fd.name = "closeIterator";
       fd.upvalKinds = {(uint8_t)K_R};
@@ -3619,10 +3618,9 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
         uint16_t text = gen(call->list[0]);
         uint16_t desc = temp(K_R);
         jsonLoc_ = e->loc;
-        jsonRecursive_ = false;
         loadStr(desc, utf8ToUtf16(jsonDescriptor(e->type)));
         uint16_t boxed = temp(K_R);
-        callNative(jsonRecursive_ ? "JSON.parseRec" : "JSON.parse", {text, desc}, boxed, 'R');
+        callNative("JSON.parse", {text, desc}, boxed, 'R');
         if (kindOf(e->type) != K_R) emit(kindOf(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, d, boxed);
         else mov(d, boxed, K_R);
         release(m0);
@@ -3634,10 +3632,9 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
         uint16_t text = gen(call->list[0]);
         uint16_t desc = temp(K_R);
         jsonLoc_ = e->loc;
-        jsonRecursive_ = false;
         loadStr(desc, utf8ToUtf16(jsonDescriptor(T.optional(e->type->elem, false, e->type->hasUndef))));
         uint16_t res = temp(K_R);
-        callNative(jsonRecursive_ ? "JSON.tryParseRec" : "JSON.tryParse", {text, desc}, res, 'R');
+        callNative("JSON.tryParse", {text, desc}, res, 'R');
         mov(d, res, K_R);
         release(m0);
         return;
@@ -5647,10 +5644,7 @@ std::string Gen::jsonDescriptor(Type* t) {
   if (t->t == TT::Object) {
     // a recursive type (D6): a back-reference to the enclosing object descriptor of this type
     for (size_t k = jsonStack_.size(); k-- > 0;)
-      if (jsonStack_[k] == t) {
-        jsonRecursive_ = true;
-        return "@" + std::to_string(jsonStack_.size() - k);
-      }
+      if (jsonStack_[k] == t) return "@" + std::to_string(jsonStack_.size() - k);
     jsonStack_.push_back(t);
     std::string d = jsonDescriptorOf(t);
     jsonStack_.pop_back();

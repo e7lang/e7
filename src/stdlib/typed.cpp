@@ -1,4 +1,4 @@
-// Typed arrays other than Uint8Array (0.3): Int8Array ... Float64Array, BigInt64Array, BigUint64Array.
+// Typed arrays other than Uint8Array: Int8Array ... Float64Array, BigInt64Array, BigUint64Array.
 // They are byte views (BytesObj) over an ArrayBuffer with the element kind in Obj::flags; elements are
 // little-endian, as on every platform e7vm runs on (JavaScript uses the platform's byte order).
 #include <algorithm>

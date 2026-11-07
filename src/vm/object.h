@@ -12,9 +12,9 @@ namespace e7 {
 
 enum class OT : uint8_t {
   String, Array, Bytes, Buffer, Instance, Closure, Cell, Box, Map, BigInt, Undefined, Handle,
-  Coro,     // 0.3: a generator or async function activation (DESIGN-0.3.md D1)
-  Promise,  // 0.3: a promise (D2)
-  RegExp,   // 0.3: a regular expression (D4)
+  Coro,     // a generator or async function activation (DESIGN.md D1)
+  Promise,  // a promise (D2)
+  RegExp,   // a regular expression (D4)
 };
 
 namespace re { struct Program; struct Limits; }
@@ -36,7 +36,7 @@ struct StrObj : Obj {
 
 // Obj::flags of an Array: an Error object, [name, message] (created only by the VM and the Error natives)
 constexpr uint16_t kArrFlagError = 2;
-// 0.3 (D4): the result of a regular expression match (exec / match / matchAll): an array of strings
+// The result of a regular expression match (D4; exec / match / matchAll): an array of strings
 // (undefined for groups that did not participate) whose block also holds a MatchExtra after the
 // ArrObj; kArrFlagIndices: the `indices` array of a match with the d flag (MatchExtra::groups only)
 constexpr uint16_t kArrFlagMatch = 4;
@@ -140,16 +140,16 @@ struct HandleObj : Obj {
   int64_t id;
 };
 
-// A coroutine: the frame of a generator or async function while it is not running (DESIGN-0.3.md D1).
+// A coroutine: the frame of a generator or async function while it is not running (DESIGN.md D1).
 // While it runs, its registers are in an ordinary frame on the VM stack (Frame::coro points here) and
 // the saved copy below is stale (not traced by the collector).
-// CO_AWAIT_RETURN (async generators, 0.3.1): the specification's awaiting-return state (return(v) waits
+// CO_AWAIT_RETURN (async generators): the specification's awaiting-return state (return(v) waits
 // for v before it completes). An async generator suspended at an AWAIT is CO_SUSPENDED (the
 // specification's executing state): the instruction at pc tells a YIELD from an AWAIT.
 enum CoroState : uint8_t { CO_START, CO_SUSPENDED, CO_RUNNING, CO_DONE, CO_AWAIT_RETURN };
 struct PromiseObj;
 struct ClassRT;
-// A request to an async generator (0.3.1): next(v) / throw(e) / return(v), queued until the generator
+// A request to an async generator: next(v) / throw(e) / return(v), queued until the generator
 // answers it (the AsyncGeneratorRequest of the specification). Its promise is resolved with an
 // IteratorResult record of class `cls` ({ value, done }); a primitive value in a `T | undefined` field
 // is boxed with elemVT.
@@ -173,7 +173,7 @@ struct CoroObj : Obj {
     // fn == nullptr: a native iterator (D4, String.prototype.matchAll): RESUME gives the elements of the
     // array `items` in order (pc is the next index)
     Obj* items;
-    // an async generator (fflags kind 3, 0.3.1): its request queue, null until the first request (its
+    // an async generator (fflags kind 3): its request queue, null until the first request (its
     // entries are counted in the heap)
     std::deque<AGenRequest>* queue;
   };
@@ -187,7 +187,7 @@ struct ClassRT {
   ClassRT* parent = nullptr;
   bool isRecord = false;
   bool isTuple = false;
-  bool presence = false;  // instances carry a presence mask (D7, format-3 class flag)
+  bool presence = false;  // instances carry a presence mask (D7, class flag kClassFlagPresence)
   bool nullProto = false; // a VM record class of regular expression groups: printed as [Object: null prototype]
   // records with getters / setters (kClassFlagAccessors): per field, bit 0 a getter, bit 1 a setter (the
   // field holds the accessor pair, see accessorGet in stdlib/util.h); empty for other classes
@@ -202,7 +202,7 @@ struct ClassRT {
   std::unordered_map<std::string, uint32_t> methodIndex;
 };
 
-// ---- promises (DESIGN-0.3.md D2)
+// ---- promises (DESIGN.md D2)
 enum PromiseState : uint8_t { PS_PENDING, PS_FULFILLED, PS_REJECTED };
 // What happens when a promise settles (a PromiseReaction of the specification, plus the internal
 // steps of await, finally and the combinators)
@@ -216,7 +216,7 @@ enum ReactionKind : uint8_t {
   RK_ALL_SETTLED,    // Promise.allSettled element: a { status, value } / { status, reason } record
   RK_ANY,            // Promise.any element: fulfill derived with the first value; collect the reasons
   RK_RACE,           // Promise.race: settle derived like the first one to settle
-  RK_AGEN_RETURN,    // 0.3.1: AsyncGeneratorAwaitReturn: async generator `a` completes its return(v) request
+  RK_AGEN_RETURN,    // AsyncGeneratorAwaitReturn: async generator `a` completes its return(v) request
 };
 struct PromiseObj;
 struct Reaction {
@@ -247,13 +247,12 @@ inline const uint64_t* InstObj::mask() const { return reinterpret_cast<const uin
 inline size_t presenceWords(uint32_t nfields) { return (nfields + 63) / 64; }
 
 // Whether field i of an instance is an own property: class fields always are; a record field is unless
-// its presence bit is clear (records with a mask) or, in records without one (0.2 modules), it holds
-// undefined (a missing optional property)
-inline bool fieldPresent(const InstObj* in, uint32_t i, const Obj* undef) {
+// the record has a presence mask and the field's bit is clear (a missing optional property). Records
+// whose properties can never be absent or hold undefined have no mask.
+inline bool fieldPresent(const InstObj* in, uint32_t i) {
   const ClassRT* c = in->cls;
-  if (!c->isRecord) return true;
-  if (c->presence) return (in->mask()[i / 64] >> (i % 64)) & 1;
-  return !(c->fieldVT[i] == VT_REF && in->fields()[i].r == undef);
+  if (!c->presence) return true;
+  return (in->mask()[i / 64] >> (i % 64)) & 1;
 }
 inline void setFieldPresent(InstObj* in, uint32_t i, bool on) {
   uint64_t bit = 1ull << (i % 64);

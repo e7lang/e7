@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // Getters and setters in object literals: `this` is the object (its fields, other accessors and
 // methods); getter / setter pairs, getter only (read-only), setter only; compound assignment and
 // ++ call the getter and the setter once each; closures captured by accessors; nested literals.

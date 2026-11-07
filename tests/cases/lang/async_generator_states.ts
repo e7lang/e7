@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // return() and throw() in every state of an async generator: not started, suspended at a yield,
 // running, awaiting, awaiting a return value, completed; finally blocks around yields
 async function* gen(label: string): AsyncGenerator<string, string> {

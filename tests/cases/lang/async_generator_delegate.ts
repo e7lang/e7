@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // yield* in async generators: values, next(v) arguments, return(v) and throw(e) are forwarded to the
 // inner async iterator; its return value is the value of the yield* expression
 async function* inner(name: string): AsyncGenerator<string, string, number> {

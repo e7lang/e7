@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Generates src/regexp/unicode_tables.inc: the Unicode data of the regular expression engine
-// (docs/DESIGN-0.3.md, D4), taken from the Node.js that runs this script, so that \p{...} and
+// (docs/DESIGN.md, D4), taken from the Node.js that runs this script, so that \p{...} and
 // case-insensitive matching give the same results as V8 (whose ICU this queries through RegExp).
 //
 //   node scripts/gen-regexp-unicode.mjs [--check]

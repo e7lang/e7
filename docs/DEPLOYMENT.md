@@ -10,7 +10,7 @@ phase before the first rollout. The client side is `E7ModuleManager`
 ```
 build server                                  CDN (static files)                app
 ------------                                  ------------------                ---
-e7c app.ts --target 0.2 --sign release.seed  →  app-2026.11.1.e7b   (immutable)
+e7c app.ts --sign release.seed               →  app-2026.11.1.e7b   (immutable)
 tools/manifest.py ... --sign release.seed     →  manifest.json       (short TTL)  →  E7ModuleManager.update():
                                                  manifest.json.sig                     verify manifest signature
                                                                                        rollout bucket, kill switch, minVm
@@ -43,25 +43,19 @@ belongs in an HSM or signing service and not on developer machines.
 ## 2. Building and signing modules
 
 ```sh
-e7c pricing.ts --target 0.2 --sign keys/release.seed -o dist/pricing-2026.11.1.e7b
-e7c --info dist/pricing-2026.11.1.e7b      # format 2, requires e7vm 0.2.0, signed: key id ..., exports
+e7c pricing.ts --sign keys/release.seed -o dist/pricing-2026.11.1.e7b
+e7c --info dist/pricing-2026.11.1.e7b      # format 3, requires e7vm 0.1.0, signed: key id ..., exports
 ```
 
-**One build per client VM line.** Every `.e7b` records the oldest e7vm that can run it (`requires`), computed
-from the instructions and natives it uses. A VM refuses modules that need a newer VM (`E7_ERR_VERSION`,
-`E7Exception.VERSION`) instead of failing in the verifier. `e7c --target <version>` makes the compiler
-refuse features that the target VM does not have, so the module is guaranteed to run there:
+**The minimum VM version.** Every `.e7b` records the oldest e7vm that can run it (`requires`), computed from the
+instructions and natives it uses (in 0.1.0 every module requires 0.1.0). A VM refuses a module that needs a newer
+VM, or that has another bytecode format, with `E7_ERR_VERSION` (`E7Exception.VERSION`) instead of failing in the
+verifier. `tools/manifest.py` copies `requires` into the manifest's `minVm`, so clients whose VM is too old skip
+the module without downloading it. If the apps in the field run different e7vm releases and a module needs a
+newer one, publish one manifest per VM line, each naming a module that line can run, and pick the manifest URL in
+the app from `E7VM.versionNumber()`.
 
-| clients run | build with | publish under |
-|---|---|---|
-| e7vm 0.2.x | `e7c --target 0.2` | `…/vm-0.2/manifest.json` |
-| e7vm 0.3.x (later) | `e7c --target 0.3` | `…/vm-0.3/manifest.json` |
-
-Pick the manifest URL in the app from `E7VM.versionNumber()` (or keep one manifest and rely on `minVm`, if
-all clients can run the same build). A module may also be published to newer VM lines unchanged: a 0.2 module
-runs on later VMs that still read its bytecode format.
-
-From JavaScript, `compile(source, { target: "0.2" })` and `inspect(bytecode)` (`@e7lang/e7`) do the same.
+From JavaScript, `inspect(bytecode)` (`@e7lang/e7`) reads the same header fields.
 
 ## 3. Manifests
 
@@ -74,7 +68,7 @@ From JavaScript, `compile(source, { target: "0.2" })` and `inspect(bytecode)` (`
 | `sha256` | hex string | SHA-256 of the module file exactly as served (the signed `.e7b`) |
 | `rolloutPercent` | number 0–100 | share of users that take this version (fractions allowed, e.g. `0.5`) |
 | `killSwitch` | boolean | `true`: every client drops downloaded modules and runs the bundled fallback |
-| `minVm` | string, optional | oldest e7vm that can run the module (`"0.2.0"`); clients below it skip without downloading |
+| `minVm` | string, optional | oldest e7vm that can run the module (`"0.1.0"`); clients below it skip without downloading |
 | `serial` | integer, optional | increases with every manifest you publish; see below |
 
 A kill-switch manifest needs only `{"killSwitch": true, "serial": N}`.
@@ -109,7 +103,7 @@ Kotlin (Android: call `update()` from WorkManager or a background thread, never 
 
 ```kotlin
 val mm = E7ModuleManager.Builder()
-    .manifestUrl("https://updates.example.com/pricing/vm-0.2/manifest.json")
+    .manifestUrl("https://updates.example.com/pricing/manifest.json")
     .trustedKeys(RELEASE_KEY, NEXT_RELEASE_KEY)
     .fetcher { url -> http.get(url).bytes() }               // your HTTP stack; no networking library is bundled
     .storageDir(File(context.filesDir, "e7/pricing"))
@@ -137,7 +131,7 @@ Swift:
 
 ```swift
 var cfg = E7ModuleManager.Configuration(
-  manifestURL: URL(string: "https://updates.example.com/pricing/vm-0.2/manifest.json")!,
+  manifestURL: URL(string: "https://updates.example.com/pricing/manifest.json")!,
   trustedKeys: [releaseKey, nextReleaseKey],
   storageDirectory: appSupport.appendingPathComponent("e7/pricing"),
   userId: installationId,
@@ -156,7 +150,7 @@ C# (the `E7VM` NuGet package; `Update()` blocks while downloading, so run it off
 ```csharp
 using var mm = new E7ModuleManager(new E7ModuleManager.Options
 {
-    ManifestUrl = new Uri("https://updates.example.com/pricing/vm-0.2/manifest.json"),
+    ManifestUrl = new Uri("https://updates.example.com/pricing/manifest.json"),
     TrustedKeys = { ReleaseKey, NextReleaseKey },
     Fetcher = url => http.GetByteArrayAsync(url).GetAwaiter().GetResult(),   // called on Update's thread
     StorageDirectory = Path.Combine(appData, "e7", "pricing"),
@@ -246,8 +240,8 @@ throws (`E7Exception` / `E7Error`: runtime error, budget or memory limit), or a 
 (validation, a mismatch with the server). `reportSuccess()` resets the count. After `maxFailures` (default 3)
 **consecutive** failures the manager reports a rollback, marks that module bad (it will not be activated
 again, even if the manifest still names it), and activates the previous good module, or the fallback when there
-is none. A module that no longer loads (e.g. after an app update with a newer VM that dropped its format) is
-dropped the same way at `start()`.
+is none. A stored module that no longer loads (e.g. after an app update whose VM reads another bytecode format)
+is dropped the same way at `start()`.
 
 ## 8. Sizing the instruction budget and memory limit
 
@@ -282,8 +276,8 @@ manifest itself was the problem; `status` is an `e7_status` code (an `E7Status` 
 | the manager cannot write its storage directory | `E7_ERR_STATE` (12) |
 
 Send these with the app version, `E7VM.version()` and the platform to your telemetry, and alert per module
-version: a burst of `SIGNATURE` errors means a broken publish (or an attack), `VERSION` errors mean a build for
-the wrong `--target`, rollbacks mean a bad module. Do not include user data in messages you add yourself;
+version: a burst of `SIGNATURE` errors means a broken publish (or an attack), `VERSION` errors mean a module
+published for clients whose VM is too old, rollbacks mean a bad module. Do not include user data in messages you add yourself;
 script error messages contain only the module's file names, line numbers and the script's own message text.
 
 ## 10. Shadow run before the first rollout
@@ -319,7 +313,7 @@ fun price(order: Order): Double {
 ## 11. Checklist
 
 - [ ] Release seed in an HSM / signing service; app ships with the current and the next public key.
-- [ ] Modules built with `--target` for each client VM line and signed; `e7c --info` checked in CI.
+- [ ] Modules signed, and their format and `requires` checked with `e7c --info` in CI.
 - [ ] `manifest.json` + `.sig` produced by `tools/manifest.py`, verified with `e7c --verify-file`, increasing `serial`.
 - [ ] A complete fallback module bundled in the app; `selfTest()` exported by every module.
 - [ ] Budget and memory limit set from measurements; `reportFailure` / `reportSuccess` wired.

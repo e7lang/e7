@@ -1,4 +1,4 @@
-// Several VMs on several threads at once (docs/ROADMAP.md 0.2.5, P0.5), through the C API only and
+// Several VMs on several threads at once, through the C API only and
 // following its contract (each e7_vm is used by one thread; e7_debug_pause may be called from any
 // thread). Every worker compiles the workload itself (the compiler runs concurrently too), creates
 // its own VM (half of them with suspension and small budget slices), runs the same sequence of calls

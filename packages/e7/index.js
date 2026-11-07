@@ -3,7 +3,7 @@
 import createE7 from "./wasm/e7wasm.js";
 
 /** Version of this npm package. */
-export const version = "0.3.1";
+export const version = "0.1.0";
 
 const STATUS = [
   "ok", "suspended", "runtime_error", "budget_exceeded", "out_of_memory", "stack_overflow", "load_error",
@@ -150,16 +150,6 @@ function hexToBytes(h) {
   return out;
 }
 
-// "0.2" | "0.3.1" | "v0.2" | 0x000200 -> version text for e7w_compile_target (validated in C)
-function targetString(t) {
-  if (typeof t === "number") {
-    if (!Number.isInteger(t) || t < 0 || t > 0xffffff) throw new E7Error(`invalid target version ${t}`);
-    return versionString(t);
-  }
-  if (typeof t !== "string") throw new TypeError('compile(): target must be a version string such as "0.2"');
-  return t;
-}
-
 function versionString(v) {
   return `${(v >> 16) & 0xff}.${(v >> 8) & 0xff}.${v & 0xff}`;
 }
@@ -214,10 +204,8 @@ class E7 {
     try {
       for (const [k, v] of files) this._withString(k, (kp) => this._withString(v, (vp, vl) => m._e7w_file_add(kp, vp, vl)));
       const flags = options.debug ? 1 : 0;
-      const target = options.target == null ? "" : targetString(options.target);
       const st = this._withString(source, (sp, sl) =>
-        this._withString(fileName, (np) => this._withString(target, (tp) => m._e7w_compile_target(sp, sl, np, flags, tp))));
-      if (st === 10) throw new E7Error(this._json(m._e7w_diagnostics())[0]?.message ?? "invalid compile options");
+        this._withString(fileName, (np) => m._e7w_compile_ex(sp, sl, np, flags)));
       if (st === 0) {
         const ptr = m._e7w_bytes_ptr();
         const len = m._e7w_bytes_len();
@@ -256,7 +244,7 @@ class E7 {
       status: STATUS[i.status] ?? `status_${i.status}`,
       code: i.status,
       format: i.format,
-      requiresVersion: i.format >= 2 ? versionString(i.requires) : null,
+      requiresVersion: i.requires ? versionString(i.requires) : null,
       requiresVersionNumber: i.requires,
       signed: i.signed,
       keyId: i.signed ? i.keyId : null,

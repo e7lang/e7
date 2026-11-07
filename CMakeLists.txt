@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(e7vm VERSION 0.3.1 LANGUAGES C CXX)
+project(e7vm VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -197,7 +197,7 @@ if(EMSCRIPTEN)
     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8
     # playground API, then the structured API used by the npm package (packages/e7), then the
     # debugger API (docs/DEBUGGING.md)
-    -sEXPORTED_FUNCTIONS=_e7w_run,_e7w_output,_e7w_result,_e7w_error,_e7w_bytecode_size,_e7w_version,_e7w_disasm,_malloc,_free,_e7w_files_clear,_e7w_file_add,_e7w_compile,_e7w_diagnostics,_e7w_bytes_ptr,_e7w_bytes_len,_e7w_disasm_bytes,_e7w_exports,_e7w_args_clear,_e7w_arg_number,_e7w_arg_bool,_e7w_arg_null,_e7w_arg_string,_e7w_arg_bytes,_e7w_arg_int,_e7w_exec,_e7w_output_json,_e7w_result_json,_e7w_compile_ex,_e7w_compile_target,_e7w_inspect,_e7w_dbg_create,_e7w_dbg_set_breakpoints,_e7w_dbg_breakpoints,_e7w_dbg_break_on_error,_e7w_dbg_break_on_caught,_e7w_dbg_launch,_e7w_dbg_resume,_e7w_dbg_pause,_e7w_dbg_stack,_e7w_dbg_scopes,_e7w_dbg_variables,_e7w_dbg_evaluate,_e7w_dbg_terminate)
+    -sEXPORTED_FUNCTIONS=_e7w_run,_e7w_output,_e7w_result,_e7w_error,_e7w_bytecode_size,_e7w_version,_e7w_disasm,_malloc,_free,_e7w_files_clear,_e7w_file_add,_e7w_compile,_e7w_diagnostics,_e7w_bytes_ptr,_e7w_bytes_len,_e7w_disasm_bytes,_e7w_exports,_e7w_args_clear,_e7w_arg_number,_e7w_arg_bool,_e7w_arg_null,_e7w_arg_string,_e7w_arg_bytes,_e7w_arg_int,_e7w_exec,_e7w_output_json,_e7w_result_json,_e7w_compile_ex,_e7w_inspect,_e7w_dbg_create,_e7w_dbg_set_breakpoints,_e7w_dbg_breakpoints,_e7w_dbg_break_on_error,_e7w_dbg_break_on_caught,_e7w_dbg_launch,_e7w_dbg_resume,_e7w_dbg_pause,_e7w_dbg_stack,_e7w_dbg_scopes,_e7w_dbg_variables,_e7w_dbg_evaluate,_e7w_dbg_terminate)
   set_target_properties(e7wasm PROPERTIES SUFFIX ".js")
 endif()
 

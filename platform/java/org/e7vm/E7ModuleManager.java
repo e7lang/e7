@@ -622,7 +622,7 @@ public final class E7ModuleManager {
       return m;
     }
 
-    // "0.2", "0.2.1", "v0.2" -> major << 16 | minor << 8 | patch
+    // "1.2", "1.2.3", "v1.2" -> major << 16 | minor << 8 | patch
     static int parseVersion(String s) {
       String t = s.startsWith("v") ? s.substring(1) : s;
       String[] p = t.split("\\.", -1);

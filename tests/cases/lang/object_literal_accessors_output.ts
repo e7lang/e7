@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // The accessors of an object literal are own enumerable properties, in the literal's order:
 // Object.keys lists them; JSON.stringify, spread, rest, Object.values / entries and Object.assign
 // call the getters; console.log prints [Getter] / [Setter] / [Getter/Setter] without calling them (as

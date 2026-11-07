@@ -512,7 +512,7 @@ int main() {
     }
     CHECK(first[0] == first[1]);
   }
-  // 0.2: versions, struct sizes, inspect, gc stats
+  // versions, struct sizes, inspect, gc stats
   {
     CHECK(e7_version_number() == ((uint32_t)E7_VERSION_MAJOR << 16 | E7_VERSION_MINOR << 8 | E7_VERSION_PATCH));
     std::vector<uint8_t> bc = compile("export function main(): number { return 7; }");
@@ -520,7 +520,7 @@ int main() {
     memset(&info, 0, sizeof info);
     info.struct_size = sizeof info;
     CHECK(e7_inspect(bc.data(), bc.size(), &info) == E7_OK);
-    CHECK(info.format == 2 && info.requires_version == 0x000200 && !info.is_signed && !info.has_debug_info);
+    CHECK(info.format == 3 && info.requires_version == 0x000100 && !info.is_signed && !info.has_debug_info);
     uint8_t seed[32] = {1, 2, 3};
     uint8_t* signedBc = nullptr;
     size_t signedLen = 0;
@@ -529,13 +529,13 @@ int main() {
     info.struct_size = sizeof info;
     CHECK(e7_inspect(signedBc, signedLen, &info) == E7_OK && info.is_signed == 1);
     e7_free(signedBc);
-    // a module needing a newer VM, and an old format, are rejected with E7_ERR_VERSION
+    // a module needing a newer VM, and another bytecode format, are rejected with E7_ERR_VERSION
     std::vector<uint8_t> newer = patchHeader(bc, 12, 0x630000);
-    std::vector<uint8_t> older = patchHeader(bc, 4, 1);
+    std::vector<uint8_t> other = patchHeader(bc, 4, 2);
     memset(&info, 0, sizeof info);
     info.struct_size = sizeof info;
     CHECK(e7_inspect(newer.data(), newer.size(), &info) == E7_ERR_VERSION && info.requires_version == 0x630000);
-    CHECK(e7_inspect(older.data(), older.size(), &info) == E7_ERR_VERSION && info.format == 1);
+    CHECK(e7_inspect(other.data(), other.size(), &info) == E7_ERR_VERSION && info.format == 2);
     std::vector<uint8_t> junk(40, 7);
     CHECK(e7_inspect(junk.data(), junk.size(), &info) == E7_ERR_LOAD);
     info.struct_size = 0;
@@ -544,7 +544,8 @@ int main() {
     e7_module* m = nullptr;
     CHECK(e7_load(vm, newer.data(), newer.size(), &m) == E7_ERR_VERSION);
     CHECK(strstr(e7_last_error(vm), "requires e7vm 99.0.0") != nullptr);
-    CHECK(e7_load(vm, older.data(), older.size(), &m) == E7_ERR_VERSION);
+    CHECK(e7_load(vm, other.data(), other.size(), &m) == E7_ERR_VERSION);
+    CHECK(strstr(e7_last_error(vm), "e7b format 2 is not supported") != nullptr);
     CHECK(e7_load(vm, bc.data(), bc.size(), &m) == E7_OK);
     e7_vm_free(vm);
     // struct_size: an older (shorter) e7_config keeps defaults for the fields it lacks; bad sizes fail
@@ -561,7 +562,7 @@ int main() {
     vm = e7_vm_new(&cfg);
     CHECK(vm != nullptr);
     e7_vm_free(vm);
-    // compile options: target versions
+    // compile options: struct size
     e7_compile_options co;
     e7_compile_options_init(&co);
     CHECK(co.struct_size == sizeof co);
@@ -569,14 +570,8 @@ int main() {
     uint8_t* out = nullptr;
     size_t outLen = 0;
     char* errs = nullptr;
-    co.target_version = 0x000200;
     CHECK(e7_compile_ex(src, strlen(src), "t.ts", &co, &out, &outLen, &errs) == E7_OK);
     e7_free(out);
-    co.target_version = 0x000100;
-    CHECK(e7_compile_ex(src, strlen(src), "t.ts", &co, &out, &outLen, &errs) == E7_ERR_COMPILE);
-    CHECK(errs && strstr(errs, "--target 0.1.0 is not supported"));
-    e7_free(errs);
-    errs = nullptr;
     co.struct_size = 3;
     CHECK(e7_compile_ex(src, strlen(src), "t.ts", &co, &out, &outLen, &errs) == E7_ERR_ARGS);
     // gc stats
@@ -601,7 +596,7 @@ int main() {
     e7_vm_free(vm);
   }
   testDetachedSignatures();
-  // try/catch security review (0.2.1): failing natives are charged, catching charges the frames it
+  // try/catch security review: failing natives are charged, catching charges the frames it
   // drops and builds no stack trace, a memory error in Map.set keeps the heap count consistent
   {
     const char* src =
@@ -645,7 +640,7 @@ int main() {
     CHECK(e7_call(vm, m2, "small", nullptr, 0, &r) == E7_OK && r.v.num == 3);
     e7_vm_free(vm);
   }
-  // 0.2.5 (equivalence runs, budget slice 1): with suspension enabled, a native that charges its work
+  // equivalence runs (budget slice 1): with suspension enabled, a native that charges its work
   // up front (pbkdf2) failed with E7_ERR_BUDGET whenever the rest of the current slice was smaller than
   // its work; it must complete and the call suspend at the next check instead. Without suspension the
   // budget still stops it.
@@ -689,7 +684,7 @@ int main() {
     }
     e7_vm_free(vm);
   }
-  // 0.2.6 (security review of 0.2.5): with suspension, a native may run past the end of the slice only
+  // security review: with suspension, a native may run past the end of the slice only
   // by a bounded amount (VM::kNativeOverrun); past it the call fails with E7_ERR_BUDGET instead of holding
   // the host thread (pbkdf2 charging up front; assertEqual charging per node of a DAG of 2^60 nodes).
   // console.log charges its formatting (a large BigInt, a shared object graph printed with %j), and
@@ -736,7 +731,7 @@ int main() {
     CHECK(runSliced("sortKeys", 100000000) == E7_ERR_MEMORY);
     e7_vm_free(vm);
   }
-  // 0.2.5 (coverage report): host natives receiving booleans, sized integers, Uint8Array and
+  // coverage report: host natives receiving booleans, sized integers, Uint8Array and
   // KeyHandle arguments; integer parameters of exported functions given numbers / booleans; argument
   // types that cannot convert
   {
@@ -792,7 +787,7 @@ int main() {
     CHECK(e7_call(vm, m, "run", args, 3, &r) == E7_ERR_ARGS && strstr(e7_last_error(vm), "expected a key handle"));
     e7_vm_free(vm);
   }
-  // 0.2.5 (coverage report): the frame limit reached by a callback from a native (a sort comparator)
+  // coverage report: the frame limit reached by a callback from a native (a sort comparator)
   // ends the call with E7_ERR_STACK; the VM stays usable
   {
     const char* src =
@@ -827,7 +822,7 @@ int main() {
     CHECK(e7_call(vm, m, "run", &a, 1, &r) == E7_OK && r.v.num == 2);
     e7_vm_free(vm);
   }
-  // 0.2.5 (GC stress review): the garbage made inside a callback from a native (a sort comparator)
+  // GC stress review: the garbage made inside a callback from a native (a sort comparator)
   // was never collected before the native returned: sorting 50,000 numbers with a comparator that
   // builds a string peaked at 150 MB and failed with an 8 MB limit. The collector now also runs during
   // callbacks; the elements being sorted stay rooted even when the comparator empties the array.
@@ -869,7 +864,7 @@ int main() {
     }
     e7_vm_free(vm);
   }
-  // 0.2.5 (allocation-failure injection): a module whose initializer failed (memory error, runtime
+  // allocation-failure injection: a module whose initializer failed (memory error, runtime
   // error) stayed in the VM with its constants and the globals it had set: no handle to it exists, so
   // that memory was lost for the life of the VM, a little more with every failed e7_load. It is
   // dropped now; a debugger forgets its functions (a breakpoint in it is unverified again).
@@ -993,7 +988,7 @@ int main() {
     CHECK(e7_call(vm, m, "syncCall", nullptr, 0, &ret) == E7_OK && ret.v.num == 3);
     e7_vm_free(vm);
   }
-  // ---- 0.3.1: async generators over host tickets (E7_PENDING between their awaits), the budget
+  // ---- async generators over host tickets (E7_PENDING between their awaits), the budget
   // suspending inside their bodies, and an async generator returned to the host
   {
     e7_vm* vm = e7_vm_new(nullptr);
@@ -1087,7 +1082,7 @@ int main() {
     CHECK(st == E7_OK && slices > 10 && ret.v.num == want * 20);
     e7_vm_free(vm);
   }
-  // 0.3 (D4): regular expressions are bounded like any other script work. A catastrophic pattern
+  // regular expressions (D4) are bounded like any other script work. A catastrophic pattern
   // (/(a+)+$/ on "aaa...!", 2^n steps) ends with E7_ERR_BUDGET, also with suspension (the matcher runs in a
   // native, which cannot suspend halfway: it may run past the slice by VM::kNativeOverrun, then fails);
   // a match that fits in the overrun completes and the call suspends after it. The backtracking stacks
@@ -1153,7 +1148,7 @@ int main() {
     CHECK(e7_ticks_used(vm) - t1 > 500000);
     e7_vm_free(vm);
   }
-  // 0.3.0 security review of the regular expressions (docs/PRODUCTION.md 3.8): replacement strings, the
+  // security review of the regular expressions (docs/PRODUCTION.md 3.8): replacement strings, the
   // results of replace, pattern compilation (new RegExp and module literals), programs shared by copies,
   // group-name classes and per-match setup are all charged to the budget or counted against the memory
   // limit, within bounded time

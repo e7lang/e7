@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Line / function / region coverage of the VM, the standard library, the crypto code, the C API and
-the compiler, measured over the whole ctest suite (docs/ROADMAP.md 0.2.5, P0.7).
+the compiler, measured over the whole ctest suite.
 
 Configures a clang build with E7_COVERAGE=ON (source-based coverage), runs ctest with every process
 writing its own raw profile, merges them and writes, into the build directory:

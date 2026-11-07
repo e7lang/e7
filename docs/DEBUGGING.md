@@ -93,17 +93,16 @@ Without it (release bytecode), the format is unchanged: `at fail (prices.ts:16)`
 byte offsets, like compiler diagnostics. A call is located at the callee's name and a property access at the
 property name (like V8); an index expression at its `[`.
 
-**Compatibility.** The debug information is stored as an extension of each function's line table that older VMs
-skip (see [BYTECODE.md](BYTECODE.md#1-file-format)), so a module compiled with `--debug` loads in any e7vm 1.x.
-The module header sets flag bit 0 when debug information is present. The verifier checks the debug section like
+**Format.** The debug information is stored as an extension of each function's line table (see
+[BYTECODE.md](BYTECODE.md#1-file-format)); it does not change the code, and a module compiled with `--debug` runs
+the same with or without a debugger. The module header sets flag bit 0 when debug information is present. The verifier checks the debug section like
 code (register indices and kinds, instruction ranges, statement boundaries at instruction starts): it is
 untrusted input too.
 
 ## 3. The `debugger;` statement
 
 `debugger;` compiles to a `DEBUGGER` instruction. Without a debugger it does nothing (as in Node.js without an
-inspector); with one, execution stops there (`E7_STOP_DEBUGGER`). A module that contains `debugger;` needs a VM
-that knows the instruction (this release or later); older VMs reject it at load time ("invalid opcode").
+inspector); with one, execution stops there (`E7_STOP_DEBUGGER`).
 
 ## 4. Command-line debugger: `e7 debug`
 

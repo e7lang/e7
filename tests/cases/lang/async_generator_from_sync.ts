@@ -1,4 +1,3 @@
-// @requires-vm: 0.3.1
 // yield* of sync iterables in async generators (the async-from-sync iterator of the specification):
 // arrays of values and of promises, sync generators with finally blocks, iterable classes; the order of
 // the jobs interleaved with other promise chains

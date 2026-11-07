@@ -10,8 +10,8 @@ App: e7_config.trusted_keys = release.pub → e7_load() checks the signature + v
 ```
 
 For apps that receive modules over the air, [DEPLOYMENT.md](DEPLOYMENT.md) describes the complete flow: key
-management and rotation, signed manifests, staged rollout, kill switch, rollback, `e7c --target` per client VM
-version, sizing limits from measurements, error reporting and a shadow-run phase. `E7ModuleManager` (Java/Kotlin,
+management and rotation, signed manifests, staged rollout, kill switch, rollback, the minimum VM version of a
+module, sizing limits from measurements, error reporting and a shadow-run phase. `E7ModuleManager` (Java/Kotlin,
 Swift and C#) implements the client side.
 
 - **Signing is optional.** A plain `e7c app.ts -o app.e7b` module runs anywhere. Signing only adds a
@@ -26,9 +26,9 @@ Swift and C#) implements the client side.
   On the command line, `e7 --trust release.pub app.e7b` is the equivalent of the last row.
 - Generate keys: `e7c --keygen release` produces `release.seed` (32-byte private key seed, hex, **keep secret**) and `release.pub` (public key, built into the app).
 - Multiple public keys are supported (key rotation): pass N×32 bytes in `trusted_keys`.
-- `.e7b` carries a format version and the minimum e7vm version it needs; a VM rejects a module it cannot run with
-  `E7_ERR_VERSION`. Build with `e7c --target <version>` for the oldest app version you still serve, or keep one
-  build per VM version and pick it with `e7_inspect` / `e7c --info` (see [BYTECODE.md](BYTECODE.md#5-compatibility)).
+- `.e7b` carries its bytecode format and the oldest e7vm that can run it (`requires`); a VM rejects a module it
+  cannot run with `E7_ERR_VERSION`. `e7_inspect` / `e7c --info` read both without loading the module (see
+  [BYTECODE.md](BYTECODE.md#5-versions-and-compatibility)).
 - Source can also be compiled on the device (`e7_compile` / `e7_load_source`, requires `E7_WITH_COMPILER=ON`);
   if you only need to run `.e7b`, use `-DE7_WITH_COMPILER=OFF` to reduce size.
 
@@ -39,10 +39,10 @@ Swift and C#) implements the client side.
 | `e7_config_init` / `e7_vm_new` / `e7_vm_free` | Create/destroy a VM. Config: `memory_limit`, `stack_slots`, `max_frames`, `suspend_on_budget`, `require_signature`, `trusted_keys`, `gc_growth_percent`. Always fill the struct with `e7_config_init` first: it sets `struct_size`, which lets newer libraries add fields |
 | `e7_load(vm, data, len, &module)` | Verify signature → parse → verify → link native functions → run module top-level code (`E7_ERR_VERSION` for a module of another bytecode format or one that needs a newer e7vm) |
 | `e7_inspect(data, len, &info)` | Read a module's format, required e7vm version (`requires_version`) and signature key id without loading it |
-| `e7_version` / `e7_version_number` | Library version (`"0.3.1"` / `0x000301`) |
+| `e7_version` / `e7_version_number` | Library version (`"0.1.0"` / `0x000100`) |
 | `e7_gc_stats_get(vm, &stats)` | Garbage collections, total and longest pause, heap size and peak |
 | `e7_compile` / `e7_load_source` | Compile source (errors are formatted as `file:line:col: error: ...`) |
-| `e7_compile_ex(src, len, name, &opts, ...)` | Compile with options (`e7_compile_options_init` first): `E7_COMPILE_DEBUG` (debug information), a `read_file` callback for imports, `target_version` (oldest e7vm that must run the module) |
+| `e7_compile_ex(src, len, name, &opts, ...)` | Compile with options (`e7_compile_options_init` first): `E7_COMPILE_DEBUG` (debug information), a `read_file` callback for imports |
 | `e7_call(vm, module, "fn", args, n, &ret)` | Call an `export function` |
 | `e7_set_budget(vm, ticks)` | Instruction budget for subsequent execution (≤0 means unlimited) |
 | `e7_resume` / `e7_abort_suspended` | Resume / abandon a suspended call, or one waiting for async host functions (`E7_PENDING`) |
@@ -64,8 +64,8 @@ Swift and C#) implements the client side.
 
 **Error codes**: `E7_OK`, `E7_SUSPENDED`, `E7_ERR_RUNTIME` (script error/throw/abort), `E7_ERR_BUDGET`, `E7_ERR_MEMORY`,
 `E7_ERR_STACK`, `E7_ERR_LOAD`, `E7_ERR_VERIFY`, `E7_ERR_SIGNATURE`, `E7_ERR_NOT_FOUND`, `E7_ERR_ARGS`, `E7_ERR_COMPILE`, `E7_ERR_STATE`,
-`E7_ERR_VERSION` (bytecode format or required e7vm version not supported: deliver a module built with
-`e7c --target <app's e7vm version>`), `E7_PAUSED` (only with a debugger attached in pause-to-host mode), and
+`E7_ERR_VERSION` (bytecode format not supported, or the module requires a newer e7vm: recompile it with the
+compiler that matches the app's VM), `E7_PAUSED` (only with a debugger attached in pause-to-host mode), and
 `E7_PENDING` (the call waits for async host functions: [§2.6](#26-async-host-functions)).
 The VM remains usable after any error; module globals are preserved.
 
@@ -164,9 +164,9 @@ A VM may be used from only one thread; different VMs share no state and can run 
 
 ### 2.6 Async host functions
 
-Since 0.3 a script can `await` work the host does asynchronously (a network request, a Keystore / Keychain
+A script can `await` work the host does asynchronously (a network request, a Keystore / Keychain
 operation that shows UI, a database query). The VM has no event loop and no threads of its own: **the host is the
-event loop** ([DESIGN-0.3.md D2](DESIGN-0.3.md#d2-async--await)).
+event loop** ([DESIGN.md D2](DESIGN.md#d2-async--await)).
 
 ```ts
 import { hmac } from "e7:crypto";
@@ -328,8 +328,8 @@ The binding is published as two Maven artifacts (group `org.e7vm`):
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("org.e7vm:e7vm-android:0.3.1")   // Android
-    // implementation("org.e7vm:e7vm:0.3.1")         // desktop / server JVM
+    implementation("org.e7vm:e7vm-android:0.1.0")   // Android
+    // implementation("org.e7vm:e7vm:0.1.0")         // desktop / server JVM
 }
 ```
 
@@ -353,7 +353,7 @@ dependencyResolutionManagement {
 ```
 
 The `.aar` and `.jar` are also attached to each [GitHub release](https://github.com/e7lang/e7/releases);
-a downloaded AAR can be used with `implementation(files("libs/e7vm-android-0.3.1.aar"))`.
+a downloaded AAR can be used with `implementation(files("libs/e7vm-android-0.1.0.aar"))`.
 
 On the desktop JVM, `org.e7vm.NativeLoader` loads the library in this order: the path in the system
 property `e7vm.library`, then `System.loadLibrary("e7vm_jni")` (`java.library.path`), then the copy bundled
@@ -411,7 +411,7 @@ crypto libraries from source; no prebuilt binary is involved. In Xcode use *File
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/e7lang/e7.git", from: "0.3.1"),
+  .package(url: "https://github.com/e7lang/e7.git", from: "0.1.0"),
 ],
 targets: [
   .target(name: "App", dependencies: [.product(name: "E7VM", package: "e7")]),
@@ -455,7 +455,7 @@ e7vm uses no JIT and allocates no executable memory, which meets the App Store r
   and macOS 11+ (universal), which .NET loads automatically from `runtimes/<rid>/native/`:
 
   ```bash
-  dotnet add package E7VM --version 0.3.1
+  dotnet add package E7VM --version 0.1.0
   ```
 
   The package targets `netstandard2.0` and `net8.0` (managed assembly `E7.dll`, namespace `E7`). It is also attached to each GitHub release and published to
@@ -482,7 +482,7 @@ delivery ([DEPLOYMENT.md](DEPLOYMENT.md#4-client-integration)).
 
 The JavaScript package [`@e7lang/e7`](../packages/e7) is the compiler and VM built with Emscripten
 (`tools/e7wasm.cpp`). It is not published to the npm registry: install `e7lang-e7-<version>.tgz` from a GitHub
-release (`npm install ./e7lang-e7-0.3.1.tgz`). Every `run` uses a fresh VM with an instruction budget and a memory limit; host
+release (`npm install ./e7lang-e7-0.1.0.tgz`). Every `run` uses a fresh VM with an instruction budget and a memory limit; host
 functions and `KeyHandle` are not available from JavaScript (use the native API for those). Async exports and
 top-level `await` complete within `run` ([§2.6](#26-async-host-functions)).
 

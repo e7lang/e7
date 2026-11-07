@@ -461,9 +461,8 @@ struct Inspector {
         }
         bool numericKeys = false;
         for (uint32_t i = 0; i < c->nfields; i++) {
-          // a record field holding undefined is a missing optional property (JSON.stringify and spread
-          // treat it the same way); class fields are always own properties in JavaScript
-          if (!fieldPresent(static_cast<InstObj*>(o), i, vm.undef())) continue;
+          // a record's missing optional property is not shown; class fields are always own properties
+          if (!fieldPresent(static_cast<InstObj*>(o), i)) continue;
           if (privateField(c, i)) continue;  // #private fields are not shown (as in Node.js)
           fields.push_back(i);
           if (!c->fieldNames[i].empty() && c->fieldNames[i][0] >= '0' && c->fieldNames[i][0] <= '9') numericKeys = true;
@@ -1062,9 +1061,9 @@ E7_NATIVE(n_objectKeys) {
   ArrObj* arr = vm.newArray(VT_REF, in->cls->nfields);
   VM::TempRoot keep(vm, arr);
   for (uint32_t i : jsFieldOrder(in->cls)) {
-    // a record (object literal) property holding undefined is a missing optional property; the fields
-    // of a class instance are always own properties (also when undefined), as in JavaScript
-    if (!fieldPresent(in, i, vm.undef())) continue;
+    // a record's missing optional property is skipped; the fields of a class instance are always own
+    // properties (also when undefined), as in JavaScript
+    if (!fieldPresent(in, i)) continue;
     if (privateField(in->cls, i)) continue;
     vm.arrayPush(arr, slotR(vm.newStringUtf8(in->cls->fieldNames[i])));
   }
@@ -1081,7 +1080,7 @@ E7_NATIVE(n_objectHas) {
   if (!o || o->type != OT::Instance) return;
   auto* in = static_cast<InstObj*>(o);
   auto it = in->cls->fieldIndex.find(strUtf8(asStr(vm, a[1])));
-  if (it != in->cls->fieldIndex.end()) r->i = fieldPresent(in, it->second, vm.undef());
+  if (it != in->cls->fieldIndex.end()) r->i = fieldPresent(in, it->second);
 }
 
 // structuredClone(v): a deep copy that keeps shared and cyclic references (the compiler rejects values
@@ -1387,7 +1386,7 @@ void applyNativeCosts(VM& vm) {
       "encoding.base64Encode", "encoding.base64Decode", "encoding.base64UrlEncode", "encoding.base64UrlDecode",
       "encoding.base32Encode", "encoding.base32Decode", "encoding.utf8Encode", "encoding.utf8Decode",
       "encoding.pemDecode", "encoding.pemEncode", "encoding.concatBytes", "encoding.bytesEqual", "JSON.stringify",
-      "JSON.stringifyIndent", "JSON.stringifyIndentStr", "JSON.parse", "JSON.tryParse", "JSON.parseRec", "JSON.tryParseRec", "Map.fromEntries", "Set.fromArray",
+      "JSON.stringifyIndent", "JSON.stringifyIndentStr", "JSON.parse", "JSON.tryParse", "Map.fromEntries", "Set.fromArray",
       "Map.copy", "Math.minArray", "Math.maxArray", "Math.hypotArray", "String.indexOf", "String.lastIndexOf",
       "String.includes", "String.startsWith", "String.endsWith", "String.toUpperCase", "String.toLowerCase",
       "String.trim", "String.trimStart", "String.trimEnd", "String.split", "String.replace", "String.replaceAll",

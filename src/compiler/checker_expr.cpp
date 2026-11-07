@@ -292,7 +292,7 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
     for (size_t i = 0; i < nm && same; i++)
       if (c->vtable[i].name != (*methods)[i].first || c->vtable[i].fn->type != (*methods)[i].second) same = false;
     if (same) {
-      if (!tuple && P.presenceMasks)
+      if (!tuple)
         for (auto& f : fields) c->presence = c->presence || (f.second->t == TT::Optional && f.second->hasUndef) || f.second->t == TT::Undefined;
       return c->type;
     }
@@ -308,7 +308,7 @@ Type* Checker::recordFor(const std::vector<std::pair<std::string, Type*>>& field
   for (auto& f : fields) {
     c->fieldIdx[f.first] = (int)c->fields.size();
     c->fields.push_back({f.first, f.second, nullptr, false, c, Loc()});
-    if (!tuple && P.presenceMasks) c->presence = c->presence || (f.second->t == TT::Optional && f.second->hasUndef) || f.second->t == TT::Undefined;
+    if (!tuple) c->presence = c->presence || (f.second->t == TT::Optional && f.second->hasUndef) || f.second->t == TT::Undefined;
   }
   c->type = T.classType(c);
   // methods of an object literal (method shorthand, or function properties implementing an
@@ -406,7 +406,7 @@ Type* Checker::iteratorMethodType(Type* t, Loc l) {
 }
 
 // The async iterator a class instance's [Symbol.asyncIterator]() method returns (an AsyncGenerator
-// type), or null (0.3.1).
+// type), or null.
 Type* Checker::asyncIteratorMethodType(Type* t, Loc l) {
   if (t->t != TT::Class) return nullptr;
   ClassSym* c = t->cls;
@@ -512,7 +512,7 @@ Type* Checker::etaExpand(Expr* e, Type* expected, int arity) {
 Type* Checker::checkYield(Expr* e) {
   FuncSym* f = curFn;
   if (!f || !f->isGenerator) return errT(e->loc, "'yield' is only allowed in the body of a generator function (function*)");
-  const bool async = f->isAsync;  // an async generator (0.3.1)
+  const bool async = f->isAsync;  // an async generator
   Type* g = f->inferRet ? nullptr : f->type->ret;
   if (g && g->t != (async ? TT::AsyncGenerator : TT::Generator)) g = nullptr;
   if (e->delegate && async) {
@@ -521,7 +521,7 @@ Type* Checker::checkYield(Expr* e) {
     Type* ag = it->t == TT::AsyncGenerator ? it : asyncIteratorMethodType(it, e->a->loc);
     if (!ag) {
       if (it->t == TT::Unknown) return T.unknown();
-      // a sync iterable (0.3.1): an array, a generator or an iterable class, through the specification's
+      // a sync iterable: an array, a generator or an iterable class, through the specification's
       // async-from-sync iterator (a value that is a promise is awaited)
       Type* st = it->t == TT::Generator ? it : it->t == TT::Array ? nullptr : iteratorMethodType(it, e->a->loc);
       if (!st && it->t != TT::Array)

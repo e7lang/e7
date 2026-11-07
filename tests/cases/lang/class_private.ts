@@ -1,4 +1,3 @@
-// @requires-vm: 0.2.5
 // #private fields and methods: only accessible inside the class body; not own enumerable
 // properties (Object.keys, JSON.stringify, console.log and object spread do not show them).
 

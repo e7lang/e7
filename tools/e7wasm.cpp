@@ -27,8 +27,6 @@
 //   const char* e7w_output_json(void)        JSON array of printed lines of the last e7w_exec
 //   const char* e7w_result_json(void)        JSON {"type":..,"value":..} of the last e7w_exec
 //   int         e7w_compile_ex(source, len, fileName, flags)       e7w_compile with flags (1 = debug information)
-//   int         e7w_compile_target(source, len, fileName, flags, target)   e7w_compile_ex for an older VM:
-//               target "0.2" / "0.2.1" ("" = this VM); 10 (bad arguments) if target is malformed
 //   const char* e7w_inspect(data, len)       JSON {"status","format","requires","signed","keyId","debug"} of a
 //               .e7b header (e7_inspect); requires is major << 16 | minor << 8 | patch
 //
@@ -223,12 +221,10 @@ void onPrintLines(void* user, const char* text, size_t len) {
 }
 
 bool gCompileDebug = false;    // e7w_compile_ex flag 1
-uint32_t gCompileTarget = 0;   // e7w_compile_target (0: this VM)
 
 e7::CompileOutput compileWithFiles(const std::string& entry, const std::string& src) {
   e7::CompileOptions opts;
   opts.debugInfo = gCompileDebug;
-  opts.target = gCompileTarget;
   return e7::compileProgram(entry, [&](const std::string& path, std::string& content) {
     if (path == entry) {
       content = src;
@@ -328,22 +324,6 @@ E7W_EXPORT int e7w_compile_ex(const char* source, double len, const char* fileNa
   gCompileDebug = (flags & 1) != 0;
   int st = e7w_compile(source, len, fileName);
   gCompileDebug = false;
-  return st;
-}
-E7W_EXPORT int e7w_compile_target(const char* source, double len, const char* fileName, int flags, const char* target) {
-  uint32_t t = 0;
-  if (target && *target && !e7::parseVersion(target, t)) {
-    gBytes.clear();
-    gDiag = "[{\"file\":";
-    jsonStr(gDiag, fileName && *fileName ? fileName : "main.ts");
-    gDiag += ",\"line\":0,\"col\":0,\"message\":";
-    jsonStr(gDiag, std::string("invalid target version '") + target + "' (expected e.g. 0.2)");
-    gDiag += "}]";
-    return E7_ERR_ARGS;
-  }
-  gCompileTarget = t;
-  int st = e7w_compile_ex(source, len, fileName, flags);
-  gCompileTarget = 0;
   return st;
 }
 E7W_EXPORT const char* e7w_diagnostics(void) { return gDiag.c_str(); }
@@ -846,13 +826,6 @@ int main(int argc, char** argv) {
         printf("{\"error\":\"unknown command\"}\n");
       }
     }
-    return 0;
-  }
-  if (argc > 3 && std::string(argv[2]) == "--target") {  // --target VERSION: compile only
-    std::string src = ss.str();
-    int cs = e7w_compile_target(src.c_str(), (double)src.size(), argv[1], 0, argv[3]);
-    printf("compile=%d diagnostics=%s\n", cs, e7w_diagnostics());
-    if (cs == 0) printf("inspect=%s\n", e7w_inspect(e7w_bytes_ptr(), e7w_bytes_len()));
     return 0;
   }
   if (argc > 2 && std::string(argv[2]) == "--json") {  // structured API: --json [fn [string args...]]

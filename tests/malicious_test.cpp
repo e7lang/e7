@@ -74,8 +74,8 @@ int main(int argc, char** argv) {
       const char* bs = strrchr(base, '\\');
       if (bs) base = bs + 1;
       if (st == E7_ERR_VERSION) {
-        // a sample in an outdated bytecode format no longer exercises what it was written for
-        printf("FAIL %s: rejected for its format version (convert it to the current format): %s\n", argv[i],
+        // a sample in another bytecode format (or requiring a newer VM) never reaches what it was written for
+        printf("FAIL %s: rejected for its format or version (convert it to the current format): %s\n", argv[i],
                e7_last_error(vm));
         failures++;
       } else if (strncmp(base, "run_", 4) == 0) {
