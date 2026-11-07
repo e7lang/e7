@@ -232,7 +232,16 @@ public final class ModuleManagerScenarios {
   // a module whose top level and selfTest await an async host function (completed on another thread)
   static void asyncExports() throws Exception {
     try (Fixture f = new Fixture()) {
-      f.setup = vm -> vm.registerAsyncNative("hostValue", ">n", args -> CompletableFuture.supplyAsync(() -> 7.0));
+      // completes a little later, so that a synchronous call (below) always finds it pending, as in the C# and
+      // Swift tests (an already completed stage settles at once and the call would succeed)
+      f.setup = vm -> vm.registerAsyncNative("hostValue", ">n", args -> CompletableFuture.supplyAsync(() -> {
+        try {
+          Thread.sleep(5);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+        return 7.0;
+      }));
       String src = "declare function hostValue(): Promise<number>;\n"
           + "const base = await hostValue();\n"
           + "export async function selfTest(): Promise<boolean> { return (await hostValue()) === 7; }\n"

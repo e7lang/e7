@@ -58,9 +58,11 @@ enum class EK {
   Array, Object, Unary, Update, Binary, Logical, Assign, Cond, Call, New,
   Member, Index, NonNull, As, Arrow, Spread, Conv, Paren, TypeOf,
   Yield,  // a = operand (or null); delegate: yield*
-  Await,  // a = operand
-  RegExp  // a regular expression literal: raw = the pattern as written, regexFlags
+  Await   // a = operand
 };
+
+// the error for a regular expression literal, RegExp and the String methods that take one
+inline constexpr const char* kNoRegExp = "regular expressions are not supported in E7; use string methods (indexOf, includes, startsWith, endsWith, split, replaceAll)";
 
 struct Stmt;
 struct Expr;
@@ -110,7 +112,6 @@ struct Expr {
   bool isIntLit = false;     // Num: written as integer literal
   std::string raw;           // Num raw text / BigLit digits / Ident name / Member name / op
   std::u16string str;        // Str
-  std::string regexFlags;    // RegExp
   bool bval = false;
   // template
   std::vector<std::u16string> quasis;

@@ -1209,39 +1209,10 @@ class Gen:
             self.stmt_try(ind, d - 1)
         elif k < 97:
             self.stmt_destructure(ind, max(d, 1))
-        elif k < 99:
-            self.stmt_coroutine(ind, max(d, 1))
         elif k < 100:
-            self.stmt_regexp(ind, max(d, 1))
+            self.stmt_coroutine(ind, max(d, 1))
         else:
             self.stmt_accessors(ind, max(d, 1))
-
-    # ---------------------------------------------------------------- regular expressions
-    REGEXPS = [r"/\d+/", r"/(\w)(\w)?/", r"/(?<w>[a-z]+)/i", r"/\s+/", r"/^./u", r"/(?<=a)b/", r"/x*/",
-               r"/[😀-😁]/u", r"/(a|b)+c?/", r"/(?<p>.)\k<p>/", r"/[^\w\s]/", r"/$/m"]
-
-    def stmt_regexp(self, ind, d):
-        r = self.r
-        s = self.string(d - 1)
-        p = self.pick(self.REGEXPS)
-        g = p + "g"
-        k = r.randrange(7)
-        rep = self.pick(['"[$&]"', '"$1|$2"', '"$`$\'"', '"$<w>"', '"$$"'])
-        src = tslit(self.pick(["a+", "(.)", "\\d", "x|", "(?:)"]))
-        if k == 0:
-            self.emit(ind, f"console.log({s}.match({self.pick([p, g])}));")
-        elif k == 1:
-            self.emit(ind, f"console.log({s}.replace({self.pick([p, g])}, {rep}));")
-        elif k == 2:
-            self.emit(ind, f"console.log({s}.split({p}, {r.randrange(0, 5)}), {s}.search({p}));")
-        elif k == 3:
-            self.emit(ind, f"console.log([...{s}.matchAll({g})].map(m => `${{m.index}}:${{m[0]}}`));")
-        elif k == 4:
-            self.emit(ind, f"console.log({p}.test({s}), {p}.exec({s}));")
-        elif k == 5:
-            self.emit(ind, f"console.log({s}.replaceAll({g}, (m) => String(m.length)));")
-        else:
-            self.emit(ind, f"console.log(new RegExp({src}, \"g\").exec({s}));")
 
     # ---------------------------------------------------------------- getters and setters in object literals
     def stmt_accessors(self, ind, d):

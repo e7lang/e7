@@ -37,19 +37,9 @@ console.log(fnv1a(new TextEncoder().encode("hello")).toString(16)); // 4f9f2cab
 
 `length charAt charCodeAt codePointAt at indexOf lastIndexOf includes startsWith endsWith slice substring substr
 toUpperCase toLowerCase trim trimStart trimEnd padStart padEnd repeat split replace replaceAll concat
-localeCompare match matchAll search`, `String.fromCharCode/fromCodePoint`, template strings. `split` /
-`replace` / `replaceAll` take a string or a regular expression; with a string pattern the replacement can be a
-function `(match, offset, string) => string`. Strings are UTF-16 like JavaScript; `for (const ch of s)` iterates code points.
-
-## Regular expressions
-
-ES2024 regular expressions without the `v` flag, as in Node.js: literals `/.../dgimsuy` (checked when compiling),
-`new RegExp(pattern, flags?)` (a bad pattern throws a catchable `SyntaxError`), `test exec lastIndex source flags
-global ...`, and `s.match / matchAll / replace / replaceAll / split / search` with a `RegExp`. `exec` gives
-`RegExpExecArray | null`: a `string[]` with `index`, `input`, `groups`. The named groups of a **literal** are typed
-(`/(?<y>\d{4})/.exec(s)?.groups?.y` is `string | undefined`); a pattern from `new RegExp` has only the indexed groups
-`m[1]`. A replacement function gets `(match, p1, ..., pn, offset, input, groups)` for a literal, `(match)` for a
-pattern built at run time. Matching steps count against the instruction budget (ReDoS ends the call).
+localeCompare`, `String.fromCharCode/fromCodePoint`, template strings. `split` / `replace` / `replaceAll` take a
+string pattern; the replacement can be a function `(match, offset, string) => string`. There are no regular
+expressions (`/.../`, `RegExp`, `match`, `matchAll` and `search` are compile errors). Strings are UTF-16 like JavaScript; `for (const ch of s)` iterates code points.
 
 ## Arrays, Map, Set
 

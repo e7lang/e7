@@ -512,5 +512,5 @@ package for diagnostics and *Run File*.
 
 ## 8. Size and performance reference
 
-- Linux x86-64 shared library (`MinSizeRel`, stripped, all crypto algorithms included): about **470 KB** for the runtime only, about **920 KB** with the on-device compiler.
+- Android arm64-v8a shared library (stripped, all crypto algorithms included, libc++ linked statically): about **1.2 MB** for the runtime only (`MinSizeRel`; 1.3 MB `Release`), about **2.7 MB** with the on-device compiler (3.0 MB `Release`). Compressed (as in an APK) it is about 40% of that. An app that receives compiled `.e7b` modules from a server needs only the runtime (`-DE7_WITH_COMPILER=OFF`).
 - Interpreter performance is comparable to or faster than V8's interpreter (`--jitless`); standard crypto algorithms run as native code. See the benchmark table in the README.

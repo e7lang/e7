@@ -1,7 +1,6 @@
 #include "vm.h"
 
 #include "debug.h"
-#include "../regexp/regexp.h"
 
 #include <chrono>
 #include <cmath>
@@ -70,7 +69,6 @@ VM::VM(const VMConfig& cfg) : cfg_(cfg) {
   registerTestNatives(*this);
   registerPromiseNatives(*this);
   registerTypedArrayNatives(*this);
-  registerRegExpNatives(*this);
   applyNativeCosts(*this);
 }
 
@@ -700,97 +698,13 @@ CoroObj* VM::newCoro(FuncRT* fn, CloObj* closure) {
   c->fn = fn;
   c->closure = closure;
   c->promise = nullptr;
-  c->items = nullptr;
+  c->queue = nullptr;
   c->pc = 0;
   c->nregs = fn->nregs;
   c->fflags = fn->d ? fn->d->fflags : 0;
   c->state = CO_START;
   memset(c->regs(), 0, (size_t)fn->nregs * sizeof(Slot));
   return c;
-}
-
-CoroObj* VM::newNativeIterator(ArrObj* items) {
-  auto* c = static_cast<CoroObj*>(allocRaw(OT::Coro, sizeof(CoroObj)));
-  c->fn = nullptr;
-  c->closure = nullptr;
-  c->promise = nullptr;
-  c->items = items;
-  c->pc = 0;
-  c->nregs = 0;
-  c->fflags = (uint8_t)(FK_GENERATOR | (3 << 2));  // yields references; next / return take nothing
-  c->state = CO_START;
-  return c;
-}
-
-RegExpObj* VM::newRegExp(std::shared_ptr<const re::Program> prog, StrObj* source, uint64_t progBytes, bool fresh) {
-  if (fresh && progBytes) accountExternal((int64_t)progBytes);
-  void* mem;
-  try {
-    mem = allocRaw(OT::RegExp, sizeof(RegExpObj));
-  } catch (...) {
-    if (fresh && progBytes) accountExternalUnchecked(-(int64_t)progBytes);
-    throw;
-  }
-  Obj hdr = *static_cast<Obj*>(mem);
-  auto* r = new (mem) RegExpObj();
-  *static_cast<Obj*>(r) = hdr;
-  r->prog = std::move(prog);
-  r->source = source;
-  r->lastIndex = 0;
-  r->progBytes = progBytes;
-  return r;
-}
-
-re::Limits VM::regexpLimits() {
-  re::Limits lim;
-  lim.charge = [this](uint64_t n) { chargeWork(n); };
-  lim.reserve = [this](size_t bytes) { checkTemp(bytes); };
-  return lim;
-}
-
-ArrObj* VM::newMatchArray(uint8_t vt, uint32_t cap, uint16_t flag) {
-  NoGC ng(*this);
-  auto* a = static_cast<ArrObj*>(allocRaw(OT::Array, sizeof(ArrObj) + sizeof(MatchExtra)));
-  a->flags = flag;
-  a->vt = vt;
-  a->len = 0;
-  a->cap = 0;
-  a->data = nullptr;
-  MatchExtra* x = matchExtra(a);
-  x->index = 0;
-  x->input = nullptr;
-  x->groups = undef_;
-  x->indices = nullptr;
-  if (cap) arrayReserve(a, cap);
-  return a;
-}
-
-ClassRT* VM::groupsClass(const std::vector<std::string>& names, bool nullProto) {
-  std::string key = nullProto ? "n:" : "o:";
-  for (auto& n : names) key += n + ",";
-  auto it = groupsClasses_.find(key);
-  if (it != groupsClasses_.end()) return it->second.get();
-  // kept for the VM's lifetime (inline caches compare ClassRT pointers), so not part of a call's heap: their
-  // number and their size (at most a quarter of the memory limit) are bounded instead
-  uint64_t bytes = sizeof(ClassRT) + 3 * key.size() + names.size() * 96;
-  if (groupsClasses_.size() >= kMaxGroupsClasses || groupsBytes_ + bytes > cfg_.memoryLimit / 4)
-    errorCode(ERR_MEMORY, "out of memory (%zu sets of regular expression group names, %llu bytes)", groupsClasses_.size(),
-              (unsigned long long)groupsBytes_);
-  groupsBytes_ += bytes;
-  auto c = std::make_unique<ClassRT>();
-  c->isRecord = true;
-  c->presence = true;  // every group is an own property, also when it did not participate
-  c->nullProto = nullProto;
-  c->nfields = (uint32_t)names.size();
-  for (size_t k = 0; k < names.size(); k++) {
-    c->fieldVT.push_back(VT_REF);
-    c->fieldNames.push_back(names[k]);
-    c->fieldIndex[names[k]] = (uint32_t)k;
-    c->refFields.push_back((uint16_t)k);
-  }
-  ClassRT* p = c.get();
-  groupsClasses_[key] = std::move(c);
-  return p;
 }
 
 void VM::dropFrames(size_t n) {
@@ -839,12 +753,6 @@ void VM::freeObj(Obj* o) {
       if (isAsyncGen(c)) delete c->queue;
       break;
     }
-    case OT::RegExp: {
-      auto* r = static_cast<RegExpObj*>(o);
-      if (r->progBytes && r->prog.use_count() == 1) bytes_ -= r->progBytes;  // the last holder of the program
-      r->prog.~shared_ptr();
-      break;
-    }
     default: break;
   }
   free(o);
@@ -856,17 +764,11 @@ bool VM::checkHeap(std::string* why) const {
     return false;
   };
   std::unordered_set<const Obj*> all;
-  std::unordered_set<const void*> programs;  // run-time regular expression programs, counted once
   size_t sum = 0;
-  for (auto& mp : modules) sum += mp->regexpBytes;
   for (const Obj* o = objects_; o; o = o->gcNext) {
     if (!all.insert(o).second) return fail("the object list has a cycle");
     if (o->marked) return fail("an object is left marked outside a collection");
     sum += o->size + externalBytes(o);
-    if (o->type == OT::RegExp) {
-      auto* r = static_cast<const RegExpObj*>(o);
-      if (r->progBytes && programs.insert(r->prog.get()).second) sum += r->progBytes;
-    }
   }
   if (sum != bytes_)
     return fail("heap accounting: bytesAllocated() = " + std::to_string(bytes_) +
@@ -882,17 +784,8 @@ bool VM::checkHeap(std::string* why) const {
         if (a->vt == VT_REF)
           for (uint32_t i = 0; i < a->len; i++)
             if (!ref(a->data[i].r, "an array element")) return false;
-        if (hasMatchExtra(a)) {
-          const MatchExtra* x = matchExtra(a);
-          if (!ref(x->input, "a match's input") || !ref(x->groups, "a match's groups") || !ref(x->indices, "a match's indices"))
-            return false;
-        }
         break;
       }
-      case OT::RegExp:
-        if (!static_cast<const RegExpObj*>(o)->prog) return fail("regular expression without a program");
-        if (!ref(static_cast<const RegExpObj*>(o)->source, "a regular expression's source")) return false;
-        break;
       case OT::Buffer:
         if (!static_cast<const BufObj*>(o)->data && static_cast<const BufObj*>(o)->len) return fail("buffer without data");
         break;
@@ -941,7 +834,6 @@ bool VM::checkHeap(std::string* why) const {
         auto* c = static_cast<const CoroObj*>(o);
         if (!ref(c->closure, "a coroutine's closure")) return false;
         if (!ref(c->promise, "a coroutine's promise")) return false;
-        if (!c->fn && !ref(c->items, "a native iterator's items")) return false;
         if (isAsyncGen(c) && c->queue)
           for (const AGenRequest& q : *c->queue)
             if (!ref(q.promise, "an async generator request") ||
@@ -1043,15 +935,8 @@ void VM::traceAll() {
         auto* a = static_cast<ArrObj*>(o);
         if (a->vt == VT_REF)
           for (uint32_t i = 0; i < a->len; i++) mark(a->data[i].r);
-        if (hasMatchExtra(a)) {
-          MatchExtra* x = matchExtra(a);
-          mark(x->input);
-          mark(x->groups);
-          mark(x->indices);
-        }
         break;
       }
-      case OT::RegExp: mark(static_cast<RegExpObj*>(o)->source); break;
       case OT::Bytes: mark(static_cast<BytesObj*>(o)->buf); break;
       case OT::Instance: {
         auto* in = static_cast<InstObj*>(o);
@@ -1089,7 +974,6 @@ void VM::traceAll() {
         auto* c = static_cast<CoroObj*>(o);
         mark(c->closure);
         mark(reinterpret_cast<Obj*>(c->promise));
-        if (!c->fn) mark(c->items);
         if (isAsyncGen(c) && c->queue)
           for (const AGenRequest& q : *c->queue) {
             mark(q.promise);
@@ -1226,29 +1110,6 @@ ModuleRT* VM::loadModule(Module&& mod) {
                                    (c.methodIndex.count("set " + c.fieldNames[k]) ? 2 : 0));
     }
   }
-  // regular expression literals (D4): compiled once, shared by the RegExp objects made from them. The
-  // compilation is bounded (kLoadRegExpWork steps for the module, the memory limit) and the programs are
-  // counted in the heap while the module is loaded
-  {
-    uint64_t work = 0;
-    re::Limits lim;
-    lim.charge = [this, &work](uint64_t n) {
-      work += n;
-      if (work > kLoadRegExpWork) errorCode(ERR_LOAD, "the module's regular expressions are too large to compile");
-    };
-    lim.reserve = [this](size_t bytes) { checkTemp(bytes); };
-    uint64_t bytes = 0;
-    for (auto& rd : m.regexps) {
-      std::string rerr;
-      re::ProgramPtr p = re::compile(utf8ToUtf16(rd.source), rd.flags, rerr, &lim);
-      if (!p) errorCode(ERR_LOAD, "%s", rerr.c_str());
-      bytes += re::programSize(*p);
-      checkTemp((size_t)bytes);
-      M->regexps.push_back(std::shared_ptr<const re::Program>(std::move(p)));
-    }
-    if (bytes) accountExternal((int64_t)bytes);
-    M->regexpBytes = bytes;
-  }
   // string constants (rooted through the module)
   modules.push_back(std::move(mrt));
   try {
@@ -1256,7 +1117,6 @@ ModuleRT* VM::loadModule(Module&& mod) {
     for (auto& s : m.strs) M->strs.push_back(newString(s));
     M->globals.assign(m.globals.size(), Slot{});
   } catch (...) {
-    accountExternalUnchecked(-(int64_t)M->regexpBytes);
     modules.pop_back();  // out of memory: the constants made so far become garbage
     throw;
   }
@@ -1277,7 +1137,6 @@ void VM::unloadModule(ModuleRT* mod) {
   for (size_t i = modules.size(); i-- > 0;) {
     if (modules[i].get() != mod) continue;
     if (dbg_) dbg_->moduleUnloading(mod);
-    accountExternalUnchecked(-(int64_t)mod->regexpBytes);
     modules.erase(modules.begin() + (std::ptrdiff_t)i);
     // its objects are unreachable now, but instances and closures still point to its class and
     // function descriptions, which are gone: free them at once, while nothing can run

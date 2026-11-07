@@ -18,7 +18,6 @@ enum class TT : uint8_t {
   Generator,  // Generator<T, TReturn, TNext> / Iterator<T> / IterableIterator<T> (elem, ret, val; gk)
   Promise,    // Promise<T> (elem)
   TypedArray, // Int8Array ... Float64Array, BigInt64Array, BigUint64Array (vt: the element kind, TAKind)
-  RegExp,     // RegExp (reCaps / reNames: the groups of a literal; reCaps -1 for a pattern unknown until run time)
   // AsyncGenerator<T, TReturn, TNext> / AsyncIterator<T> / AsyncIterableIterator<T> / AsyncIterable<T>
   // (elem, ret, val and gk as for Generator: all are async generators at run time)
   AsyncGenerator
@@ -53,13 +52,6 @@ struct Type {
   std::vector<std::u16string> strLits;  // sorted
   std::vector<double> numLits;          // sorted (0 and -0 are one literal)
   uint8_t boolLits = 0;                 // bit 0: false, bit 1: true
-  // regular expressions (D4): a RegExp type with the groups of a literal (reCaps >= 0), and the result
-  // of a match, an Array type of strings with `re` set (index, input, groups, indices; reExec: an
-  // exec result, whose index and input are always there)
-  int32_t reCaps = -1;
-  std::vector<std::string> reNames;
-  Type* re = nullptr;
-  bool reExec = false;
 };
 
 struct GenericSym;
@@ -350,8 +342,6 @@ class Types {
   Type* litUnion(Type* a, Type* b);
   Type* promise(Type* t);
   Type* typedArray(uint8_t kind);
-  Type* regexp(int32_t caps = -1, const std::vector<std::string>& names = {});  // -1: unknown groups
-  Type* matchArray(Type* re, bool exec);
   std::vector<std::unique_ptr<ObjShape>> shapes;
 
  private:

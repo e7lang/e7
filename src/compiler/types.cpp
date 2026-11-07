@@ -186,26 +186,6 @@ Type* Types::typedArray(uint8_t kind) {
   t->vt = kind;
   return interned_[k] = t;
 }
-Type* Types::regexp(int32_t caps, const std::vector<std::string>& names) {
-  std::string k = "RE" + std::to_string(caps);
-  for (auto& n : names) k += "," + n;
-  auto it = interned_.find(k);
-  if (it != interned_.end()) return it->second;
-  Type* t = mk(TT::RegExp);
-  t->reCaps = caps;
-  t->reNames = names;
-  return interned_[k] = t;
-}
-Type* Types::matchArray(Type* re, bool exec) {
-  std::string k = std::string(exec ? "MX" : "MM") + ptrKey(re);
-  auto it = interned_.find(k);
-  if (it != interned_.end()) return it->second;
-  Type* t = mk(TT::Array);
-  t->elem = string_;
-  t->re = re;
-  t->reExec = exec;
-  return interned_[k] = t;
-}
 Type* Types::promise(Type* e) {
   std::string k = "P" + ptrKey(e);
   auto it = interned_.find(k);
@@ -332,7 +312,6 @@ static std::string typeNameB(const Type* t, int& budget) {
     case TT::Unknown: case TT::Caught: return "unknown";
     case TT::Int: return intName(t->vt);
     case TT::Array: {
-      if (t->re) return t->reExec ? "RegExpExecArray" : "RegExpMatchArray";
       std::string e = typeNameB(t->elem, budget);
       if (t->elem->t == TT::Optional || t->elem->t == TT::Func) e = "(" + e + ")";
       return (t->ro ? "readonly " : "") + e + "[]";
@@ -380,7 +359,6 @@ static std::string typeNameB(const Type* t, int& budget) {
     case TT::TextDecoder: return "TextDecoder";
     case TT::Error: return "Error";
     case TT::Date: return "Date";
-    case TT::RegExp: return "RegExp";
     case TT::Generator:
     case TT::AsyncGenerator: {
       static const char* const names[4] = {"Generator", "Iterator", "IterableIterator", "IteratorObject"};

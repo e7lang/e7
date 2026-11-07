@@ -10,8 +10,7 @@ import PackageDescription
 let coreSources = ["utf", "numfmt", "serialize", "verify", "disasm"].map { "src/core/\($0).cpp" }
   + ["third_party/fdlibm/ieee754.cpp"]
 let vmSources = ["src/vm/vm.cpp", "src/vm/interp.cpp", "src/vm/debug.cpp", "src/vm/promise.cpp"]
-  + ["core", "string", "array", "map", "math", "bytes", "bigint", "json", "encoding", "date", "test", "typed", "regexp"].map { "src/stdlib/\($0).cpp" }
-  + ["regexp", "parser", "compiler", "unicode"].map { "src/regexp/\($0).cpp" }
+  + ["core", "string", "array", "map", "math", "bytes", "bigint", "json", "encoding", "date", "test", "typed"].map { "src/stdlib/\($0).cpp" }
   + ["crypto", "keccak", "sign"].map { "src/crypto/\($0).cpp" }
   + ["src/capi/capi.cpp"]
 let compilerSources = [

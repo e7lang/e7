@@ -107,11 +107,6 @@ struct ExportDesc {
   std::string hostSig;
 };
 
-struct RegExpDesc {
-  std::string source;  // UTF-8
-  std::string flags;   // a subset of "dgimsuy"
-};
-
 struct Module {
   std::string name;
   std::vector<int64_t> ints;
@@ -119,7 +114,6 @@ struct Module {
   std::vector<std::u16string> strs;
   std::vector<std::string> sigs;  // e.g. "FR>I" : param kinds '>' return kind (V = void)
   std::vector<NativeImport> natives;
-  std::vector<RegExpDesc> regexps;
   std::vector<ClassDesc> classes;
   std::vector<FuncDesc> funcs;
   std::vector<GlobalDesc> globals;

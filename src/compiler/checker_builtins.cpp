@@ -558,98 +558,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
   Type* num = T.number();
   Type* str = T.string();
   Type* boo = T.boolean();
-  if (bt->t == TT::Array && bt->re) {
-    // a regular expression match (D4): index / input / groups / indices, else a string[]
-    if (prop("index")) {
-      native(bt->reExec ? "Match.index" : "Match.indexOpt");
-      return bt->reExec ? num : T.optional(num, false, true);
-    }
-    if (prop("input")) {
-      native("Match.input");
-      return bt->reExec ? str : T.optional(str, false, true);
-    }
-    if (prop("groups")) {
-      Type* re = bt->re;
-      if (re->reCaps < 0)
-        return errT(m->loc, "the groups of a pattern built at run time are not known at compile time; use a regular "
-                            "expression literal or the indexed groups (m[1], m[2], ...)");
-      native("Match.groups");
-      if (re->reNames.empty()) return T.undef();
-      return T.optional(regexpGroupsType(re), false, true);
-    }
-    if (prop("indices")) {
-      native("Match.indices");
-      return T.optional(T.array(T.array(num)), false, true);
-    }
-    bt = T.array(str);
-  }
   switch (bt->t) {
-    case TT::RegExp: {
-      if (prop("lastIndex")) { native("RegExp.lastIndex"); return num; }
-      if (prop("source") || prop("flags")) { native("RegExp." + name); return str; }
-      static const char* const flagProps[] = {"global", "ignoreCase", "multiline", "sticky", "unicode", "dotAll", "hasIndices"};
-      for (const char* fp : flagProps)
-        if (prop(fp)) { native(std::string("RegExp.") + fp); return boo; }
-      if (prop("unicodeSets")) return errT(m->loc, "the v flag (unicodeSets) is not supported");
-      if (meth("test")) {
-        if (!argsMatch(e, args, {str}, 1, "test")) return T.unknown();
-        native("RegExp.test");
-        return boo;
-      }
-      if (meth("exec")) {
-        if (!argsMatch(e, args, {str}, 1, "exec")) return T.unknown();
-        native("RegExp.exec");
-        return T.optional(T.matchArray(bt, true), true, false);
-      }
-      if (meth("toString")) {
-        if (!argsMatch(e, args, {}, 0, "toString")) return T.unknown();
-        native("RegExp.toString");
-        return str;
-      }
-      return noSuch();
-    }
     case TT::String: {
-      if ((meth("match") || meth("matchAll") || meth("search") || meth("split") || meth("replace") || meth("replaceAll")) &&
-          !args.empty() && args[0]->k != EK::Spread && baseOf(check(args[0], nullptr))->t == TT::RegExp) {
-        // a RegExp argument (D4)
-        Type* reT = baseOf(args[0]->type);
-        if (args[0]->type->t == TT::Optional) return errT(args[0]->loc, "the regular expression is possibly null or undefined");
-        if (meth("match") || meth("matchAll") || meth("search")) {
-          if (!argsMatch(e, args, {T.regexp()}, 1, name.c_str())) return T.unknown();
-          if (name == "search") { native("String.searchRe"); return num; }
-          if (name == "match") { native("String.matchRe"); return T.optional(T.matchArray(reT, false), true, false); }
-          native("String.matchAllRe");
-          return T.generator(T.matchArray(reT, true), T.voidT(), T.voidT(), 2);
-        }
-        if (meth("split")) {
-          if (args.size() == 1) args.push_back(N(4294967295.0));
-          if (!argsMatch(e, args, {T.regexp(), num}, 2, "split")) return T.unknown();
-          native("String.splitRe");
-          return T.array(str);
-        }
-        if (args.size() != 2 || args[1]->k == EK::Spread) return errT(l, name + " takes a pattern and a replacement");
-        if (strip(args[1])->k == EK::Arrow || check(args[1], nullptr)->t == TT::Func) {
-          // the callback's parameters are fixed by the pattern: (match, p1, ..., pn, offset, input[, groups]) for a
-          // literal, (match) for a pattern built at run time
-          std::vector<Type*> ps = {str};
-          if (reT->reCaps >= 0) {
-            for (int32_t k = 0; k < reT->reCaps; k++) ps.push_back(str);
-            ps.push_back(num);
-            ps.push_back(str);
-            if (!reT->reNames.empty()) ps.push_back(regexpGroupsType(reT));
-          }
-          Type* ft = cb(args[1], ps, str);
-          if (ft->t != TT::Func) return T.unknown();
-          if (ft->ret != str) return errT(args[1]->loc, "the replacement function must return a string");
-          if (!coerce(args[0], T.regexp())) return T.unknown();
-          args.push_back(intLit(name == "replaceAll", l));
-          native("String.replaceReFn");
-          return str;
-        }
-        if (!argsMatch(e, args, {T.regexp(), str}, 2, name.c_str())) return T.unknown();
-        native(name == "replace" ? "String.replaceRe" : "String.replaceAllRe");
-        return str;
-      }
       if (prop("length")) { e->intrinsic = IN_ARR_LEN; return num; }
       if (meth("toString") || meth("valueOf")) {
         if (!argsMatch(e, args, {}, 0, "toString")) return str;
@@ -739,8 +649,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         e->intrinsic = IN_STR_CONCAT;
         return str;
       }
-      if (meth("match") || meth("matchAll") || meth("search"))
-        return errT(m->loc, "'" + name + "' takes a regular expression (RegExp)");
+      if (meth("match") || meth("matchAll") || meth("search")) return errT(m->loc, kNoRegExp);
       if (meth("normalize")) return errT(m->loc, "'normalize' is not supported (no Unicode normalization data)");
       return noSuch();
     }

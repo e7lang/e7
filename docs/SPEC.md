@@ -49,9 +49,9 @@ three references that can each be checked mechanically:
 - Numbers: decimal, `0x`/`0o`/`0b`, exponents, numeric separators `1_000`; **bigint** literals `123n`. Legacy octal `017` is not allowed.
 - Strings: `'...'`, `"..."`, escapes `\n \t \r \b \f \v \0 \xHH \uHHHH \u{H...}`; template strings `` `a ${expr} b` `` (nestable).
 - Private names `#x` for class members (section 5).
-- Regular expression literals `/pattern/flags` (section 6.6): a `/` where an expression can start begins
-  one, elsewhere (after a value, an identifier, `)` or `]`) it is a division.
-- **Not supported**: decorators `@`.
+- **Not supported**: decorators `@`; regular expression literals `/pattern/flags` (section 6.6). A `/` where an
+  expression can start is read as one and reported as a compile error; elsewhere (after a value, an identifier, `)`
+  or `]`) it is a division.
 
 ## 2. Types
 
@@ -77,8 +77,7 @@ three references that can each be checked mechanically:
 
 Also: `Promise<T>`, `Generator<T, TReturn, TNext>` / `Iterator<T>` / `IterableIterator<T>` (coroutines at run
 time; `IteratorResult<T>` is `{ value: T | undefined; done: boolean }`, or `{ value: T; ... }` when the return type is
-`T`), the typed arrays `Int8Array` ... `Float64Array`, `Uint8ClampedArray`, `BigInt64Array`, `BigUint64Array`,
-`RegExp`, `RegExpMatchArray` / `RegExpExecArray` (section 6.6), and
+`T`), the typed arrays `Int8Array` ... `Float64Array`, `Uint8ClampedArray`, `BigInt64Array`, `BigUint64Array`, and
 literal types: string, numeric and boolean literals and unions of literals of one base type (`"GET" | "POST"`,
 `0 | 1`, `true`), checked as tsc checks them (narrowed by `===`, `!==` and `switch`) and represented as their base
 type. The utility types `Awaited<T>`, `NonNullable<T>`, `NoInfer<T>` and `Uppercase` / `Lowercase` / `Capitalize`
@@ -438,8 +437,8 @@ The following behave the same as JavaScript (verified by differential testing ag
 - **Number**: `isInteger isSafeInteger isFinite isNaN parseFloat parseInt`, constants; instance methods `toString(radix) toFixed toPrecision toExponential`.
 - **String**: `length charAt charCodeAt codePointAt at indexOf lastIndexOf includes startsWith endsWith slice substring substr
   toUpperCase toLowerCase trim trimStart trimEnd padStart padEnd repeat split replace replaceAll concat localeCompare`,
-  `String.fromCharCode/fromCodePoint`, and `match matchAll search` with a regular expression (section 6.6). `split`,
-  `replace` and `replaceAll` take a string or a regular expression; with a string pattern the replacement of `replace` /
+  and `String.fromCharCode/fromCodePoint`. `split`, `replace` and `replaceAll` take a string pattern (there are no
+  regular expressions, section 6.6, so `match matchAll search` are compile errors); the replacement of `replace` /
   `replaceAll` can be a function `(match, offset, string) => string`; case conversion covers Latin, Greek and Cyrillic letters;
   `localeCompare` compares by code units (locale-independent).
 - **Array**: `length push pop shift unshift at slice splice concat indexOf lastIndexOf includes join reverse fill sort
@@ -499,42 +498,13 @@ if (cfg === null) console.log("bad config: " + lastError());  // e.g. "expected 
   validated, and `lastError()` texts differ. Differential tests therefore only use shape-correct documents or syntax
   errors; shape mismatches are tested against E7 alone (`tests/cases/lib/json_try_shape.ts` with its `.out` file).
 
-### 6.6 Regular expressions
+### 6.6 Regular expressions (not supported)
 
-ECMAScript 2024 regular expressions without the `v` flag, with the semantics of V8 (Node.js 22) on UTF-16 strings,
-run by an own backtracking engine (`src/regexp`).
-
-- **Literals** `/pattern/flags` with the flags `d g i m s u y` (each at most once). The compiler checks every
-  literal: a syntax error is a compile error at the literal with V8's message (`Invalid regular expression: /(/:
-  Unterminated group`, `Invalid regular expression flags`). Each evaluation of a literal creates a new `RegExp`
-  object (its own `lastIndex`), as in JavaScript.
-- **Syntax**: everything ES2018-2024 adds (named groups `(?<name>...)` and `\k<name>`, lookbehind, the `s` flag,
-  `\p{...}` property escapes with General_Category, Script, Script_Extensions and the binary properties) and the Annex B
-  syntax V8 accepts without the `u` flag. Duplicate group names and pattern modifiers `(?i:...)` (ES2025) are syntax
-  errors, as in Node.js 22. The Unicode data is that of the Node.js the tables were generated from
-  (`scripts/gen-regexp-unicode.mjs`).
-- **`new RegExp(pattern, flags?)`** with a string or a `RegExp` pattern: a pattern built at run time; a syntax error is a
-  catchable `SyntaxError`.
-- **`RegExp`**: `test exec toString`, `lastIndex` (read and assigned), `source flags global ignoreCase multiline sticky
-  unicode dotAll hasIndices`. `exec` and `test` follow RegExpBuiltinExec (`lastIndex` is used and updated with `g` or `y`).
-- **Match results**: `exec` returns a `RegExpExecArray | null` and `match` a `RegExpMatchArray | null`: a `string[]` (a
-  group that did not participate is `undefined` at run time, typed `string` as in TypeScript) with `index`, `input`,
-  `groups` and, with the `d` flag, `indices` (`number[][]`). `RegExpMatchArray`'s `index` and `input` may be `undefined`
-  (a `g` match is a plain array of the matched texts). For a **literal**, `groups` is typed from its named groups:
-  `/(?<year>\d{4})/.exec(s)?.groups?.year` is a `string | undefined`; for a pattern built at run time `groups` cannot be
-  read (only the indexed groups), since its names are not known at compile time.
-- **String methods**: `match`, `matchAll` (an `IterableIterator<RegExpExecArray>`; the matches are found when it is
-  created, which gives the same results as JavaScript's lazy iterator), `replace` / `replaceAll` with a replacement
-  string (`` $$ $& $` $' $n $nn $<name> ``) or a function, `split(re, limit?)` (groups are included), `search`. The
-  replacement function of a literal pattern gets `(match, p1, ..., pn, offset, input[, groups])` (as many as it
-  declares); for a pattern built at run time it is `(match: string) => string`. `replaceAll` and `matchAll` with a
-  regular expression without `g` throw a catchable `TypeError`.
-- **Resource limits**: every matcher step counts against the instruction budget and the backtracking stack against
-  the memory limit, so a catastrophic pattern such as `/(a+)+$/` on a long input ends the call with `E7_ERR_BUDGET` (or
-  `E7_ERR_MEMORY`), also with `suspend_on_budget` (the match is one native call: it may run past the end of the slice by
-  the bounded overrun, then the call fails).
-- `console.log`, `String(re)`, template literals and `JSON.stringify` (`{}`) print regular expressions and match
-  results as Node.js does; `structuredClone` copies them.
+E7 has no regular expressions ([DESIGN.md](DESIGN.md) D4: the engine and its Unicode tables would make every app's
+runtime about 160 KB larger). A regular expression literal, the types `RegExp`, `RegExpMatchArray` and
+`RegExpExecArray`, `new RegExp(...)` and the String methods `match`, `matchAll` and `search` are compile errors
+(`regular expressions are not supported in E7; use string methods ...`). `split`, `replace` and `replaceAll` take
+string patterns. A host that needs pattern matching can offer it as a host function.
 
 ## 7. Modules
 
@@ -663,5 +633,4 @@ or host function that was running (or that called back into the script, like `Ar
 | Spread, rest and `Object.assign` of an object literal with accessors typed as an interface that declares them | The getters' values are copied (own properties) | The properties of the static type are copied: an interface's accessors are not (a class instance's are not own properties); spread the literal's own type to copy them |
 | `structuredClone` of an object literal with accessors behind a type that does not show them | A copy with data properties | An E7 error (a value of a type with accessors is a compile error) |
 | Instances of a generic class with different type arguments | Structurally compatible | Different classes (`Box<Circle>` is not a `Box<Shape>`) |
-| Regular expressions | ES2025 adds the `v` flag, duplicate group names and `(?i:...)` | Not supported (syntax errors, as in Node.js 22); `groups` of a pattern built at run time cannot be read; a `/` after `)` is a division (`if (x) /re/.test(s)` needs a parenthesized pattern) |
 | `console.log` of an instantiated generic function value | `[Function: f]` | `[Function: f<number>]` |

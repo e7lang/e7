@@ -38,7 +38,7 @@ export function sign(msg: string, key: string): string {
 - **密钥留在宿主。** 通过 `KeyHandle`，脚本可以使用 Keychain / Keystore 里的密钥，但拿不到密钥本身。
 - **就是你熟悉的 TypeScript。** 语义与 JS 一致，能通过 `tsc --strict`，并与 Node.js 做差分测试。
 - **体积小、速度快。**
-  - 仅运行时约 470 KB，含端上编译器约 920 KB。
+  - 仅运行时约 1.2 MB（压缩后约 460 KB），含端上编译器约 2.7 MB（Android arm64，含全部加密算法）。
   - 解释器速度与 V8 的解释器（`--jitless`）相当或更快。
   - 标准密码算法由原生代码执行。
 
@@ -286,7 +286,7 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
   - 语法：带默认值和剩余元素的解构、对象展开、`?.`（整条链短路）、`??`/`??=`、模板字符串、`for...of`、`switch`、标签语句。
   - 错误处理：`try`/`catch`/`finally`，捕获 Node.js 也会抛出的错误。
   - 生成器、`async`/`await`、`Promise`（宿主充当事件循环；宿主函数可以是异步的）、异步生成器与 `for await`。
-  - 正则表达式（字面量在编译期检查，命名分组有类型；匹配受指令预算约束）、对象字面量的 getter/setter、字面量类型、递归接口。
+  - 对象字面量的 getter/setter、字面量类型、递归接口。
   - 多文件 `import`/`export`，以及类型收窄。
 - **输出与 Node.js 一致。** 每个测试程序的输出都与 Node.js 逐字节比对；`console.log` 的格式与 Node 的 `util.inspect`
   相同，Math 函数在所有平台上逐位一致（采用 V8 的 fdlibm）。
@@ -345,7 +345,7 @@ CMake 选项：
 
 ## 安全与当前状态
 
-e7vm 就是为运行从网络下发的代码而设计的。发布前经过了 8 轮安全审查（每轮由单独运行的 AI 审查代理完成，尚未做第三方审计）、
+e7vm 就是为运行从网络下发的代码而设计的。发布前经过了 7 轮安全审查（每轮由单独运行的 AI 审查代理完成，尚未做第三方审计）、
 与 Node.js/OpenSSL 的差分测试、sanitizer 和模糊测试，所有发现的问题都已修复并配有回归测试。证据见 [docs/PRODUCTION.md](docs/PRODUCTION.md)。
 E7 0.1.0 是第一个版本：已完成全面测试和安全加固，但还没有在生产环境中运行过；1.0 之前的版本可能改动语言、C API 或字节码格式
 （通往 1.0 的计划见 [docs/ROADMAP.md](docs/ROADMAP.md)）。对 App 的建议：

@@ -229,27 +229,22 @@ console.log(JSON.stringify(patch({ name: "Ann", age: 30 }, { age: 31 })));
 
 `JSON.parse(text) as Map<string, V>` reads a JSON object with arbitrary keys.
 
-### Regular expressions
+### No regular expressions
 
-ES2024 regular expressions work as in Node.js (no `v` flag): literals are checked when compiling, the named
-groups of a literal are typed, and matching counts against the instruction budget.
+E7 has no regular expressions: a `/.../` literal, `RegExp`, `match`, `matchAll` and `search` are compile errors
+(an engine and its Unicode tables would add about 160 KB to every app). Use the string methods.
 
 ```ts
-const date = /(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})/;
-const m = date.exec("released 2024-11-06");
-if (m) console.log(m[0], m.index, m.groups?.year);
-console.log("a1b22c".replace(/\d+/g, (d) => `<${d}>`), "a, b ,c".split(/\s*,\s*/));
-for (const x of "k=v; a=b".matchAll(/(\w)=(\w)/g)) console.log(x[1], x[2]);
-const dyn = new RegExp("(\\w+)@(\\w+)", "i");
-console.log(dyn.exec("Mail: Bob@Example")?.[2], /^\p{Lu}/u.test("Émile"));
+const line = "key = value ; other";
+const eq = line.indexOf("=");
+console.log(line.slice(0, eq).trim(), line.slice(eq + 1).split(";")[0].trim());
+console.log("2024-11-06".split("-").map((p) => Number(p)), "a-b-c".replaceAll("-", "+"));
+const isDigits = (s: string) => s.length > 0 && [...s].every((c) => c >= "0" && c <= "9");
+console.log(isDigits("123"), isDigits("12a"));
 ```
 
-A pattern built at run time (`new RegExp(s)`) has no typed `groups`: read its indexed groups (`m[1]`), and its
-`replace` callback is `(match) => string`. A `/` right after `)` is a division: parenthesize a pattern there.
-
 ```ts e7-reject
-const m = new RegExp("(?<year>\\d{4})").exec("2024");
-console.log(m?.groups);
+console.log(/\d+/.test("123"));
 ```
 
 ### `async`, `await`, `Promise`, generators

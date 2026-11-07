@@ -866,21 +866,6 @@ dispatch:
         R[C].i = 1;
         DISPATCH();
       }
-      if (!co->fn) {
-        // a native iterator (String.prototype.matchAll): the next element of its array
-        auto* items = static_cast<ArrObj*>(co->items);
-        if (mode == 0 && co->pc < items->len) {
-          co->state = CO_SUSPENDED;
-          R[B] = items->data[co->pc++];
-          R[C].i = 0;
-          DISPATCH();
-        }
-        co->state = CO_DONE;
-        if (mode == 1) { fr->ip = ip; raiseThrown(R[sent].r); }
-        R[B].r = mode == 2 && sentKind == want ? R[sent].r : undef_;
-        R[C].i = 1;
-        DISPATCH();
-      }
     }
     FuncRT* cf = co->fn;
     uint32_t nb = fr->base + fn->nregs;

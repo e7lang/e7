@@ -36,7 +36,8 @@ CATEGORIES = [
 ]
 # the E7 principles a @why line starts with (docs/TYPESCRIPT.md explains them)
 PRINCIPLES = [
-    "types known at compile time", "verifiable bytecode", "JavaScript-identical behaviour", "not implemented yet",
+    "types known at compile time", "verifiable bytecode", "JavaScript-identical behaviour", "small runtime",
+    "not implemented yet",
 ]
 STATUSES = ["supported", "unsupported", "partial"]
 KEYS = ["feature", "category", "status", "why", "instead", "error", "note"]

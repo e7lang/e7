@@ -25,7 +25,7 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | generic methods in interfaces, `<K extends keyof T>`, `x instanceof Box` (generic class) | generic functions, classes, interfaces and aliases work (compiled per type argument list); use a generic class or function instead |
 | `string \| number`, discriminated unions | one interface with a `kind` field (string or enum) and optional fields |
 | `{ [key: string]: V }`, `Record<K, V>`, `Partial`, `Pick` | `Map<string, V>`, or write the interface out |
-| regex `/.../`, `RegExp` | supported: literals are checked when compiling; named groups of a literal are typed (`m.groups?.year`); a pattern from `new RegExp(s)` has only indexed groups (`m[1]`); no `v` flag |
+| regex `/.../`, `RegExp`, `s.match` / `matchAll` / `search` | not supported (kept out to keep the runtime small): `indexOf`, `includes`, `startsWith`, `endsWith`, `split(sep)`, `replaceAll(str, str)`, `trim`, or a small loop over `charCodeAt` |
 | `setTimeout`, `fetch`, `fs` | no timers or I/O: an async host function (`declare function f(): Promise<T>`, settled by the host) or data passed in (`async`/`await`, `Promise` and generators work as in Node.js) |
 | `for (k in obj)`, `delete`, `in` | `Object.keys(obj)`, or use a `Map` |
 | `class A { get x() }` implementing `interface I { x: number }` | declare the accessor in the interface: `get x(): number` (interfaces read properties as fields) |
@@ -52,17 +52,17 @@ with narrowing and exhaustive `switch`, `T | null | undefined`, type predicates 
 destructuring, spread, optional chaining, `??`, template literals and tagged templates, closures, `try` / `catch` /
 `finally`, generators (`function*`, `yield*`, `[Symbol.iterator]`), `async` / `await`, `Promise` (`then`, `all`,
 `allSettled`, `any`, `race`, `new Promise`), top-level `await`, async generators (`async function*`, `for await`
-over them), `for await` over arrays, regular expressions (literals, `RegExp`, `match` / `matchAll` /
-`replace` / `split`), `Map`, `Set`, `Date`, `JSON` (typed with `as T`), `BigInt`, typed arrays (`Uint8Array` ...
+over them), `for await` over arrays, `Map`, `Set`, `Date`, `JSON` (typed with `as T`), `BigInt`, typed arrays (`Uint8Array` ...
 `Float64Array`, `BigInt64Array`), `DataView`, `structuredClone`, ES modules (named, default, namespace imports,
 re-exports), and E7's machine integers and `e7:crypto` / `e7:encoding` / `e7:json` / `e7:test` modules.
 
 **Not supported** (compile errors with a hint): `any` / `unknown` as declared types, unions of different types
 (`string | number`, discriminated unions of objects), intersections, index signatures / `Record` / mapped,
-conditional, `keyof`, `typeof` and template literal types, `Symbol` values, `Proxy` / `Reflect` / `eval`,
-`for...in` / `delete` / `in`, `var`, class expressions and mixins, decorators, namespaces, JSX, `WeakMap` /
-`WeakSet`, `Intl` and locale formatting, timers and I/O (`setTimeout`, `fetch`: the host does them), methods used
-as values. The full table with a reason and a replacement for each of 250 TypeScript features: [docs/TYPESCRIPT.md](https://github.com/e7lang/e7/blob/main/docs/TYPESCRIPT.md).
+conditional, `keyof`, `typeof` and template literal types, `Symbol` values, `Proxy` / `Reflect` / `eval`, `for...in` /
+`delete` / `in`, `var`, class expressions and mixins, decorators, namespaces, JSX, regular expressions (`/.../`,
+`RegExp`, `match` / `matchAll` / `search`), `WeakMap` / `WeakSet`, `Intl` and locale formatting, timers and I/O
+(`setTimeout`, `fetch`: the host does them), methods used as values. The full table with a reason and a replacement
+for each of 250 TypeScript features: [docs/TYPESCRIPT.md](https://github.com/e7lang/e7/blob/main/docs/TYPESCRIPT.md).
 
 For the complete list (destructuring limits, class rules, operators, every standard-library method) read
 [references/language.md](references/language.md). For the built-in modules read

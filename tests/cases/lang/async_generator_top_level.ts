@@ -8,7 +8,7 @@ async function* lines(text: string): AsyncGenerator<string> {
 
 export async function wordCount(text: string): Promise<number> {
   let n = 0;
-  for await (const line of lines(text)) n += line.split(/\s+/).length;
+  for await (const line of lines(text)) n += line.split(" ").filter((w) => w !== "").length;
   return n;
 }
 

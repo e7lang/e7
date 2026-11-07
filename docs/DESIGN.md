@@ -1,7 +1,7 @@
 # E7 design decisions
 
-This document records why E7 and e7vm are built the way they are: the foundations (sections 1-6), then the
-decisions behind coroutines, `async` / `await`, the bytecode format, regular expressions, literal types, recursive
+This document records why E7 and e7vm are built the way they are: the foundations (sections 1-6), then the decisions
+behind coroutines, `async` / `await`, the bytecode format, leaving out regular expressions, literal types, recursive
 types and properties that hold `undefined` (D1-D7), with notes on how each was implemented. The specifications are
 [SPEC.md](SPEC.md) (the language), [BYTECODE.md](BYTECODE.md) (the `.e7b` format and the verifier) and
 [EMBEDDING.md](EMBEDDING.md) (the C API); where this document and those differ, they are authoritative.
@@ -144,8 +144,8 @@ The security reviews and their results are in [PRODUCTION.md](PRODUCTION.md).
 |---|---|---|
 | D1 | Coroutines: a generator or `async` activation keeps its frame in a heap object between resumptions | yes |
 | D2 | `async` / `await`: ECMAScript promise jobs in the VM, the host as the event loop | yes |
-| D3 | One bytecode format: function flags, class flags and a regular expression table are part of it | yes |
-| D4 | Regular expressions: an own backtracking engine, budget-bounded, patterns checked at compile time | yes |
+| D3 | One bytecode format: function flags and class flags are part of it | yes |
+| D4 | No regular expressions: left out to keep the runtime small | no |
 | D5 | Literal types: checked at compile time, represented as their base type | no |
 | D6 | Recursive interfaces and type aliases | no (JSON descriptors gain a back-reference) |
 | D7 | Properties that hold `undefined`: a presence mask in objects of interface / object types | yes |
@@ -294,13 +294,12 @@ function type.
 ### Decision
 
 There is one `.e7b` format ([BYTECODE.md](BYTECODE.md)), with the format identifier 3 in its header. The features
-of D1, D4 and D7 are part of its layout:
+of D1 and D7 are part of its layout:
 
 - a function flags byte (generator, `async`, async generator, and the value kinds of the coroutine), checked by the
   verifier: `GEN_START`, `YIELD` and `AWAIT` appear only in functions with the matching kind, `GEN_START` /
   `ASYNC_START` only as the first instruction;
 - a class flags byte (records with a presence mask, D7; records with accessors);
-- a regular expression table (source and flags, D4);
 - the opcodes `GEN_START`, `ASYNC_START`, `YIELD`, `RESUME_I/F/R`, `AWAIT` and `FIELD_ABSENT`; promise and iterator
   operations are natives, so they need no verification rules of their own.
 
@@ -325,46 +324,25 @@ changes.
 
 ---
 
-## D4. Regular expressions
+## D4. No regular expressions
 
 ### Decision
 
-An own regular expression engine in the VM (`src/regexp/`): a compiler from pattern to a small program and a
-**backtracking matcher with explicit stacks** (no C recursion), with ECMAScript semantics on UTF-16 strings, which is
-how E7 strings are stored.
+E7 has no regular expressions. A regular expression literal (`/.../`), `RegExp`, `RegExpMatchArray`,
+`RegExpExecArray` and the String methods that only take a pattern (`match`, `matchAll`, `search`) are compile
+errors that point to the string methods. `split`, `replace` and `replaceAll` take string patterns only.
 
-- **Flags**: `d g i m s u y`. The `v` flag (set notation, ES2024) is not supported.
-- **Syntax**: everything ES2018 adds (named groups, lookbehind, `s`, Unicode property escapes `\p{...}`) and the
-  Annex B syntax that V8 accepts without the `u` flag, so a pattern that works in Node.js works in E7.
-- **Patterns are data, not code.** A module stores a literal's source and flags (D3's regular expression table);
-  the VM compiles them when the module is loaded. A malformed pattern fails the load (it cannot happen for compiler
-  output, since the compiler checks literals). So there is no regular expression program in the module to verify.
-- **Compile-time checking**: the compiler parses every literal; a syntax error is a compile error with the position.
-  `new RegExp(source, flags)` with a source built at run time raises a catchable `SyntaxError`, as in JavaScript.
+### Why
 
-### Bounded by the host's limits
+e7vm is embedded in apps, and every app pays for every feature in its download size. An ECMAScript regular
+expression engine that matches V8 needs its own parser, compiler and backtracking matcher plus Unicode property and
+case-folding tables: about 160 KB of the 1.5 MB Android runtime, more than the VM's interpreter. The business logic
+E7 is built for (rules, validation, request signing, data shaping) rarely needs patterns that `indexOf`,
+`startsWith`, `split` and `replaceAll` cannot express, and leaving the engine out also removes a class of
+denial-of-service inputs (catastrophic backtracking) and a large part of the security review surface.
 
-Every matcher step is charged to the instruction budget (in batches) and the backtracking stacks to the memory
-limit. A catastrophic pattern such as `/(a+)+$/` on a long input therefore ends with `E7_ERR_BUDGET` (or suspends
-with `suspend_on_budget`) instead of hanging the host: ReDoS is limited by the same budget as any other script work.
-
-### Types (the fixed rule)
-
-- `RegExp`, `RegExpMatchArray` (`string[]` with `index`, `input`, `groups`), `RegExpExecArray`.
-- **Named groups are known for literals**: for `/(?<year>\d{4})/`, `m.groups?.year` is a `string | undefined`. For a
-  pattern built at run time, `groups` has no known properties and only indexed groups are available (TypeScript
-  types `groups` as an index signature, which E7 does not have).
-- `replace(re, fn)`: the callback's parameters are fixed by the pattern: the match, one `string | undefined` per
-  capture group of a literal, then the offset and the input (and the groups object for a literal with named groups).
-  For a run-time pattern only `(match: string) => string` is accepted.
-- `matchAll` returns an `IterableIterator<RegExpExecArray>` (D1).
-
-### Unicode data and verification
-
-`\p{...}` (General_Category, Script, Script_Extensions and the binary properties) and case-insensitive matching use
-Unicode tables generated from the ICU data of Node.js 22 (`scripts/gen-regexp-unicode.mjs`), so results match V8.
-The engine is checked by test262-derived tests within the supported flags, a random pattern-and-input fuzzer
-compared with V8, ReDoS tests that check the budget bound, and the GC-stress, allocation-failure and sanitizer runs.
+A host that needs pattern matching can provide it as a host function (`declare function matches(pattern: string,
+s: string): boolean`), with the platform's own engine.
 
 ---
 
@@ -466,9 +444,8 @@ declares.
   does) and the outer await, so a step takes the same two jobs as in Node.js; `throw(e)` into an array (no `throw`
   method) rejects with a `TypeError` a job later, and `return(v)` on it gives `{ value: v, done: true }` (the ES2025
   text, also what Node.js 22 and 24 do).
-- **D4.** The engine is `src/regexp/` (a parser following V8's, a compiled program, a matcher with two explicit
-  stacks); its Unicode tables are about 59 KB compiled. The `v` flag and duplicate named groups are rejected, as
-  Node.js 22 does.
+- **D4.** The parser still recognizes a regular expression literal, so that `/a+/` is reported as "regular
+  expressions are not supported in E7" with a hint rather than as a confusing division.
 - **D5.** `as const` works for literals and for arrays and objects of literals; a `const` initialized with a literal
   has the literal's type, a `let` the base type (TypeScript's widening). An enum member used as a type (`kind: E.A`)
   is the enum's type (tsc checks the member).
