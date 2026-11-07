@@ -14,10 +14,7 @@ enum class OT : uint8_t {
   String, Array, Bytes, Buffer, Instance, Closure, Cell, Box, Map, BigInt, Undefined, Handle,
   Coro,     // a generator or async function activation (DESIGN.md D1)
   Promise,  // a promise (D2)
-  RegExp,   // a regular expression (D4)
 };
-
-namespace re { struct Program; struct Limits; }
 
 struct Obj {
   Obj* gcNext;
@@ -36,38 +33,12 @@ struct StrObj : Obj {
 
 // Obj::flags of an Array: an Error object, [name, message] (created only by the VM and the Error natives)
 constexpr uint16_t kArrFlagError = 2;
-// The result of a regular expression match (D4; exec / match / matchAll): an array of strings
-// (undefined for groups that did not participate) whose block also holds a MatchExtra after the
-// ArrObj; kArrFlagIndices: the `indices` array of a match with the d flag (MatchExtra::groups only)
-constexpr uint16_t kArrFlagMatch = 4;
-constexpr uint16_t kArrFlagIndices = 8;
 
 struct ArrObj : Obj {
   uint8_t vt;
   uint32_t len;
   uint32_t cap;
   Slot* data;
-};
-
-struct MatchExtra {
-  double index;
-  Obj* input;    // the subject string (null for indices arrays)
-  Obj* groups;   // the groups object (an instance of a VM record class) or undefined
-  Obj* indices;  // d flag: the indices array (kArrFlagIndices), or null
-};
-inline MatchExtra* matchExtra(ArrObj* a) { return reinterpret_cast<MatchExtra*>(a + 1); }
-inline const MatchExtra* matchExtra(const ArrObj* a) { return reinterpret_cast<const MatchExtra*>(a + 1); }
-inline bool hasMatchExtra(const Obj* o) { return o->flags & (kArrFlagMatch | kArrFlagIndices); }
-
-// A regular expression (D4): the compiled program (shared with the module for a literal; for `new RegExp`
-// shared by the object and its copies), its source and lastIndex.
-struct RegExpObj : Obj {
-  std::shared_ptr<const re::Program> prog;
-  Obj* source;          // StrObj: the pattern text (as given; `source` escapes it)
-  double lastIndex;
-  // a program compiled at run time: its size, counted in the heap once while any object holds it (the
-  // last one to be freed releases it); 0 for a module's literal (the module counts it)
-  uint64_t progBytes;
 };
 
 struct BufObj : Obj {
@@ -169,17 +140,12 @@ struct CoroObj : Obj {
   uint32_t nregs;
   uint8_t fflags;       // the function's flags (kind and value kinds)
   uint8_t state;        // CoroState
-  union {
-    // fn == nullptr: a native iterator (D4, String.prototype.matchAll): RESUME gives the elements of the
-    // array `items` in order (pc is the next index)
-    Obj* items;
-    // an async generator (fflags kind 3): its request queue, null until the first request (its
-    // entries are counted in the heap)
-    std::deque<AGenRequest>* queue;
-  };
+  // an async generator (fflags kind 3): its request queue, null until the first request (its entries
+  // are counted in the heap)
+  std::deque<AGenRequest>* queue;
   Slot* regs() { return reinterpret_cast<Slot*>(this + 1); }
 };
-inline bool isAsyncGen(const CoroObj* c) { return c->fn && (c->fflags & 3) == 3; }
+inline bool isAsyncGen(const CoroObj* c) { return (c->fflags & 3) == 3; }
 
 // Runtime class info
 struct ClassRT {
@@ -188,7 +154,6 @@ struct ClassRT {
   bool isRecord = false;
   bool isTuple = false;
   bool presence = false;  // instances carry a presence mask (D7, class flag kClassFlagPresence)
-  bool nullProto = false; // a VM record class of regular expression groups: printed as [Object: null prototype]
   // records with getters / setters (kClassFlagAccessors): per field, bit 0 a getter, bit 1 a setter (the
   // field holds the accessor pair, see accessorGet in stdlib/util.h); empty for other classes
   std::vector<uint8_t> accessors;

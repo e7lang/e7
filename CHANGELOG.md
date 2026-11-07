@@ -20,7 +20,7 @@ delivered from a server, signed, verified at load time and run in a sandbox.
 - Every E7 program is a valid TypeScript program (checked with `tsc --strict` and `exactOptionalPropertyTypes`)
   and prints what Node.js 22 prints; every value's type is known at compile time.
 - Types: `number`, `boolean`, `string`, `bigint`, fixed-width integers (`i8` ... `u64`, `int`) with machine
-  semantics, arrays, tuples, `Map` / `Set`, `Uint8Array` and the other typed arrays, `DataView`, `Date`, `RegExp`,
+  semantics, arrays, tuples, `Map` / `Set`, `Uint8Array` and the other typed arrays, `DataView`, `Date`,
   `Promise`, generators and iterators, nullable types (`T | null`, `T | undefined`), literal types and unions of
   literals, enums, function types, recursive interfaces and type aliases.
 - Classes (single inheritance, `abstract`, `implements`, static members and blocks, parameter properties,
@@ -31,10 +31,10 @@ delivered from a server, signed, verified at load time and run in a sandbox.
   call.
 - Generators, `async` / `await`, async generators and `for await`, with the promise job order of the
   specification; the host is the event loop (`declare function f(): Promise<T>` host functions).
-- Regular expressions with an own backtracking engine (flags `dgimsuy`, named groups, lookbehind, `\p{...}`),
-  patterns checked at compile time, every step charged to the instruction budget.
 - Properties that hold `undefined` behave as in JavaScript (a presence mask in records).
-- 250 TypeScript features documented with a sample program each: 155 supported, 17 partial, 78 unsupported (with
+- No regular expressions: literals, `RegExp`, `match`, `matchAll` and `search` are compile errors that point to the
+  string methods; leaving the engine out keeps the runtime about 160 KB smaller ([docs/DESIGN.md](docs/DESIGN.md) D4).
+- 250 TypeScript features documented with a sample program each: 154 supported, 16 partial, 80 unsupported (with
   the reason and the alternative).
 
 ### Standard library
@@ -77,9 +77,8 @@ delivered from a server, signed, verified at load time and run in a sandbox.
   allocation-failure, equivalence (budget slice 1, single-stepping debugger), soak and ThreadSanitizer runs, C API,
   debugger and binding tests on an Android emulator, the iOS simulator, JVMs and .NET; libFuzzer targets for the
   loader, compiler and natives (ClusterFuzzLite on pull requests and nightly).
-- Eight independent security reviews (bytecode loading, natives and the C API, crypto, release sign-off,
-  `try` / `catch`, the GC and formatter, coroutines and promises, regular expressions), every finding fixed with a
-  regression test.
+- Seven independent security reviews (bytecode loading, natives and the C API, crypto, release sign-off,
+  `try` / `catch`, the GC and formatter, coroutines and promises), every finding fixed with a regression test.
 
 [Unreleased]: https://github.com/e7lang/e7/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/e7lang/e7/releases/tag/v0.1.0

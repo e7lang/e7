@@ -1102,8 +1102,7 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "Error" || name == "AggregateError") { noArgs(); return T.error(); }
   if (name == "TemplateStringsArray") { noArgs(); return T.array(T.string(), true); }
   if (name == "Date") { noArgs(); return T.date(); }
-  if (name == "RegExp") { noArgs(); return T.regexp(); }
-  if (name == "RegExpMatchArray" || name == "RegExpExecArray") { noArgs(); return T.matchArray(T.regexp(), name == "RegExpExecArray"); }
+  if (name == "RegExp" || name == "RegExpMatchArray" || name == "RegExpExecArray") return errT(l, kNoRegExp);
   if (name == "Record" || name == "Partial" || name == "Required" || name == "Pick" || name == "Omit" || name == "Readonly")
     return errT(l, "utility type '" + name + "' is not supported; use Map<K, V> or an interface");
   if (name == "Generator" || name == "Iterator" || name == "IterableIterator" || name == "IteratorObject" ||

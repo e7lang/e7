@@ -19,7 +19,6 @@ struct Program {
   std::vector<VarSym*> globals;
   FuncSym* init = nullptr;          // module initializer (all files' top-level code)
   std::vector<std::pair<std::string, FuncSym*>> exports;
-  std::vector<std::pair<std::string, std::string>> regexps;  // regular expression literals (source, flags)
   template <class T>
   T* make() {
     syms.emplace_back(new T());
@@ -169,8 +168,6 @@ class Checker {
   void checkCoroutineRet(FuncSym* f, Type* ret, Loc l);
   Type* checkYield(Expr* e);
   Type* checkAwait(Expr* e);
-  Type* checkRegExpLit(Expr* e);
-  Type* regexpGroupsType(Type* re);  // the groups object of a literal with named groups
   Type* promiseCallbackRet(Expr* cb, Type* ret, Loc l);
   Type* iteratorMethodType(Type* t, Loc l);
   Type* asyncIteratorMethodType(Type* t, Loc l);  // [Symbol.asyncIterator]()

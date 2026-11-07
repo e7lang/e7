@@ -15,7 +15,6 @@ nums    u32 n, n × f64        number constant pool (IEEE-754 bit patterns)
 strs    u32 n, n × (u32 len, len × u16)   string constants (UTF-16)
 sigs    u32 n, n × str        signatures, e.g. "FR>I": param kind list '>' return kind (V = void)
 natives u32 n, n × (str name, u32 sig)          native function imports (linked by name + signature)
-regexps u32 n, n × (str source, str flags)      regular expression literals
 classes u32 n, n × (str name, i32 parent, u8 kind(0 class/1 record/2 tuple), u8 cflags,
                     u32 nf × (str name, u8 vt), u32 nm × (u32 func, str methodName))
 funcs   u32 n, n × (str name, u32 sig, u16 nparams, u8 fflags, u32 nregs × u8 kind, u32 nup × u8 kind,
@@ -58,7 +57,7 @@ distinct from module signatures. See [DEPLOYMENT.md](DEPLOYMENT.md#3-manifests).
 - **vt** (exact value type): `0 number, 1 boolean, 2 i8, 3 u8, 4 i16, 5 u16, 6 i32, 7 u32, 8 i64, 9 u64, 10 ref`.
   Used for array elements, fields, cells, boxed values, Map keys/values, and formatting.
 - **hostSig**: host type codes for an exported function's parameters/return (see `e7.h`); the host uses them to encode/decode arguments.
-- **regexps**, **cflags**, **fflags**: regular expression literals, class flags and function flags (section 6.1).
+- **cflags**, **fflags**: class flags and function flags (section 6.1).
 
 ## 2. Instruction encoding
 
@@ -315,16 +314,13 @@ string/byte types) are checked by the interpreter at runtime. So even maliciousl
   modules that do not keep running on older VMs. The format identifier changes only for an incompatible change of the
   layout.
 
-## 6. Coroutines, regular expressions and record flags
+## 6. Coroutines and record flags
 
-Generators, `async` functions and async generators ([DESIGN.md](DESIGN.md), D1-D2), regular expressions (D4) and
-records with a presence mask (D7) or with accessors use the tables, flags and instructions below.
+Generators, `async` functions and async generators ([DESIGN.md](DESIGN.md), D1-D2) and records with a presence mask
+(D7) or with accessors use the flags and instructions below.
 
-### 6.1 Regular expressions, class flags and function flags
+### 6.1 Class flags and function flags
 
-- **regexps**: the source (UTF-8) and flags (a subset of `dgimsuy`, each at most once) of each regular expression
-  literal. The VM compiles every entry when the module is loaded; a pattern that does not compile fails the load
-  (`E7_ERR_LOAD`).
 - **cflags**, bit 0: the instances carry a presence mask (D7): one bit per field after the fields, all set by `NEW`;
   allowed for records only (`kind` 1). Records whose properties can never be absent or hold `undefined` have no
   mask, and all their fields are own properties. Bit 1: a record with accessor properties (section 6.4). Other bits
@@ -384,8 +380,7 @@ The records are instances of the class the request names (a primitive field gets
 `undefined`). The generator's kinds are checked against the request's at run time (`generator type mismatch`), as for
 `RESUME`.
 
-Promise, iterator, regular expression and typed array operations are native functions (`Promise.*`, `TA.*`,
-`RegExp.*`, `Array.toSorted` / `toReversed` / `toSpliced` / `with*`, `Date.set`, `Error.newCause` / `newAggregate` /
+Promise, iterator and typed array operations are native functions (`Promise.*`, `TA.*`, `Array.toSorted` / `toReversed` / `toSpliced` / `with*`, `Date.set`, `Error.newCause` / `newAggregate` /
 `cause` / `errors`, `Object.has`, `Global.structuredClone`, `test.later*`); they need no verification rules of their
 own.
 

@@ -124,13 +124,7 @@ bool Checker::assignable(Type* src, Type* dst) {
     }
     case TT::Class:
       return src->t == TT::Class && isAncestor(dst->cls, src->cls);
-    case TT::RegExp:
-      // a literal's type (with its groups) is a RegExp
-      return src->t == TT::RegExp && dst->reCaps < 0;
     case TT::Array:
-      // a match result is a string[]; only a match result is one (exec results have index and input)
-      if (dst->re)
-        return src->t == TT::Array && src->re && (src->reExec || !dst->reExec) && (dst->re->reCaps < 0 || src->re == dst->re);
       // a mutable array is assignable to a readonly one, not the other way round (as in TypeScript)
       if (src->t == TT::Array && src->ro && !dst->ro) return false;
       if (src->t == TT::Array && src->elem == dst->elem) return true;
@@ -235,7 +229,6 @@ Type* Checker::widen(Type* t) {
   if (!t) return t;
   if (t->lit) return t->litBase;
   if (t->t == TT::Optional && t->elem->lit) return T.optional(t->elem->litBase, t->hasNull, t->hasUndef);
-  if (t->t == TT::RegExp && t->reCaps >= 0) return T.regexp();  // `let re = /x/` may get another pattern
   return t;
 }
 
@@ -253,7 +246,6 @@ Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
     bool un = (a->t == TT::Optional && a->hasUndef) || (b->t == TT::Optional && b->hasUndef);
     return T.optional(u, n, un);
   }
-  if (a->t == TT::RegExp && b->t == TT::RegExp) return T.regexp();
   if (a->t == TT::Class && b->t == TT::Class) {
     for (ClassSym* c = a->cls; c; c = c->parent)
       if (isAncestor(c, b->cls)) return c->type;

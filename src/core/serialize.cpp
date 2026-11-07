@@ -201,8 +201,6 @@ std::vector<uint8_t> serializeModule(const Module& m) {
   for (auto& s : m.sigs) w.str(s);
   w.u32((uint32_t)m.natives.size());
   for (auto& n : m.natives) { w.str(n.name); w.u32(n.sig); }
-  w.u32((uint32_t)m.regexps.size());
-  for (auto& r : m.regexps) { w.str(r.source); w.str(r.flags); }
   w.u32((uint32_t)m.classes.size());
   for (auto& c : m.classes) {
     w.str(c.name);
@@ -296,9 +294,6 @@ bool deserializeModule(const uint8_t* data, size_t len, Module& m, std::string& 
   n = r.count(8);
   m.natives.resize(n);
   for (auto& x : m.natives) { x.name = r.str(); x.sig = r.u32(); }
-  n = r.count(8);
-  m.regexps.resize(n);
-  for (auto& x : m.regexps) { x.source = r.str(); x.flags = r.str(); }
   n = r.count(18);
   m.classes.resize(n);
   for (auto& c : m.classes) {

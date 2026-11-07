@@ -34,6 +34,10 @@ PRINCIPLE_TEXT = {
         "silently misbehave) is rejected at compile time rather than approximated. The few run-time differences "
         "that remain (out-of-bounds reads are errors, for example) are listed in "
         "[SPEC.md section 9](SPEC.md#9-known-differences-from-javascript-summary).",
+    "small runtime":
+        "**Small runtime.** e7vm is embedded in apps, so every feature's code and data ship with each of them. "
+        "A feature that needs a large engine or large tables (regular expressions with their Unicode data) "
+        "is left out; string methods cover the common cases.",
     "not implemented yet":
         "**Not implemented yet.** The feature fits the principles above but the compiler does not support it "
         "(yet). These rows are candidates for future versions.",

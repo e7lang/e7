@@ -39,7 +39,8 @@ export function sign(msg: string, key: string): string {
 - **Secrets stay in the host.** A `KeyHandle` lets scripts use a key held in the Keychain or Keystore without ever seeing the key bytes.
 - **TypeScript you already know.** The same JS semantics, checked by `tsc --strict`, and differential-tested against Node.js.
 - **Small and fast.**
-  - About 470 KB for the runtime only, or about 920 KB with the on-device compiler.
+  - About 1.2 MB for the runtime only (about 460 KB compressed), or about 2.7 MB with the on-device compiler
+    (Android arm64, crypto included).
   - Interpreter speed comparable to or faster than V8's interpreter (`--jitless`).
   - Standard crypto runs as native code.
 
@@ -298,8 +299,7 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
   - Errors: `try`/`catch`/`finally` for the errors Node.js also throws.
   - Generators, `async`/`await`, `Promise` (the host is the event loop; host functions may be async), async
     generators and `for await`.
-  - Regular expressions (literals checked when compiling, named groups typed; matching is budget-bounded),
-    object literal getters and setters, literal types, recursive interfaces.
+  - Object literal getters and setters, literal types, recursive interfaces.
   - Multi-file `import`/`export`, and type narrowing.
 - **Same output as Node.js.** Every test program is compared with Node.js byte for byte; `console.log` formats
   like Node's `util.inspect`, and Math functions are bit-identical (V8's fdlibm) on every platform.
@@ -359,7 +359,7 @@ CMake options:
 
 ## Security and status
 
-e7vm is built for running code that comes over the network. Before release it went through eight
+e7vm is built for running code that comes over the network. Before release it went through seven
 security reviews (each by a separate AI review agent; no third-party audit yet), differential testing
 against Node.js/OpenSSL, sanitizers, and fuzzing, and every finding was fixed with a regression test. The
 evidence is in [docs/PRODUCTION.md](docs/PRODUCTION.md). E7 0.1.0 is the first release: thoroughly tested and

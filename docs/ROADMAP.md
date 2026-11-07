@@ -7,9 +7,9 @@ business rules, written in everyday TypeScript and delivered from a server. It c
 
 - **The language**: a strict TypeScript subset ([SPEC.md](SPEC.md)) with classes, interfaces, generics, closures,
   destructuring, `try` / `catch` / `finally`, generators and iterators, `async` / `await` with promises, async
-  generators and `for await`, regular expressions, literal types, recursive types, getters and setters, and
-  fixed-width integer types. [TYPESCRIPT.md](TYPESCRIPT.md) lists 250 TypeScript features: 155 supported, 17
-  partial, 78 unsupported, each with its reason and alternative.
+  generators and `for await`, literal types, recursive types, getters and setters, and
+  fixed-width integer types. [TYPESCRIPT.md](TYPESCRIPT.md) lists 250 TypeScript features: 154 supported, 16
+  partial, 80 unsupported, each with its reason and alternative.
 - **The standard library** of JavaScript as Node.js 22 implements it for these types (strings, arrays, `Map` / `Set`,
   `JSON`, `Math`, `Date`, `BigInt`, typed arrays, `structuredClone`), plus `e7:crypto`, `e7:encoding`, `e7:json` and
   `e7:test`.
@@ -18,7 +18,7 @@ business rules, written in everyday TypeScript and delivered from a server. It c
   JavaScript (WebAssembly), plus module managers for staged rollout.
 - **Tooling**: `e7c`, `e7`, a VS Code extension, a playground and an AI skill.
 - **Verification**: differential testing against Node.js, fuzzing, GC-stress, allocation-failure and sanitizer runs,
-  and eight independent security reviews ([PRODUCTION.md](PRODUCTION.md)).
+  and seven independent security reviews ([PRODUCTION.md](PRODUCTION.md)).
 
 Releases before 1.0 may still change the language, the C API or the bytecode format; each change is listed in the
 [CHANGELOG](../CHANGELOG.md). A module's `requires` field (BYTECODE.md section 5) tells a VM whether it can run it.
@@ -60,12 +60,11 @@ These TypeScript features are not excluded by the rules of SPEC section 0.1, but
 | Class expressions and mixins | Classes are not values in E7 |
 | Namespaces, decorators, JSX | Little use in the target scripts; decorators need run-time metadata |
 | `var`, non-ASCII identifiers | Rarely needed; `let` / `const` and ASCII names cover the target scripts |
-| The `v` regular expression flag | Set notation (ES2024) is not in the engine yet |
 
 Excluded for good by the rules of SPEC section 0.1 (about 60 rows of TYPESCRIPT.md): `any`, `unknown` as a declared
 type, unions other than with `null` / `undefined` (including discriminated unions of object types), index signatures
 and `Record`, `keyof` / `typeof` types, conditional, mapped and template literal types, intersection types, `Symbol`
-values, `Proxy` / `Reflect`, `eval`.
+values, `Proxy` / `Reflect`, `eval`. Regular expressions are left out to keep the runtime small (DESIGN.md D4).
 
 ## Later
 

@@ -2,7 +2,6 @@
 #include <cmath>
 
 #include "../core/numfmt.h"
-#include "../regexp/regexp.h"
 #include "checker.h"
 #include "intrinsics.h"
 #include "suggest.h"
@@ -71,7 +70,6 @@ Type* Checker::checkInner(Expr* e, Type* expected) {
     case EK::Spread: return errT(e->loc, "spread is not allowed here");
     case EK::Yield: return checkYield(e);
     case EK::Await: return checkAwait(e);
-    case EK::RegExp: return checkRegExpLit(e);
     case EK::Paren: return check(e->a, expected);
     case EK::Conv: return e->type;
     case EK::TypeOf: {
@@ -97,34 +95,6 @@ Type* Checker::checkInner(Expr* e, Type* expected) {
 }
 
 // ------------------------------------------------------------------ literals
-// A regular expression literal (D4): checked with the engine (a syntax error is a compile error with
-// V8's message) and stored in the module's table; its type knows the groups
-Type* Checker::checkRegExpLit(Expr* e) {
-  std::string err;
-  re::ProgramPtr p = re::compile(utf8ToUtf16(e->raw), e->regexFlags, err);
-  if (!p) {
-    if (err.rfind("Invalid flags", 0) == 0) return errT(e->loc, "Invalid regular expression flags");
-    return errT(e->loc, err);
-  }
-  int idx = -1;
-  for (size_t i = 0; i < P.regexps.size() && idx < 0; i++)
-    if (P.regexps[i].first == e->raw && P.regexps[i].second == e->regexFlags) idx = (int)i;
-  if (idx < 0) {
-    idx = (int)P.regexps.size();
-    P.regexps.push_back({e->raw, e->regexFlags});
-  }
-  e->ival = idx;
-  std::vector<std::string> names;
-  for (auto& g : re::namedGroups(*p)) names.push_back(g.name);
-  return T.regexp((int32_t)re::captureCount(*p), names);
-}
-
-Type* Checker::regexpGroupsType(Type* re) {
-  std::vector<ObjShape::Prop> props;
-  for (auto& n : re->reNames) props.push_back({n, T.optional(T.string(), false, true), false, true, false});
-  return T.anonObject(props);
-}
-
 static bool parseUnsigned(const std::string& raw, uint64_t& out) {
   // raw is decimal digits or 0x / 0o / 0b prefixed digits (no separators)
   int radix = 10;
@@ -1645,9 +1615,6 @@ Type* Checker::checkAssign(Expr* e) {
         return errT(e->loc, "'" + op + "' on an array length is not supported; write 'a.length = a.length " +
                                 op.substr(0, op.size() - 1) + " ...' instead");
       target->intrinsic = IN_ARR_LENGTH_SET;
-    } else if (target->k == EK::Member && target->intrinsic == IN_NATIVE && target->native == "RegExp.lastIndex") {
-      if (op != "=") return errT(e->loc, "'" + op + "' on lastIndex is not supported; write 're.lastIndex = re.lastIndex " + op.substr(0, op.size() - 1) + " ...' instead");
-      target->intrinsic = IN_LASTINDEX_SET;
     } else if (target->k == EK::Member) {
       std::string werr = memberWriteError(target);
       if (!werr.empty()) return errT(e->loc, werr);

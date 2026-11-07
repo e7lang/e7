@@ -2179,13 +2179,7 @@ class Parser {
       case TK::TmplFull:
       case TK::TmplHead:
         return parseTemplate();
-      case TK::Regex: {
-        Expr* e = A.expr(EK::RegExp, l);
-        e->raw = tk.text;
-        e->regexFlags = tk.flags;
-        i++;
-        return e;
-      }
+      case TK::Regex: fail(kNoRegExp);
       case TK::Ident: {
         const std::string& w = tk.text;
         if (w == "true" || w == "false") { Expr* e = A.expr(EK::Bool, l); e->bval = w == "true"; i++; return e; }

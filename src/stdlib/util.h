@@ -97,8 +97,6 @@ BigObj* bigParse(VM& vm, const std::string& s, bool literal);  // nullptr on syn
 double bigToDouble(const BigObj* b);
 // Map helpers (map.cpp)
 int32_t mapFind(VM& vm, MapObj* m, Slot k);
-// "/source/flags" of a regular expression (regexp.cpp)
-std::u16string regexpToString(const RegExpObj* re);
 // current module of the executing script function
 ModuleRT* currentModule(VM& vm);
 

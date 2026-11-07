@@ -44,21 +44,7 @@ static bool deepEq(VM& vm, Slot a, Slot b, uint8_t vt, int depth) {
       for (uint32_t i = 0; i < ax->len && i < ay->len; i++)
         if (!deepEq(vm, ax->data[i], ay->data[i], ax->vt, depth + 1)) return false;
       if (ax->len != ay->len) return false;
-      if (hasMatchExtra(ax) != hasMatchExtra(ay)) return false;
-      if (hasMatchExtra(ax)) {  // regular expression matches: also index, input, groups and indices
-        const MatchExtra* mx = matchExtra(ax);
-        const MatchExtra* my = matchExtra(ay);
-        if (mx->index != my->index || !deepEq(vm, slotR(mx->input), slotR(my->input), VT_REF, depth + 1) ||
-            !deepEq(vm, slotR(mx->groups), slotR(my->groups), VT_REF, depth + 1) ||
-            !deepEq(vm, slotR(mx->indices), slotR(my->indices), VT_REF, depth + 1))
-          return false;
-      }
       return true;
-    }
-    case OT::RegExp: {  // the same source, flags and lastIndex (as assert.deepStrictEqual)
-      auto* rx = static_cast<RegExpObj*>(x);
-      auto* ry = static_cast<RegExpObj*>(y);
-      return regexpToString(rx) == regexpToString(ry) && rx->lastIndex == ry->lastIndex;
     }
     case OT::Instance: {
       auto* ix = static_cast<InstObj*>(x);

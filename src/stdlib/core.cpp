@@ -106,9 +106,8 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Promise: return u"[object Promise]";
     case OT::Coro: {
       auto* c = static_cast<CoroObj*>(o);
-      return !c->fn ? u"[object RegExp String Iterator]" : isAsyncGen(c) ? u"[object AsyncGenerator]" : u"[object Generator]";
+      return isAsyncGen(c) ? u"[object AsyncGenerator]" : u"[object Generator]";
     }
-    case OT::RegExp: return regexpToString(static_cast<RegExpObj*>(o));
     default: return u"[object Object]";
   }
 }
@@ -347,9 +346,8 @@ struct Inspector {
       case OT::Handle: return "KeyHandle {}";
       case OT::Coro: {
         auto* c = static_cast<CoroObj*>(o);
-        return !c->fn ? "Object [RegExp String Iterator] {}" : isAsyncGen(c) ? "Object [AsyncGenerator] {}" : "Object [Generator] {}";
+        return isAsyncGen(c) ? "Object [AsyncGenerator] {}" : "Object [Generator] {}";
       }
-      case OT::RegExp: return utf16ToUtf8(regexpToString(static_cast<RegExpObj*>(o)));
       case OT::Promise: {
         auto* p = static_cast<PromiseObj*>(o);
         if (p->state == PS_PENDING) return "Promise { <pending> }";
@@ -428,7 +426,7 @@ struct Inspector {
     std::vector<uint32_t> fields;  // visible fields of an instance, in JavaScript property order
     switch (o->type) {
       case OT::Array: {
-        if (static_cast<ArrObj*>(o)->len == 0 && !showHidden && !hasMatchExtra(o)) return "[]";
+        if (static_cast<ArrObj*>(o)->len == 0 && !showHidden) return "[]";
         brace0 = "[", brace1 = "]", ctor = "Array", arrayLike = true;
         break;
       }
@@ -480,9 +478,9 @@ struct Inspector {
           for (auto& e : idx) fields.push_back(e.second);
           fields.insert(fields.end(), rest.begin(), rest.end());
         }
-        std::string prefix = c->nullProto ? "[Object: null prototype] " : c->isRecord ? "" : c->name + " ";
+        std::string prefix = c->isRecord ? "" : c->name + " ";
         if (fields.empty()) return prefix + "{}";
-        brace0 = prefix + "{", ctor = c->nullProto ? "Object: null prototype" : c->isRecord ? "Object" : c->name;
+        brace0 = prefix + "{", ctor = c->isRecord ? "Object" : c->name;
         break;
       }
       default: return "[object]";
@@ -500,16 +498,6 @@ struct Inspector {
         for (uint32_t i = 0; i < shown; i++) out.push_back(item(a->data[i], a->vt, rt));
         if (a->len > shown) out.push_back(remainingText(a->len - shown));
         if (showHidden) out.push_back("[length]: " + std::to_string(a->len));
-        if (hasMatchExtra(a)) {
-          // a regular expression match: index, input, groups (and indices with the d flag), as Node.js
-          const MatchExtra* x = matchExtra(a);
-          if (a->flags & kArrFlagMatch) {
-            out.push_back("index: " + formatNumber(x->index));
-            out.push_back("input: " + item(slotR(x->input), VT_REF, rt));
-          }
-          out.push_back("groups: " + item(slotR(x->groups), VT_REF, rt));
-          if (x->indices) out.push_back("indices: " + item(slotR(x->indices), VT_REF, rt));
-        }
         numeric = true;
         for (size_t i = 0; i < out.size() && numeric; i++) numeric = i < a->len && numericSlot(a->data[i], a->vt);
         break;
@@ -1113,24 +1101,14 @@ struct Cloner {
       }
       case OT::Array: {
         auto* a = static_cast<ArrObj*>(o);
-        // a regular expression match keeps its index, input, groups and indices (own properties in JavaScript)
-        ArrObj* c = hasMatchExtra(a) ? vm.newMatchArray(a->vt, a->len, a->flags & (kArrFlagMatch | kArrFlagIndices))
-                                     : vm.newArray(a->vt, a->len);
+        ArrObj* c = vm.newArray(a->vt, a->len);
         keep(o, c);
-        c->flags = a->flags;  // an Error, a match
+        c->flags = a->flags;  // an Error
         for (uint32_t i = 0; i < a->len; i++) {
           Slot v = a->data[i];
           if (a->vt == VT_REF) v.r = copy(v.r);
           c->data[i] = v;
           c->len = i + 1;
-        }
-        if (hasMatchExtra(a)) {
-          const MatchExtra* x = matchExtra(a);
-          MatchExtra* y = matchExtra(c);
-          y->index = x->index;
-          y->input = x->input;
-          y->groups = copy(x->groups);
-          y->indices = x->indices ? copy(x->indices) : nullptr;
         }
         return c;
       }
@@ -1139,8 +1117,7 @@ struct Cloner {
         if (!in->cls->isRecord) vm.error("DataCloneError: a class instance cannot be cloned");
         if (!in->cls->accessors.empty())  // the copy would need a class with data properties instead
           vm.error("structuredClone of an object with getters or setters is not supported (an e7 limit)");
-        // the groups of a match become a plain object (the clone has Object.prototype)
-        InstObj* c = vm.newInstance(in->cls->nullProto ? vm.groupsClass(in->cls->fieldNames, false) : in->cls);
+        InstObj* c = vm.newInstance(in->cls);
         keep(o, c);
         if (in->cls->presence) memcpy(c->mask(), in->mask(), presenceWords(in->cls->nfields) * 8);
         for (uint32_t i = 0; i < in->cls->nfields; i++) {
@@ -1149,11 +1126,6 @@ struct Cloner {
           c->fields()[i] = v;
         }
         return c;
-      }
-      case OT::RegExp: {
-        // the pattern and flags (lastIndex is not copied, as in JavaScript)
-        auto* r = static_cast<RegExpObj*>(o);
-        return keep(o, vm.newRegExp(r->prog, static_cast<StrObj*>(r->source), r->progBytes, false));
       }
       case OT::Bytes: {
         auto* b = static_cast<BytesObj*>(o);

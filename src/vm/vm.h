@@ -83,8 +83,6 @@ struct ModuleRT {
   std::vector<Slot> globals;
   std::vector<NativeBinding> natives;
   std::vector<uint32_t> sigMap;
-  std::vector<std::shared_ptr<const re::Program>> regexps;  // compiled Module::regexps
-  uint64_t regexpBytes = 0;  // their size, counted in the VM's heap while the module is loaded
   bool initialized = false;
 };
 
@@ -180,10 +178,6 @@ class VM {
   // cannot hold the host thread for longer than that: past it the call fails with E7_ERR_BUDGET.
   // 2^22 ticks: about 20 ms of interpreted code, or a PBKDF2 of 4 million HMACs (about 0.6 s; one tick each)
   static constexpr int64_t kNativeOverrun = int64_t(1) << 22;
-  // regular expressions (D4): the compilation work allowed for the literals of one module at load, and
-  // the number of distinct sets of group names whose record classes the VM keeps
-  static constexpr uint64_t kLoadRegExpWork = uint64_t(1) << 26;
-  static constexpr size_t kMaxGroupsClasses = 16384;
   void chargeWork(uint64_t ticks) {
     if (ticks > (uint64_t)(budget_ < 0 ? 0 : budget_)) {
       if (budgetStart_ == INT64_MAX) return;  // unlimited budget: never fails
@@ -259,19 +253,6 @@ class VM {
   HandleObj* newHandle(int64_t id);
   CoroObj* newCoro(FuncRT* fn, CloObj* closure);
   PromiseObj* newPromise(uint8_t vt);
-  // ---- regular expressions (stdlib/regexp.cpp, DESIGN.md D4)
-  // fresh: a program compiled at run time that no object holds yet (its progBytes are counted now);
-  // otherwise a copy sharing the program (and the count) of another RegExp, or a module literal (0 bytes)
-  RegExpObj* newRegExp(std::shared_ptr<const re::Program> prog, StrObj* source, uint64_t progBytes, bool fresh);
-  // the limits a regular expression compilation runs under (budget and memory limit), for natives
-  re::Limits regexpLimits();
-  // an array of strings with a MatchExtra (flag kArrFlagMatch or kArrFlagIndices), its references null
-  ArrObj* newMatchArray(uint8_t vt, uint32_t cap, uint16_t flag);
-  // a native iterator (CoroObj without a function) over the elements of items (an array of references)
-  CoroObj* newNativeIterator(ArrObj* items);
-  // the record class of a groups object with these property names (VM-owned, shared by all modules)
-  // (nullProto false: the same record as a plain object, for structuredClone)
-  ClassRT* groupsClass(const std::vector<std::string>& names, bool nullProto = true);
 
   // ---- promises and the microtask queue (promise.cpp, DESIGN.md D2)
   // Resolves p with v (of p's value type); a promise value (a thenable) is adopted through a job.
@@ -549,8 +530,6 @@ class VM {
   size_t dbgRetDepth_ = 0;  // stepping: returning below this frame depth stops at the next instruction
   int catchDepth_ = 0;
 
-  std::unordered_map<std::string, std::unique_ptr<ClassRT>> groupsClasses_;  // never freed (inline caches hold them)
-  uint64_t groupsBytes_ = 0;  // their size (bounded by a quarter of the memory limit)
   std::unordered_map<std::string, NativeEntry> natives_;
   std::unordered_map<std::string, uint32_t> sigIds_;
   std::vector<std::string> sigs_;
@@ -582,7 +561,6 @@ void registerDateNatives(VM& vm);
 void registerTestNatives(VM& vm);
 void registerPromiseNatives(VM& vm);  // promise.cpp
 void registerTypedArrayNatives(VM& vm);  // stdlib/typed.cpp
-void registerRegExpNatives(VM& vm);  // stdlib/regexp.cpp
 void applyNativeCosts(VM& vm);  // core.cpp
 
 }  // namespace e7
