@@ -512,5 +512,6 @@ package for diagnostics and *Run File*.
 
 ## 8. Size and performance reference
 
-- Android arm64-v8a shared library (stripped, all crypto algorithms included, libc++ linked statically): about **1.2 MB** for the runtime only (`MinSizeRel`; 1.3 MB `Release`), about **2.7 MB** with the on-device compiler (3.0 MB `Release`). Compressed (as in an APK) it is about 40% of that. An app that receives compiled `.e7b` modules from a server needs only the runtime (`-DE7_WITH_COMPILER=OFF`).
+- Android arm64-v8a shared library (stripped, all crypto algorithms included, libc++ linked statically): about **1.1 MB** for the runtime only (`MinSizeRel`; 1.2 MB `Release`), about **2.6 MB** with the on-device compiler (2.9 MB `Release`). Compressed (as in an APK) it is about 40% of that. An app that receives compiled `.e7b` modules from a server needs only the runtime (`-DE7_WITH_COMPILER=OFF`).
+- iOS arm64 static library: what it adds to a stripped app that calls the whole C API (the linker drops unused code, and libc++ comes with the OS) is about **600 KB** for the runtime only (`MinSizeRel`; 720 KB `Release`) and about **1.4 MB** with the on-device compiler (1.8 MB `Release`). `platform/ios/build_xcframework.sh --no-compiler` builds the runtime-only XCFramework.
 - Interpreter performance is comparable to or faster than V8's interpreter (`--jitless`); standard crypto algorithms run as native code. See the benchmark table in the README.

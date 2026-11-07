@@ -38,7 +38,7 @@ export function sign(msg: string, key: string): string {
 - **密钥留在宿主。** 通过 `KeyHandle`，脚本可以使用 Keychain / Keystore 里的密钥，但拿不到密钥本身。
 - **就是你熟悉的 TypeScript。** 语义与 JS 一致，能通过 `tsc --strict`，并与 Node.js 做差分测试。
 - **体积小、速度快。**
-  - 仅运行时约 1.2 MB（压缩后约 460 KB），含端上编译器约 2.7 MB（Android arm64，含全部加密算法）。
+  - 仅运行时约 1.1 MB（压缩后约 430 KB），含端上编译器约 2.6 MB（Android arm64，含全部加密算法）。在 iOS 上给 App 增加约 600 KB（含编译器约 1.4 MB）。
   - 解释器速度与 V8 的解释器（`--jitless`）相当或更快。
   - 标准密码算法由原生代码执行。
 
@@ -303,12 +303,13 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
   - 类型化数组（`Uint8Array` … `Float64Array`、`BigInt64Array`）/`ArrayBuffer`/`DataView`、`TextEncoder`/`TextDecoder`、
     `structuredClone`、`encodeURIComponent`。
 - **`e7:crypto`。**
-  - 哈希：MD5、SHA-1、SHA-2、SHA-3、Keccak。
+  - 只提供现代算法。哈希：SHA-256、SHA-384、SHA-512。
   - 密钥派生与消息认证：HMAC、HKDF、PBKDF2。
-  - 加密：AES-GCM/CBC/CTR、ChaCha20-Poly1305。
-  - 签名与密钥交换：Ed25519、X25519、ECDSA P-256/384/521（raw 或严格 DER）、RSA PKCS#1 v1.5 / PSS。
-  - 另有 CRC32、安全随机数、`KeyHandle`。
-- **`e7:encoding`。** hex、base64、base64url、base32、UTF-8、PEM，以及字节拼接与比较。
+  - 认证加密：AES-GCM、ChaCha20-Poly1305。
+  - 签名与密钥交换：Ed25519、X25519。
+  - 另有安全随机数、常数时间比较、`KeyHandle`。
+  - 不提供：MD5、SHA-1、SHA-3/Keccak、AES-CBC/CTR、RSA、ECDSA。需要对接老协议的宿主 App 可以注册宿主函数来提供。
+- **`e7:encoding`。** hex、base64、base64url、base32、UTF-8、PEM、CRC-32，以及字节拼接与比较。
 - **`e7:json`。** `tryParse(text) as T | null` 与 `JSON.parse` 同样按类型校验，但对格式错误或结构不符的（不可信）输入
   返回 `null` 而不是终止脚本；`lastError()` 给出原因，例如 `expected a number at $.amount`。
 - **执行控制。**
@@ -397,7 +398,7 @@ build/e7 test examples/tests   # 用 e7:test 编写的单元测试
 | 纯脚本 SHA-256（u32）1 MiB | 168 | 1159 | 41 |
 | 字符串拼接/拆分/Map | 384 | 293 | 243 |
 
-在签名类脚本中，标准算法（HMAC、RSA、ECDSA 等）由原生代码执行，单次调用通常远低于 1 毫秒。
+在签名类脚本中，标准算法（HMAC、Ed25519、AES-GCM 等）由原生代码执行，单次调用通常远低于 1 毫秒。
 
 `e7 --stats script.ts` 会打印一次运行消耗的指令数（`e7_ticks_used()`，与指令预算同一单位，在任何机器上都相同）、
 GC 次数及最长和累计暂停时间、堆峰值。CI 用 [`scripts/bench.py`](scripts/bench.py) 防止性能退化：每个 `bench/*.ts`

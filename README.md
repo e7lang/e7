@@ -39,8 +39,8 @@ export function sign(msg: string, key: string): string {
 - **Secrets stay in the host.** A `KeyHandle` lets scripts use a key held in the Keychain or Keystore without ever seeing the key bytes.
 - **TypeScript you already know.** The same JS semantics, checked by `tsc --strict`, and differential-tested against Node.js.
 - **Small and fast.**
-  - About 1.2 MB for the runtime only (about 460 KB compressed), or about 2.7 MB with the on-device compiler
-    (Android arm64, crypto included).
+  - About 1.1 MB for the runtime only (about 430 KB compressed), or about 2.6 MB with the on-device compiler
+    (Android arm64, crypto included). On iOS it adds about 600 KB to an app (1.4 MB with the compiler).
   - Interpreter speed comparable to or faster than V8's interpreter (`--jitless`).
   - Standard crypto runs as native code.
 
@@ -316,12 +316,14 @@ cart.ts:4:13: error: cannot find name 'totl'; did you mean 'total'?
   - Typed arrays (`Uint8Array` … `Float64Array`, `BigInt64Array`)/`ArrayBuffer`/`DataView`, `TextEncoder`/`TextDecoder`,
     `structuredClone`, `encodeURIComponent`.
 - **`e7:crypto`.**
-  - Hashes: MD5, SHA-1, SHA-2, SHA-3, Keccak.
+  - Only modern algorithms. Hashes: SHA-256, SHA-384, SHA-512.
   - Key derivation and MACs: HMAC, HKDF, PBKDF2.
-  - Ciphers: AES-GCM/CBC/CTR, ChaCha20-Poly1305.
-  - Signatures and key exchange: Ed25519, X25519, ECDSA P-256/384/521 (raw or strict DER), RSA PKCS#1 v1.5 and PSS.
-  - Also CRC32, secure random bytes, and `KeyHandle`.
-- **`e7:encoding`.** hex, base64, base64url, base32, UTF-8, PEM, plus byte concat and compare.
+  - Authenticated encryption: AES-GCM, ChaCha20-Poly1305.
+  - Signatures and key exchange: Ed25519, X25519.
+  - Also secure random bytes, constant-time comparison, and `KeyHandle`.
+  - Not included: MD5, SHA-1, SHA-3/Keccak, AES-CBC/CTR, RSA, ECDSA. A host app that must speak a legacy
+    protocol registers a host function for it.
+- **`e7:encoding`.** hex, base64, base64url, base32, UTF-8, PEM, CRC-32, plus byte concat and compare.
 - **`e7:json`.** `tryParse(text) as T | null` validates like `JSON.parse` but returns `null` for malformed or
   mismatching (untrusted) input; `lastError()` says why, e.g. `expected a number at $.amount`.
 - **Execution control.**
@@ -417,7 +419,7 @@ only option on iOS) and the full JIT.
 | SHA-256 in pure script (u32), 1 MiB | 168 | 1159 | 41 |
 | String concat/split/Map | 384 | 293 | 243 |
 
-In signing scripts, standard algorithms (HMAC, RSA, ECDSA, …) run natively, so a typical call takes
+In signing scripts, standard algorithms (HMAC, Ed25519, AES-GCM, …) run natively, so a typical call takes
 well under a millisecond.
 
 `e7 --stats script.ts` prints the instruction ticks a run consumed (`e7_ticks_used()`; the same unit as

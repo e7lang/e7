@@ -579,8 +579,10 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
     BuiltinSym tmp;
     std::string id = M + "." + name;
     const auto& names = builtinModuleExports(M);
-    if (std::find(names.begin(), names.end(), name) == names.end())
-      return errT(l, "module '" + M + "' has no exported member '" + name + "'" + didYouMean(name, names));
+    if (std::find(names.begin(), names.end(), name) == names.end()) {
+      std::string hint = removedBuiltinHint(M, name);
+      return errT(l, "module '" + M + "' has no exported member '" + name + "'" + (hint.empty() ? didYouMean(name, names) : hint));
+    }
     if (!isCall) return errT(l, "'" + name + "' cannot be used as a value");
     return checkBuiltinCall(e, id, expected);
   }
@@ -914,13 +916,17 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
       nat("encoding.bytesEqual");
       return boo;
     }
+    if (n == "crc32") {
+      if (!argsMatch(e, args, {bytes}, 1, "crc32")) return T.unknown();
+      nat("encoding.crc32");
+      return num;
+    }
     return errT(l, "module 'e7:encoding' has no function '" + n + "'" + didYouMean(n, builtinModuleExports("e7:encoding")));
   }
   // ------------------------------------------------------------ e7:crypto
   if (id.rfind("e7:crypto.", 0) == 0) {
     std::string n = id.substr(10);
-    static const char* hashes[] = {"md5", "sha1", "sha224", "sha256", "sha384", "sha512",
-                                   "sha3_224", "sha3_256", "sha3_384", "sha3_512", "keccak256"};
+    static const char* hashes[] = {"sha256", "sha384", "sha512"};
     for (const char* h : hashes)
       if (n == h) {
         if (!argsMatch(e, args, {bytes}, 1, h)) return T.unknown();
@@ -929,7 +935,6 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
       }
     Type* handle = T.handle();
     Type* optBytes = T.optional(bytes, true, false);
-    Type* optStr = T.optional(str, true, false);
     auto keyArg = [&](size_t idx) -> int {  // 0 = bytes, 1 = handle, -1 error
       if (idx >= args.size()) return -1;
       Type* t = check(args[idx], nullptr);
@@ -962,11 +967,6 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
       nat("crypto.pbkdf2");
       return bytes;
     }
-    if (n == "crc32") {
-      if (!argsMatch(e, args, {bytes}, 1, "crc32")) return T.unknown();
-      nat("crypto.crc32");
-      return num;
-    }
     if (n == "randomBytes") {
       if (!argsMatch(e, args, {num}, 1, "randomBytes")) return T.unknown();
       nat("crypto.randomBytes");
@@ -982,11 +982,6 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
       if (!argsMatch(e, args, {bytes, bytes, bytes, optBytes}, 4, n.c_str())) return T.unknown();
       nat("crypto." + n);
       return n.find("Decrypt") != std::string::npos ? T.optional(bytes, true, false) : bytes;
-    }
-    if (n == "aesCbcEncrypt" || n == "aesCbcDecrypt" || n == "aesCtr") {
-      if (!argsMatch(e, args, {bytes, bytes, bytes}, 3, n.c_str())) return T.unknown();
-      nat("crypto." + n);
-      return n == "aesCbcDecrypt" ? T.optional(bytes, true, false) : bytes;
     }
     if (n == "ed25519PublicKey") {
       if (!argsMatch(e, args, {bytes}, 1, n.c_str())) return T.unknown();
@@ -1006,33 +1001,6 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     if (n == "x25519") {
       if (!argsMatch(e, args, {bytes, bytes}, 2, n.c_str())) return T.unknown();
       nat("crypto.x25519");
-      return bytes;
-    }
-    if (n == "ecdsaSign") {
-      if (!argsMatch(e, args, {str, str, bytes, bytes}, 4, n.c_str())) return T.unknown();
-      nat("crypto.ecdsaSign");
-      return bytes;
-    }
-    if (n == "ecdsaVerify") {
-      if (!argsMatch(e, args, {str, str, bytes, bytes, bytes}, 5, n.c_str())) return T.unknown();
-      nat("crypto.ecdsaVerify");
-      return boo;
-    }
-    if (n == "ecdsaPublicKey") {
-      if (!argsMatch(e, args, {str, bytes}, 2, n.c_str())) return T.unknown();
-      nat("crypto.ecdsaPublicKey");
-      return bytes;
-    }
-    if (n == "rsaVerify") {
-      if (args.size() == 4) args.push_back(mkNull(P, T, l));
-      if (!argsMatch(e, args, {str, bytes, bytes, bytes, optStr}, 5, n.c_str())) return T.unknown();
-      nat("crypto.rsaVerify");
-      return boo;
-    }
-    if (n == "rsaSign") {
-      if (args.size() == 3) args.push_back(mkNull(P, T, l));
-      if (!argsMatch(e, args, {str, bytes, bytes, optStr}, 4, n.c_str())) return T.unknown();
-      nat("crypto.rsaSign");
       return bytes;
     }
     return errT(l, "module 'e7:crypto' has no function '" + n + "'" + didYouMean(n, builtinModuleExports("e7:crypto")));

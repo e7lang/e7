@@ -1,2 +1,8 @@
-Source: Ubuntu archive bearssl_0.6+dfsg.1.orig.tar.xz (BearSSL 0.6, MIT). Only primitive directories vendored (no ssl/x509).
+Source: Ubuntu archive bearssl_0.6+dfsg.1.orig.tar.xz (BearSSL 0.6, MIT).
+Only the source files e7:crypto links are vendored: SHA-256/384/512, HMAC, HMAC-DRBG and the system RNG,
+AES (constant-time "ct" implementation) with CTR and GCM (GHASH ctmul), ChaCha20 and Poly1305 (ctmul), and the
+big-endian codec helpers they use. RSA, EC, the big-integer code, MD5, SHA-1, DES, CBC, CCM/EAX, PEM and the
+SSL/X.509 engine are not vendored. The public headers (inc/) are kept whole because src/inner.h includes them all.
+To check the list after changing src/crypto: build, then compute the closure of the BearSSL objects that
+libe7vm_static.a references (nm -g on both archives); it must match the .c files under src/.
 - inner.h: MSC intrinsics include block skipped under clang-cl (it takes the clang path)

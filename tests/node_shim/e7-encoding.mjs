@@ -33,3 +33,4 @@ export const pemEncode = (b, label) => {
 };
 export const concatBytes = (...parts) => U(Buffer.concat(parts.map(B)));
 export const bytesEqual = (a, b) => B(a).equals(B(b));
+export const crc32 = (d) => { let x = ~0 >>> 0; for (const b of d) { x ^= b; for (let k = 0; k < 8; k++) x = x & 1 ? (0xedb88320 ^ (x >>> 1)) >>> 0 : x >>> 1; } return (~x) >>> 0; };

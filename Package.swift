@@ -11,7 +11,7 @@ let coreSources = ["utf", "numfmt", "serialize", "verify", "disasm"].map { "src/
   + ["third_party/fdlibm/ieee754.cpp"]
 let vmSources = ["src/vm/vm.cpp", "src/vm/interp.cpp", "src/vm/debug.cpp", "src/vm/promise.cpp"]
   + ["core", "string", "array", "map", "math", "bytes", "bigint", "json", "encoding", "date", "test", "typed"].map { "src/stdlib/\($0).cpp" }
-  + ["crypto", "keccak", "sign"].map { "src/crypto/\($0).cpp" }
+  + ["crypto", "sign"].map { "src/crypto/\($0).cpp" }
   + ["src/capi/capi.cpp"]
 let compilerSources = [
   "parser", "types", "checker", "checker_stmt", "checker_expr", "checker_builtins", "checker_ns", "checker_generic", "codegen", "compiler",
@@ -28,7 +28,6 @@ let package = Package(
     .target(
       name: "CE7VM",
       path: ".",
-      exclude: ["third_party/bearssl/src/codec/pemdec.t0"],
       sources: coreSources + vmSources + compilerSources + [
         "third_party/bearssl/src",
         "third_party/monocypher/monocypher.c",

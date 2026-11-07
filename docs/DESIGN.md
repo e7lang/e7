@@ -73,17 +73,24 @@ Signing scripts have two layers, and E7 treats them differently:
 | Layer | Typical contents | Where it runs |
 |---|---|---|
 | Protocol | Sorting and joining parameters, canonical JSON, URL encoding, timestamps and nonces, Base64 / hex, choosing the algorithm, building headers | The E7 script, updated by delivering a new module |
-| Cryptographic primitives | SHA-1/2/3, HMAC, HKDF, PBKDF2, AES, ChaCha20-Poly1305, RSA, ECDSA, Ed25519, X25519 | Native code, exposed as `e7:crypto` |
+| Cryptographic primitives | SHA-256/384/512, HMAC, HKDF, PBKDF2, AES-GCM, ChaCha20-Poly1305, Ed25519, X25519 | Native code, exposed as `e7:crypto` |
 | Custom algorithms | Proprietary digests and transforms | The E7 script, on the fixed-width integer fast path |
 
 Standard primitives are one to two orders of magnitude slower in an interpreter, and native implementations are
 easier to make constant-time and to audit; the script decides how to combine them, which is the part that changes.
-The primitives come from BearSSL (RSA, ECDSA, AES, ChaCha20-Poly1305, SHA-1/2, HMAC, HKDF) and Monocypher
-(Ed25519, X25519); SHA-3 / Keccak, PBKDF2 and RSA-PSS are implemented in E7's own code. All are checked against
-Node.js `node:crypto` and published test vectors. The Chinese national algorithms (SM2/3/4) are not included.
+The primitives come from BearSSL (SHA-2, HMAC, AES-GCM, ChaCha20-Poly1305) and Monocypher (Ed25519, X25519);
+HKDF and PBKDF2 are E7's own code on top of BearSSL's HMAC. All are checked against Node.js `node:crypto` and
+published test vectors.
+
+- **Only modern algorithms.** `e7:crypto` has no MD5, SHA-1, SHA-3 / Keccak, AES-CBC / CTR, RSA or ECDSA, and no
+  Chinese national algorithms (SM2/3/4). A smaller set is less to audit, fuzz and keep constant-time, and new
+  protocols do not need the rest. An app that must speak a legacy protocol registers a host function for that
+  algorithm (backed by the platform's own crypto library), so the legacy code stays in the host. Only the 16
+  BearSSL source files these primitives use are vendored (`third_party/bearssl/VENDORED.txt`): there is no RSA,
+  EC, big-integer, MD5 or SHA-1 code in the tree.
 
 - **Bytes.** `Uint8Array` is the one byte-string type; `DataView` gives endian-aware reads and writes;
-  `e7:encoding` has hex, Base64, Base64url, Base32 and PEM.
+  `e7:encoding` has hex, Base64, Base64url, Base32, PEM and CRC-32.
 - **`bigint`** is backed by a native arbitrary-precision implementation with JavaScript's semantics.
 - **Keys never enter the script.** The host keeps keys in the Keychain, Keystore or DPAPI and passes an opaque
   `KeyHandle`: a script can use it for `hmac` or `sign` but cannot read the key. MACs are compared with
