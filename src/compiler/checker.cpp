@@ -755,7 +755,11 @@ Sym* Checker::importedSym(Stmt* s, FileInfo* tfi, const std::string& name, const
     const auto& names = builtinModuleExports(s->from);
     if (std::find(names.begin(), names.end(), name) == names.end()) {
       if (name == "default") err(s->loc, "module '" + s->from + "' has no default export");
-      else err(s->loc, "module '" + s->from + "' has no exported member '" + name + "'" + didYouMean(name, names));
+      else {
+        std::string hint = removedBuiltinHint(s->from, name);
+        err(s->loc, "module '" + s->from + "' has no exported member '" + name + "'" +
+                        (hint.empty() ? didYouMean(name, names) : hint));
+      }
       return nullptr;
     }
     if (name == "KeyHandle") {

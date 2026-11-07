@@ -5,7 +5,7 @@
 // (p_*: round trips, tamper detection, consistency between natives) that must return true whenever
 // they complete. The input is a sequence of operations: one byte selects an exported function, the
 // following bytes give its arguments according to its signature (byte strings, strings - raw or from
-// a dictionary of hash / curve / padding / PEM label names -, numbers, booleans, key handles). Every
+// a dictionary of hash / PEM label names -, numbers, booleans, key handles). Every
 // call must end in success or a clean error; a property returning false aborts (a bug).
 #include <cstdint>
 #include <cstdio>
@@ -18,68 +18,22 @@
 #include "e7/e7.h"
 
 static const char kHarness[] = R"E7(
-import { md5, sha1, sha224, sha256, sha384, sha512, sha3_224, sha3_256, sha3_384, sha3_512, keccak256, hash, hmac, hkdf,
-  pbkdf2, crc32, randomBytes, timingSafeEqual, aesGcmEncrypt, aesGcmDecrypt, chacha20Poly1305Encrypt,
-  chacha20Poly1305Decrypt, aesCbcEncrypt, aesCbcDecrypt, aesCtr, ed25519PublicKey, ed25519Sign, ed25519Verify, x25519,
-  ecdsaSign, ecdsaVerify, ecdsaPublicKey, rsaVerify, rsaSign } from "e7:crypto";
+import { sha256, sha384, sha512, hash, hmac, hkdf, pbkdf2, randomBytes, timingSafeEqual, aesGcmEncrypt, aesGcmDecrypt,
+  chacha20Poly1305Encrypt, chacha20Poly1305Decrypt, ed25519PublicKey, ed25519Sign, ed25519Verify, x25519 } from "e7:crypto";
 import type { KeyHandle } from "e7:crypto";
 import { hexEncode, hexDecode, base64Encode, base64Decode, base64UrlEncode, base64UrlDecode, base32Encode, base32Decode,
-  utf8Encode, utf8Decode, pemDecode, pemEncode, concatBytes, bytesEqual } from "e7:encoding";
-
-// RSA-2048 test key (tests/cases/lib/crypto_rsa_ecdsa.ts)
-const RSA_SPKI = hexDecode(
-  "30820122300d06092a864886f70d01010105000382010f003082010a0282010100b2078c8f1f035e2ceac5768f49e693c437" +
-  "1ee8642d488d38b59287fc6c2d38edea91683dab7ad9a9b1413e35337f648dbc16d0a0f1afe311bdd3665cc115e422d3f56d" +
-  "22aefb447d1b0f4203c8b4dd9461515cac7282de44a0ac160ac51144e3077371dddf6911e3018e433deb7dae0530980ca080" +
-  "75a04c14457a2e5fa7143a783f6489b201a0e9359a3a1fa2b88c12ce256f8c6d39d49b2766f9c6f7ebc1b6532e852183924a" +
-  "3149d045202f5beb1063f424c86bbef164c58f0218ed82b68a0067f65b0b8e4ed8745adcfdd702fb721bced005654e3b7e1b" +
-  "82831f7167e626d1cd7d9d01b0169b0bd5b43f74ba156f1fabb4a45473dc82af2fc638e5ce4e5b0203010001");
-const RSA_PKCS8 = hexDecode(
-  "308204bc020100300d06092a864886f70d0101010500048204a6308204a20201000282010100b2078c8f1f035e2ceac5768f" +
-  "49e693c4371ee8642d488d38b59287fc6c2d38edea91683dab7ad9a9b1413e35337f648dbc16d0a0f1afe311bdd3665cc115" +
-  "e422d3f56d22aefb447d1b0f4203c8b4dd9461515cac7282de44a0ac160ac51144e3077371dddf6911e3018e433deb7dae05" +
-  "30980ca08075a04c14457a2e5fa7143a783f6489b201a0e9359a3a1fa2b88c12ce256f8c6d39d49b2766f9c6f7ebc1b6532e" +
-  "852183924a3149d045202f5beb1063f424c86bbef164c58f0218ed82b68a0067f65b0b8e4ed8745adcfdd702fb721bced005" +
-  "654e3b7e1b82831f7167e626d1cd7d9d01b0169b0bd5b43f74ba156f1fabb4a45473dc82af2fc638e5ce4e5b020301000102" +
-  "8201002de460496c9733a9a4836e82956c48df25ce63dd9f06bad0c98d925c718e5ec485d921e3f3d66151ab0dc4797662fa" +
-  "8ac6d7a2c43a493ae191eb72d1aa3c7868b9f6e4413296371b80e438023db4d201b3ec835538d79f705572c6e3d3d515cae8" +
-  "5acc1983c3d4068e9a1b9f549b3b46bf3612db35021d663f3b81b97e92d555a6caf89884ceb08db100a73a1a99321b702b53" +
-  "206ef1d574a098009dae0e3053452452c18dc2c169c5e0904247b3b67cbcb9ca625a6d4f801d9af2e40379973116df98cc47" +
-  "50eea213a969f0748e7aa4864c742ecfe11a6d6980a3aaa937f986c88bf5c12b569c5725883b01b6b5eef62ff0bc8d825dc7" +
-  "50fd0454bf38dc493102818100e7432441334e3ae7cacc46faec608698a15b4162f80f1dd92bbb9b75c546d6fa2d1accce91" +
-  "1c37fb0378d90bf1f3164440b509a466cda5137a8b02249c3cb10c3b892f4c406d995a0812c2c147483365af72e808728b67" +
-  "20df7383a490cb16495f8fd4349258dd339b84fef2e99042bee07499e5eb575fd75edf90617c9eb8d702818100c512aff0c4" +
-  "2cf00be1350ca66d6048cf17049f4518a2feab19d0a0927f983e35240d7a78567024c06c4f8295874c1140966f184a29bd6a" +
-  "0e9a0a05f8864929c9ceadde1f7d9d8aed954b522f3fd3c4277148bec07c52f6929347be9aa7d6afb2be3d14d3ea7ad6e184" +
-  "0625502785435619f454de3fb9258e6d2cefdec805d21d0281802df7ffa5e22fe3af9d751b8ad71f9cc18c195a96f49df49d" +
-  "ed7e7e395bbc68111494262fcd5261a2489f65ed64eb9ffa732e493b5f9ff2f73b3d94707889ebdb759e2043b4eed433bc35" +
-  "16775ad6f4387b3688fedcddeee2eee7c43c1af7f3772442afb8bf7a6085d89d081c7ae6cd0daa0a23693b6d83c488bc41b3" +
-  "cf14b1c30281801051bad61238b26c196b1e300df0a236dbee1b0e4abafca1c8927929887d5ff16099e9215bef0f6c0bcc0d" +
-  "c13a21f76fc4c5505a9bd83e9714f46d8825fe9b02462629b5abde46e9e3aa08153790deb6717017b3b2d7dfe9455ef48eb4" +
-  "055829520d96d2f1a0d878764957ffaa3623dc566be03743499ead8ba6e3fa2bd027950281805a443a4afa37d7371a1d56bb" +
-  "40801c0846f30d27785c5dacac267263bb16fd66f5f962f6dbe0c2d6f2d12cbe9b184b2bf0b443d61dee294e147a81c39851" +
-  "70583f8175ae1d245fc1db1699c3278d2983033b8525af4dd01aed052c7947a9f7dc6618d56ffcb249532775e00d93816fcb" +
-  "f845745ae2f25971836344e05bc78063");
+  utf8Encode, utf8Decode, pemDecode, pemEncode, concatBytes, bytesEqual, crc32 } from "e7:encoding";
 
 function opt(use: boolean, b: Uint8Array): Uint8Array | null { return use ? b : null; }
 function optStr(use: boolean, s: string): string | null { return use ? s : null; }
 function digest(which: number, d: Uint8Array): Uint8Array {
-  switch (which % 11) {
-    case 0: return md5(d);
-    case 1: return sha1(d);
-    case 2: return sha224(d);
-    case 3: return sha256(d);
-    case 4: return sha384(d);
-    case 5: return sha512(d);
-    case 6: return sha3_224(d);
-    case 7: return sha3_256(d);
-    case 8: return sha3_384(d);
-    case 9: return sha3_512(d);
-    default: return keccak256(d);
+  switch (which % 3) {
+    case 0: return sha256(d);
+    case 1: return sha384(d);
+    default: return sha512(d);
   }
 }
-const HASH_NAMES: string[] = ["md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3-224", "sha3-256", "sha3-384",
-  "sha3-512", "keccak256"];
+const HASH_NAMES: string[] = ["sha256", "sha384", "sha512"];
 function flipBit(b: Uint8Array, at: number): void {
   const i = Math.floor(at) % b.length;
   b[i] = b[i] ^ (1 << (Math.floor(at) % 8));
@@ -113,18 +67,10 @@ export function f_aesGcmEncrypt(k: Uint8Array, iv: Uint8Array, p: Uint8Array, aa
 export function f_aesGcmDecrypt(k: Uint8Array, iv: Uint8Array, c: Uint8Array, aad: Uint8Array, useAad: boolean): boolean { return aesGcmDecrypt(k, iv, c, opt(useAad, aad)) !== null; }
 export function f_chachaEncrypt(k: Uint8Array, iv: Uint8Array, p: Uint8Array, aad: Uint8Array, useAad: boolean): Uint8Array { return chacha20Poly1305Encrypt(k, iv, p, opt(useAad, aad)); }
 export function f_chachaDecrypt(k: Uint8Array, iv: Uint8Array, c: Uint8Array, aad: Uint8Array, useAad: boolean): boolean { return chacha20Poly1305Decrypt(k, iv, c, opt(useAad, aad)) !== null; }
-export function f_aesCbcEncrypt(k: Uint8Array, iv: Uint8Array, p: Uint8Array): Uint8Array { return aesCbcEncrypt(k, iv, p); }
-export function f_aesCbcDecrypt(k: Uint8Array, iv: Uint8Array, c: Uint8Array): boolean { return aesCbcDecrypt(k, iv, c) !== null; }
-export function f_aesCtr(k: Uint8Array, ctr: Uint8Array, d: Uint8Array): Uint8Array { return aesCtr(k, ctr, d); }
 export function f_ed25519PublicKey(seed: Uint8Array): Uint8Array { return ed25519PublicKey(seed); }
 export function f_ed25519Sign(seed: Uint8Array, m: Uint8Array): Uint8Array { return ed25519Sign(seed, m); }
 export function f_ed25519Verify(pub: Uint8Array, m: Uint8Array, sig: Uint8Array): boolean { return ed25519Verify(pub, m, sig); }
 export function f_x25519(a: Uint8Array, b: Uint8Array): Uint8Array { return x25519(a, b); }
-export function f_ecdsaSign(curve: string, alg: string, priv: Uint8Array, m: Uint8Array): Uint8Array { return ecdsaSign(curve, alg, priv, m); }
-export function f_ecdsaVerify(curve: string, alg: string, pub: Uint8Array, m: Uint8Array, sig: Uint8Array): boolean { return ecdsaVerify(curve, alg, pub, m, sig); }
-export function f_ecdsaPublicKey(curve: string, priv: Uint8Array): Uint8Array { return ecdsaPublicKey(curve, priv); }
-export function f_rsaVerify(alg: string, pub: Uint8Array, m: Uint8Array, sig: Uint8Array, pad: string, usePad: boolean): boolean { return rsaVerify(alg, pub, m, sig, optStr(usePad, pad)); }
-export function f_rsaSign(alg: string, priv: Uint8Array, m: Uint8Array, pad: string, usePad: boolean): Uint8Array { return rsaSign(alg, priv, m, optStr(usePad, pad)); }
 
 )E7" /* split: MSVC limits a single string literal to 16 KB */ R"E7(
 // ---- properties (must return true whenever they complete)
@@ -163,16 +109,6 @@ export function p_aead(chacha: boolean, k: Uint8Array, iv: Uint8Array, p: Uint8A
   flipBit(c, flip);
   return (chacha ? chacha20Poly1305Decrypt(k, iv, c, a) : aesGcmDecrypt(k, iv, c, a)) === null;
 }
-export function p_cbc(k: Uint8Array, iv: Uint8Array, p: Uint8Array): boolean {
-  const c = aesCbcEncrypt(k, iv, p);
-  if (c.length % 16 !== 0 || c.length <= p.length) return false;
-  const d = aesCbcDecrypt(k, iv, c);
-  return d !== null && bytesEqual(d, p);
-}
-export function p_ctr(k: Uint8Array, ctr: Uint8Array, p: Uint8Array): boolean {
-  const c = aesCtr(k, ctr, p);
-  return c.length === p.length && bytesEqual(aesCtr(k, ctr, c), p);
-}
 export function p_ed25519(seed: Uint8Array, m: Uint8Array, flip: number): boolean {
   const pub = ed25519PublicKey(seed), sig = ed25519Sign(seed, m);
   if (!ed25519Verify(pub, m, sig)) return false;
@@ -184,22 +120,10 @@ export function p_x25519(a: Uint8Array, b: Uint8Array): boolean {
   base[0] = 9;
   return bytesEqual(x25519(a, x25519(b, base)), x25519(b, x25519(a, base)));
 }
-export function p_ecdsa(curve: string, alg: string, priv: Uint8Array, m: Uint8Array, flip: number): boolean {
-  const pub = ecdsaPublicKey(curve, priv), sig = ecdsaSign(curve, alg, priv, m);
-  if (!ecdsaVerify(curve, alg, pub, m, sig)) return false;
-  flipBit(sig, flip);
-  return !ecdsaVerify(curve, alg, pub, m, sig);
-}
-export function p_rsa(alg: string, m: Uint8Array, pad: string, usePad: boolean, flip: number): boolean {
-  const sig = rsaSign(alg, RSA_PKCS8, m, optStr(usePad, pad));
-  if (!rsaVerify(alg, RSA_SPKI, m, sig, optStr(usePad, pad))) return false;
-  flipBit(sig, flip);
-  return !rsaVerify(alg, RSA_SPKI, m, sig, optStr(usePad, pad));
-}
 )E7";
 
 // Argument kinds: y bytes, k bytes that are also the key behind handle 1, s raw string, a hash name,
-// c curve name, p RSA padding, l PEM label, n number, f small non-negative integer, b boolean,
+// l PEM label, n number, f small non-negative integer, b boolean,
 // h key handle (1 resolves to the last 'k' bytes, other ids are unknown keys).
 struct Op {
   const char* name;
@@ -212,21 +136,16 @@ static const Op kOps[] = {
     {"f_concatBytes", "yyy"}, {"f_bytesEqual", "yy"}, {"f_digest", "fy"}, {"f_hash", "ay"}, {"f_hmac", "ayy"},
     {"f_hmacKey", "ahy"}, {"f_hkdf", "ayyyn"}, {"f_pbkdf2", "ayynn"}, {"f_crc32", "y"}, {"f_randomBytes", "n"},
     {"f_timingSafeEqual", "yy"}, {"f_aesGcmEncrypt", "yyyyb"}, {"f_aesGcmDecrypt", "yyyyb"},
-    {"f_chachaEncrypt", "yyyyb"}, {"f_chachaDecrypt", "yyyyb"}, {"f_aesCbcEncrypt", "yyy"},
-    {"f_aesCbcDecrypt", "yyy"}, {"f_aesCtr", "yyy"}, {"f_ed25519PublicKey", "y"}, {"f_ed25519Sign", "yy"},
-    {"f_ed25519Verify", "yyy"}, {"f_x25519", "yy"}, {"f_ecdsaSign", "cayy"}, {"f_ecdsaVerify", "cayyy"},
-    {"f_ecdsaPublicKey", "cy"}, {"f_rsaVerify", "ayyypb"}, {"f_rsaSign", "ayypb"},
+    {"f_chachaEncrypt", "yyyyb"}, {"f_chachaDecrypt", "yyyyb"}, {"f_ed25519PublicKey", "y"},
+    {"f_ed25519Sign", "yy"}, {"f_ed25519Verify", "yyy"}, {"f_x25519", "yy"},
     {"p_encoding", "y"}, {"p_pem", "yl"}, {"p_hash", "y"}, {"p_hmacKey", "ahky"}, {"p_kdfPrefix", "ayyyff"},
-    {"p_aead", "byyyybf"}, {"p_cbc", "yyy"}, {"p_ctr", "yyy"}, {"p_ed25519", "yyf"}, {"p_x25519", "yy"},
-    {"p_ecdsa", "cayyf"}, {"p_rsa", "aypbf"},
+    {"p_aead", "byyyybf"}, {"p_ed25519", "yyf"}, {"p_x25519", "yy"},
 };
 static const size_t kNumOps = sizeof kOps / sizeof kOps[0];
 
-static const char* const kHashNames[] = {"md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3-224",
-                                         "sha3-256", "sha3-384", "sha3-512", "keccak256", "SHA-256", "SHA-1",
-                                         "SHA-384", "SHA-512", "sha2", ""};
-static const char* const kCurves[] = {"P-256", "P-384", "P-521", "p-256", "secp256k1"};
-static const char* const kPaddings[] = {"pkcs1", "pss", "PSS", "oaep"};
+// the supported names first, then other spellings and names that must be rejected cleanly
+static const char* const kHashNames[] = {"sha256", "sha384", "sha512", "SHA-256", "SHA-384", "SHA-512", "sha_256",
+                                         "sha1", "md5", "sha3-256", "sha2", ""};
 static const char* const kLabels[] = {"CERTIFICATE", "PUBLIC KEY", "PRIVATE KEY", "EC PRIVATE KEY",
                                       "RSA PRIVATE KEY", "X"};
 #define DICT(d) d, sizeof d / sizeof d[0]
@@ -328,12 +247,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
           break;
         case 's':
         case 'a':
-        case 'c':
-        case 'p':
         case 'l': {
           std::string s = *a == 'a'   ? in.str(DICT(kHashNames))
-                          : *a == 'c' ? in.str(DICT(kCurves))
-                          : *a == 'p' ? in.str(DICT(kPaddings))
                           : *a == 'l' ? in.str(DICT(kLabels))
                                       : in.str(nullptr, 0);
           keep.emplace_back(s.begin(), s.end());

@@ -52,18 +52,31 @@ inline std::string didYouMean(const std::string& name, const std::vector<std::st
   return b.empty() ? "" : "; did you mean '" + b + "'?";
 }
 
+// Hint for an import of a name that e7:crypto no longer has: legacy algorithms were removed in 0.1, so
+// E7 offers only modern ones; an app that must talk to a legacy protocol registers a host function.
+inline std::string removedBuiltinHint(const std::string& module, const std::string& name) {
+  if (module != "e7:crypto") return "";
+  if (name == "crc32") return "; crc32 is in 'e7:encoding'";
+  static const char* removed[] = {"md5", "sha1", "sha224", "sha3_224", "sha3_256", "sha3_384", "sha3_512",
+                                  "keccak256", "aesCbcEncrypt", "aesCbcDecrypt", "aesCtr", "ecdsaSign",
+                                  "ecdsaVerify", "ecdsaPublicKey", "rsaSign", "rsaVerify"};
+  for (const char* r : removed)
+    if (name == r)
+      return "; e7:crypto has only modern algorithms (SHA-256/384/512, HMAC, HKDF, PBKDF2, AES-GCM, "
+             "ChaCha20-Poly1305, Ed25519, X25519): register a host function for legacy ones";
+  return "";
+}
+
 // Exported names of the builtin modules.
 inline const std::vector<std::string>& builtinModuleExports(const std::string& module) {
   static const std::vector<std::string> encoding = {
       "hexEncode", "hexDecode", "base64Encode", "base64Decode", "base64UrlEncode", "base64UrlDecode",
       "base32Encode", "base32Decode", "utf8Encode", "utf8Decode", "pemDecode", "pemEncode", "concatBytes",
-      "bytesEqual"};
+      "bytesEqual", "crc32"};
   static const std::vector<std::string> crypto = {
-      "KeyHandle", "HashName", "md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3_224", "sha3_256",
-      "sha3_384", "sha3_512", "keccak256", "hash", "hmac", "hkdf", "pbkdf2", "crc32", "randomBytes",
+      "KeyHandle", "HashName", "sha256", "sha384", "sha512", "hash", "hmac", "hkdf", "pbkdf2", "randomBytes",
       "timingSafeEqual", "aesGcmEncrypt", "aesGcmDecrypt", "chacha20Poly1305Encrypt", "chacha20Poly1305Decrypt",
-      "aesCbcEncrypt", "aesCbcDecrypt", "aesCtr", "ed25519PublicKey", "ed25519Sign", "ed25519Verify", "x25519",
-      "ecdsaSign", "ecdsaVerify", "ecdsaPublicKey", "rsaVerify", "rsaSign"};
+      "ed25519PublicKey", "ed25519Sign", "ed25519Verify", "x25519"};
   static const std::vector<std::string> test = {"assert", "assertEqual", "assertNotEqual", "assertClose",
                                                 "assertThrows", "fail", "later", "laterReject"};
   static const std::vector<std::string> json = {"tryParse", "lastError"};

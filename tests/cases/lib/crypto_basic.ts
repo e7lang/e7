@@ -1,32 +1,25 @@
-import { sha256, sha1, md5, sha512, sha384, sha224, sha3_256, sha3_512, hmac, hkdf, pbkdf2, crc32, hash, timingSafeEqual,
-  aesGcmEncrypt, aesGcmDecrypt, aesCbcEncrypt, aesCbcDecrypt, aesCtr, chacha20Poly1305Encrypt, chacha20Poly1305Decrypt,
-  ed25519PublicKey, ed25519Sign, ed25519Verify, x25519, ecdsaSign, ecdsaVerify, ecdsaPublicKey } from "e7:crypto";
-import { hexEncode, hexDecode, base64Encode, base64Decode, base64UrlEncode, utf8Encode, utf8Decode, concatBytes, bytesEqual, base32Encode, base32Decode } from "e7:encoding";
+import { sha256, sha512, sha384, hmac, hkdf, pbkdf2, hash, timingSafeEqual,
+  aesGcmEncrypt, aesGcmDecrypt, chacha20Poly1305Encrypt, chacha20Poly1305Decrypt,
+  ed25519PublicKey, ed25519Sign, ed25519Verify, x25519 } from "e7:crypto";
+import { hexEncode, hexDecode, base64Encode, base64Decode, base64UrlEncode, utf8Encode, utf8Decode, concatBytes, bytesEqual, base32Encode, base32Decode, crc32 } from "e7:encoding";
 
 const enc = new TextEncoder();
 const msg = enc.encode("The quick brown fox jumps over the lazy dog");
-console.log(hexEncode(md5(msg)));
-console.log(hexEncode(sha1(msg)));
-console.log(hexEncode(sha224(msg)));
 console.log(hexEncode(sha256(msg)));
 console.log(hexEncode(sha384(msg)));
 console.log(hexEncode(sha512(msg)));
-console.log(hexEncode(sha3_256(msg)));
-console.log(hexEncode(sha3_512(new Uint8Array(0))));
-console.log(hexEncode(hash("SHA-256", enc.encode("abc"))));
+console.log(hexEncode(hash("SHA-256", enc.encode("abc"))), hexEncode(hash("sha_512", new Uint8Array(0))));
 const key = enc.encode("key");
 console.log(hexEncode(hmac("sha256", key, msg)));
 console.log(hexEncode(hmac("sha512", key, msg)));
-console.log(hexEncode(hmac("sha1", new Uint8Array(100), msg)));
-console.log(hexEncode(hmac("sha3-256", key, msg)));
+console.log(hexEncode(hmac("sha384", new Uint8Array(200), msg)));
 console.log(hexEncode(hkdf("sha256", hexDecode("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"), hexDecode("000102030405060708090a0b0c"), hexDecode("f0f1f2f3f4f5f6f7f8f9"), 42)));
 console.log(hexEncode(pbkdf2("sha256", enc.encode("password"), enc.encode("salt"), 4096, 32)));
 console.log(crc32(msg), crc32(new Uint8Array(0)));
-console.log(timingSafeEqual(sha256(msg), sha256(msg)), timingSafeEqual(sha256(msg), sha1(msg)));
+console.log(timingSafeEqual(sha256(msg), sha256(msg)), timingSafeEqual(sha256(msg), sha512(msg)));
 const k16 = hexDecode("000102030405060708090a0b0c0d0e0f");
 const k32 = sha256(enc.encode("k32"));
 const iv12 = hexDecode("cafebabefacedbaddecaf888");
-const iv16 = hexDecode("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
 const pt = enc.encode("attack at dawn! attack at dawn!!!");
 const g = aesGcmEncrypt(k16, iv12, pt, enc.encode("hdr"));
 console.log(hexEncode(g));
@@ -34,9 +27,6 @@ const gd = aesGcmDecrypt(k16, iv12, g, enc.encode("hdr"));
 console.log(gd === null ? "null" : utf8Decode(gd));
 g[0] ^= 1;
 console.log(aesGcmDecrypt(k16, iv12, g, enc.encode("hdr")) === null);
-const cbc = aesCbcEncrypt(k32, iv16, pt);
-console.log(hexEncode(cbc), utf8Decode(aesCbcDecrypt(k32, iv16, cbc)!));
-console.log(hexEncode(aesCtr(k16, hexDecode("ffffffffffffffffffffffffffffffff"), pt)));
 const cc = chacha20Poly1305Encrypt(k32, iv12, pt);
 console.log(hexEncode(cc), utf8Decode(chacha20Poly1305Decrypt(k32, iv12, cc)!));
 const seed = sha256(enc.encode("seed"));
@@ -49,10 +39,5 @@ const a = sha256(enc.encode("alice")), b = sha256(enc.encode("bob"));
 const ab = x25519(a, x25519(b, hexDecode("0900000000000000000000000000000000000000000000000000000000000000")));
 const ba = x25519(b, x25519(a, hexDecode("0900000000000000000000000000000000000000000000000000000000000000")));
 console.log(bytesEqual(ab, ba), hexEncode(ab));
-const ecPriv = sha256(enc.encode("ec-private"));
-const ecPub = ecdsaPublicKey("P-256", ecPriv);
-const esig = ecdsaSign("P-256", "sha256", ecPriv, msg);
-console.log(hexEncode(ecPub), esig.length);
-console.log(ecdsaVerify("P-256", "sha256", ecPub, msg, esig), ecdsaVerify("P-256", "sha256", ecPub, enc.encode("no"), esig));
 console.log(base64Encode(msg), base64UrlEncode(hexDecode("fbff")), utf8Decode(base64Decode("aGVsbG8=")), base32Encode(enc.encode("foobar")), utf8Decode(base32Decode("MZXW6YTBOI======")));
 console.log(hexEncode(concatBytes(hexDecode("01"), hexDecode("0203"), new Uint8Array(0))), bytesEqual(utf8Encode("é"), hexDecode("c3a9")));

@@ -539,6 +539,8 @@ string patterns. A host that needs pattern matching can offer it as a host funct
   JavaScript's evaluation order.
 - Paths are relative to the current file and the extension may be omitted (tries `.ts`, `.e7`, `/index.ts`). Circular dependencies are forbidden.
 - Built-in modules: `e7:crypto`, `e7:encoding`, `e7:json`, `e7:test` (API in `lib/e7.d.ts`; `e7:json` is described in section 6.5, `e7:test` in section 7.1).
+  `e7:crypto` has only modern algorithms (SHA-256/384/512, HMAC, HKDF, PBKDF2, AES-GCM, ChaCha20-Poly1305, Ed25519,
+  X25519); importing a removed one (`md5`, `sha1`, `rsaSign`, `ecdsaVerify`, …) is a compile error that says so.
 - Host functions: `declare function name(a: string, n: number): string;`; parameters/return values are limited to
   `number boolean string`, fixed-width integers, `Uint8Array KeyHandle void`, and are checked against the signature registered by the host when the module is loaded.
 - The functions that the entry file exports (declared there or re-exported; a default export under the name `default`) can be called by the host (only parameters and return values of the types above can cross the boundary). Top-level code runs once at load time,
