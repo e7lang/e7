@@ -8,7 +8,7 @@ function mk(c: boolean, d: boolean): void {
   const p = { ...(c ? { b: "x" } : {}) };
   console.log(JSON.stringify(p));
   const q = { z: 0, ...(c ? { k: 1 } : d ? { k: 2, j: "j" } : {}) };
-  console.log(JSON.stringify(q), q.k, q.j);
+  console.log(JSON.stringify(q));
   const arr = [c ? { v: 1.5 } : {}, { v: 2 }];
   console.log(JSON.stringify(arr));
 }
