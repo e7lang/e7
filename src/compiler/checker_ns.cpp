@@ -172,6 +172,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       for (Expr*& a : args) {
         if (a->k == EK::Spread) {
           Type* st = check(a->a, T.array(num));
+          iterUse(a->a);
           if (st != T.array(num)) return errT(a->loc, "spread argument must be number[]");
           a->type = st;
           continue;
@@ -260,6 +261,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       for (Expr*& a : args) {
         if (a->k == EK::Spread) return errT(a->loc, "spread is not supported in console.log");
         Type* t = check(a, nullptr);
+        iterUse(a);
         if (t->t == TT::Void) return errT(a->loc, "cannot print a void value");
         if (containsError(t))
           return errT(a->loc, "console.log of an Error prints a stack trace in Node.js; print String(e) or e.message instead" +
@@ -517,6 +519,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       }
       if (args.size() != 1) return errT(l, "Array.from expects one argument");
       Type* t = check(args[0], nullptr);
+      iterUse(args[0]);
       Type* et = elemTypeForIter(args[0], t, args[0]->loc);
       if (t->t == TT::Map) e->cls = tupleRecord(et);
       e->intrinsic = IN_ARRAY_FROM;
@@ -1119,6 +1122,7 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
       // contextual type; the result may also be a Map (copy constructor)
       Type* want = kt ? T.array(T.tuple({kt, vt})) : nullptr;
       Type* at = check(args[0], want);
+      iterUse(args[0]);
       if (at->t == TT::Map) {
         if (kt && (at->key != kt || at->val != vt)) return errT(args[0]->loc, "Map type mismatch in copy constructor");
         e->intrinsic = IN_NATIVE_NORECV;
@@ -1151,6 +1155,7 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
       // checked once (checking an expression again is not idempotent), with the array as the contextual
       // type; the result may also be a Set (copy constructor)
       Type* at = check(args[0], et ? T.array(et) : nullptr);
+      iterUse(args[0]);
       if (at->t == TT::Set) {
         if (et && at->elem != et) return errT(args[0]->loc, "Set type mismatch in copy constructor");
         e->intrinsic = IN_NATIVE_NORECV;

@@ -467,6 +467,11 @@ void Checker::run() {
     if (!f->checked && !f->isInit && !f->isNative) checkFunction(f);
   }
   spreadOrders();
+  for (Expr* x : iterCalls)
+    if (!x->iterUsed)
+      err(x->loc, "'" + x->a->raw + "()' is a copy of the elements in E7 (not a live iterator): use it directly in "
+                  "for...of, a spread ([...m." + x->a->raw + "()]), Array.from(...) or new Set / new Map, and store "
+                  "that array if it is needed later");
   // exports of the entry file
   if (!fileInfos.empty()) {
     FileInfo* entry = fileInfos.back().get();

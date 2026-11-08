@@ -121,6 +121,11 @@ class Checker {
   };
   std::vector<SpreadLit> spreadLits;
   bool spreadCond_ = false;  // the conditional checked next is spread into an object literal
+  std::vector<Expr*> iterCalls;  // see Expr::iterCall
+  void iterUse(Expr* x) {
+    while (x && (x->k == EK::Paren || x->k == EK::Conv)) x = x->a;
+    if (x && x->iterCall) x->iterUsed = true;
+  }
   Type* spreadCondType(Type* a, Type* b, Loc l);
   void spreadOrders();
   Type* checkArrayPatInit(VarDecl& d, Expr* init);

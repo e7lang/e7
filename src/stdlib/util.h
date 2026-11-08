@@ -81,7 +81,8 @@ inline Slot slotI(int64_t i) { Slot s; s.i = i; return s; }
 inline Slot slotR(Obj* o) { Slot s; s.r = o; return s; }
 
 // value formatting / comparison helpers (core.cpp)
-std::u16string valueToString(VM& vm, Slot v, uint8_t vt);   // JS String(x)
+std::u16string valueToString(VM& vm, Slot v, uint8_t vt);
+void arraySortCmp(VM& vm, ArrObj* arr, CloObj* c);  // arr.sort(cmp), in place (array.cpp)   // JS String(x)
 std::string inspectValue(VM& vm, Slot v, uint8_t vt, int depth, bool top);  // single line, for messages
 std::string jsonForLog(VM& vm, Slot v, uint8_t vt);  // JSON.stringify for console.log's %j (json.cpp)
 bool strictEquals(VM& vm, Slot a, Slot b, uint8_t vt);

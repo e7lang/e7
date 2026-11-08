@@ -77,6 +77,7 @@ void Checker::expandSpreads(std::vector<Expr*>& args) {
     }
     Type* st = check(a->a, nullptr);
     a->type = st;
+    iterUse(a->a);
     if (st->t != TT::Tuple) continue;
     VarSym* hv = newVar("<spread>", st, true, a->loc);
     hv->owner = curFn;
@@ -1147,9 +1148,49 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         native(name == "reverse" ? "TA.reverse" : "TA.sort");
         return bt;
       }
+      auto comparator = [&](Expr*& x) {
+        Type* ft = check(x, T.func({et, et}, num));
+        if (ft->t != TT::Func) return errT(x->loc, "sort expects a comparator function");
+        if (ft->params.size() != 2) return errT(x->loc, "sort comparator must take two parameters");
+        if (ft->ret != num) return errT(x->loc, "sort comparator must return a number");
+        coerce(x, T.func({et, et}, num));
+        return ft;
+      };
+      if (meth("sort")) {
+        // in place, with the comparator
+        if (args.size() != 1) return errT(e->loc, "sort takes at most one argument");
+        if (comparator(args[0])->t == TT::Unknown) return T.unknown();
+        native("TA.sortCmp");
+        return bt;
+      }
+      if (meth("toSorted")) {
+        // a sorted copy: numeric order without a comparator (not the string order of an array)
+        if (args.size() > 1) return errT(e->loc, "toSorted takes at most one argument");
+        bool withCmp = !args.empty();
+        if (withCmp && comparator(args[0])->t == TT::Unknown) return T.unknown();
+        Expr* copy = P.arena.expr(EK::Call, m->a->loc);
+        copy->list = {m->a, N(0), N(INFINITY)};
+        for (size_t i = 1; i < copy->list.size(); i++) check(copy->list[i], num);
+        copy->native = "TA.slice";
+        copy->intrinsic = IN_NATIVE_NORECV;
+        copy->type = bt;
+        e->list.insert(e->list.begin(), copy);
+        e->a = nullptr;
+        e->native = withCmp ? "TA.sortCmp" : "TA.sort";
+        e->intrinsic = IN_NATIVE_NORECV;
+        return bt;
+      }
       // the other methods (callbacks, at, ...): on the elements as an array; map / filter / toSorted /
       // toReversed give the typed array again
       {
+        // the callbacks get the elements, not the typed array itself
+        size_t maxParams = name == "reduce" || name == "reduceRight" ? 3 : 2;
+        for (Expr* a : args) {
+          Expr* x = strip(a);
+          if (x->k == EK::Arrow && x->fn && x->fn->params && x->fn->params->size() > maxParams)
+            return errT((*x->fn->params)[maxParams].loc, "the callbacks of a " + typeName(bt) + "'s '" + name +
+                                                              "' do not get the typed array as a parameter; use the variable that holds it");
+        }
         Expr* recv = m->a;
         Expr* conv = P.arena.expr(EK::Call, recv->loc);
         conv->list = {recv};
@@ -1180,14 +1221,35 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       std::vector<Type*> valueParams;
       if (vt->t != TT::Void) valueParams.push_back(vt);
       Type* errFn = nullptr;
+      // a callback (also a function passed by name) must take what the promise gives it: no more
+      // parameters, of types that accept the value (with its representation)
+      auto cbOk = [&](Expr* a, Type* ft, const std::vector<Type*>& given) {
+        if (ft->t != TT::Func) return true;
+        if (ft->restParam) { err(a->loc, "a promise callback cannot have a rest parameter"); return false; }
+        if (ft->params.size() > given.size()) {
+          err(a->loc, "this promise callback takes " + std::to_string(ft->params.size()) + " parameters; it is called with " +
+                          std::to_string(given.size()));
+          return false;
+        }
+        for (size_t i = 0; i < ft->params.size(); i++) {
+          Type* p = ft->params[i];
+          if (p == given[i] || (kindOf(p) == kindOf(given[i]) && !isBoxedOptional(p) && assignable(given[i], p))) continue;
+          err(a->loc, "the promise callback's parameter of type '" + typeName(p) + "' does not accept the value of type '" +
+                          typeName(given[i]) + "'");
+          return false;
+        }
+        return true;
+      };
       if (meth("then")) {
         if (args.empty() || args.size() > 2) return errT(l, "then takes one or two callbacks");
         Type* f1 = check(args[0], T.func(valueParams, T.unknown()));
         if (f1->t != TT::Func) return errT(args[0]->loc, "then expects a function");
+        cbOk(args[0], f1, valueParams);
         Type* u = promiseCallbackRet(args[0], f1->ret, args[0]->loc);
         if (args.size() == 2) {
           errFn = check(args[1], T.func({T.error()}, u->t == TT::Void ? T.voidT() : u));
           if (errFn->t != TT::Func) return errT(args[1]->loc, "then expects a function");
+          cbOk(args[1], errFn, {T.error()});
           Type* u2 = promiseCallbackRet(args[1], errFn->ret, args[1]->loc);
           if (u2 != u && !(u2->t == TT::Void && u->t == TT::Void))
             return errT(args[1]->loc, "the callbacks of then must return the same type ('" + typeName(u) + "' and '" + typeName(u2) + "')");
@@ -1200,6 +1262,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         if (args.size() != 1) return errT(l, "catch takes one callback");
         Type* f2 = check(args[0], T.func({T.error()}, vt));
         if (f2->t != TT::Func) return errT(args[0]->loc, "catch expects a function");
+        cbOk(args[0], f2, {T.error()});
         Type* u = promiseCallbackRet(args[0], f2->ret, args[0]->loc);
         // a handler that returns nothing: the promise keeps the type (an e7 limit: undefined is not a T)
         if (u != vt && u->t != TT::Void)
@@ -1210,7 +1273,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       if (meth("finally")) {
         if (args.size() != 1) return errT(l, "finally takes one callback");
-        Type* f3 = check(args[0], T.func({}, T.voidT()));
+        // its result is awaited (a rejected promise rejects the result): not checked as void
+        Type* f3 = check(args[0], T.func({}, T.unknown()));
         if (f3->t != TT::Func || !f3->params.empty()) return errT(args[0]->loc, "finally expects a function without parameters");
         e->intrinsic = IN_PROMISE_THEN;
         e->raw = "finally";
@@ -1315,10 +1379,14 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       if (meth("keys") || meth("values")) {
         if (!argsMatch(e, args, {}, 0, name.c_str())) return T.unknown();
         native("Map." + name);
+        e->iterCall = true;
+        iterCalls.push_back(e);
         return T.array(name == "keys" ? bt->key : bt->val);
       }
       if (meth("entries")) {
         if (!argsMatch(e, args, {}, 0, "entries")) return T.unknown();
+        e->iterCall = true;
+        iterCalls.push_back(e);
         e->intrinsic = IN_ARRAY_FROM;
         e->cls = tupleRecord(T.tuple({bt->key, bt->val}));
         return T.array(T.tuple({bt->key, bt->val}));
@@ -1353,6 +1421,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       if (meth("values") || meth("keys")) {
         if (!argsMatch(e, args, {}, 0, name.c_str())) return T.unknown();
         native("Map.keys");
+        e->iterCall = true;
+        iterCalls.push_back(e);
         return T.array(bt->elem);
       }
       if (meth("forEach")) {

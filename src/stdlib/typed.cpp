@@ -298,6 +298,7 @@ TA_NATIVE(ta_join) {
   for (uint32_t i = 0; i < n; i++) {
     if (i) out += sep;
     std::string t = taElemText(b, i);
+    if (t == "-0") t = "0";  // join converts with String(x): -0 is "0" (console.log shows "-0")
     if (taIsBig(taKind(b))) t.pop_back();  // join prints bigints without the "n"
     out += t;
     vm.checkTemp(out.size());
@@ -313,6 +314,28 @@ TA_NATIVE(ta_reverse) {
   r->r = b;
 }
 // numeric sort (NaN last; -0 before +0), as TypedArray.prototype.sort without a comparator
+// ta.sort(cmp): in place, with the comparator (on the elements as numbers / bigints)
+TA_NATIVE(ta_setFrom);
+TA_NATIVE(ta_sortCmp) {
+  TA_UNUSED;
+  BytesObj* b = TA(vm, a[0]);
+  CloObj* c = Clo(vm, a[1]);
+  Slot arr;
+  ta_toArray(vm, a, 1, &arr, ud);
+  VM::TempRoot keep(vm, arr.r);
+  arraySortCmp(vm, static_cast<ArrObj*>(arr.r), c);
+  // the comparator may have changed the typed array: write back what still fits
+  uint32_t n = std::min<uint32_t>(taLength(b), static_cast<ArrObj*>(arr.r)->len);
+  static_cast<ArrObj*>(arr.r)->len = n;
+  Slot s[3];
+  s[0] = a[0];
+  s[1] = arr;
+  s[2].f = 0;
+  Slot none;
+  ta_setFrom(vm, s, 3, &none, ud);
+  r->r = a[0].r;
+}
+
 TA_NATIVE(ta_sort) {
   TA_UNUSED;
   BytesObj* b = TA(vm, a[0]);
@@ -362,6 +385,7 @@ void registerTypedArrayNatives(VM& vm) {
   vm.registerNative("TA.join", "RR>R", ta_join);
   vm.registerNative("TA.reverse", "R>R", ta_reverse);
   vm.registerNative("TA.sort", "R>R", ta_sort);
+  vm.registerNative("TA.sortCmp", "RR>R", ta_sortCmp);
   vm.registerNative("TA.buffer", "R>R", ta_buffer);
 }
 

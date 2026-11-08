@@ -80,6 +80,7 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
         if (i) out += u',';
         std::string t = taKind(b) == TA_U8 ? std::to_string(b->ptr()[i]) : taElemText(b, i);
         if (taIsBig(taKind(b))) t.pop_back();
+        if (t == "-0") t = "0";  // String(-0)
         out += ascii(t);
       }
       return out;

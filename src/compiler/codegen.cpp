@@ -1937,7 +1937,7 @@ void Gen::genForOf(Stmt* s) {
   Type* t = s->expr->type;
   uint16_t coll = temp(K_R);
   genInto(s->expr, coll);
-  if (t->t == TT::TypedArray) {  // over its elements as an array
+  if (t->t == TT::TypedArray && s->declareKind != 0) {  // over its elements as an array
     callNative("TA.toArray", {coll}, coll, 'R');
     t = T.array(t->vt >= 9 ? T.bigint() : T.number());
   }
@@ -2016,6 +2016,17 @@ void Gen::genForOf(Stmt* s) {
         bindElem(v, et);
       }
     }
+  } else if (t->t == TT::TypedArray) {
+    // the live elements (a write in the body to a later element is seen, as in JavaScript)
+    bool big = t->vt >= 9;
+    uint16_t n = temp(K_F), fi = temp(K_F), c = temp(K_I);
+    callNative("TA.length", {coll}, n, 'F');
+    emit(OP_I2F, fi, i);
+    emit(OP_LT_F, c, fi, n);
+    jump(OP_JF, c, end);
+    uint16_t v = temp(big ? K_R : K_F);
+    callNative(big ? "TA.getBig" : "TA.get", {coll, fi}, v, big ? 'R' : 'F');
+    bindElem(v, big ? T.bigint() : T.number());
   } else if (t->t == TT::Bytes) {
     uint16_t n = temp(K_I), c = temp(K_I);
     emit(OP_BLENI, n, coll);
