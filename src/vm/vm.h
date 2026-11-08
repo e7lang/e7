@@ -206,6 +206,8 @@ class VM {
   // through the caller's registers; anything else it holds in C++ variables needs a TempRoot or
   // TempRootSlots).
   Slot callClosure(CloObj* c, const Slot* args, uint32_t nargs);
+  // The same for a method (args[0] is the receiver)
+  Slot callMethod(FuncRT* f, const Slot* args, uint32_t nargs);
   // Calls a parameterless closure from native code; a runtime error (throw, abort, ...) raised by
   // it is caught: returns false with the error message. Other errors (budget, memory, stack)
   // propagate.
@@ -398,6 +400,7 @@ class VM {
   std::vector<std::unique_ptr<ModuleRT>> modules;
 
  private:
+  Slot callFn(FuncRT* f, CloObj* c, const Slot* args, uint32_t nargs);
   friend struct Interp;
   friend class Debugger;
   int execute(size_t entryDepth);

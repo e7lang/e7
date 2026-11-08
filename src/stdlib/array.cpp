@@ -227,8 +227,11 @@ E7_NATIVE(a_sort) {
 }
 E7_NATIVE(a_sortCmp) {
   E7_UNUSED;
-  ArrObj* arr = A(vm, a[0]);
-  CloObj* c = Clo(vm, a[1]);
+  arraySortCmp(vm, A(vm, a[0]), Clo(vm, a[1]));
+  r->r = a[0].r;
+}
+// arr.sort(cmp) (arr and c must stay reachable from the caller)
+void arraySortCmp(VM& vm, ArrObj* arr, CloObj* c) {
   char k = kindChar(kindOfVT(arr->vt));
   std::string want = std::string(1, k) + k + ">F";
   if (vm.sigString(c->fn->sigId) != want) vm.error("sort comparator has the wrong signature");
@@ -251,7 +254,6 @@ E7_NATIVE(a_sortCmp) {
   });
   uint32_t n0 = std::min<uint32_t>(arr->len, (uint32_t)v.size());
   for (uint32_t i = 0; i < n0; i++) arr->data[i] = v[i];
-  r->r = arr;
 }
 // JavaScript rejects lengths that are not integers in [0, 2^32 - 1] with a RangeError; e7 also
 // limits arrays to 2^27 - 1 elements, which is its own limit and therefore not catchable.

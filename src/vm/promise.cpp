@@ -482,9 +482,7 @@ void VM::finishCallbackJob(Slot v, char kind) {
     t.capturedVT = curArgVT_;
     t.capturedRejected = curRejected_;
     promiseThen(res, t);
-    Slot pv;
-    pv.r = p2;
-    resolvePromise(d, pv);  // d adopts p2 (a thenable)
+    adoptPromise(d, p2);  // d adopts p2 (a thenable), whatever d's value type
     return;
   }
   if (!d) return;

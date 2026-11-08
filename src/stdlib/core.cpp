@@ -80,6 +80,7 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
         if (i) out += u',';
         std::string t = taKind(b) == TA_U8 ? std::to_string(b->ptr()[i]) : taElemText(b, i);
         if (taIsBig(taKind(b))) t.pop_back();
+        if (t == "-0") t = "0";  // String(-0)
         out += ascii(t);
       }
       return out;
@@ -87,7 +88,22 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Map: return static_cast<MapObj*>(o)->isSet ? u"[object Set]" : u"[object Map]";
     case OT::Instance: {
       auto* in = static_cast<InstObj*>(o);
-      if (!in->cls->isTuple) return u"[object Object]";
+      if (!in->cls->isTuple) {
+        // its own toString(): string (a class's, inherited ones included, or an object literal's), called
+        // as JavaScript does, whatever the static type was
+        auto it = in->cls->methodIndex.find("toString");
+        if (it != in->cls->methodIndex.end()) {
+          FuncRT* f = in->cls->vtable[it->second];
+          if (f && f->nparams == 1 && f->retKind == 'R') {
+            Slot self;
+            self.r = o;
+            Slot r = vm.callMethod(f, &self, 1);
+            if (r.r && r.r->type == OT::String) return strU16(static_cast<StrObj*>(r.r));
+            return valueToString(vm, r, VT_REF);
+          }
+        }
+        return u"[object Object]";
+      }
       if (joining(o)) return u"";
       JoinGuard g(vm, o);
       std::u16string out;

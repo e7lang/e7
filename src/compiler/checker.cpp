@@ -467,6 +467,11 @@ void Checker::run() {
     if (!f->checked && !f->isInit && !f->isNative) checkFunction(f);
   }
   spreadOrders();
+  for (Expr* x : iterCalls)
+    if (!x->iterUsed)
+      err(x->loc, "'" + x->a->raw + "()' is a copy of the elements in E7 (not a live iterator): use it directly in "
+                  "for...of, a spread ([...m." + x->a->raw + "()]), Array.from(...) or new Set / new Map, and store "
+                  "that array if it is needed later");
   // exports of the entry file
   if (!fileInfos.empty()) {
     FileInfo* entry = fileInfos.back().get();
@@ -1587,7 +1592,27 @@ void Checker::resolveClass(ClassSym* c) {
       c->vtable.push_back({key, f});
     }
   }
+  // an accessor declared in a subclass replaces both halves of the base class's: overriding only the
+  // getter leaves no setter in JavaScript (and only the setter no getter)
   for (auto& m : d->members) {
+    if (m.kind != ClassMember::Method || !m.accessor || m.isStatic || m.name[0] == '#') continue;
+    if ((holder && !m.isStatic) || (inst && m.isStatic)) continue;
+    std::string other = (m.accessor == 1 ? "set " : "get ") + m.name;
+    auto it = c->methodIdx.find(other);
+    if (it == c->methodIdx.end() || c->vtable[it->second].fn->cls == c) continue;
+    err(m.loc, "class '" + c->name + "' declares only the " + (m.accessor == 1 ? "getter" : "setter") + " of '" + m.name +
+                   "', which replaces the whole accessor of '" + c->vtable[it->second].fn->cls->name + "' (it would have no " +
+                   (m.accessor == 1 ? "setter" : "getter") + "); declare both, the other calling super." + m.name);
+  }
+  // `declare x: T` fields last: they exist once the constructor assigns them, after the initialized
+  // fields (the key order of JavaScript for the usual `declare` + assignment in the constructor)
+  std::vector<ClassMember*> fieldOrder;
+  for (auto& m : d->members)
+    if (!m.isDeclare) fieldOrder.push_back(&m);
+  for (auto& m : d->members)
+    if (m.isDeclare) fieldOrder.push_back(&m);
+  for (ClassMember* mp : fieldOrder) {
+    ClassMember& m = *mp;
     if (m.kind != ClassMember::Field) continue;
     if ((holder && !m.isStatic) || (inst && m.isStatic)) continue;
     if (m.isAbstract) {

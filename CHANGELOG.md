@@ -10,6 +10,62 @@ VM rejects a module it cannot run at load time rather than running it incorrectl
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-08
+
+Fixes found by a second round of testing: about 330 programs in six areas (classes and generics, numbers and
+strings, collections, control flow and async, binary data and JSON, the type system) compared with Node.js.
+This release fixes the programs that E7 accepted and then ran differently from Node.js; where E7 cannot behave the
+same, the program is now a compile error or the difference is listed in SPEC section 9.
+
+### Fixed
+- Evaluation order: an assignment evaluated its value before the target's object and index (`a[i++] = i`,
+  `obj().p = f()`, `o.x = (o = other, 1)`); `a[i++] ??= v` (also `||=`, `&&=`) evaluated the target twice, and so
+  did `x = arr[i++].n++` with an accessor `n`.
+- `for (let [i] = [0]; ...)` (a destructuring `let` in a `for` loop) shared one binding among the closures of all
+  iterations.
+- `{ ...(c ? a : b) }`, `Object.assign(t, c ? a : b)` and `const { ...rest } = c ? a : b` lost properties when a
+  branch was not an object literal (0.1.1 fixed the case of two literals). Array literals of object literals of
+  different shapes (`[c ? { v: 1 } : {}, { v: 2 }]`) and of object literals with another object type
+  (`[p, { id: 5, meta: 6 }]`) have the type tsc gives them instead of their common properties only.
+- An explicit `undefined` did not take a parameter's default when the parameter's type includes `undefined`
+  (`function f(n: number | undefined = 3)`).
+- A value of type `never` (the `assertNever(x)` pattern, after a number was cast to an enum it is not a member of)
+  printed as `""` or `undefined`; it keeps its value.
+- Object rest (`const { id, ...rest } = p`) created the optional properties that `p` does not have.
+- `toString()` was chosen by the static type: through a base class, an interface, a nullable type or for an object
+  literal's own `toString()`, `String(x)`, templates and `+` printed `[object Object]`. `join`, `%s` and the default
+  `sort()` call it too now. `"" + x` calls a class's `valueOf()` first, as JavaScript does.
+- `JSON.stringify` calls `toJSON()` / `toJSON(key)` of classes and object literals.
+- Typed arrays other than `Uint8Array`: `sort(cmp)` sorted a copy instead of the array; `toSorted()` sorted the
+  numbers as strings; `join` / `String(x)` printed `-0`; `for...of` read a snapshot; `JSON.stringify` of an empty
+  `BigInt64Array` threw.
+- Promises: `finally` on a promise of a number or integer passed on a garbage value two ticks early, and ignored a
+  rejected promise returned by its callback; `then` / `catch` did not check callbacks passed by name (a function of
+  another class's parameter read the wrong field; a rest parameter crashed).
+- `toUpperCase` / `toLowerCase` implement full Unicode case mapping (generated from Node.js), with the Greek final
+  sigma; `"Ÿ".toLowerCase()` gave `"Ź"`, and many Latin, Greek and Cyrillic letters did not convert.
+- A top-level `let` / `const` read or written by a function before its declaration ran gave `0` / `null`; it throws
+  a `ReferenceError` as in JavaScript.
+- `declare` fields come after the initialized fields in the key order (as JavaScript adds them in the constructor).
+- An internal compiler error for a value of type `null` on the left of `??` with a number or boolean on the right.
+
+### Changed
+- `map.keys()`, `values()` and `entries()` (also of `Set`) are copies of the elements, not live iterators: they are
+  accepted only where JavaScript also reads them all at once (directly in `for...of`, a spread, `Array.from`,
+  `new Set` / `new Map`, `console.log`). Store `[...m.keys()]` to keep them.
+- Expressions of number literals for an integer type are range-checked like a single literal
+  (`const x: u8 = 255 + 1` is an error instead of `0`); `1 + 2 + 3`, `~0` and `1e2` are accepted.
+- A subclass that overrides only the getter (or only the setter) of an inherited accessor is an error: in
+  JavaScript it would have no setter (getter). Declare both.
+- The callbacks of a typed array's `forEach`, `map`, ... cannot take the array as a third parameter (they got a copy).
+- `toSpliced()` needs a start index (as TypeScript declares it); a property name with an unpaired surrogate is an error.
+- `Object.freeze(array)` has the type `readonly T[]`, as in TypeScript.
+- A module that sorts a typed array with a comparator requires e7vm 0.1.2 (native `TA.sortCmp`); others still run
+  on 0.1.0. The fixes inside the VM (`toString`, `toJSON`, `finally`, `join`) apply to modules run on 0.1.2.
+- SPEC section 9 lists the differences that remain (fields read by a base constructor before the subclass's
+  initializers, a never-assigned `declare` field, `Object.freeze`, `JSON.parse` key order, typed array callbacks,
+  and a few others).
+
 ## [0.1.1] - 2026-11-07
 
 Fixes found by writing six realistic scripts (pricing rules, form validation, feature flags, a BLE device protocol,
@@ -110,6 +166,7 @@ delivered from a server, signed, verified at load time and run in a sandbox.
 - Seven independent security reviews (bytecode loading, natives and the C API, crypto, release sign-off,
   `try` / `catch`, the GC and formatter, coroutines and promises), every finding fixed with a regression test.
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/e7lang/e7/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/e7lang/e7/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/e7lang/e7/releases/tag/v0.1.0

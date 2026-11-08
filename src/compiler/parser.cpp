@@ -496,7 +496,16 @@ class Parser {
   std::string propName() {
     // identifiers including reserved words, strings, numbers
     if (cur().k == TK::Ident) return t[i++].text;
-    if (cur().k == TK::Str) return utf16ToUtf8(t[i++].str);
+    if (cur().k == TK::Str) {
+      // property names are UTF-8 in e7: an unpaired surrogate has no representation
+      const std::u16string& k = t[i].str;
+      for (size_t j = 0; j < k.size(); j++) {
+        bool hi = k[j] >= 0xD800 && k[j] <= 0xDBFF, lo = k[j] >= 0xDC00 && k[j] <= 0xDFFF;
+        if (hi && j + 1 < k.size() && k[j + 1] >= 0xDC00 && k[j + 1] <= 0xDFFF) { j++; continue; }
+        if (hi || lo) fail("a property name with an unpaired surrogate (\\u" + std::string(lo ? "DC.." : "D8..") + ") is not supported");
+      }
+      return utf16ToUtf8(t[i++].str);
+    }
     if (cur().k == TK::Num) return t[i++].text;
     if (cur().k == TK::PrivateName) fail("private names (#x) are only allowed for class members");
     fail("expected property name");

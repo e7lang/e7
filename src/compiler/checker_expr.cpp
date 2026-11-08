@@ -26,7 +26,70 @@ Type* Checker::checkCond(Expr* e) {
   return t;
 }
 
+// The value of an expression of number literals (1 + 2 * 3, ~0, -(1 << 4)) as JavaScript computes it
+static bool foldNumConst(Expr* e, double& out) {
+  e = strip(e);
+  auto i32 = [](double d) -> int32_t {
+    if (!std::isfinite(d)) return 0;
+    double m = std::fmod(std::trunc(d), 4294967296.0);
+    if (m < 0) m += 4294967296.0;
+    return (int32_t)(uint32_t)m;
+  };
+  if (e->k == EK::Num) { out = e->num; return true; }
+  if (e->k == EK::Unary) {
+    double a;
+    if (!foldNumConst(e->a, a)) return false;
+    if (e->raw == "-") { out = -a; return true; }
+    if (e->raw == "+") { out = a; return true; }
+    if (e->raw == "~") { out = ~i32(a); return true; }
+    return false;
+  }
+  if (e->k != EK::Binary) return false;
+  double a, b;
+  if (!foldNumConst(e->a, a) || !foldNumConst(e->b, b)) return false;
+  const std::string& op = e->raw;
+  if (op == "+") out = a + b;
+  else if (op == "-") out = a - b;
+  else if (op == "*") out = a * b;
+  else if (op == "/") out = a / b;
+  else if (op == "%") out = std::fmod(a, b);
+  else if (op == "**") out = std::pow(a, b);
+  else if (op == "&") out = i32(a) & i32(b);
+  else if (op == "|") out = i32(a) | i32(b);
+  else if (op == "^") out = i32(a) ^ i32(b);
+  else if (op == "<<") out = (int32_t)((uint32_t)i32(a) << (i32(b) & 31));
+  else if (op == ">>") out = i32(a) >> (i32(b) & 31);
+  else if (op == ">>>") out = (double)((uint32_t)i32(a) >> (i32(b) & 31));
+  else return false;
+  return true;
+}
+
 Type* Checker::checkInner(Expr* e, Type* expected) {
+  // an expression of number literals where an integer type is expected: computed as in JavaScript and
+  // range-checked like a single literal (255 + 1 is not a u8, as 256 is not)
+  if (expected && baseOf(expected)->t == TT::Int &&
+      (e->k == EK::Binary || (e->k == EK::Unary && (e->raw == "~" || strip(e->a)->k != EK::Num)))) {
+    double v;
+    if (foldNumConst(e, v)) {
+      Type* it = baseOf(expected);
+      bool sign = isSignedInt(it);
+      int bits = intBits(it);
+      // [lo, hi): the range of the type (computed in doubles exactly as JavaScript, so the value is Node's)
+      double lo = sign ? -std::ldexp(1.0, bits - 1) : 0;
+      double hi = sign ? std::ldexp(1.0, bits - 1) : std::ldexp(1.0, bits);
+      if (v != std::trunc(v) || !std::isfinite(v))
+        return errT(e->loc, "the value of this expression (" + numberToString(v) + ") is not an integer, so it cannot be a '" + typeName(it) + "'");
+      if (v < lo || v >= hi)
+        return errT(e->loc, "the value of this expression (" + numberToString(v) + ") is out of range for '" + typeName(it) + "'");
+      e->k = EK::Num;
+      e->num = v;
+      e->ival = v < 0 ? (int64_t)v : (int64_t)(uint64_t)v;
+      e->isIntLit = true;
+      e->raw = numberToString(std::fabs(v));
+      e->a = e->b = nullptr;
+      return it;
+    }
+  }
   switch (e->k) {
     case EK::Num: return checkNum(e, expected);
     case EK::BigLit: return T.bigint();
@@ -152,7 +215,19 @@ Type* Checker::checkNum(Expr* e, Type* expected) {
   if (exp && exp->t == TT::Int) {
     std::string why;
     int64_t v;
-    if (!e->isIntLit) return errT(e->loc, "a fractional number literal cannot be used as '" + typeName(exp) + "'");
+    if (!e->isIntLit) {
+      // 1e2, 100.0: an integer written another way
+      bool sign = isSignedInt(exp);
+      int bits = intBits(exp);
+      double lo = sign ? -std::ldexp(1.0, bits - 1) : 0, hi = sign ? std::ldexp(1.0, bits - 1) : std::ldexp(1.0, bits);
+      if (e->num != std::trunc(e->num) || !std::isfinite(e->num))
+        return errT(e->loc, "a fractional number literal cannot be used as '" + typeName(exp) + "'");
+      if (e->num < lo || e->num >= hi) return errT(e->loc, "value " + e->raw + " out of range for '" + typeName(exp) + "'");
+      e->ival = (int64_t)(uint64_t)e->num;
+      e->isIntLit = true;
+      e->raw = numberToString(e->num);
+      return exp;
+    }
     if (!litFits(e, exp, v, false, why)) return errT(e->loc, why);
     e->ival = v;
     return exp;
@@ -658,6 +733,17 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
     }
     types.push_back(t);
   }
+  if (!et && e->list.size() > 1) {
+    // [c ? { v: 1.5 } : {}, { v: 2 }]: object literals of different shapes are laid out for one type in
+    // which a property of only some of them is optional (as for a conditional, see mergeObjectLits)
+    if (Type* m = mergeObjectLitList(e->list, e->loc)) {
+      et = m;
+      for (Type*& t : types) t = m;
+    } else if (Type* m = objectLitsAs(e->list)) {
+      et = m;
+      for (Type*& t : types) t = m;
+    }
+  }
   if (!et) {
     for (Type* t : types) et = et ? unify(et, t, e->loc, "array literal") : t;
     if (et->t == TT::Null || et->t == TT::Undefined) return errT(e->loc, "cannot infer array element type from null/undefined");
@@ -717,7 +803,7 @@ void Checker::spreadOrders() {
       int si = -1;
       for (size_t pi = 0; pi < e->props.size() && si < 0; pi++) {
         Type* vt = e->props[pi].value->type;
-        if (e->props[pi].spread && vt && vt->t == TT::Object && !sl.entries[pi].empty()) si = (int)pi;
+        if (e->props[pi].spread && vt && vt->t == TT::Object && !sl.entries[pi].empty() && !strip(e->props[pi].value)->spreadCond) si = (int)pi;
       }
       if (si < 0) continue;
       ClassSym* sc = e->cls;
@@ -857,7 +943,9 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
     for (size_t pi = 0; pi < e->props.size(); pi++) {
       ObjProp& p = e->props[pi];
       if (p.spread) {
+        spreadCond_ = strip(p.value)->k == EK::Cond;
         Type* t = check(p.value, nullptr);
+        spreadCond_ = false;
         if (t->t == TT::Class) {
           resolveClass(t->cls);
           if (!t->cls->abstractProps.empty())
@@ -1724,6 +1812,67 @@ static bool plainObjectLit(Expr* e) {
   return true;
 }
 
+// [p, { id: 5, meta: 6 }] with p: P: the object literals are laid out as the one other object type
+// (when they fit it), as TypeScript infers P[]
+Type* Checker::objectLitsAs(std::vector<Expr*>& xs) {
+  Type* target = nullptr;
+  for (Expr* x : xs) {
+    if (x->k == EK::Spread) return nullptr;
+    if (plainObjectLit(x)) continue;
+    Type* t = x->type ? baseOf(x->type) : nullptr;
+    if (!t || x->type->t == TT::Optional || t->t != TT::Object || !t->shape->methods.empty() || t->shape->ownAccessors) return nullptr;
+    if (target && target != t) return nullptr;
+    target = t;
+  }
+  if (!target) return nullptr;
+  for (Expr* x : xs) {
+    if (!plainObjectLit(x)) continue;
+    ObjShape* ls = stripCond(x)->type->shape;
+    for (auto& p : ls->props) {
+      const ObjShape::Prop* q = target->shape->findProp(p.name);
+      if (!q || !assignable(p.type, q->type)) return nullptr;
+    }
+    for (auto& q : target->shape->props)
+      if (!ls->findProp(q.name) && !q.optional && !(q.type->t == TT::Optional && q.type->hasUndef)) return nullptr;
+  }
+  for (Expr* x : xs)
+    if (plainObjectLit(x)) relayoutObjectLit(x, target);
+  return target;
+}
+
+Type* Checker::mergeObjectLitList(std::vector<Expr*>& xs, Loc l) {
+  for (Expr* x : xs)
+    if (x->k == EK::Spread || !plainObjectLit(x)) return nullptr;
+  bool same = true;
+  for (Expr* x : xs) same = same && stripCond(x)->type->shape == stripCond(xs[0])->type->shape;
+  if (same) return nullptr;
+  auto undefOk = [](const ObjShape::Prop& p) { return p.optional ? p.undefOk : hasUndefined(p.type); };
+  auto opt = [&](Type* t) { return t->t == TT::Optional ? T.optional(t->elem, t->hasNull, true) : T.optional(t, false, true); };
+  // the properties in order of first appearance; in every element: its type unified, else optional
+  std::vector<std::string> names;
+  for (Expr* x : xs)
+    for (auto& p : stripCond(x)->type->shape->props)
+      if (std::find(names.begin(), names.end(), p.name) == names.end()) names.push_back(p.name);
+  std::vector<ObjShape::Prop> props;
+  for (auto& n : names) {
+    Type* t = nullptr;
+    bool all = true, o = false, uo = false;
+    for (Expr* x : xs) {
+      const ObjShape::Prop* q = stripCond(x)->type->shape->findProp(n);
+      if (!q) { all = false; continue; }
+      t = t ? unify(t, q->type, l, "array literal") : q->type;
+      if (t->t == TT::Unknown) return t;
+      o = o || q->optional;
+      uo = uo || undefOk(*q);
+    }
+    if (!all) o = uo = true;
+    props.push_back({n, o ? opt(t) : t, o, uo});
+  }
+  Type* t = T.anonObject(props);
+  for (Expr* x : xs) relayoutObjectLit(x, t);
+  return t;
+}
+
 Type* Checker::mergeObjectLits(Expr* b, Expr* c, Loc l) {
   if (!plainObjectLit(b) || !plainObjectLit(c)) return nullptr;
   ObjShape* as = stripCond(b)->type->shape;
@@ -1772,7 +1921,46 @@ void Checker::relayoutObjectLit(Expr* e, Type* target) {
   x->cls = recordFor(fields)->cls;
 }
 
+// The type of { ...(c ? a : b) } 's source when a and b keep their own object types: the properties of
+// both (their common type), and those of one branch as optional; null when a branch is not an object
+// type with plain properties.
+Type* Checker::spreadCondType(Type* a, Type* b, Loc l) {
+  auto propsOf = [&](Type* t, std::vector<ObjShape::Prop>& out) {
+    if (t->t == TT::Class) {
+      resolveClass(t->cls);
+      if (!t->cls->abstractProps.empty()) return false;
+      for (auto& f : t->cls->fields)
+        if (f.name[0] != '#') out.push_back({f.name, f.type, f.optional, f.undefOk});
+      return true;
+    }
+    if (t->t != TT::Object || t->shape->ownAccessors) return false;
+    out = t->shape->props;
+    return true;
+  };
+  std::vector<ObjShape::Prop> pa, pb;
+  if (!propsOf(a, pa) || !propsOf(b, pb)) return nullptr;
+  auto opt = [&](Type* t) { return t->t == TT::Optional ? T.optional(t->elem, t->hasNull, true) : T.optional(t, false, true); };
+  auto find = [](std::vector<ObjShape::Prop>& v, const std::string& n) -> ObjShape::Prop* {
+    for (auto& p : v) if (p.name == n) return &p;
+    return nullptr;
+  };
+  std::vector<ObjShape::Prop> props;
+  for (auto& p : pa) {
+    ObjShape::Prop* q = find(pb, p.name);
+    if (!q) { props.push_back({p.name, opt(p.type), true, true}); continue; }
+    Type* t = unify(p.type, q->type, l, "conditional spread");
+    if (t->t == TT::Unknown) return t;
+    bool o = p.optional || q->optional || (t->t == TT::Optional && t->hasUndef);
+    props.push_back({p.name, o ? opt(t) : t, o, p.undefOk || q->undefOk || o});
+  }
+  for (auto& q : pb)
+    if (!find(pa, q.name)) props.push_back({q.name, opt(q.type), true, true});
+  return T.anonObject(props);
+}
+
 Type* Checker::checkCondExpr(Expr* e, Type* expected) {
+  bool sc = spreadCond_;
+  spreadCond_ = false;
   checkCond(e->a);
   std::vector<Fact> tf, ff;
   factsFrom(e->a, true, tf);
@@ -1787,12 +1975,16 @@ Type* Checker::checkCondExpr(Expr* e, Type* expected) {
   if (!emptyB) {
     pushScope();
     applyFacts(tf);
+    spreadCond_ = sc && strip(e->b)->k == EK::Cond;
     bt = check(e->b, expected);
+    spreadCond_ = false;
     popScope();
   }
   pushScope();
   applyFacts(ff);
+  spreadCond_ = sc && strip(e->c)->k == EK::Cond;
   ct = check(e->c, expected ? expected : (isEmptyArr(e->c) && bt && baseOf(bt)->t == TT::Array ? baseOf(bt) : nullptr));
+  spreadCond_ = false;
   popScope();
   if (emptyB) {
     pushScope();
@@ -1812,6 +2004,13 @@ Type* Checker::checkCondExpr(Expr* e, Type* expected) {
     else t = unify(bt, ct, e->loc, "conditional expression");
   } else {
     Type* m = expected ? nullptr : mergeObjectLits(e->b, e->c, e->loc);
+    if (!m && sc && !expected && bt != ct) {
+      // spread: each branch keeps its type; the copy reads the branch taken
+      if (Type* st = spreadCondType(bt, ct, e->loc)) {
+        e->spreadCond = true;
+        return st;
+      }
+    }
     t = m ? m : unify(bt, ct, e->loc, "conditional expression");
   }
   coerce(e->b, t);

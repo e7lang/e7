@@ -1314,8 +1314,11 @@ void VM::detachDebugger() {
   dbgMask_.store(0);
 }
 
-Slot VM::callClosure(CloObj* c, const Slot* args, uint32_t nargs) {
-  FuncRT* f = c->fn;
+Slot VM::callClosure(CloObj* c, const Slot* args, uint32_t nargs) { return callFn(c->fn, c, args, nargs); }
+
+Slot VM::callMethod(FuncRT* f, const Slot* args, uint32_t nargs) { return callFn(f, nullptr, args, nargs); }
+
+Slot VM::callFn(FuncRT* f, CloObj* c, const Slot* args, uint32_t nargs) {
   // each re-entry uses native stack; bound it independently of the script frame limit
   if (nativeDepth_ > 64) errorCode(ERR_STACK, "too many nested native callbacks");
   if (nargs != f->nparams) error("callback expects %u arguments, got %u", f->nparams, nargs);

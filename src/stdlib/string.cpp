@@ -152,59 +152,134 @@ E7_NATIVE(s_substr) {
   r->r = sub(vm, s, b, e);
 }
 
-// Case mapping: ASCII, Latin-1, Greek, Cyrillic (simple 1:1 mappings) + German sharp s
-static char16_t upperOf(char16_t c) {
-  if (c >= 'a' && c <= 'z') return c - 32;
-  if (c < 0x80) return c;
-  if ((c >= 0xE0 && c <= 0xFE && c != 0xF7)) return c - 32;
-  if (c == 0xFF) return 0x178;
-  if (c >= 0x100 && c <= 0x17F) {
-    if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) return (c & 1) ? c : c - 1;
-    if (c != 0x131 && c != 0x138 && c != 0x149 && c != 0x17F) return (c & 1) ? c - 1 : c;
-    if (c == 0x131) return 'I';
-    if (c == 0x17F) return 'S';
-    return c;
+// Case mapping: the full, locale-independent Unicode mappings of JavaScript (tables generated from
+// Node.js by scripts/gen-casemap.mjs), with Final_Sigma (Σ at the end of a word lowercases to ς)
+namespace {
+struct CaseRun { uint32_t lo; uint16_t len; int32_t delta; uint8_t stride; };
+struct CaseSpecial { uint32_t cp; uint8_t n; char16_t out[3]; };
+struct CaseRange { uint32_t lo, hi; };
+#include "casemap.inc"
+
+template <size_t N>
+uint32_t mapRun(const CaseRun (&t)[N], uint32_t c) {
+  size_t lo = 0, hi = N;
+  while (lo < hi) {  // the last run starting at or before c
+    size_t mid = (lo + hi) / 2;
+    if (t[mid].lo <= c) lo = mid + 1;
+    else hi = mid;
   }
-  if (c >= 0x3B1 && c <= 0x3C9 && c != 0x3C2) return c - 32;
-  if (c == 0x3C2) return 0x3A3;
-  if (c >= 0x3AC && c <= 0x3AF) { static const char16_t m[] = {0x386, 0x388, 0x389, 0x38A}; return m[c - 0x3AC]; }
-  if (c >= 0x430 && c <= 0x44F) return c - 32;
-  if (c >= 0x450 && c <= 0x45F) return c - 80;
+  if (lo == 0) return c;
+  const CaseRun& r = t[lo - 1];
+  uint32_t off = c - r.lo;
+  if (off % r.stride || off / r.stride >= r.len) return c;
+  return (uint32_t)((int64_t)c + r.delta);
+}
+template <size_t N>
+const CaseSpecial* findSpecial(const CaseSpecial (&t)[N], uint32_t c) {
+  size_t lo = 0, hi = N;
+  while (lo < hi) {
+    size_t mid = (lo + hi) / 2;
+    if (t[mid].cp < c) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < N && t[lo].cp == c ? &t[lo] : nullptr;
+}
+template <size_t N>
+bool inRanges(const CaseRange (&t)[N], uint32_t c) {
+  size_t lo = 0, hi = N;
+  while (lo < hi) {
+    size_t mid = (lo + hi) / 2;
+    if (t[mid].hi < c) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < N && t[lo].lo <= c;
+}
+
+// the code point at i (a lone surrogate is itself); n: its length in code units
+uint32_t cpAt(const char16_t* s, uint32_t len, uint32_t i, uint32_t& n) {
+  char16_t c = s[i];
+  if (c >= 0xD800 && c <= 0xDBFF && i + 1 < len && s[i + 1] >= 0xDC00 && s[i + 1] <= 0xDFFF) {
+    n = 2;
+    return 0x10000 + (((uint32_t)c - 0xD800) << 10) + ((uint32_t)s[i + 1] - 0xDC00);
+  }
+  n = 1;
   return c;
 }
-static char16_t lowerOf(char16_t c) {
-  if (c >= 'A' && c <= 'Z') return c + 32;
-  if (c < 0x80) return c;
-  if (c >= 0xC0 && c <= 0xDE && c != 0xD7) return c + 32;
-  if (c >= 0x100 && c <= 0x17F) {
-    if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) return (c & 1) ? c + 1 : c;
-    if (c == 0x130) return 'i';
-    if (c != 0x131 && c != 0x138 && c != 0x149 && c != 0x17F) return (c & 1) ? c : c + 1;
-    return c;
+// the code point ending before i
+uint32_t cpBefore(const char16_t* s, uint32_t i, uint32_t& n) {
+  char16_t c = s[i - 1];
+  if (c >= 0xDC00 && c <= 0xDFFF && i >= 2 && s[i - 2] >= 0xD800 && s[i - 2] <= 0xDBFF) {
+    n = 2;
+    return 0x10000 + (((uint32_t)s[i - 2] - 0xD800) << 10) + ((uint32_t)c - 0xDC00);
   }
-  if (c == 0x178) return 0xFF;
-  if (c >= 0x391 && c <= 0x3A9 && c != 0x3A2) return c + 32;
-  if (c >= 0x410 && c <= 0x42F) return c + 32;
-  if (c >= 0x400 && c <= 0x40F) return c + 80;
+  n = 1;
   return c;
 }
+void appendCp(std::u16string& out, uint32_t c) {
+  if (c >= 0x10000) {
+    c -= 0x10000;
+    out += (char16_t)(0xD800 + (c >> 10));
+    out += (char16_t)(0xDC00 + (c & 0x3FF));
+  } else {
+    out += (char16_t)c;
+  }
+}
+// Final_Sigma: a cased letter (then case-ignorables) before, and no (case-ignorables then) cased letter after
+bool finalSigma(const char16_t* s, uint32_t len, uint32_t i, uint32_t n) {
+  bool before = false;
+  for (uint32_t j = i; j > 0;) {
+    uint32_t k;
+    uint32_t c = cpBefore(s, j, k);
+    j -= k;
+    if (inRanges(kCaseIgnorable, c)) continue;
+    before = inRanges(kCased, c);
+    break;
+  }
+  if (!before) return false;
+  for (uint32_t j = i + n; j < len;) {
+    uint32_t k;
+    uint32_t c = cpAt(s, len, j, k);
+    j += k;
+    if (inRanges(kCaseIgnorable, c)) continue;
+    return !inRanges(kCased, c);
+  }
+  return true;
+}
+}  // namespace
+
 E7_NATIVE(s_toUpper) {
   E7_UNUSED;
   StrObj* s = S(vm, a[0]);
+  const char16_t* p = s->chars();
   std::u16string out;
   out.reserve(s->len);
-  for (uint32_t i = 0; i < s->len; i++) {
-    char16_t c = s->chars()[i];
-    if (c == 0xDF) { out += u"SS"; continue; }
-    out += upperOf(c);
+  for (uint32_t i = 0; i < s->len;) {
+    uint32_t n;
+    uint32_t c = cpAt(p, s->len, i, n);
+    i += n;
+    if (c < 0x80) { out += (char16_t)(c >= 'a' && c <= 'z' ? c - 32 : c); continue; }
+    if (const CaseSpecial* sp = findSpecial(kUpperSpecial, c)) { out.append(sp->out, sp->n); continue; }
+    appendCp(out, mapRun(kUpper, c));
   }
+  vm.checkTemp(out.size() * 2);
   r->r = vm.newString(out);
 }
 E7_NATIVE(s_toLower) {
   E7_UNUSED;
   StrObj* s = S(vm, a[0]);
-  std::u16string out(s->chars(), s->len);
-  for (auto& c : out) c = lowerOf(c);
+  const char16_t* p = s->chars();
+  std::u16string out;
+  out.reserve(s->len);
+  for (uint32_t i = 0; i < s->len;) {
+    uint32_t n;
+    uint32_t c = cpAt(p, s->len, i, n);
+    if (c < 0x80) { out += (char16_t)(c >= 'A' && c <= 'Z' ? c + 32 : c); i += n; continue; }
+    if (c == 0x3A3) { out += finalSigma(p, s->len, i, n) ? u'\u03C2' : u'\u03C3'; i += n; continue; }
+    i += n;
+    if (const CaseSpecial* sp = findSpecial(kLowerSpecial, c)) { out.append(sp->out, sp->n); continue; }
+    appendCp(out, mapRun(kLower, c));
+  }
+  vm.checkTemp(out.size() * 2);
   r->r = vm.newString(out);
 }
 static void trimImpl(VM& vm, Slot* a, Slot* r, bool start, bool end) {

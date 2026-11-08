@@ -120,6 +120,15 @@ class Checker {
     std::vector<std::vector<std::pair<std::string, Type*>>> entries;
   };
   std::vector<SpreadLit> spreadLits;
+  bool spreadCond_ = false;  // the conditional checked next is spread into an object literal
+  std::vector<Expr*> iterCalls;  // see Expr::iterCall
+  void iterUse(Expr* x) {
+    while (x && (x->k == EK::Paren || x->k == EK::Conv)) x = x->a;
+    if (x && x->iterCall) x->iterUsed = true;
+  }
+  Type* spreadCondType(Type* a, Type* b, Loc l);
+  Type* mergeObjectLitList(std::vector<Expr*>& xs, Loc l);
+  Type* objectLitsAs(std::vector<Expr*>& xs);
   void spreadOrders();
   Type* checkArrayPatInit(VarDecl& d, Expr* init);
   ClassSym* classOf(Sym* s);  // a class, or the static holder of a generic class

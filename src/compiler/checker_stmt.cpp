@@ -224,7 +224,13 @@ bool Checker::coerce(Expr*& e, Type* target, const char* ctx) {
     Expr* x = e;
     while (x && (x->k == EK::Paren || (x->k == EK::Conv && x->conv == ConvKind::None))) x = x->a;
     if (x && x->neverNarrowed) {
-      for (Expr* y = e; y; y = y == x ? nullptr : y->a) y->type = target;
+      // the value is kept as it is (boxed when it is a number, boolean or integer)
+      Kind k = kindOf(x->type);
+      Expr* c = P.arena.expr(EK::Conv, e->loc);
+      c->conv = k == K_F ? ConvKind::NumToBox : k == K_I ? ConvKind::IntToBox : ConvKind::None;
+      c->a = e;
+      c->type = target;
+      e = c;
       return true;
     }
   }
@@ -277,23 +283,6 @@ Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
   }
   if (assignable(a, b)) return b;
   if (assignable(b, a)) return a;
-  // two object types without methods ({ v?: number } and { v: number }): their common supertype, the
-  // properties both have with a type each is assignable to
-  if (a->t == TT::Object && b->t == TT::Object && a->shape->methods.empty() && b->shape->methods.empty() &&
-      !a->shape->ownAccessors && !b->shape->ownAccessors) {
-    std::vector<ObjShape::Prop> props;
-    for (auto& p : a->shape->props) {
-      const ObjShape::Prop* q = b->shape->findProp(p.name);
-      if (!q) continue;
-      if (p.type == q->type) props.push_back({p.name, p.type, p.optional || q->optional, p.undefOk || q->undefOk});
-      else if (kindOf(p.type) == K_R && kindOf(q->type) == K_R && !isBoxedOptional(p.type) && !isBoxedOptional(q->type)) {
-        if (assignable(p.type, q->type)) props.push_back({p.name, q->type, p.optional || q->optional, p.undefOk || q->undefOk});
-        else if (assignable(q->type, p.type)) props.push_back({p.name, p.type, p.optional || q->optional, p.undefOk || q->undefOk});
-      }
-    }
-    Type* t = T.anonObject(props);
-    if (assignable(a, t) && assignable(b, t)) return t;
-  }
   return errT(l, std::string("incompatible types in ") + what + ": '" + typeName(a) + "' and '" + typeName(b) + "'");
 }
 
@@ -942,6 +931,16 @@ Type* Checker::checkArrayPatInit(VarDecl& d, Expr* init) {
 
 void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
   bool simple = !d.isArrayPat && !d.isObjPat;
+  if (d.isObjPat && !d.elems.empty() && d.elems.back().isRest && d.init && stripParens(d.init)->k == EK::Cond) {
+    // const { a, ...rest } = c ? x : y: from the copy { ...(c ? x : y) } (the properties of the branch taken)
+    Expr* lit = P.arena.expr(EK::Object, d.init->loc);
+    ObjProp sp;
+    sp.loc = d.init->loc;
+    sp.spread = true;
+    sp.value = d.init;
+    lit->props.push_back(sp);
+    d.init = lit;
+  }
   if (d.generic) return;  // top-level `const f = <T>(...) => ...` (see declareFile)
   if (simple && d.init && !d.type) {
     Expr* gi = d.init;

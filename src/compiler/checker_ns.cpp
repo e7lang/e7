@@ -172,6 +172,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       for (Expr*& a : args) {
         if (a->k == EK::Spread) {
           Type* st = check(a->a, T.array(num));
+          iterUse(a->a);
           if (st != T.array(num)) return errT(a->loc, "spread argument must be number[]");
           a->type = st;
           continue;
@@ -260,6 +261,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       for (Expr*& a : args) {
         if (a->k == EK::Spread) return errT(a->loc, "spread is not supported in console.log");
         Type* t = check(a, nullptr);
+        iterUse(a);
         if (t->t == TT::Void) return errT(a->loc, "cannot print a void value");
         if (containsError(t))
           return errT(a->loc, "console.log of an Error prints a stack trace in Node.js; print String(e) or e.message instead" +
@@ -444,6 +446,16 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
         return errT(args[0]->loc, "Object.assign requires an object target");
       if (tb->t == TT::Class) resolveClass(tb->cls);
       for (size_t i = 1; i < args.size(); i++) {
+        if (strip(args[i])->k == EK::Cond) {
+          // Object.assign(t, c ? a : b): from the copy { ...(c ? a : b) } (the properties of the branch taken)
+          Expr* lit = P.arena.expr(EK::Object, args[i]->loc);
+          ObjProp sp;
+          sp.loc = args[i]->loc;
+          sp.spread = true;
+          sp.value = args[i];
+          lit->props.push_back(sp);
+          args[i] = lit;
+        }
         Type* st = check(args[i], nullptr);
         if (st->t == TT::Unknown) return st;
         Type* sb = baseOf(st);
@@ -484,6 +496,9 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       Type* t = check(args[0], nullptr);
       e->intrinsic = IN_NUMBER;  // identity
       e->raw = "identity";
+      // as in TypeScript, a frozen array is a readonly array (writes through the result do not compile;
+      // e7 does not stop writes through other references: see SPEC section 9)
+      if (t->t == TT::Array) return T.array(t->elem, true);
       return t;
     }
     return bad();
@@ -507,6 +522,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       }
       if (args.size() != 1) return errT(l, "Array.from expects one argument");
       Type* t = check(args[0], nullptr);
+      iterUse(args[0]);
       Type* et = elemTypeForIter(args[0], t, args[0]->loc);
       if (t->t == TT::Map) e->cls = tupleRecord(et);
       e->intrinsic = IN_ARRAY_FROM;
@@ -1109,6 +1125,7 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
       // contextual type; the result may also be a Map (copy constructor)
       Type* want = kt ? T.array(T.tuple({kt, vt})) : nullptr;
       Type* at = check(args[0], want);
+      iterUse(args[0]);
       if (at->t == TT::Map) {
         if (kt && (at->key != kt || at->val != vt)) return errT(args[0]->loc, "Map type mismatch in copy constructor");
         e->intrinsic = IN_NATIVE_NORECV;
@@ -1141,6 +1158,7 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
       // checked once (checking an expression again is not idempotent), with the array as the contextual
       // type; the result may also be a Set (copy constructor)
       Type* at = check(args[0], et ? T.array(et) : nullptr);
+      iterUse(args[0]);
       if (at->t == TT::Set) {
         if (et && at->elem != et) return errT(args[0]->loc, "Set type mismatch in copy constructor");
         e->intrinsic = IN_NATIVE_NORECV;
