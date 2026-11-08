@@ -1604,7 +1604,15 @@ void Checker::resolveClass(ClassSym* c) {
                    "', which replaces the whole accessor of '" + c->vtable[it->second].fn->cls->name + "' (it would have no " +
                    (m.accessor == 1 ? "setter" : "getter") + "); declare both, the other calling super." + m.name);
   }
-  for (auto& m : d->members) {
+  // `declare x: T` fields last: they exist once the constructor assigns them, after the initialized
+  // fields (the key order of JavaScript for the usual `declare` + assignment in the constructor)
+  std::vector<ClassMember*> fieldOrder;
+  for (auto& m : d->members)
+    if (!m.isDeclare) fieldOrder.push_back(&m);
+  for (auto& m : d->members)
+    if (m.isDeclare) fieldOrder.push_back(&m);
+  for (ClassMember* mp : fieldOrder) {
+    ClassMember& m = *mp;
     if (m.kind != ClassMember::Field) continue;
     if ((holder && !m.isStatic) || (inst && m.isStatic)) continue;
     if (m.isAbstract) {

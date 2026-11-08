@@ -269,10 +269,13 @@ try {
 - Values annotated with types such as `u32` are true machine integers: `+ - *` wrap around; `/` is **truncating integer division**, `%` is integer remainder; division by 0 is a runtime error.
 - Bitwise operations work at the type's bit width; for unsigned types `>>` is a logical shift, for signed types `>>` is an arithmetic shift and `>>>` a logical shift;
   shift counts are taken modulo 32 for types of ≤32 bits and modulo 64 for 64-bit types.
-- Integer literals adapt to the contextual type and are range-checked (`const x: u8 = 256` is a compile error).
+- Integer literals adapt to the contextual type and are range-checked (`const x: u8 = 256` is a compile error); so are
+  expressions of literals, computed as JavaScript computes them (`const x: u8 = 255 + 1` is a compile error, `1 + 2 + 3` a `u8` 6).
 - Conversion functions `u32(x)`, `i64(x)`, etc.: from `number`, truncate the fraction and then reduce modulo 2^n (consistent with `x >>> 0`, `x | 0`); from other integer types/`bigint`, reduce modulo 2^n.
 - Built-ins: `rotl32 rotr32 rotl64 rotr64 clz32 clz64 ctz32 ctz64 popcnt bswap16 bswap32 bswap64 mulhi64 imulhi64`.
-- On a JS engine (where `lib/e7.d.ts` declares them as `number`) they do not wrap around; **code written as `u32(a + b)` gives the same result on both**.
+- On a JS engine (where `lib/e7.d.ts` declares them as `number`) they do not wrap around; **code written as `u32(a + b)` gives the same result on both**
+  as long as the exact result fits in a double (2^53): `+` and `-` of 32-bit values always do, `*` does not. For a 32-bit product
+  write `u32(Math.imul(a, b))` (the low 32 bits on both); 64-bit values give the same result only within 2^53.
 
 ### 4.3 Strings
 - `+` and template strings: values of any type are converted with JS `String(x)` rules and then concatenated.
@@ -459,11 +462,15 @@ The following behave the same as JavaScript (verified by differential testing ag
   `{ length: n }, fn`), `Array.of`, `new Array<T>(n)`, writable `length`. The default `sort()` sorts as strings (same as JS); sorting is stable.
   **Out-of-bounds reads are runtime errors** (JS returns `undefined`); writing at index `length` appends.
 - **Map / Set**: `size get set has delete clear forEach keys values entries`, iteration, spread, copy construction.
+  `keys()`, `values()` and `entries()` give a copy of the elements (not a live iterator), so they are accepted only
+  where JavaScript also reads them all at once: directly in `for...of`, in a spread, `Array.from(...)`,
+  `new Set(...)` / `new Map(...)` and `console.log` (store `[...m.keys()]` for later).
 - **Uint8Array / ArrayBuffer / DataView**: `length byteLength byteOffset buffer set subarray slice fill indexOf lastIndexOf
   includes join reverse at forEach`, `Uint8Array.from/of`, all DataView `get/set{Uint8..Float64,BigInt64,BigUint64}` (big/little endian).
 - **TextEncoder / TextDecoder** (UTF-8; decoding replaces invalid sequences per WHATWG rules).
 - **bigint**: all arithmetic/bitwise/comparison operations, `BigInt.asUintN/asIntN`, `toString(radix)`, use as Map keys.
-- **JSON.stringify** (including the indent argument; tuples are output as arrays; `undefined` fields are omitted; circular references are an error).
+- **JSON.stringify** (including the indent argument; tuples are output as arrays; `undefined` fields are omitted; circular references are an error;
+  a class's or object literal's `toJSON()` / `toJSON(key)` returning a string or a number is called, as in JavaScript).
 - **Object**: `keys(obj)`; `values(obj)` / `entries(obj)` for object and class types whose properties all have
   one type (an optional property counts with its type without `undefined` and is skipped when absent, as with
   `keys`): the properties come in their run-time order, and a property that the static
@@ -629,6 +636,15 @@ or host function that was running (or that called back into the script, like `Ar
 | Out-of-bounds array/string read | `undefined` | Runtime error |
 | Elements of `new Array<T>(n)` | Holes (read as `undefined`) | `0` / `false` / `null` (`undefined` for reference types) |
 | Fixed-width integer arithmetic | Floating point | Machine integers that wrap around |
+| Reading a field of a subclass from a method that the base class constructor calls (before the subclass's field initializers run) | `undefined` | The field's zero value (`0`, `false`, `null`); a `string` field ends the call (section 3.1) |
+| A `declare` field that is never assigned | Not a property | A property with the zero value of its type |
+| `Object.freeze(obj)` | Later writes throw a `TypeError` (strict mode) | Writes are not stopped (a frozen array's type is `readonly T[]`, as in TypeScript, so writes through the result do not compile) |
+| `JSON.parse(text) as T` | Properties in the order of the text | Properties in the order of `T` (the layout of an object is fixed by its type) |
+| Callbacks of the methods of a typed array other than `Uint8Array` (`forEach`, `map`, `filter`, `reduce`, ...) | See writes made while they run | Get the elements as they were when the method was called (`for...of` sees writes) |
+| `arr.map(f)` where `f` shortens `arr` | The result keeps the original length (holes) | The result has the elements that were mapped |
+| `"" + obj` where only a subclass of `obj`'s static type defines `valueOf()` | Calls it | Calls `toString()` (`valueOf` is found from the static type) |
+| `parseInt(s, radix)` of more than about 15 digits with a radix that is not a power of 2 | V8's rounding | Correctly rounded (may differ in the last bit) |
+| `JSON.stringify` of a `DataView`; `structuredClone` of a typed array that views part of a buffer | `{}`; a copy of the whole buffer (same `byteOffset`) | The bytes as a `Uint8Array`; a copy of the viewed bytes only (`byteOffset` 0) |
 | `console.log` of functions | `[Function: f]` (name inferred from the variable or property) | `[Function (anonymous)]` for arrow functions and function expressions; `%o` does not list their hidden properties |
 | `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null` |
 | `yield*` of a sync iterable in an async generator | Node.js 22: `throw(e)` into an array rejects with `e`; a sync generator that yields a rejected promise is not closed | ECMAScript 2025 (Node.js 24): a `TypeError`, and the generator is closed (its `finally` runs) |

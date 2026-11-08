@@ -304,9 +304,9 @@ string/byte types) are checked by the interpreter at runtime. So even maliciousl
   before its body is read.
 - `requires` is the oldest e7vm that can run the module. The compiler computes it from the instructions and native
   functions the module uses: each has a "since" version in `src/core/since.h` (`opSince`, `nativeSinceTable`), and
-  everything without an entry counts as the baseline, 0.1.0. In 0.1.1 the only entries are the natives
-  `JSON.parse2` / `JSON.tryParse2` (typed parse into literal types and enums), so a module requires 0.1.1 only when
-  it parses JSON into such a type, and 0.1.0 otherwise. A VM older than `requires` rejects the module with `E7_ERR_VERSION` ("the module requires e7vm X; this is
+  everything without an entry counts as the baseline, 0.1.0. The entries so far: the natives `JSON.parse2` /
+  `JSON.tryParse2` (0.1.1, typed parse into literal types and enums) and `TA.sortCmp` (0.1.2, `sort(cmp)` of a typed
+  array), so a module requires 0.1.1 or 0.1.2 only when it uses one of them, and 0.1.0 otherwise. A VM older than `requires` rejects the module with `E7_ERR_VERSION` ("the module requires e7vm X; this is
   e7vm Y") instead of failing verification.
 - `e7_inspect()` (and `e7c --info`) read the format, `requires`, the debug flag and the signature trailer without
   loading a module, so a host can tell whether it can run a module before loading it.

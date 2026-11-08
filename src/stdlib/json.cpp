@@ -203,9 +203,9 @@ struct Stringifier {
       out += u'}';
     } else if (o->type == OT::Bytes) {
       auto* b = static_cast<BytesObj*>(o);
-      if (taIsBig(taKind(b))) vm.error("TypeError: Do not know how to serialize a BigInt");
-      out += u'{';
       uint32_t n = taLength(b);
+      if (taIsBig(taKind(b)) && n) vm.error("TypeError: Do not know how to serialize a BigInt");
+      out += u'{';
       for (uint32_t i = 0; i < n; i++) {
         if (i) out += u',';
         nl(inner);

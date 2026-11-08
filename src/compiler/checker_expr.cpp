@@ -733,6 +733,17 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
     }
     types.push_back(t);
   }
+  if (!et && e->list.size() > 1) {
+    // [c ? { v: 1.5 } : {}, { v: 2 }]: object literals of different shapes are laid out for one type in
+    // which a property of only some of them is optional (as for a conditional, see mergeObjectLits)
+    if (Type* m = mergeObjectLitList(e->list, e->loc)) {
+      et = m;
+      for (Type*& t : types) t = m;
+    } else if (Type* m = objectLitsAs(e->list)) {
+      et = m;
+      for (Type*& t : types) t = m;
+    }
+  }
   if (!et) {
     for (Type* t : types) et = et ? unify(et, t, e->loc, "array literal") : t;
     if (et->t == TT::Null || et->t == TT::Undefined) return errT(e->loc, "cannot infer array element type from null/undefined");
@@ -1799,6 +1810,67 @@ static bool plainObjectLit(Expr* e) {
   for (auto& p : e->props)
     if (p.spread || p.method || p.accessor || p.computed) return false;
   return true;
+}
+
+// [p, { id: 5, meta: 6 }] with p: P: the object literals are laid out as the one other object type
+// (when they fit it), as TypeScript infers P[]
+Type* Checker::objectLitsAs(std::vector<Expr*>& xs) {
+  Type* target = nullptr;
+  for (Expr* x : xs) {
+    if (x->k == EK::Spread) return nullptr;
+    if (plainObjectLit(x)) continue;
+    Type* t = x->type ? baseOf(x->type) : nullptr;
+    if (!t || x->type->t == TT::Optional || t->t != TT::Object || !t->shape->methods.empty() || t->shape->ownAccessors) return nullptr;
+    if (target && target != t) return nullptr;
+    target = t;
+  }
+  if (!target) return nullptr;
+  for (Expr* x : xs) {
+    if (!plainObjectLit(x)) continue;
+    ObjShape* ls = stripCond(x)->type->shape;
+    for (auto& p : ls->props) {
+      const ObjShape::Prop* q = target->shape->findProp(p.name);
+      if (!q || !assignable(p.type, q->type)) return nullptr;
+    }
+    for (auto& q : target->shape->props)
+      if (!ls->findProp(q.name) && !q.optional && !(q.type->t == TT::Optional && q.type->hasUndef)) return nullptr;
+  }
+  for (Expr* x : xs)
+    if (plainObjectLit(x)) relayoutObjectLit(x, target);
+  return target;
+}
+
+Type* Checker::mergeObjectLitList(std::vector<Expr*>& xs, Loc l) {
+  for (Expr* x : xs)
+    if (x->k == EK::Spread || !plainObjectLit(x)) return nullptr;
+  bool same = true;
+  for (Expr* x : xs) same = same && stripCond(x)->type->shape == stripCond(xs[0])->type->shape;
+  if (same) return nullptr;
+  auto undefOk = [](const ObjShape::Prop& p) { return p.optional ? p.undefOk : hasUndefined(p.type); };
+  auto opt = [&](Type* t) { return t->t == TT::Optional ? T.optional(t->elem, t->hasNull, true) : T.optional(t, false, true); };
+  // the properties in order of first appearance; in every element: its type unified, else optional
+  std::vector<std::string> names;
+  for (Expr* x : xs)
+    for (auto& p : stripCond(x)->type->shape->props)
+      if (std::find(names.begin(), names.end(), p.name) == names.end()) names.push_back(p.name);
+  std::vector<ObjShape::Prop> props;
+  for (auto& n : names) {
+    Type* t = nullptr;
+    bool all = true, o = false, uo = false;
+    for (Expr* x : xs) {
+      const ObjShape::Prop* q = stripCond(x)->type->shape->findProp(n);
+      if (!q) { all = false; continue; }
+      t = t ? unify(t, q->type, l, "array literal") : q->type;
+      if (t->t == TT::Unknown) return t;
+      o = o || q->optional;
+      uo = uo || undefOk(*q);
+    }
+    if (!all) o = uo = true;
+    props.push_back({n, o ? opt(t) : t, o, uo});
+  }
+  Type* t = T.anonObject(props);
+  for (Expr* x : xs) relayoutObjectLit(x, t);
+  return t;
 }
 
 Type* Checker::mergeObjectLits(Expr* b, Expr* c, Loc l) {

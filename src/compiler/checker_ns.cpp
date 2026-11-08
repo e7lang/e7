@@ -496,6 +496,9 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       Type* t = check(args[0], nullptr);
       e->intrinsic = IN_NUMBER;  // identity
       e->raw = "identity";
+      // as in TypeScript, a frozen array is a readonly array (writes through the result do not compile;
+      // e7 does not stop writes through other references: see SPEC section 9)
+      if (t->t == TT::Array) return T.array(t->elem, true);
       return t;
     }
     return bad();

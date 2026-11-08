@@ -817,7 +817,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return T.array(bt->elem);
       }
       if (meth("toSpliced")) {
-        if (args.empty()) args.push_back(N(0));
+        // (a start is required, as in TypeScript's declaration; JavaScript's toSpliced() copies the array)
+        if (args.empty()) return errT(l, "toSpliced expects a start index (use slice() for a copy)");
         if (args.size() == 1) args.push_back(N(INFINITY));
         Expr* items;
         if (args.size() > 2) {
@@ -1187,8 +1188,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         size_t maxParams = name == "reduce" || name == "reduceRight" ? 3 : 2;
         for (Expr* a : args) {
           Expr* x = strip(a);
-          if (x->k == EK::Arrow && x->fn && x->fn->params && x->fn->params->size() > maxParams)
-            return errT((*x->fn->params)[maxParams].loc, "the callbacks of a " + typeName(bt) + "'s '" + name +
+          if (x->k == EK::Arrow && x->params.size() > maxParams)
+            return errT(x->params[maxParams].loc, "the callbacks of a " + typeName(bt) + "'s '" + name +
                                                               "' do not get the typed array as a parameter; use the variable that holds it");
         }
         Expr* recv = m->a;

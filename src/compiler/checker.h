@@ -127,6 +127,8 @@ class Checker {
     if (x && x->iterCall) x->iterUsed = true;
   }
   Type* spreadCondType(Type* a, Type* b, Loc l);
+  Type* mergeObjectLitList(std::vector<Expr*>& xs, Loc l);
+  Type* objectLitsAs(std::vector<Expr*>& xs);
   void spreadOrders();
   Type* checkArrayPatInit(VarDecl& d, Expr* init);
   ClassSym* classOf(Sym* s);  // a class, or the static holder of a generic class
