@@ -608,8 +608,10 @@ struct Gen {
   // top-level let / const a function may read before their declaration ran (temporal dead zone): a
   // hidden global flag, set when the declaration runs; reads and writes in functions check it
   std::unordered_map<VarSym*, uint32_t> tdzFlag;
+  std::unordered_map<ClassSym*, uint32_t> tdzClass;  // classes (their static fields share the flag)
   void findTdzGlobals();
   void tdzCheck(VarSym* v);
+  void tdzThrowUnless(uint32_t flag, const std::string& name);
   std::vector<int> synthKinds;  // 0..2 resolve I/F/R, 3 resolve void, 4 reject, 5..7 closeIterator I/F/R
   uint32_t synthBase = 0;
   uint32_t synthFn(int kind) {
@@ -1920,6 +1922,14 @@ void Gen::genStmt(Stmt* s) {
     }
     case SK::Class: {
       if (!s->cls) break;
+      // the class exists from here on (its static initializers may use it, through its own methods too)
+      if (auto tc = tdzClass.find(s->cls); tc != tdzClass.end() && fn->isInit) {
+        size_t m0 = mark();
+        uint16_t one = temp(K_I);
+        loadInt(one, 1);
+        emitBx(OP_GSET_I, one, tc->second);
+        release(m0);
+      }
       for (auto& m : s->members) {
         if (m.kind == ClassMember::StaticBlock) {
           genStmt(m.body);
@@ -3144,6 +3154,15 @@ void Gen::findTdzGlobals() {
         case SK::Declare: case SK::Empty:
           break;
         case SK::Class:
+          if (mayRun && s->cls && !tdzClass.count(s->cls)) {
+            GlobalDesc gd;
+            gd.name = "<tdz " + s->cls->name + ">";
+            gd.vt = vtOf(T.boolean());
+            uint32_t f = (uint32_t)M.globals.size();
+            M.globals.push_back(gd);
+            tdzClass[s->cls] = f;
+            for (auto& sf : s->cls->staticFields) tdzFlag[sf.second] = f;
+          }
           for (auto& m : s->members)
             if ((m.kind == ClassMember::Field && m.isStatic) || m.kind == ClassMember::StaticBlock) mayRun = true;
           break;
@@ -3170,18 +3189,22 @@ void Gen::findTdzGlobals() {
   }
 }
 
-// throws ReferenceError when v's declaration has not run yet
+// throws ReferenceError when v's declaration (a static field's: its class's) has not run yet
 void Gen::tdzCheck(VarSym* v) {
   auto it = tdzFlag.find(v);
   if (it == tdzFlag.end() || fn->isInit) return;
+  tdzThrowUnless(it->second, v->name.substr(0, v->name.find('.')));
+}
+
+void Gen::tdzThrowUnless(uint32_t flag, const std::string& name) {
   size_t m0 = mark();
   uint16_t f = temp(K_I);
   Label* ok = newLabel();
-  emitBx(OP_GGET_I, f, it->second);
+  emitBx(OP_GGET_I, f, flag);
   jump(OP_JT, f, ok);
   uint16_t nm = temp(K_R), msg = temp(K_R), er = temp(K_R);
   loadStr(nm, u"ReferenceError");
-  loadStr(msg, utf8ToUtf16("Cannot access '" + v->name + "' before initialization"));
+  loadStr(msg, utf8ToUtf16("Cannot access '" + name + "' before initialization"));
   callNative("Error.new", {nm, msg}, er, 'R');
   emit(OP_THROW, er);
   place(ok);
@@ -5835,6 +5858,7 @@ void Gen::genNew(Expr* e, uint16_t d) {
   }
   if (e->cls && e->callee) {
     FuncSym* ctor = e->callee;
+    if (auto tc = tdzClass.find(e->cls); tc != tdzClass.end() && !fn->isInit) tdzThrowUnless(tc->second, e->cls->name);
     uint16_t obj = temp(K_R);
     emit(OP_NEW, obj, (uint16_t)e->cls->classIdx);
     size_t n;

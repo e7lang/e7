@@ -638,6 +638,7 @@ or host function that was running (or that called back into the script, like `Ar
 | Fixed-width integer arithmetic | Floating point | Machine integers that wrap around |
 | Reading a field of a subclass from a method that the base class constructor calls (before the subclass's field initializers run) | `undefined` | The field's zero value (`0`, `false`, `null`); a `string` field ends the call (section 3.1) |
 | A `declare` field that is never assigned | Not a property | A property with the zero value of its type |
+| `typeof x` where `x` has type `never` (an `assertNever(x)` argument: a number cast to an enum it is not a member of) | The value's type (`"number"`) | `"object"` (the value itself is kept: printing it shows the number) |
 | `Object.freeze(obj)` | Later writes throw a `TypeError` (strict mode) | Writes are not stopped (a frozen array's type is `readonly T[]`, as in TypeScript, so writes through the result do not compile) |
 | `JSON.parse(text) as T` | Properties in the order of the text | Properties in the order of `T` (the layout of an object is fixed by its type) |
 | Callbacks of the methods of a typed array other than `Uint8Array` (`forEach`, `map`, `filter`, `reduce`, ...) | See writes made while they run | Get the elements as they were when the method was called (`for...of` sees writes) |

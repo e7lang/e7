@@ -10,3 +10,7 @@ function pq(): number { return p + q; }
 console.log(readY(), pq());
 setZ();
 console.log(z);
+function make(): number { return Late.s + new Late().v; }
+try { console.log(make()); } catch (e) { console.log(String(e)); }
+class Late { static s = 10; v = 1; }
+console.log(make());
