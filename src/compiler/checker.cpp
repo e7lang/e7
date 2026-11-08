@@ -1592,6 +1592,18 @@ void Checker::resolveClass(ClassSym* c) {
       c->vtable.push_back({key, f});
     }
   }
+  // an accessor declared in a subclass replaces both halves of the base class's: overriding only the
+  // getter leaves no setter in JavaScript (and only the setter no getter)
+  for (auto& m : d->members) {
+    if (m.kind != ClassMember::Method || !m.accessor || m.isStatic || m.name[0] == '#') continue;
+    if ((holder && !m.isStatic) || (inst && m.isStatic)) continue;
+    std::string other = (m.accessor == 1 ? "set " : "get ") + m.name;
+    auto it = c->methodIdx.find(other);
+    if (it == c->methodIdx.end() || c->vtable[it->second].fn->cls == c) continue;
+    err(m.loc, "class '" + c->name + "' declares only the " + (m.accessor == 1 ? "getter" : "setter") + " of '" + m.name +
+                   "', which replaces the whole accessor of '" + c->vtable[it->second].fn->cls->name + "' (it would have no " +
+                   (m.accessor == 1 ? "setter" : "getter") + "); declare both, the other calling super." + m.name);
+  }
   for (auto& m : d->members) {
     if (m.kind != ClassMember::Field) continue;
     if ((holder && !m.isStatic) || (inst && m.isStatic)) continue;

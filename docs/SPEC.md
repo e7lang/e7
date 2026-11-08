@@ -451,7 +451,7 @@ The following behave the same as JavaScript (verified by differential testing ag
   toUpperCase toLowerCase trim trimStart trimEnd padStart padEnd repeat split replace replaceAll concat localeCompare`,
   and `String.fromCharCode/fromCodePoint`. `split`, `replace` and `replaceAll` take a string pattern (there are no
   regular expressions, section 6.6, so `match matchAll search` are compile errors); the replacement of `replace` /
-  `replaceAll` can be a function `(match, offset, string) => string`; case conversion covers Latin, Greek and Cyrillic letters;
+  `replaceAll` can be a function `(match, offset, string) => string`; case conversion is JavaScript's (full Unicode, locale-independent, with Greek final sigma);
   `localeCompare` compares by code units (locale-independent).
 - **Array**: `length push pop shift unshift at slice splice concat indexOf lastIndexOf includes join reverse fill sort
   map filter forEach reduce reduceRight some every find findIndex findLast findLastIndex flatMap flat`
@@ -639,7 +639,7 @@ or host function that was running (or that called back into the script, like `Ar
 | Asynchronous host operations, timers | The event loop (`setTimeout`, I/O) | No timers; host functions returning promises settle through tickets, and a call returns `E7_PENDING` while tickets are open (the host is the event loop) |
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
 | JSON of the wrong shape | Accepted (no validation) | `JSON.parse(text) as T` ends the call (not catchable); `tryParse(text) as T \| null` from `e7:json` returns `null`. Syntax errors are a catchable `SyntaxError` in both |
-| Case conversion / `localeCompare` | Full Unicode / locale | Latin/Greek/Cyrillic / code-unit comparison |
+| `localeCompare` | Locale-aware | Code-unit comparison |
 | Exceptions | Every error is catchable | `try`/`catch` catches the errors Node.js also throws; E7-specific checks and resource limits end the call (section 3.1) |
 | E7's own runtime checks (out of bounds, failed `as`, limits) | — | Not catchable; `finally` blocks do not run |
 | `Object.values` / `entries` of an object with more properties than its type | All own properties | E7 error (the extra property's type is unknown) |

@@ -605,6 +605,11 @@ struct Gen {
   }
   // functions the compiler adds (the resolve / reject functions of new Promise): created after the
   // others, at fixed indices
+  // top-level let / const a function may read before their declaration ran (temporal dead zone): a
+  // hidden global flag, set when the declaration runs; reads and writes in functions check it
+  std::unordered_map<VarSym*, uint32_t> tdzFlag;
+  void findTdzGlobals();
+  void tdzCheck(VarSym* v);
   std::vector<int> synthKinds;  // 0..2 resolve I/F/R, 3 resolve void, 4 reject, 5..7 closeIterator I/F/R
   uint32_t synthBase = 0;
   uint32_t synthFn(int kind) {
@@ -833,6 +838,7 @@ bool Gen::run(const std::string& name) {
     if (g->type && g->type->t == TT::Unknown) gd.vt = VT_REF;
     M.globals.push_back(gd);
   }
+  findTdzGlobals();
   for (FuncSym* f : P.funcs) {
     if (f->isNative) continue;
     if (f->isInit) genInit();
@@ -1302,6 +1308,14 @@ void Gen::bindVar(VarSym* v, uint16_t valueReg) {
   if (v->isGlobal) {
     static const uint16_t ops[3] = {OP_GSET_I, OP_GSET_F, OP_GSET_R};
     emitBx(ops[K(v->type)], valueReg, (uint32_t)v->globalIdx);
+    auto tf = tdzFlag.find(v);
+    if (tf != tdzFlag.end()) {  // the declaration has run
+      size_t m0 = mark();
+      uint16_t one = temp(K_I);
+      loadInt(one, 1);
+      emitBx(OP_GSET_I, one, tf->second);
+      release(m0);
+    }
     return;
   }
   declareLocal(v);
@@ -1338,6 +1352,12 @@ void Gen::genVarDecl(VarDecl& d, bool topLevel) {
         else loadZero(r, K(v->type));
       }
       emitBx(ops[K(v->type)], r, (uint32_t)v->globalIdx);
+      auto tf = tdzFlag.find(v);
+      if (tf != tdzFlag.end()) {  // the declaration has run
+        uint16_t one = temp(K_I);
+        loadInt(one, 1);
+        emitBx(OP_GSET_I, one, tf->second);
+      }
       release(m0);
       return;
     }
@@ -3083,6 +3103,91 @@ void Gen::genSwitch(Stmt* s) {
 }
 
 // ======================================================================= variables
+// A top-level statement that runs no script code (declarations; let / const with initializers that call
+// nothing) cannot reach a function that reads a later let / const
+static bool runsNoCode(Expr* e) {
+  if (!e) return true;
+  while (e->k == EK::Paren || e->k == EK::Conv || e->k == EK::As || e->k == EK::NonNull) e = e->a;
+  auto prim = [](Expr* x) {
+    Type* t = x->type;
+    return t && (t->t == TT::Number || t->t == TT::String || t->t == TT::Bool || t->t == TT::Int || t->t == TT::BigInt ||
+                 t->t == TT::Enum);
+  };
+  switch (e->k) {
+    case EK::Num: case EK::BigLit: case EK::Str: case EK::Bool: case EK::Null: case EK::Undefined: case EK::Ident:
+    case EK::Arrow: case EK::TypeOf:
+      return true;
+    case EK::Template: return e->list.empty();
+    case EK::Unary: return prim(e->a) && runsNoCode(e->a);
+    case EK::Binary: case EK::Logical: return prim(e->a) && prim(e->b) && runsNoCode(e->a) && runsNoCode(e->b);
+    case EK::Cond: return runsNoCode(e->a) && runsNoCode(e->b) && runsNoCode(e->c);
+    case EK::Array:
+      for (Expr* x : e->list)
+        if (x->k == EK::Spread || !runsNoCode(x)) return false;
+      return true;
+    case EK::Object:
+      for (auto& p : e->props)
+        if (p.spread || p.computed || !runsNoCode(p.value)) return false;
+      return true;
+    default:
+      return false;
+  }
+}
+
+void Gen::findTdzGlobals() {
+  bool mayRun = false;  // code that may call a function has run before this statement
+  for (auto& file : P.files) {
+    if (!file->evaluated) continue;
+    for (Stmt* s : file->body) {
+      switch (s->k) {
+        case SK::Func: case SK::Interface: case SK::TypeAlias: case SK::Enum: case SK::Import: case SK::Export:
+        case SK::Declare: case SK::Empty:
+          break;
+        case SK::Class:
+          for (auto& m : s->members)
+            if ((m.kind == ClassMember::Field && m.isStatic) || m.kind == ClassMember::StaticBlock) mayRun = true;
+          break;
+        case SK::Var: {
+          std::function<void(VarDecl&)> leaves = [&](VarDecl& d) {
+            if (d.sym && d.sym->isGlobal && mayRun && !tdzFlag.count(d.sym)) {
+              GlobalDesc gd;
+              gd.name = "<tdz " + d.sym->name + ">";
+              gd.vt = vtOf(T.boolean());
+              tdzFlag[d.sym] = (uint32_t)M.globals.size();
+              M.globals.push_back(gd);
+            }
+            for (auto& el : d.elems) leaves(el);
+          };
+          for (auto& d : s->decls) leaves(d);
+          for (auto& d : s->decls)
+            if (d.isArrayPat || d.isObjPat || !runsNoCode(d.init)) mayRun = true;
+          break;
+        }
+        default:
+          mayRun = true;
+      }
+    }
+  }
+}
+
+// throws ReferenceError when v's declaration has not run yet
+void Gen::tdzCheck(VarSym* v) {
+  auto it = tdzFlag.find(v);
+  if (it == tdzFlag.end() || fn->isInit) return;
+  size_t m0 = mark();
+  uint16_t f = temp(K_I);
+  Label* ok = newLabel();
+  emitBx(OP_GGET_I, f, it->second);
+  jump(OP_JT, f, ok);
+  uint16_t nm = temp(K_R), msg = temp(K_R), er = temp(K_R);
+  loadStr(nm, u"ReferenceError");
+  loadStr(msg, utf8ToUtf16("Cannot access '" + v->name + "' before initialization"));
+  callNative("Error.new", {nm, msg}, er, 'R');
+  emit(OP_THROW, er);
+  place(ok);
+  release(m0);
+}
+
 void Gen::readVar(VarSym* v, uint16_t dst, Type* want) {
   Type* st = v->type;
   if (!want) want = st;
@@ -3096,6 +3201,7 @@ void Gen::readVar(VarSym* v, uint16_t dst, Type* want) {
   bool needUnbox = isBoxedOptional(st) && want->t != TT::Optional && kindOf(want) != K_R;
   uint16_t tgt = needUnbox ? temp(K_R) : dst;
   if (v->isGlobal) {
+    tdzCheck(v);
     emitBx(gget[K(st)], tgt, (uint32_t)v->globalIdx);
   } else {
     auto it = varReg.find(v);
@@ -3120,7 +3226,16 @@ void Gen::writeVar(VarSym* v, uint16_t src) {
   static const uint16_t cset[3] = {OP_CSET_I, OP_CSET_F, OP_CSET_R};
   static const uint16_t uset[3] = {OP_USET_I, OP_USET_F, OP_USET_R};
   if (v->isGlobal) {
+    tdzCheck(v);
     emitBx(gset[K(st)], src, (uint32_t)v->globalIdx);
+    auto tf = tdzFlag.find(v);
+    if (tf != tdzFlag.end() && fn->isInit) {  // (a pattern's names) the declaration has run
+      size_t m0 = mark();
+      uint16_t one = temp(K_I);
+      loadInt(one, 1);
+      emitBx(OP_GSET_I, one, tf->second);
+      release(m0);
+    }
     return;
   }
   auto it = varReg.find(v);
@@ -3603,6 +3718,11 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
         Label* end = newLabel();
         uint16_t a = gen(e->a);
         if (lt->t != TT::Optional && !Checker::isNullish(lt)) { mov(d, a, K(e->type)); release(m0); return; }
+        if (Checker::isNullish(lt)) {  // null ?? b: always b
+          genInto(e->b, d);
+          release(m0);
+          return;
+        }
         jump(OP_JNULLISH, a, useB);
         unboxNarrowed(d, a, lt, e->type);
         jump(OP_JMP, 0, end);

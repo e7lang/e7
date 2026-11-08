@@ -26,7 +26,70 @@ Type* Checker::checkCond(Expr* e) {
   return t;
 }
 
+// The value of an expression of number literals (1 + 2 * 3, ~0, -(1 << 4)) as JavaScript computes it
+static bool foldNumConst(Expr* e, double& out) {
+  e = strip(e);
+  auto i32 = [](double d) -> int32_t {
+    if (!std::isfinite(d)) return 0;
+    double m = std::fmod(std::trunc(d), 4294967296.0);
+    if (m < 0) m += 4294967296.0;
+    return (int32_t)(uint32_t)m;
+  };
+  if (e->k == EK::Num) { out = e->num; return true; }
+  if (e->k == EK::Unary) {
+    double a;
+    if (!foldNumConst(e->a, a)) return false;
+    if (e->raw == "-") { out = -a; return true; }
+    if (e->raw == "+") { out = a; return true; }
+    if (e->raw == "~") { out = ~i32(a); return true; }
+    return false;
+  }
+  if (e->k != EK::Binary) return false;
+  double a, b;
+  if (!foldNumConst(e->a, a) || !foldNumConst(e->b, b)) return false;
+  const std::string& op = e->raw;
+  if (op == "+") out = a + b;
+  else if (op == "-") out = a - b;
+  else if (op == "*") out = a * b;
+  else if (op == "/") out = a / b;
+  else if (op == "%") out = std::fmod(a, b);
+  else if (op == "**") out = std::pow(a, b);
+  else if (op == "&") out = i32(a) & i32(b);
+  else if (op == "|") out = i32(a) | i32(b);
+  else if (op == "^") out = i32(a) ^ i32(b);
+  else if (op == "<<") out = (int32_t)((uint32_t)i32(a) << (i32(b) & 31));
+  else if (op == ">>") out = i32(a) >> (i32(b) & 31);
+  else if (op == ">>>") out = (double)((uint32_t)i32(a) >> (i32(b) & 31));
+  else return false;
+  return true;
+}
+
 Type* Checker::checkInner(Expr* e, Type* expected) {
+  // an expression of number literals where an integer type is expected: computed as in JavaScript and
+  // range-checked like a single literal (255 + 1 is not a u8, as 256 is not)
+  if (expected && baseOf(expected)->t == TT::Int &&
+      (e->k == EK::Binary || (e->k == EK::Unary && (e->raw == "~" || strip(e->a)->k != EK::Num)))) {
+    double v;
+    if (foldNumConst(e, v)) {
+      Type* it = baseOf(expected);
+      bool sign = isSignedInt(it);
+      int bits = intBits(it);
+      // [lo, hi): the range of the type (computed in doubles exactly as JavaScript, so the value is Node's)
+      double lo = sign ? -std::ldexp(1.0, bits - 1) : 0;
+      double hi = sign ? std::ldexp(1.0, bits - 1) : std::ldexp(1.0, bits);
+      if (v != std::trunc(v) || !std::isfinite(v))
+        return errT(e->loc, "the value of this expression (" + numberToString(v) + ") is not an integer, so it cannot be a '" + typeName(it) + "'");
+      if (v < lo || v >= hi)
+        return errT(e->loc, "the value of this expression (" + numberToString(v) + ") is out of range for '" + typeName(it) + "'");
+      e->k = EK::Num;
+      e->num = v;
+      e->ival = v < 0 ? (int64_t)v : (int64_t)(uint64_t)v;
+      e->isIntLit = true;
+      e->raw = numberToString(std::fabs(v));
+      e->a = e->b = nullptr;
+      return it;
+    }
+  }
   switch (e->k) {
     case EK::Num: return checkNum(e, expected);
     case EK::BigLit: return T.bigint();
@@ -152,7 +215,19 @@ Type* Checker::checkNum(Expr* e, Type* expected) {
   if (exp && exp->t == TT::Int) {
     std::string why;
     int64_t v;
-    if (!e->isIntLit) return errT(e->loc, "a fractional number literal cannot be used as '" + typeName(exp) + "'");
+    if (!e->isIntLit) {
+      // 1e2, 100.0: an integer written another way
+      bool sign = isSignedInt(exp);
+      int bits = intBits(exp);
+      double lo = sign ? -std::ldexp(1.0, bits - 1) : 0, hi = sign ? std::ldexp(1.0, bits - 1) : std::ldexp(1.0, bits);
+      if (e->num != std::trunc(e->num) || !std::isfinite(e->num))
+        return errT(e->loc, "a fractional number literal cannot be used as '" + typeName(exp) + "'");
+      if (e->num < lo || e->num >= hi) return errT(e->loc, "value " + e->raw + " out of range for '" + typeName(exp) + "'");
+      e->ival = (int64_t)(uint64_t)e->num;
+      e->isIntLit = true;
+      e->raw = numberToString(e->num);
+      return exp;
+    }
     if (!litFits(e, exp, v, false, why)) return errT(e->loc, why);
     e->ival = v;
     return exp;
