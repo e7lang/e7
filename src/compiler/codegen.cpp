@@ -450,6 +450,10 @@ struct Gen {
 
   // ---------------------------------------------------------------- helpers
   static Kind K(Type* t) {
+    // a value of type never (a function returning never returns no value, kindOf): only in code the
+    // type checker considers unreachable, where it can still arrive (a number cast to an enum it is not
+    // a member of); it is kept boxed, as it is
+    if (t->t == TT::Never) return K_R;
     Kind k = kindOf(t);
     return k == K_V ? K_I : k;
   }
@@ -621,10 +625,24 @@ struct Gen {
   void truthyOf(uint16_t dst, uint16_t src, Type* t);
   void condJump(Expr* e, bool jumpIf, Label* target);
   uint16_t toStringReg(uint16_t src, Type* t);
+  uint16_t concatStringReg(uint16_t src, Type* t);
   void readVar(VarSym* v, uint16_t dst, Type* asType);
   uint16_t varLocation(VarSym* v, bool& isCell, bool& isUp, int& upIdx);
   void writeVar(VarSym* v, uint16_t src);
   void genAssign(Expr* e, uint16_t dst);
+  // An assignment target whose object and index are evaluated once, before the right-hand side (JS
+  // order): mode 0 = re-evaluated (identifiers, statics), 1 = accessor, 2 = member, 3 = index,
+  // 4 = array length.
+  struct LVal {
+    Expr* e = nullptr;  // the target as written (its type is the stored type)
+    Expr* t = nullptr;  // stripped
+    int mode = 0;
+    uint16_t obj = 0xFFFF, idx = 0xFFFF;
+  };
+  LVal prepareLVal(Expr* target, bool forRead);
+  void readLVal(LVal& lv, uint16_t dst);
+  void writeLVal(LVal& lv, uint16_t v);
+  void genCompound(Expr* lhs, const std::string& bop, Expr* rhs, uint16_t dst, bool postfix);
   void storeTo(Expr* target, uint16_t valueReg);
   void readStatic(Expr* e, uint16_t d);
   void genBinary(Expr* e, uint16_t dst);
@@ -977,7 +995,16 @@ void Gen::prologue(FuncSym* f) {
       uint16_t lim = temp(K_I), cmp = temp(K_I);
       loadInt(lim, (int64_t)i);
       emit(OP_LT_I, cmp, lim, argcReg);  // i < argc: argument was given
-      jump(OP_JT, cmp, skip);
+      if (v->type->t == TT::Optional && v->type->hasUndef && K(v->type) == K_R) {
+        // a parameter whose type includes undefined: an explicit undefined also takes the default
+        Label* apply = newLabel();
+        jump(OP_JF, cmp, apply);
+        emit(OP_ISUNDEF, cmp, varReg[v]);
+        jump(OP_JF, cmp, skip);
+        place(apply);
+      } else {
+        jump(OP_JT, cmp, skip);
+      }
       genInto(p->init, varReg[v]);
       place(skip);
       release(m0);
@@ -1400,10 +1427,28 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
           }
           vs.push_back(v);
         }
+        // an optional property the source does not have is not a property of the rest either (D7)
+        std::vector<uint16_t> hs(fs.size(), kNoReg);
+        for (size_t k = 0; k < fs.size(); k++) {
+          Type* ft = fs[k].second;
+          if (!((ft->t == TT::Optional && ft->hasUndef) || ft->t == TT::Undefined)) continue;
+          hs[k] = temp(K_I);
+          uint16_t nm = temp(K_R);
+          loadStr(nm, utf8ToUtf16(fs[k].first));
+          callNative("Object.has", {src, nm}, hs[k], 'I');
+        }
         auto build = [&](ClassSym* bc) {
           emit(OP_NEW, r, (uint16_t)bc->classIdx);
           for (size_t k = 0; k < fs.size(); k++)
             emit(op3(K(fs[k].second), OP_SETF_I, OP_SETF_F, OP_SETF_R), r, (uint16_t)bc->fieldIdx[fs[k].first], vs[k]);
+          if (bc->presence)
+            for (size_t k = 0; k < fs.size(); k++) {
+              if (hs[k] == kNoReg) continue;
+              Label* keep = newLabel();
+              jump(OP_JT, hs[k], keep);
+              emit(OP_FIELD_ABSENT, r, (uint16_t)bc->fieldIdx[fs[k].first]);
+              place(keep);
+            }
         };
         // an object type: the properties in the run-time order of the value (as JavaScript copies them),
         // for each class or object layout it can have with another order (see Checker::spreadOrders)
@@ -1611,7 +1656,12 @@ void Gen::genStmt(Stmt* s) {
           for (auto& d : s->init->decls) {
             if (d.sym && d.sym->captured) declareLocal(d.sym);
             genVarDecl(d, false);
-            if (d.sym) loopVars.push_back(d.sym);
+            // every name the declaration binds, destructuring patterns included
+            std::function<void(VarDecl&)> collect = [&](VarDecl& x) {
+              if (x.sym) loopVars.push_back(x.sym);
+              for (auto& el : x.elems) collect(el);
+            };
+            collect(d);
           }
         } else {
           genStmt(s->init);
@@ -3025,7 +3075,7 @@ void Gen::genSwitch(Stmt* s) {
 void Gen::readVar(VarSym* v, uint16_t dst, Type* want) {
   Type* st = v->type;
   if (!want) want = st;
-  if (want->t == TT::Never) {  // narrowed to never: never runs
+  if (want->t == TT::Never && st->t != TT::Never) {  // narrowed to never: never runs
     if (dst != kNoReg) loadZero(dst, kindOfReg(dst));
     return;
   }
@@ -3101,9 +3151,9 @@ uint16_t Gen::gen(Expr* e) {
   Expr* x = strip(e);
   // a variable or a property path narrowed to never (the default of an exhaustive switch): code that
   // never runs
-  if ((x->k == EK::Ident || x->k == EK::Member) && x->type && x->type->t == TT::Never) {
-    uint16_t r = temp(K_I);
-    loadZero(r, K_I);
+  if (x->k == EK::Member && x->type && x->type->t == TT::Never) {
+    uint16_t r = temp(K_R);
+    loadZero(r, K_R);
     return r;
   }
   if (x->k == EK::Num && x->type && x->type->t == TT::Number) return numConst(x->num);
@@ -3116,11 +3166,12 @@ uint16_t Gen::gen(Expr* e) {
     auto it = varReg.find(x->var);
     if (it != varReg.end()) return it->second;
   }
-  if (!e->type || kindOf(e->type) == K_V) {
+  if (!e->type || (kindOf(e->type) == K_V && e->type->t != TT::Never)) {
     genInto(e, kNoReg);
     return kNoReg;
   }
   uint16_t r = temp(K(e->type));
+  if (e->type->t == TT::Never) emit(OP_LOADNULL, r);  // a call that returns never gives no value
   genInto(e, r);
   return r;
 }
@@ -3246,9 +3297,28 @@ void Gen::condJump(Expr* e, bool jumpIf, Label* target) {
   release(m0);
 }
 
+// An operand of string `+`: a class instance with its own valueOf() is converted through it first
+// (JavaScript's ToPrimitive with the "default" hint); otherwise as String(x)
+uint16_t Gen::concatStringReg(uint16_t src, Type* t) {
+  if (t->t == TT::Class && t->cls) {
+    auto it = t->cls->methodIdx.find("valueOf");
+    if (it != t->cls->methodIdx.end()) {
+      FuncSym* f = t->cls->vtable[it->second].fn;
+      if (f && f->type && f->type->params.empty() && f->type->ret && kindOf(f->type->ret) != K_V) {
+        Type* rt = f->type->ret;
+        uint16_t r = temp(K(rt));
+        emit(OP_CALLM, r, src, 0);
+        emitWord((uint64_t)(uint32_t)it->second | ((uint64_t)sig(sigOf(f)) << 32));
+        return toStringReg(r, rt);
+      }
+    }
+  }
+  return toStringReg(src, t);
+}
+
 uint16_t Gen::toStringReg(uint16_t src, Type* t) {
   switch (t->t) {
-    case TT::Never: { uint16_t r = temp(K_R); loadStr(r, u""); return r; }  // never runs
+    case TT::Never: { uint16_t r = temp(K_R); callNative("Value.toString", {src}, r, 'R'); return r; }  // kept boxed
     case TT::String: return src;
     case TT::Number: { uint16_t r = temp(K_R); emit(OP_NUM2STR, r, src); return r; }
     case TT::Int: { uint16_t r = temp(K_R); emit(OP_INT2STR, r, src, t->vt); return r; }
@@ -3476,26 +3546,13 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
         return;
       }
       // general lvalue: read, modify, write (object/index evaluated once)
-      Expr* fake = P.arena.expr(EK::Assign, e->loc);
-      fake->raw = e->raw == "++" ? "+=" : "-=";
-      fake->a = e->a;
       Expr* one = P.arena.expr(t->t == TT::BigInt ? EK::BigLit : EK::Num, e->loc);
       one->num = 1;
       one->isIntLit = true;
       one->ival = 1;
       one->raw = "1";
       one->type = t;
-      fake->b = one;
-      fake->type = t;
-      if (e->prefix || dst == kNoReg) {
-        genAssign(fake, dst);
-      } else {
-        // postfix with value: old value
-        uint16_t old = temp(K(t));
-        genInto(e->a, old);
-        genAssign(fake, kNoReg);
-        mov(dst, old, K(t));
-      }
+      genCompound(e->a, e->raw == "++" ? "+" : "-", one, dst, !e->prefix);
       release(m0);
       return;
     }
@@ -3724,6 +3781,14 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
         return;
       }
       if (dst == kNoReg) { genDiscard(e->a); return; }
+      if (e->a->type && e->a->type->t == TT::Never && K(e->type) != K_R) {
+        // a value of type never (kept boxed) used as a number / boolean / integer
+        size_t m0 = mark();
+        uint16_t a = gen(e->a);
+        emit(K(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, dst, a);
+        release(m0);
+        return;
+      }
       if (e->a->type && K(e->a->type) != K(e->type) && kindOf(e->a->type) != K_V) {
         // Never / unknown -> anything
         size_t m0 = mark();
@@ -3911,47 +3976,45 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
         return;
       }
     }
+    if (target->k == EK::Ident) {
+      uint16_t v = gen(e->b);
+      storeTo(e->a, v);
+      if (dst != kNoReg) mov(dst, v, K(lt));
+      release(m0);
+      return;
+    }
+    // object and index first, then the value (JS order)
+    LVal lv = prepareLVal(e->a, false);
     uint16_t v = gen(e->b);
     // preserve the value: gen() may return a variable register
-    if (target->k == EK::Ident) {
-      storeTo(e->a, v);
-    } else {
-      uint16_t vt = temp(K(lt));
-      mov(vt, v, K(lt));
-      storeTo(e->a, vt);
-      v = vt;
-    }
-    if (dst != kNoReg) mov(dst, v, K(lt));
+    uint16_t vt = temp(K(lt));
+    mov(vt, v, K(lt));
+    writeLVal(lv, vt);
+    if (dst != kNoReg) mov(dst, vt, K(lt));
     release(m0);
     return;
   }
-  if (op == "||=" || op == "&&=") {
-    // a ||= b / a &&= b: assign only when a is falsy / truthy; the value is the target's afterwards
-    Kind k = K(lt);
+  if (op == "||=" || op == "&&=" || op == "??=") {
+    // a ||= b / a &&= b / a ??= b: assign only when a is falsy / truthy / nullish; the target's object
+    // and index are evaluated once; the value is the target's afterwards
+    bool nullish = op == "??=";
+    Kind k = nullish ? K_R : K(lt);
     Label* end = newLabel();
+    LVal lv = prepareLVal(e->a, true);
     uint16_t cur = temp(k);
-    genInto(e->a, cur);
-    uint16_t t = temp(K_I);
-    truthyOf(t, cur, lt);
-    jump(op == "||=" ? OP_JT : OP_JF, t, end);
+    readLVal(lv, cur);
+    if (nullish) {
+      jump(OP_JNOTNULLISH, cur, end);
+    } else {
+      uint16_t t = temp(K_I);
+      truthyOf(t, cur, lt);
+      jump(op == "||=" ? OP_JT : OP_JF, t, end);
+    }
     uint16_t v = gen(e->b);
-    storeTo(e->a, v);
     mov(cur, v, k);
+    writeLVal(lv, cur);
     place(end);
     if (dst != kNoReg) mov(dst, cur, k);
-    release(m0);
-    return;
-  }
-  if (op == "??=") {
-    Label* end = newLabel();
-    uint16_t cur = temp(K_R);
-    genInto(e->a, cur);
-    jump(OP_JNOTNULLISH, cur, end);
-    uint16_t v = gen(e->b);
-    storeTo(e->a, v);
-    mov(cur, v, K_R);
-    place(end);
-    if (dst != kNoReg) mov(dst, cur, K_R);
     release(m0);
     return;
   }
@@ -3963,7 +4026,7 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
     uint16_t vr = varReg[target->var];
     if (bop == "+" && (lt->t == TT::String || (lt->t == TT::Enum && lt->en->isString))) {
       uint16_t r = gen(e->b);
-      uint16_t sr = toStringReg(r, e->b->type);
+      uint16_t sr = concatStringReg(r, e->b->type);
       emit(OP_SCAT, vr, vr, sr);
     } else {
       uint16_t r = gen(e->b);
@@ -3973,86 +4036,158 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
     release(m0);
     return;
   }
+  genCompound(e->a, bop, e->b, dst, false);
+  release(m0);
+}
+
+// target op= rhs (postfix: dst receives the old value)
+void Gen::genCompound(Expr* lhs, const std::string& bop, Expr* rhs, uint16_t dst, bool postfix) {
+  size_t m0 = mark();
+  Type* lt = lhs->type;
+  Kind k = K(lt);
+  LVal lv = prepareLVal(lhs, true);
   uint16_t cur = temp(k);
-  uint16_t obj = kNoReg, idx = kNoReg;
-  Expr* readExpr = e->a;
-  bool acc = isAccessorMember(target);
-  if (acc) {
-    // o.x op= v with an accessor: receiver evaluated once, getter, then setter
-    obj = accessorReceiver(target);
-    if (obj != kNoReg) {
-      uint16_t o2 = temp(K_R);
-      mov(o2, obj, K_R);
-      obj = o2;
-    }
-    accessorCall(target, obj, false, kNoReg, cur);
-  } else if (target->k == EK::Member && (target->intrinsic == 0 || target->intrinsic == IN_ABSTRACT_PROP) &&
-             !(target->field < 0 && !target->cls && target->a->type && baseOf(target->a->type)->t != TT::Object)) {
-    obj = temp(K_R);
-    genInto(target->a, obj);
-    if (target->field >= 0 && target->cls) emit(op3(k, OP_GETF_I, OP_GETF_F, OP_GETF_R), cur, obj, (uint16_t)target->field);
-    else {
-      D->icNames.push_back(kStr(utf8ToUtf16(target->raw)));
-      emit(op3(k, OP_GETN_I, OP_GETN_F, OP_GETN_R), cur, obj, (uint16_t)(D->icNames.size() - 1));
-    }
-  } else if (target->k == EK::Index) {
-    Type* ot = baseOf(target->a->type);
-    obj = temp(K_R);
-    genInto(target->a, obj);
-    if (ot->t == TT::Tuple) {
-      emit(op3(k, OP_GETF_I, OP_GETF_F, OP_GETF_R), cur, obj, (uint16_t)target->field);
-    } else {
-      idx = temp(K(target->b->type));
-      genInto(target->b, idx);
-      bool ii = target->b->type->t == TT::Int;
-      if (ot->t == TT::TypedArray) {
-        if (ii) { uint16_t f = temp(K_F); intToNum(f, idx, target->b->type); idx = f; }
-        callNative(ot->vt >= 9 ? "TA.getBig" : "TA.get", {obj, idx}, cur, ot->vt >= 9 ? 'R' : 'F');
-      } else if (ot->t == TT::Bytes) {
-        if (ii) { uint16_t t8 = temp(K_I); emit(OP_BGETI, t8, obj, idx); emit(OP_I2F, cur, t8); }
-        else emit(OP_BGET, cur, obj, idx);
-      } else if (ii) emit(op3(k, OP_AGETI_I, OP_AGETI_F, OP_AGETI_R), cur, obj, idx);
-      else emit(op3(k, OP_AGET_I, OP_AGET_F, OP_AGET_R), cur, obj, idx);
-    }
-  } else {
-    genInto(readExpr, cur);
-  }
+  readLVal(lv, cur);
+  if (postfix && dst != kNoReg) mov(dst, cur, k);
   uint16_t res = temp(k);
   if (bop == "+" && (lt->t == TT::String || (lt->t == TT::Enum && lt->en->isString))) {
-    uint16_t r = gen(e->b);
-    uint16_t s = toStringReg(r, e->b->type);
+    uint16_t r = gen(rhs);
+    uint16_t s = concatStringReg(r, rhs->type);
     emit(OP_SCAT, res, cur, s);
   } else {
-    uint16_t r = gen(e->b);
-    binaryOp(bop, lt, e->b->type, res, cur, r, e->loc);
+    uint16_t r = gen(rhs);
+    binaryOp(bop, lt, rhs->type, res, cur, r, lhs->loc);
   }
-  // write back
-  if (acc) {
-    accessorCall(target, obj, true, res, kNoReg);
-  } else if (obj != kNoReg && target->k == EK::Member) {
-    if (target->field >= 0 && target->cls) emit(op3(k, OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)target->field, res);
-    else {
-      D->icNames.push_back(kStr(utf8ToUtf16(target->raw)));
-      emit(op3(k, OP_SETN_I, OP_SETN_F, OP_SETN_R), obj, (uint16_t)(D->icNames.size() - 1), res);
+  writeLVal(lv, res);
+  if (!postfix && dst != kNoReg) mov(dst, res, k);
+  release(m0);
+}
+
+Gen::LVal Gen::prepareLVal(Expr* target, bool forRead) {
+  LVal lv;
+  lv.e = target;
+  lv.t = strip(target);
+  Expr* t = lv.t;
+  if (isAccessorMember(t)) {
+    lv.mode = 1;
+    lv.obj = accessorReceiver(t);
+    if (lv.obj != kNoReg) {
+      uint16_t o2 = temp(K_R);
+      mov(o2, lv.obj, K_R);
+      lv.obj = o2;
     }
-  } else if (obj != kNoReg && target->k == EK::Index) {
-    Type* ot = baseOf(target->a->type);
-    if (ot->t == TT::Tuple) emit(op3(k, OP_SETF_I, OP_SETF_F, OP_SETF_R), obj, (uint16_t)target->field, res);
-    else {
-      bool ii = target->b->type->t == TT::Int;
+    return lv;
+  }
+  if (t->k == EK::Member) {
+    if (t->intrinsic == IN_STATIC_FIELD) return lv;
+    if (t->intrinsic == IN_ARR_LENGTH_SET) {
+      if (forRead) return lv;
+      lv.mode = 4;
+    } else {
+      if (forRead && !((t->intrinsic == 0 || t->intrinsic == IN_ABSTRACT_PROP) &&
+                       !(t->field < 0 && !t->cls && t->a->type && baseOf(t->a->type)->t != TT::Object)))
+        return lv;
+      lv.mode = 2;
+    }
+    lv.obj = temp(K_R);
+    genInto(t->a, lv.obj);
+    return lv;
+  }
+  if (t->k == EK::Index) {
+    Type* ot = baseOf(t->a->type);
+    lv.mode = 3;
+    lv.obj = temp(K_R);
+    genInto(t->a, lv.obj);
+    if (ot->t != TT::Tuple) {
+      lv.idx = temp(K(t->b->type));
+      genInto(t->b, lv.idx);
+    }
+    return lv;
+  }
+  return lv;
+}
+
+void Gen::readLVal(LVal& lv, uint16_t cur) {
+  Expr* t = lv.t;
+  Kind k = K(lv.e->type);
+  switch (lv.mode) {
+    case 1:
+      accessorCall(t, lv.obj, false, kNoReg, cur);
+      return;
+    case 2:
+      if (t->field >= 0 && t->cls) emit(op3(k, OP_GETF_I, OP_GETF_F, OP_GETF_R), cur, lv.obj, (uint16_t)t->field);
+      else {
+        D->icNames.push_back(kStr(utf8ToUtf16(t->raw)));
+        emit(op3(k, OP_GETN_I, OP_GETN_F, OP_GETN_R), cur, lv.obj, (uint16_t)(D->icNames.size() - 1));
+      }
+      return;
+    case 3: {
+      Type* ot = baseOf(t->a->type);
+      if (ot->t == TT::Tuple) {
+        emit(op3(k, OP_GETF_I, OP_GETF_F, OP_GETF_R), cur, lv.obj, (uint16_t)t->field);
+        return;
+      }
+      size_t m0 = mark();
+      uint16_t idx = lv.idx;
+      bool ii = t->b->type->t == TT::Int;
       if (ot->t == TT::TypedArray) {
-        if (ii && kindOfReg(idx) == K_I) { uint16_t f = temp(K_F); intToNum(f, idx, target->b->type); idx = f; }
-        callNative(ot->vt >= 9 ? "TA.setBig" : "TA.set", {obj, idx, res}, kNoReg, 'V');
+        if (ii) { uint16_t f = temp(K_F); intToNum(f, idx, t->b->type); idx = f; }
+        callNative(ot->vt >= 9 ? "TA.getBig" : "TA.get", {lv.obj, idx}, cur, ot->vt >= 9 ? 'R' : 'F');
       } else if (ot->t == TT::Bytes) {
-        if (ii) { uint16_t f = temp(K_F); intToNum(f, idx, target->b->type); idx = f; }
-        emit(OP_BSET, obj, idx, res);
-      } else if (ii) emit(op3(k, OP_ASETI_I, OP_ASETI_F, OP_ASETI_R), obj, idx, res);
-      else emit(op3(k, OP_ASET_I, OP_ASET_F, OP_ASET_R), obj, idx, res);
+        if (ii) { uint16_t t8 = temp(K_I); emit(OP_BGETI, t8, lv.obj, idx); emit(OP_I2F, cur, t8); }
+        else emit(OP_BGET, cur, lv.obj, idx);
+      } else if (ii) emit(op3(k, OP_AGETI_I, OP_AGETI_F, OP_AGETI_R), cur, lv.obj, idx);
+      else emit(op3(k, OP_AGET_I, OP_AGET_F, OP_AGET_R), cur, lv.obj, idx);
+      release(m0);
+      return;
     }
-  } else {
-    storeTo(e->a, res);
+    default:
+      genInto(lv.e, cur);
   }
-  if (dst != kNoReg) mov(dst, res, k);
+}
+
+void Gen::writeLVal(LVal& lv, uint16_t v) {
+  Expr* t = lv.t;
+  Kind k = K(lv.e->type);
+  size_t m0 = mark();
+  switch (lv.mode) {
+    case 1:
+      accessorCall(t, lv.obj, true, v, kNoReg);
+      break;
+    case 2:
+      if (t->field >= 0 && t->cls) emit(op3(k, OP_SETF_I, OP_SETF_F, OP_SETF_R), lv.obj, (uint16_t)t->field, v);
+      else {
+        D->icNames.push_back(kStr(utf8ToUtf16(t->raw)));
+        emit(op3(k, OP_SETN_I, OP_SETN_F, OP_SETN_R), lv.obj, (uint16_t)(D->icNames.size() - 1), v);
+      }
+      break;
+    case 3: {
+      Type* ot = baseOf(t->a->type);
+      if (ot->t == TT::Tuple) {
+        emit(op3(k, OP_SETF_I, OP_SETF_F, OP_SETF_R), lv.obj, (uint16_t)t->field, v);
+        break;
+      }
+      uint16_t idx = lv.idx;
+      bool ii = t->b->type->t == TT::Int;
+      if (ot->t == TT::TypedArray) {
+        if (ii) { uint16_t f = temp(K_F); intToNum(f, idx, t->b->type); idx = f; }
+        callNative(ot->vt >= 9 ? "TA.setBig" : "TA.set", {lv.obj, idx, v}, kNoReg, 'V');
+      } else if (ot->t == TT::Bytes) {
+        if (ii) { uint16_t f = temp(K_F); intToNum(f, idx, t->b->type); idx = f; }
+        emit(OP_BSET, lv.obj, idx, v);
+      } else {
+        Kind ek = K(ot->elem);
+        if (ii) emit(op3(ek, OP_ASETI_I, OP_ASETI_F, OP_ASETI_R), lv.obj, idx, v);
+        else emit(op3(ek, OP_ASET_I, OP_ASET_F, OP_ASET_R), lv.obj, idx, v);
+      }
+      break;
+    }
+    case 4:
+      callNative("Array.setLength", {lv.obj, v}, kNoReg, 'V');
+      break;
+    default:
+      storeTo(lv.e, v);
+  }
   release(m0);
 }
 
@@ -4177,9 +4312,9 @@ void Gen::genBinary(Expr* e, uint16_t d) {
   }
   if (e->intrinsic == IN_STR_CONCAT) {
     uint16_t a = gen(e->a);
-    uint16_t sa = toStringReg(a, e->a->type);
+    uint16_t sa = concatStringReg(a, e->a->type);
     uint16_t b = gen(e->b);
-    uint16_t sb = toStringReg(b, e->b->type);
+    uint16_t sb = concatStringReg(b, e->b->type);
     emit(OP_SCAT, d, sa, sb);
     return;
   }
@@ -4716,8 +4851,7 @@ void Gen::genConsoleLog(Expr* e) {
     uint16_t v = gen(a);
     Type* t = a->type;
     if (t->t == TT::Never) {
-      v = temp(K_R);
-      emit(OP_LOADUNDEF, v);
+      // kept boxed
     } else if (kindOf(t) != K_R) {
       uint16_t b = temp(K_R);
       if (kindOf(t) == K_F) emit(OP_BOX_F, b, v);
@@ -4806,8 +4940,40 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
   if (anySpread) {
     // spreads: evaluate every entry in source order, then assemble
     std::vector<uint16_t> vals(e->props.size());
+    // { ...(c ? a : b) } with branches of their own types: the condition and the branch taken are
+    // evaluated in place; the properties are read from that branch (readCS)
+    struct CSNode { Expr* x = nullptr; uint16_t c = kNoReg, val = kNoReg; CSNode* a = nullptr; CSNode* b = nullptr; };
+    std::vector<std::unique_ptr<CSNode>> csPool;
+    std::vector<CSNode*> csRoot(e->props.size(), nullptr);
+    std::function<CSNode*(Expr*)> evalCS = [&](Expr* v) -> CSNode* {
+      csPool.push_back(std::make_unique<CSNode>());
+      CSNode* n = csPool.back().get();
+      Expr* x = strip(v);
+      n->x = v;
+      if (x->k == EK::Cond && x->spreadCond) {
+        n->c = temp(K_I);
+        uint16_t cr = genTruthy(x->a);
+        mov(n->c, cr, K_I);
+        Label* els = newLabel();
+        Label* end = newLabel();
+        jump(OP_JF, n->c, els);
+        n->a = evalCS(x->b);
+        jump(OP_JMP, 0, end);
+        place(els);
+        n->b = evalCS(x->c);
+        place(end);
+        return n;
+      }
+      n->val = temp(K(v->type));
+      genInto(v, n->val);
+      return n;
+    };
     for (size_t i = 0; i < e->props.size(); i++) {
       Expr* v = e->props[i].value;
+      if (e->props[i].spread && strip(v)->k == EK::Cond && strip(v)->spreadCond) {
+        csRoot[i] = evalCS(v);
+        continue;
+      }
       vals[i] = temp(K(v->type));
       genInto(v, vals[i]);
     }
@@ -4846,6 +5012,76 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
       loadStr(nm, utf8ToUtf16(name));
       callNative("Object.has", {vals[si], nm}, out, 'I');
     };
+    // property `name` of a conditional spread source into v (type ft); hasReg: whether it is present.
+    // override: a later source that only overrides when the property is present
+    std::function<void(CSNode*, const std::string&, Type*, uint16_t, uint16_t, bool)> readCS =
+        [&](CSNode* n, const std::string& name, Type* ft, uint16_t v, uint16_t hasReg, bool override) {
+      if (n->c != kNoReg) {
+        Label* els = newLabel();
+        Label* end = newLabel();
+        jump(OP_JF, n->c, els);
+        readCS(n->a, name, ft, v, hasReg, override);
+        jump(OP_JMP, 0, end);
+        place(els);
+        readCS(n->b, name, ft, v, hasReg, override);
+        place(end);
+        return;
+      }
+      size_t m2 = mark();
+      Type* lt = baseOf(n->x->type);
+      Type* sft = nullptr;
+      uint16_t raw = kNoReg;
+      if (lt->t == TT::Class) {
+        auto it = lt->cls->fieldIdx.find(name);
+        if (it != lt->cls->fieldIdx.end()) {
+          sft = lt->cls->fields[it->second].type;
+          raw = temp(K(sft));
+          emit(op3(K(sft), OP_GETF_I, OP_GETF_F, OP_GETF_R), raw, n->val, (uint16_t)it->second);
+        }
+      } else if (const ObjShape::Prop* sp = lt->shape->findProp(name)) {
+        sft = sp->type;
+        raw = temp(K(sft));
+        readByName(raw, n->val, lt, name, sft);
+      }
+      if (!sft) {
+        // this branch does not have the property
+        if (!override) {
+          if (K(ft) == K_R) emit(OP_LOADUNDEF, v);
+          if (hasReg != kNoReg) loadInt(hasReg, 0);
+        }
+        release(m2);
+        return;
+      }
+      auto present = [&](uint16_t out) {
+        uint16_t nm = temp(K_R);
+        loadStr(nm, utf8ToUtf16(name));
+        callNative("Object.has", {n->val, nm}, out, 'I');
+      };
+      if (!override) {
+        boxIfNeeded(v, raw, sft, ft);
+        if (hasReg != kNoReg) {
+          if (mayBeAbsent(sft)) present(hasReg);
+          else loadInt(hasReg, 1);
+        }
+      } else if (mayBeAbsent(sft)) {
+        uint16_t t = temp(K_I);
+        Label* skip = newLabel();
+        if (hasReg != kNoReg) {
+          present(t);
+          jump(OP_JF, t, skip);
+          loadInt(hasReg, 1);
+        } else {
+          emit(OP_ISUNDEF, t, raw);
+          jump(OP_JT, t, skip);
+        }
+        unboxNarrowed(v, raw, sft, ft);
+        place(skip);
+      } else {
+        boxIfNeeded(v, raw, sft, ft);
+        if (hasReg != kNoReg) loadInt(hasReg, 1);
+      }
+      release(m2);
+    };
     for (size_t fi = 0; fi < c->fields.size(); fi++) {
       if (fv[fi] == kNoReg) continue;
       Type* ft = c->fields[fi].type;
@@ -4856,6 +5092,8 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
         emit(OP_LOADUNDEF, v);
       } else if (!e->props[si].spread) {
         mov(v, vals[si], K(ft));
+      } else if (csRoot[si]) {
+        readCS(csRoot[si], c->fields[fi].name, ft, v, has[fi], false);
       } else {
         Type* sft;
         uint16_t raw = readSpread(si, c->fields[fi].name, sft);
@@ -4868,6 +5106,12 @@ void Gen::genObjectLit(Expr* e, uint16_t d) {
       release(m1);
       // later optional spreads override only when the property is present
       for (int ci : e->fieldCond[fi]) {
+        if (csRoot[ci]) {
+          m1 = mark();
+          readCS(csRoot[ci], c->fields[fi].name, ft, v, has[fi], true);
+          release(m1);
+          continue;
+        }
         m1 = mark();
         Type* sft;
         uint16_t raw = readSpread(ci, c->fields[fi].name, sft);

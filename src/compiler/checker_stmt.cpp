@@ -224,7 +224,13 @@ bool Checker::coerce(Expr*& e, Type* target, const char* ctx) {
     Expr* x = e;
     while (x && (x->k == EK::Paren || (x->k == EK::Conv && x->conv == ConvKind::None))) x = x->a;
     if (x && x->neverNarrowed) {
-      for (Expr* y = e; y; y = y == x ? nullptr : y->a) y->type = target;
+      // the value is kept as it is (boxed when it is a number, boolean or integer)
+      Kind k = kindOf(x->type);
+      Expr* c = P.arena.expr(EK::Conv, e->loc);
+      c->conv = k == K_F ? ConvKind::NumToBox : k == K_I ? ConvKind::IntToBox : ConvKind::None;
+      c->a = e;
+      c->type = target;
+      e = c;
       return true;
     }
   }

@@ -717,7 +717,7 @@ void Checker::spreadOrders() {
       int si = -1;
       for (size_t pi = 0; pi < e->props.size() && si < 0; pi++) {
         Type* vt = e->props[pi].value->type;
-        if (e->props[pi].spread && vt && vt->t == TT::Object && !sl.entries[pi].empty()) si = (int)pi;
+        if (e->props[pi].spread && vt && vt->t == TT::Object && !sl.entries[pi].empty() && !strip(e->props[pi].value)->spreadCond) si = (int)pi;
       }
       if (si < 0) continue;
       ClassSym* sc = e->cls;
@@ -857,7 +857,9 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
     for (size_t pi = 0; pi < e->props.size(); pi++) {
       ObjProp& p = e->props[pi];
       if (p.spread) {
+        spreadCond_ = strip(p.value)->k == EK::Cond;
         Type* t = check(p.value, nullptr);
+        spreadCond_ = false;
         if (t->t == TT::Class) {
           resolveClass(t->cls);
           if (!t->cls->abstractProps.empty())
@@ -1772,7 +1774,46 @@ void Checker::relayoutObjectLit(Expr* e, Type* target) {
   x->cls = recordFor(fields)->cls;
 }
 
+// The type of { ...(c ? a : b) } 's source when a and b keep their own object types: the properties of
+// both (their common type), and those of one branch as optional; null when a branch is not an object
+// type with plain properties.
+Type* Checker::spreadCondType(Type* a, Type* b, Loc l) {
+  auto propsOf = [&](Type* t, std::vector<ObjShape::Prop>& out) {
+    if (t->t == TT::Class) {
+      resolveClass(t->cls);
+      if (!t->cls->abstractProps.empty()) return false;
+      for (auto& f : t->cls->fields)
+        if (f.name[0] != '#') out.push_back({f.name, f.type, f.optional, f.undefOk});
+      return true;
+    }
+    if (t->t != TT::Object || t->shape->ownAccessors) return false;
+    out = t->shape->props;
+    return true;
+  };
+  std::vector<ObjShape::Prop> pa, pb;
+  if (!propsOf(a, pa) || !propsOf(b, pb)) return nullptr;
+  auto opt = [&](Type* t) { return t->t == TT::Optional ? T.optional(t->elem, t->hasNull, true) : T.optional(t, false, true); };
+  auto find = [](std::vector<ObjShape::Prop>& v, const std::string& n) -> ObjShape::Prop* {
+    for (auto& p : v) if (p.name == n) return &p;
+    return nullptr;
+  };
+  std::vector<ObjShape::Prop> props;
+  for (auto& p : pa) {
+    ObjShape::Prop* q = find(pb, p.name);
+    if (!q) { props.push_back({p.name, opt(p.type), true, true}); continue; }
+    Type* t = unify(p.type, q->type, l, "conditional spread");
+    if (t->t == TT::Unknown) return t;
+    bool o = p.optional || q->optional || (t->t == TT::Optional && t->hasUndef);
+    props.push_back({p.name, o ? opt(t) : t, o, p.undefOk || q->undefOk || o});
+  }
+  for (auto& q : pb)
+    if (!find(pa, q.name)) props.push_back({q.name, opt(q.type), true, true});
+  return T.anonObject(props);
+}
+
 Type* Checker::checkCondExpr(Expr* e, Type* expected) {
+  bool sc = spreadCond_;
+  spreadCond_ = false;
   checkCond(e->a);
   std::vector<Fact> tf, ff;
   factsFrom(e->a, true, tf);
@@ -1787,12 +1828,16 @@ Type* Checker::checkCondExpr(Expr* e, Type* expected) {
   if (!emptyB) {
     pushScope();
     applyFacts(tf);
+    spreadCond_ = sc && strip(e->b)->k == EK::Cond;
     bt = check(e->b, expected);
+    spreadCond_ = false;
     popScope();
   }
   pushScope();
   applyFacts(ff);
+  spreadCond_ = sc && strip(e->c)->k == EK::Cond;
   ct = check(e->c, expected ? expected : (isEmptyArr(e->c) && bt && baseOf(bt)->t == TT::Array ? baseOf(bt) : nullptr));
+  spreadCond_ = false;
   popScope();
   if (emptyB) {
     pushScope();
@@ -1812,6 +1857,13 @@ Type* Checker::checkCondExpr(Expr* e, Type* expected) {
     else t = unify(bt, ct, e->loc, "conditional expression");
   } else {
     Type* m = expected ? nullptr : mergeObjectLits(e->b, e->c, e->loc);
+    if (!m && sc && !expected && bt != ct) {
+      // spread: each branch keeps its type; the copy reads the branch taken
+      if (Type* st = spreadCondType(bt, ct, e->loc)) {
+        e->spreadCond = true;
+        return st;
+      }
+    }
     t = m ? m : unify(bt, ct, e->loc, "conditional expression");
   }
   coerce(e->b, t);

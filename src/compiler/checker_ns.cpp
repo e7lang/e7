@@ -444,6 +444,16 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
         return errT(args[0]->loc, "Object.assign requires an object target");
       if (tb->t == TT::Class) resolveClass(tb->cls);
       for (size_t i = 1; i < args.size(); i++) {
+        if (strip(args[i])->k == EK::Cond) {
+          // Object.assign(t, c ? a : b): from the copy { ...(c ? a : b) } (the properties of the branch taken)
+          Expr* lit = P.arena.expr(EK::Object, args[i]->loc);
+          ObjProp sp;
+          sp.loc = args[i]->loc;
+          sp.spread = true;
+          sp.value = args[i];
+          lit->props.push_back(sp);
+          args[i] = lit;
+        }
         Type* st = check(args[i], nullptr);
         if (st->t == TT::Unknown) return st;
         Type* sb = baseOf(st);

@@ -106,6 +106,9 @@ struct Expr {
   // a read of a path narrowed to never (the default clause of an exhaustive switch): typed as declared,
   // so a value the type does not allow (an out-of-range number cast to an enum) is still read as it is
   bool neverNarrowed = false;
+  // Cond spread into an object literal ({ ...(c ? a : b) }) whose branches keep their own object types:
+  // the copy reads each property from the branch taken (its type: properties of one branch optional)
+  bool spreadCond = false;
   Loc nameLoc;           // Member: position of the property name
   Type* type = nullptr;  // filled by checker
   Type* innerType = nullptr;  // optional chaining: type of the member/call result before '?.' widening

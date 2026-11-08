@@ -50,6 +50,9 @@ struct Stringifier {
   size_t nextCheck = 0;  // out.size() at which the output is next checked against the memory limit
   bool charge = false;   // console.log's %j: charge the output to the budget as it grows (JSON.stringify's
   size_t charged = 0;    // cost is charged after the call, from the result)
+  // the key of the value being written (for toJSON(key)): an array index, a property name, or "" (root)
+  int64_t keyIdx = -1;
+  const std::string* keyName = nullptr;
 
   // The output is a transient buffer: bounded by the memory limit like the heap (a value shared many
   // times in an object graph is written out each time, so the output can be far larger than the heap)
@@ -106,6 +109,27 @@ struct Stringifier {
       case OT::Closure: return false;
       default: break;
     }
+    if (o->type == OT::Instance && !cycleOk) {
+      // its own toJSON() / toJSON(key: string): the value written instead (JSON.stringify, not %j)
+      auto* in = static_cast<InstObj*>(o);
+      auto it = in->cls->isTuple ? in->cls->methodIndex.end() : in->cls->methodIndex.find("toJSON");
+      if (it != in->cls->methodIndex.end()) {
+        FuncRT* f = in->cls->vtable[it->second];
+        if (f && (f->nparams == 1 || f->nparams == 2) && (f->retKind == 'R' || f->retKind == 'F')) {
+          VM::TempRoot keep(vm, o);
+          Slot args[2];
+          args[0].r = o;
+          if (f->nparams == 2) {
+            std::string k = keyName ? *keyName : keyIdx >= 0 ? std::to_string(keyIdx) : std::string();
+            args[1].r = vm.newString(utf8ToUtf16(k));
+          }
+          VM::TempRoot keepKey(vm, f->nparams == 2 ? args[1].r : nullptr);
+          Slot r = vm.callMethod(f, args, f->nparams);
+          VM::TempRoot keepResult(vm, f->retKind == 'R' ? r.r : nullptr);
+          return value(r, f->retKind == 'F' ? VT_NUMBER : VT_REF, indent);
+        }
+      }
+    }
     if (stack.count(o)) {
       if (!cycleOk) vm.error("TypeError: Converting circular structure to JSON");
       cycle = true;
@@ -130,6 +154,8 @@ struct Stringifier {
         for (uint32_t i = 0; i < a->len; i++) {
           if (i) out += u',';
           nl(inner);
+          keyIdx = i;
+          keyName = nullptr;
           if (!value(a->data[i], a->vt, inner)) out += u"null";
         }
         nl(indent);
@@ -141,6 +167,8 @@ struct Stringifier {
       for (uint32_t i = 0; i < in->cls->nfields; i++) {
         if (i) out += u',';
         nl(inner);
+        keyIdx = i;
+        keyName = nullptr;
         if (!value(in->fields()[i], in->cls->fieldVT[i], inner)) out += u"null";
       }
       if (in->cls->nfields) nl(indent);
@@ -156,12 +184,19 @@ struct Stringifier {
         VM::TempRoot keepValue(vm, fvt == VT_REF ? fv.r : nullptr);
         if (fvt == VT_REF && (fv.r == vm.undef() || (fv.r && fv.r->type == OT::Closure))) continue;
         if (privateField(in->cls, i)) continue;  // #private fields are not serialized
+        size_t mark = out.size();
         if (any) out += u',';
         nl(inner);
         std::u16string key = utf8ToUtf16(in->cls->fieldNames[i]);
         quoteJson(out, key.data(), key.size());
         out += gap.empty() ? u":" : u": ";
-        value(fv, fvt, inner);
+        keyIdx = -1;
+        keyName = &in->cls->fieldNames[i];
+        if (!value(fv, fvt, inner)) {
+          // toJSON returned undefined: the property is left out
+          out.resize(mark);
+          continue;
+        }
         any = true;
       }
       if (any) nl(indent);
