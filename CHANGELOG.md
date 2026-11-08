@@ -10,6 +10,35 @@ VM rejects a module it cannot run at load time rather than running it incorrectl
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-07
+
+Fixes found by writing six realistic scripts (pricing rules, form validation, feature flags, a BLE device protocol,
+API data to view models, an order state machine with a signed log) as ordinary TypeScript and porting them.
+
+### Fixed
+- Wrong results without an error: `{ a: 1, ...(c ? { badge: "VIP" } : {}) }` dropped `badge` (a conditional of
+  object literals now has the type tsc gives it, `{ badge?: string }`); a constructor parameter property whose type
+  includes `undefined` (`constructor(readonly reason?: string)`) lost the value passed to it.
+- Compiler crashes: `{ ...{} }` crashed `e7c`; an exhaustive `switch` whose `default` clause read the switched
+  property (`default: return "unknown " + r.kind`) failed with an internal compiler error.
+- Valid TypeScript that was rejected: a literal assigned to a nullable literal union
+  (`let x: "a" | "b" | undefined = "a"`); `x! / 2` (the `/` was read as the start of a regular expression);
+  `switch` on a nullable value (`string | undefined`, with `case undefined:`); narrowing after
+  `if (!x) { x = new X(); m.set(k, x); }`; an argument that may be `undefined` for a parameter with a constant
+  default; `async ({ id }) => log(id)` where a function returning `Promise<void>` is expected; a `number` converted
+  to a numeric enum (`bytes[0] as MsgType`, or assigned); a computed index into a tuple whose elements have one
+  type (`v[i]` with `v: [number, number, number]`).
+- The `default` clause of an exhaustive `switch` reads the value as it is: a number cast to an enum that is not one
+  of its members prints as that number instead of as `0` or `""`.
+- `JSON.parse(text) as T` and `tryParse` check literal types and enums (`kind: "percent" | "tier"`,
+  `level: Level`): a value outside them is a mismatch (`expected "percent" | "tier" at $.kind`) instead of a field
+  holding a value its type does not allow. Enums can now be parsed into at all. A module that parses into such a
+  type requires e7vm 0.1.1 (natives `JSON.parse2` / `JSON.tryParse2`); other modules still run on 0.1.0.
+
+### Changed
+- A number constant assigned to a numeric enum must be one of its values (`const k: Kind = 5` is an error when
+  no member is 5), as in tsc.
+
 ## [0.1.0] - 2026-11-06
 
 The first release of E7, a strict subset of TypeScript compiled to verifiable bytecode, and e7vm, the C++17
@@ -81,5 +110,6 @@ delivered from a server, signed, verified at load time and run in a sandbox.
 - Seven independent security reviews (bytecode loading, natives and the C API, crypto, release sign-off,
   `try` / `catch`, the GC and formatter, coroutines and promises), every finding fixed with a regression test.
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/e7lang/e7/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/e7lang/e7/releases/tag/v0.1.0

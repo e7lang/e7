@@ -7,6 +7,7 @@
 #include <map>
 
 #include "intrinsics.h"
+#include "../core/numfmt.h"
 
 namespace e7 {
 
@@ -457,6 +458,7 @@ struct Gen {
   std::string jsonDescriptorOf(Type* t);
   std::vector<Type*> jsonStack_;  // object types being described (a recursive type refers back: "@<depth>")
   Loc jsonLoc_;  // the JSON.parse / tryParse expression whose descriptor is being built (errors)
+  bool jsonLit_ = false;  // the descriptor has literal types / enums ('L'): parsed by JSON.parse2 / tryParse2
   void loadInt(uint16_t dst, int64_t v) {
     if (v >= INT32_MIN && v <= INT32_MAX) emitBx(OP_LOADI, dst, (uint32_t)(int32_t)v);
     else emitBx(OP_LOADK_I, dst, kInt(v));
@@ -1030,6 +1032,11 @@ void Gen::genCtorFieldInits() {
   for (size_t fi = 0; fi < c->fields.size(); fi++) {
     auto& fd = c->fields[fi];
     if (fd.owner != c) continue;
+    // a parameter property was set above (an optional one must not be reset to undefined here)
+    bool paramProp = false;
+    if (fn->params)
+      for (auto& p : *fn->params) paramProp = paramProp || (p.isProperty && p.name == fd.name);
+    if (paramProp) continue;
     Kind k = K(fd.type);
     static const uint16_t ops[3] = {OP_SETF_I, OP_SETF_F, OP_SETF_R};
     if (fd.init) {
@@ -2953,21 +2960,50 @@ void Gen::genSwitch(Stmt* s) {
   Label* end = newLabel();
   std::vector<Label*> bodies;
   Label* def = nullptr;
+  // a nullable discriminant: null / undefined cases test for them; the other cases skip a null or
+  // undefined value and compare the (unboxed) value
+  bool opt = dt->t == TT::Optional;
+  Type* bt = opt ? dt->elem : dt;
+  uint16_t val = disc;
+  Label* nullish = nullptr;
+  if (opt) {
+    nullish = newLabel();
+    if (isBoxedOptional(dt)) val = temp(K(bt));
+  }
+  bool anyValueCase = false;
+  for (auto& c : s->cases) anyValueCase = anyValueCase || (c.test && !(opt && (strip(c.test)->k == EK::Null || strip(c.test)->k == EK::Undefined)));
   for (auto& c : s->cases) {
     Label* l = newLabel();
     bodies.push_back(l);
     if (!c.test) { def = l; continue; }
+    if (opt && (strip(c.test)->k == EK::Null || strip(c.test)->k == EK::Undefined)) {
+      size_t m1 = mark();
+      uint16_t cmp = temp(K_I);
+      emit(strip(c.test)->k == EK::Null ? OP_ISNULL : OP_ISUNDEF, cmp, disc);
+      jump(OP_JT, cmp, l);
+      release(m1);
+    }
+  }
+  // the value cases (after the null / undefined ones, which only match the absent value)
+  if (opt && anyValueCase) {
+    jump(OP_JNULLISH, disc, nullish);
+    if (val != disc) emit(K(bt) == K_F ? OP_UNBOX_F : OP_UNBOX_I, val, disc);
+  }
+  for (size_t ci = 0; ci < s->cases.size(); ci++) {
+    auto& c = s->cases[ci];
+    if (!c.test || (opt && (strip(c.test)->k == EK::Null || strip(c.test)->k == EK::Undefined))) continue;
     size_t m1 = mark();
     uint16_t v = gen(c.test);
     uint16_t cmp = temp(K_I);
-    Kind k = K(dt);
-    if (dt->t == TT::String || (dt->t == TT::Enum && dt->en->isString)) emit(OP_SEQ, cmp, disc, v);
-    else if (k == K_F) emit(OP_EQ_F, cmp, disc, v);
-    else if (k == K_I) emit(OP_EQ_I, cmp, disc, v);
-    else emit(OP_EQ_R, cmp, disc, v);
-    jump(OP_JT, cmp, l);
+    Kind k = K(bt);
+    if (bt->t == TT::String || (bt->t == TT::Enum && bt->en->isString)) emit(OP_SEQ, cmp, val, v);
+    else if (k == K_F) emit(OP_EQ_F, cmp, val, v);
+    else if (k == K_I) emit(OP_EQ_I, cmp, val, v);
+    else emit(OP_EQ_R, cmp, val, v);
+    jump(OP_JT, cmp, bodies[ci]);
     release(m1);
   }
+  if (nullish) place(nullish);
   jump(OP_JMP, 0, def ? def : end);
   std::vector<Stmt*> all;
   for (auto& c : s->cases)
@@ -3063,8 +3099,9 @@ void Gen::genClosure(FuncSym* f, uint16_t dst) {
 // ======================================================================= expressions
 uint16_t Gen::gen(Expr* e) {
   Expr* x = strip(e);
-  // a variable narrowed to never (the default of an exhaustive switch): code that never runs
-  if (x->k == EK::Ident && x->type && x->type->t == TT::Never) {
+  // a variable or a property path narrowed to never (the default of an exhaustive switch): code that
+  // never runs
+  if ((x->k == EK::Ident || x->k == EK::Member) && x->type && x->type->t == TT::Never) {
     uint16_t r = temp(K_I);
     loadZero(r, K_I);
     return r;
@@ -3289,6 +3326,11 @@ static Loc debugLoc(Expr* e) {
 void Gen::genIntoImpl(Expr* e, uint16_t dst) {
   line(e->loc);
   if (debug && e->loc.line) wantPos = debugLoc(e);
+  // a property path narrowed to never (the default of an exhaustive switch): code that never runs
+  if (Expr* x = strip(e); x->k == EK::Member && x->type && x->type->t == TT::Never) {
+    if (dst != kNoReg) loadZero(dst, kindOfReg(dst));
+    return;
+  }
   // void-typed wrappers (f()!, f() as void) produce no value: just evaluate the operand
   if ((e->k == EK::NonNull || e->k == EK::As) && e->type && e->type->t == TT::Void && e->a) {
     genInto(e->a, dst);
@@ -3607,9 +3649,10 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
         uint16_t text = gen(call->list[0]);
         uint16_t desc = temp(K_R);
         jsonLoc_ = e->loc;
+        jsonLit_ = false;
         loadStr(desc, utf8ToUtf16(jsonDescriptor(e->type)));
         uint16_t boxed = temp(K_R);
-        callNative("JSON.parse", {text, desc}, boxed, 'R');
+        callNative(jsonLit_ ? "JSON.parse2" : "JSON.parse", {text, desc}, boxed, 'R');
         if (kindOf(e->type) != K_R) emit(kindOf(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, d, boxed);
         else mov(d, boxed, K_R);
         release(m0);
@@ -3621,9 +3664,10 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
         uint16_t text = gen(call->list[0]);
         uint16_t desc = temp(K_R);
         jsonLoc_ = e->loc;
+        jsonLit_ = false;
         loadStr(desc, utf8ToUtf16(jsonDescriptor(T.optional(e->type->elem, false, e->type->hasUndef))));
         uint16_t res = temp(K_R);
-        callNative("JSON.tryParse", {text, desc}, res, 'R');
+        callNative(jsonLit_ ? "JSON.tryParse2" : "JSON.tryParse", {text, desc}, res, 'R');
         mov(d, res, K_R);
         release(m0);
         return;
@@ -4757,7 +4801,9 @@ void Gen::genArrayLit(Expr* e, uint16_t d) {
 
 void Gen::genObjectLit(Expr* e, uint16_t d) {
   ClassSym* c = e->cls;
-  if (!e->fieldSrc.empty()) {
+  bool anySpread = false;  // (fieldSrc is empty when the spreads give no fields: { ...{} })
+  for (auto& p : e->props) anySpread = anySpread || p.spread;
+  if (anySpread) {
     // spreads: evaluate every entry in source order, then assemble
     std::vector<uint16_t> vals(e->props.size());
     for (size_t i = 0; i < e->props.size(); i++) {
@@ -5579,6 +5625,21 @@ void Gen::genIndex(Expr* e, uint16_t d) {
     return;
   }
   uint16_t obj = gen(e->a);
+  if (ot->t == TT::Tuple && e->field < 0) {
+    // t[i] (elements of one type): the elements as an array, indexed with its bounds check
+    Type* et = ot->elems[0];
+    Kind k = K(et);
+    uint16_t arr = temp(K_R), v = temp(k);
+    emit(OP_NEWARR, arr, vtOf(et), (uint16_t)ot->elems.size());
+    for (size_t i = 0; i < ot->elems.size(); i++) {
+      emit(op3(k, OP_GETF_I, OP_GETF_F, OP_GETF_R), v, obj, (uint16_t)i);
+      emit(op3(k, OP_APUSH_I, OP_APUSH_F, OP_APUSH_R), arr, v);
+    }
+    uint16_t idx = gen(e->b);
+    if (e->b->type->t == TT::Int) emit(op3(k, OP_AGETI_I, OP_AGETI_F, OP_AGETI_R), d, arr, idx);
+    else emit(op3(k, OP_AGET_I, OP_AGET_F, OP_AGET_R), d, arr, idx);
+    return;
+  }
   if (ot->t == TT::Tuple) {
     emit(op3(K(e->type), OP_GETF_I, OP_GETF_F, OP_GETF_R), d, obj, (uint16_t)e->field);
     return;
@@ -5638,6 +5699,38 @@ std::string Gen::jsonDescriptor(Type* t) {
 }
 
 std::string Gen::jsonDescriptorOf(Type* t) {
+  // literal types and enums: the values the document may have (L<base><count>:<value>;...)
+  auto lits = [&](char base, const std::vector<std::string>& vals) {
+    jsonLit_ = true;
+    std::string s = std::string("L") + base + std::to_string(vals.size()) + ":";
+    for (auto& v : vals) {
+      for (char ch : v) {
+        if (ch == '\\' || ch == ';') s += '\\';
+        s += ch;
+      }
+      s += ';';
+    }
+    return s;
+  };
+  if (t->lit && t->t == TT::String) {
+    std::vector<std::string> vals;
+    for (auto& x : t->strLits) vals.push_back(utf16ToUtf8(x));
+    return lits('s', vals);
+  }
+  if (t->lit && t->t == TT::Number) {
+    std::vector<std::string> vals;
+    for (double x : t->numLits) vals.push_back(numberToString(x));
+    return lits('n', vals);
+  }
+  if (t->lit && t->t == TT::Bool && t->boolLits != 3) return lits('b', {t->boolLits == 2 ? "1" : "0"});
+  if (t->t == TT::Enum && t->en) {
+    std::vector<std::string> vals;
+    for (auto& m : t->en->members) {
+      std::string v = t->en->isString ? utf16ToUtf8(m.str) : numberToString(m.num);
+      if (std::find(vals.begin(), vals.end(), v) == vals.end()) vals.push_back(v);
+    }
+    if (!vals.empty()) return lits(t->en->isString ? 's' : 'n', vals);
+  }
   switch (t->t) {
     case TT::Number: return "n";
     case TT::Bool: return "b";

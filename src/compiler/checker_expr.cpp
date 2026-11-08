@@ -193,6 +193,10 @@ Type* Checker::checkIdent(Expr* e, Type* expected) {
       if (!declared) return errT(e->loc, "'" + e->raw + "' is used before its declaration");
       markCapture(v);
       Type* n = narrowed(varKey(v), v->isConst);
+      if (n && n->t == TT::Never) {
+        e->neverNarrowed = true;
+        return declared;
+      }
       return n ? n : declared;
     }
     case SymK::Func: {
@@ -1698,6 +1702,76 @@ bool Checker::nonNullValue(Expr* x) {
   return t && t->t != TT::Optional && !isNullish(t) && t->t != TT::Unknown && t->t != TT::Never && t->t != TT::Void;
 }
 
+// c ? { badge: "VIP" } : {}: TypeScript normalizes the object literal types of the branches to one type
+// in which a property of only one branch is optional ({ badge?: string }), so a spread or a read of the
+// result still sees it (their common supertype '{ }' would lose it). The branches (object literals with
+// plain properties, or conditionals of them) are laid out for that type; null if they are not such
+// literals or already have the same type.
+static Expr* stripCond(Expr* e) {
+  while (e && (e->k == EK::Paren || (e->k == EK::Conv && e->conv == ConvKind::None))) e = e->a;
+  return e;
+}
+
+static bool plainObjectLit(Expr* e) {
+  e = stripCond(e);
+  if (!e->type || e->type->t != TT::Object || !e->type->shape->name.empty() || !e->type->shape->methods.empty() ||
+      e->type->shape->ownAccessors)
+    return false;
+  if (e->k == EK::Cond) return plainObjectLit(e->b) && plainObjectLit(e->c);
+  if (e->k != EK::Object) return false;
+  for (auto& p : e->props)
+    if (p.spread || p.method || p.accessor || p.computed) return false;
+  return true;
+}
+
+Type* Checker::mergeObjectLits(Expr* b, Expr* c, Loc l) {
+  if (!plainObjectLit(b) || !plainObjectLit(c)) return nullptr;
+  ObjShape* as = stripCond(b)->type->shape;
+  ObjShape* bs = stripCond(c)->type->shape;
+  if (as == bs) return nullptr;
+  auto undefOk = [](const ObjShape::Prop& p) { return p.optional ? p.undefOk : hasUndefined(p.type); };
+  auto opt = [&](Type* t) { return t->t == TT::Optional ? T.optional(t->elem, t->hasNull, true) : T.optional(t, false, true); };
+  std::vector<ObjShape::Prop> props;
+  for (auto& p : as->props) {
+    const ObjShape::Prop* q = bs->findProp(p.name);
+    if (!q) { props.push_back({p.name, opt(p.type), true, undefOk(p)}); continue; }
+    Type* t = unify(p.type, q->type, l, "conditional expression");
+    if (t->t == TT::Unknown) return t;
+    bool o = p.optional || q->optional;
+    props.push_back({p.name, o ? opt(t) : t, o, undefOk(p) || undefOk(*q)});
+  }
+  for (auto& q : bs->props)
+    if (!as->findProp(q.name)) props.push_back({q.name, opt(q.type), true, undefOk(q)});
+  Type* t = T.anonObject(props);
+  relayoutObjectLit(b, t);
+  relayoutObjectLit(c, t);
+  return t;
+}
+
+void Checker::relayoutObjectLit(Expr* e, Type* target) {
+  for (Expr* x = e; x && x != stripCond(e); x = x->a) x->type = target;
+  Expr* x = stripCond(e);
+  x->type = target;
+  if (x->k == EK::Cond) {
+    relayoutObjectLit(x->b, target);
+    relayoutObjectLit(x->c, target);
+    return;
+  }
+  ObjShape* sh = target->shape;
+  std::vector<std::pair<std::string, Type*>> fields;
+  for (auto& p : x->props) {
+    const ObjShape::Prop* sp = sh->findProp(p.key);
+    coerce(p.value, sp->type);
+    fields.push_back({p.key, sp->type});
+  }
+  for (auto& sp : sh->props) {
+    bool present = false;
+    for (auto& p : x->props) present = present || p.key == sp.name;
+    if (!present) fields.push_back({sp.name, sp.type});
+  }
+  x->cls = recordFor(fields)->cls;
+}
+
 Type* Checker::checkCondExpr(Expr* e, Type* expected) {
   checkCond(e->a);
   std::vector<Fact> tf, ff;
@@ -1728,10 +1802,17 @@ Type* Checker::checkCondExpr(Expr* e, Type* expected) {
   }
   Type* t;
   if (expected && expected->t != TT::Bool) {
-    if (assignable(bt, expected) && assignable(ct, expected)) t = expected;
+    // a constant branch of a literal type's base: its value decides (c ? null : 1 is a 1 | 2 | null)
+    auto litOf = [&](Expr* x, Type* xt) {
+      if (baseOf(expected)->lit && !xt->lit && (xt->t == TT::String || xt->t == TT::Number || xt->t == TT::Bool))
+        if (Type* c = constLit(x)) return c;
+      return xt;
+    };
+    if (assignable(litOf(e->b, bt), expected) && assignable(litOf(e->c, ct), expected)) t = expected;
     else t = unify(bt, ct, e->loc, "conditional expression");
   } else {
-    t = unify(bt, ct, e->loc, "conditional expression");
+    Type* m = expected ? nullptr : mergeObjectLits(e->b, e->c, e->loc);
+    t = m ? m : unify(bt, ct, e->loc, "conditional expression");
   }
   coerce(e->b, t);
   coerce(e->c, t);
@@ -2090,7 +2171,10 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
             if (e == lvalueTarget && lvalueMode >= 1 && !it->second->isConst) staticShadow(c, name, it->second);
           } else if (!(e == lvalueTarget && lvalueMode >= 1)) {
             // a static field read as a path: narrowed like a variable (if (C.#x === null) C.#x = ...; C.#x.f)
-            if (Type* n = narrowed(pathKey(e), false)) return n;
+            if (Type* n = narrowed(pathKey(e), false)) {
+              if (n->t != TT::Never) return n;
+              e->neverNarrowed = true;
+            }
           }
           return t;
         }
@@ -2195,7 +2279,8 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
     bool pc;
     std::string key = pathKey(e, &pc);
     Type* n = narrowed(key, false);
-    if (n) result = n;
+    if (n && n->t == TT::Never) e->neverNarrowed = true;
+    else if (n) result = n;
   }
   if (e->optional) {
     if (result->t == TT::Void) return errT(e->loc, "void in optional chain");
@@ -2264,8 +2349,23 @@ Type* Checker::checkIndexOn(Expr* e, Type* ot) {
     }
     case TT::Tuple: {
       Expr* ix = strip(e->b);
+      // t[i] with an index computed at run time: a tuple whose elements all have one type reads like an
+      // array (field -1: codegen copies the elements into one)
+      bool same = !ot->elems.empty();
+      for (Type* x : ot->elems) same = same && x == ot->elems[0];
+      if (ix->k != EK::Num && same) {
+        if (e == lvalueTarget && lvalueMode >= 1)
+          return errT(e->b->loc, "assigning a tuple element needs an integer literal index; use an array (T[]) for computed indexes");
+        Type* it = check(e->b, nullptr);
+        if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "tuple index must be a number or integer");
+        e->field = -1;
+        e->cls = tupleRecord(ot);
+        return ot->elems[0];
+      }
       if (ix->k != EK::Num || !ix->isIntLit || ix->num >= (double)ot->elems.size())
-        return errT(e->b->loc, "tuple index must be an integer literal in range");
+        return errT(e->b->loc, same ? "tuple index must be an integer in range"
+                                    : "tuple index must be an integer literal in range (a computed index needs a tuple whose elements all have "
+                                      "one type, or an array)");
       ix->type = T.number();
       e->field = (int)ix->num;
       e->cls = tupleRecord(ot);

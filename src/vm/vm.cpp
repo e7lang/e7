@@ -455,8 +455,10 @@ std::string VM::stackTrace() const {
   // the callback frame and the frame that called the native
   struct Entry { std::string name, where; };
   std::vector<Entry> es;
+  // JSON.parse2 / tryParse2 are JSON.parse / tryParse for descriptors with literal types (since 0.1.1)
+  auto shown = [](const std::string& n) { return n == "JSON.parse2" || n == "JSON.tryParse2" ? n.substr(0, n.size() - 1) : n; };
   // (e7:test assertion natives are left out: their message already says what failed)
-  if (curNative_ && curNative_->name.rfind("test.", 0) != 0) es.push_back(Entry{curNative_->name, "native"});
+  if (curNative_ && curNative_->name.rfind("test.", 0) != 0) es.push_back(Entry{shown(curNative_->name), "native"});
   size_t cb = callbackNatives_.size();
   for (size_t i = frames_.size(); i-- > 0;) {
     const Frame& fr = frames_[i];
@@ -467,7 +469,7 @@ std::string VM::stackTrace() const {
     es.push_back(Entry{fr.fn->name, where});
     while (cb > 0 && callbackNatives_[cb - 1].first == i) {
       cb--;
-      if (callbackNatives_[cb].second) es.push_back(Entry{callbackNatives_[cb].second->name, "native"});
+      if (callbackNatives_[cb].second) es.push_back(Entry{shown(callbackNatives_[cb].second->name), "native"});
     }
   }
   // collapse repeated cycles (recursion): print one cycle, then a summary line

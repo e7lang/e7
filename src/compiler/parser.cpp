@@ -342,6 +342,9 @@ class Lexer {
     const Tok& pv = out.back();
     switch (pv.k) {
       case TK::Punct:
+        // x! / 2: a '!' after a value is the non-null assertion, so the '/' is a division (a prefix '!'
+        // as in !/a/.test(s) is not)
+        if (pv.text == "!" && out.size() >= 2 && !regexAllowed({out.begin(), out.end() - 1})) return false;
         return !(pv.text == ")" || pv.text == "]" || pv.text == "++" || pv.text == "--");
       case TK::TmplHead:
       case TK::TmplMid:
@@ -1768,6 +1771,7 @@ class Parser {
       Stmt* b = A.stmt(SK::Block, exprBody->loc);
       Stmt* r = A.stmt(SK::Return, exprBody->loc);
       r->expr = exprBody;
+      r->fromExprBody = true;
       b->stmts = pre;
       b->stmts.push_back(r);
       body = b;

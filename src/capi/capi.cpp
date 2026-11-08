@@ -94,7 +94,7 @@ static bool copySized(const T* in, T& out) {
 
 extern "C" {
 
-const char* e7_version(void) { return "0.1.0"; }
+const char* e7_version(void) { return "0.1.1"; }
 uint32_t e7_version_number(void) { return kVmVersion; }
 
 void e7_config_init(e7_config* cfg) {

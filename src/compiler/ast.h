@@ -103,6 +103,9 @@ struct ObjProp {
 struct Expr {
   EK k;
   Loc loc;
+  // a read of a path narrowed to never (the default clause of an exhaustive switch): typed as declared,
+  // so a value the type does not allow (an out-of-range number cast to an enum) is still read as it is
+  bool neverNarrowed = false;
   Loc nameLoc;           // Member: position of the property name
   Type* type = nullptr;  // filled by checker
   Type* innerType = nullptr;  // optional chaining: type of the member/call result before '?.' widening
@@ -221,6 +224,7 @@ struct Stmt {
   Loc loc;
   bool exported = false;
   bool typeOnly = false;           // `import type ...` / `export type ... from`: erased, does not run the module
+  bool fromExprBody = false;       // Return: an arrow's expression body (with destructured parameters)
   bool isDefault = false;          // `export default`: Func / Class / Interface (exported as "default"), or
                                    // Var: `export default <expression>` (a hidden const named "default")
   bool isConst = false;            // Var
