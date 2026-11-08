@@ -1358,7 +1358,7 @@ void applyNativeCosts(VM& vm) {
       "encoding.base64Encode", "encoding.base64Decode", "encoding.base64UrlEncode", "encoding.base64UrlDecode",
       "encoding.base32Encode", "encoding.base32Decode", "encoding.utf8Encode", "encoding.utf8Decode",
       "encoding.pemDecode", "encoding.pemEncode", "encoding.concatBytes", "encoding.bytesEqual", "JSON.stringify",
-      "JSON.stringifyIndent", "JSON.stringifyIndentStr", "JSON.parse", "JSON.tryParse", "Map.fromEntries", "Set.fromArray",
+      "JSON.stringifyIndent", "JSON.stringifyIndentStr", "JSON.parse", "JSON.tryParse", "JSON.parse2", "JSON.tryParse2", "Map.fromEntries", "Set.fromArray",
       "Map.copy", "Math.minArray", "Math.maxArray", "Math.hypotArray", "String.indexOf", "String.lastIndexOf",
       "String.includes", "String.startsWith", "String.endsWith", "String.toUpperCase", "String.toLowerCase",
       "String.trim", "String.trimStart", "String.trimEnd", "String.split", "String.replace", "String.replaceAll",

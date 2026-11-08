@@ -416,6 +416,27 @@ struct Builder {
     if (q == p || q >= d.size() || d[q] != term) bad();
     return q + 1;
   }
+  // L<base><count>:<value>;...: a literal type (or an enum): the values a string ('s'), number ('n') or
+  // boolean ('b', values 0 / 1) may have; in a value, '\\' escapes the next character. Returns the end;
+  // `out` (when given) receives the values.
+  size_t literals(size_t p, std::vector<std::string>* out) {
+    if (p + 2 >= d.size() || (d[p + 1] != 's' && d[p + 1] != 'n' && d[p + 1] != 'b')) bad();
+    size_t q = number(p + 2, ':');
+    size_t cnt = (size_t)atoi(d.c_str() + p + 2);
+    if (cnt == 0 || cnt > d.size()) bad();
+    for (size_t k = 0; k < cnt; k++) {
+      std::string v;
+      while (q < d.size() && d[q] != ';') {
+        if (d[q] == '\\') q++;
+        if (q >= d.size()) bad();
+        v.push_back(d[q++]);
+      }
+      if (q >= d.size()) bad();
+      q++;  // ';'
+      if (out) out->push_back(std::move(v));
+    }
+    return q;
+  }
   size_t validate(size_t p, int depth) {
     if (depth > 300 || p >= d.size()) bad();
     switch (d[p]) {
@@ -436,6 +457,7 @@ struct Builder {
         if (p + 1 >= d.size() || d[p + 1] == '?' || d[p + 1] == '~') bad();
         return validate(p + 1, depth + 1);
       case '[': case 'M': return validate(p + 1, depth + 1);
+      case 'L': return literals(p, nullptr);
       case '@': {
         // a back-reference to the n-th enclosing object descriptor (a recursive type)
         size_t q = p + 1;
@@ -480,6 +502,7 @@ struct Builder {
     switch (c) {
       case 'n': case 'b': case 's': return p + 1;
       case 'i': return p + 2;
+      case 'L': return literals(p, nullptr);
       case '?': case '~': case '[': case 'M': return skip(p + 1);
       case '@': {
         size_t q = p + 1;
@@ -517,6 +540,7 @@ struct Builder {
   }
   uint8_t vtOfDesc(size_t p) {
     char c = d[p];
+    if (c == 'L') c = d[p + 1];
     if (c == 'n') return VT_NUMBER;
     if (c == 'b') return VT_BOOL;
     if (c == 'i') return (uint8_t)(d[p + 1] - '0');
@@ -560,6 +584,37 @@ struct Builder {
         if (v->t != JNode::Str) fail(path, "expected a string");
         out.r = vm.newString(v->str);
         return out;
+      case 'L': {
+        // a literal type / enum: the value must be one of its values
+        std::vector<std::string> vals;
+        literals(p, &vals);
+        char base = d[p + 1];
+        bool ok = false;
+        if (base == 's') {
+          if (v->t != JNode::Str) fail(path, "expected a string");
+          std::string u = utf16ToUtf8(v->str);
+          for (auto& x : vals) ok = ok || x == u;
+          if (ok) out.r = vm.newString(v->str);
+        } else if (base == 'n') {
+          if (v->t != JNode::Num) fail(path, "expected a number");
+          for (auto& x : vals) ok = ok || strtod(x.c_str(), nullptr) == v->num;
+          if (ok) out.f = v->num;
+        } else {
+          if (v->t != JNode::Bool) fail(path, "expected a boolean");
+          for (auto& x : vals) ok = ok || (x == "1") == v->b;
+          if (ok) out.i = v->b;
+        }
+        if (!ok) {
+          std::string all;
+          for (size_t k = 0; k < vals.size() && k < 8; k++) {
+            if (k) all += " | ";
+            all += base == 's' ? "\"" + vals[k] + "\"" : base == 'b' ? (vals[k] == "1" ? "true" : "false") : vals[k];
+          }
+          if (vals.size() > 8) all += " | ...";
+          throw JsonFail{false, "expected " + all + " at " + (path.empty() ? std::string("$") : path)};
+        }
+        return out;
+      }
       case 'i': {
         if (v->t != JNode::Num || std::trunc(v->num) != v->num) fail(path, "expected an integer");
         uint8_t vt = (uint8_t)(d[p + 1] - '0');
@@ -713,6 +768,9 @@ void registerJsonNatives(VM& vm) {
   vm.registerNative("JSON.stringifyIndentStr", "RR>R", j_stringifyIndentStr);
   vm.registerNative("JSON.parse", "RR>R", j_parse);
   vm.registerNative("JSON.tryParse", "RR>R", j_tryParse);
+  // the same for descriptors with literal types / enums ('L', since 0.1.1): older VMs reject the module
+  vm.registerNative("JSON.parse2", "RR>R", j_parse);
+  vm.registerNative("JSON.tryParse2", "RR>R", j_tryParse);
   vm.registerNative("JSON.lastError", ">R", j_lastError);
 }
 

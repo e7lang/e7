@@ -40,6 +40,8 @@ struct NativeSince { const char* name; uint32_t since; };
 // Natives added after the baseline, e.g. { "JSON.somethingNew", makeVersion(x, y, z) }.
 inline const NativeSince* nativeSinceTable(size_t& n) {
   static const NativeSince kTable[] = {
+      {"JSON.parse2", makeVersion(0, 1, 1)},     // typed JSON.parse with literal types / enums ('L' descriptors)
+      {"JSON.tryParse2", makeVersion(0, 1, 1)},
       {nullptr, 0},  // placeholder (C++ has no empty arrays); not an entry
   };
   n = sizeof kTable / sizeof kTable[0] - 1;

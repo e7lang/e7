@@ -64,7 +64,7 @@ three references that can each be checked mechanically:
 | `bigint` | Arbitrary-precision integer | Heap object |
 | `i8 u8 i16 u16 i32 u32 i64 u64`, `int`=`i64` | **E7 extension**: machine integers (§4.2) | int64 register (normalized to bit width) |
 | `T[]` / `Array<T>` | Dynamic array, typed element storage | Heap object |
-| `[A, B, ...]` | Tuple (fixed length, each element independently typed) | Fixed-length record |
+| `[A, B, ...]` | Tuple (fixed length, each element independently typed; an index computed at run time needs elements of one type) | Fixed-length record |
 | `{ a: T; b?: U }`, `interface`, `type` alias | Structural object type (fields accessed by name, with inline caches) | Record/class instance |
 | `class C` | Nominal type, field layout fixed at compile time, virtual method dispatch | Instance |
 | `enum` | Numeric or string enum (compile-time constants: literals or constant expressions of other members, `+ - * / % ** \| & ^ << >> >>> ~` and string `+`) | number / string |
@@ -97,7 +97,9 @@ User-defined generics are supported (section 2.3).
   `undefined` (by an object literal, an assignment or a spread of a property that may hold `undefined`); declare
   `x?: T | undefined` to allow it. An optional method `m?(): T` is an optional property of function type: call it as
   `o.m?.()`, or as `o.m()` after a check (`if (o.m)`).
-- Numeric enum → `number`, string enum → `string`.
+- Numeric enum → `number`, string enum → `string`. A `number` converts to a numeric enum (`bytes[0] as Kind`,
+  or assigned to a `Kind`), as in tsc: the value need not be a member (a byte read off the wire), and the `default`
+  clause of an exhaustive `switch` reads it as it is; a number constant must be one of the enum's values.
 - Function types: parameter and return types must match; an arrow function used as a callback may **declare fewer parameters** (extra arguments are ignored), and a `void`-returning context accepts any return value.
 - There is **no implicit conversion** between fixed-width integers and `number`, or between integers of different widths; use explicit conversions such as `u32(x)` or `Number(x)`.
 
@@ -114,7 +116,12 @@ User-defined generics are supported (section 2.3).
   `JSON.parse(text) as T` into a recursive type works (its descriptor refers back to the enclosing type).
 - A `switch` with a case for every member of an enum or every value of a literal type is exhaustive: a function may
   end with it without a `default` or a final `return`, and its `default` branch sees the value as `never`
-  (`assertNever(x)` patterns compile). Each case sees the value narrowed to its literals.
+  (`assertNever(x)` patterns compile). Each case sees the value narrowed to its literals. A nullable value can be
+  switched on too (`switch (op)` with `op: string | undefined`): `case undefined:` / `case null:` match the absent
+  value and the other cases see it narrowed to its type.
+- A conditional of object literals has one type in which a property of only one branch is optional, as tsc
+  normalizes it: `c ? { badge: "VIP" } : {}` is a `{ badge?: string }`, so `{ ...(c ? { badge: "VIP" } : {}) }`
+  keeps `badge`.
 - Type predicates `(x: T): x is U` and `this is U`, and assertion functions `asserts x is U` / `asserts x`, narrow
   at their calls (nullable values, literal types, classes); the function's check is trusted, as in TypeScript.
 - Narrowing: `x === null`, `x !== undefined`, `x == null`, truthiness checks `if (x)`, `instanceof`, combinations with `&&`/`||`/`!`,
@@ -303,6 +310,10 @@ try {
   passes the index as the radix, as in JavaScript): the compiler wraps it in an arrow function.
   Arrow functions and function expressions can have default parameters too: such a closure parameter has the
   type `T | undefined` (a default applies when the argument is omitted or `undefined`, as in JavaScript).
+  A function declaration or method applies a default when the argument is left out; an argument of type
+  `T | undefined` (or `undefined`) for a parameter whose default is a constant (a literal or an enum member) gets the
+  default when it is `undefined`, as in JavaScript (the call passes `x ?? default`); for other defaults pass
+  `x ?? value`.
   A callback parameter annotated `unknown` takes its contextual type (`Array.from({ length: n }, (_: unknown, i) => i)`).
 - Spread arguments: a tuple supplies one argument per element (`f(...pair)`, evaluated once); arrays, tuples and
   other iterables can be spread into a rest parameter of a user function anywhere in the argument list (the rest
@@ -465,9 +476,10 @@ The following behave the same as JavaScript (verified by differential testing ag
   `<`/`>` comparison; `Date.parse` supports ISO 8601 and RFC 1123 formats, invalid dates are `NaN` (terminates on `toISOString`).
 
 ### 6.4 JSON.parse (type-checked)
-In E7 it must be written as `JSON.parse(text) as T`, where `T` may be a primitive type, array, tuple, interface/object type (nested), nullable and optional fields,
+In E7 it must be written as `JSON.parse(text) as T`, where `T` may be a primitive type, a literal type or enum, array, tuple, interface/object type (nested), nullable and optional fields,
 or `Map<string, V>` (E7 extension: objects with dynamic keys). Parsing **validates against T**; a missing field or type mismatch terminates with a path, for example
-`JSON.parse: expected a number at $.items[0].price`. Extra fields are ignored. Nesting deeper than 256 levels is a syntax error.
+`JSON.parse: expected a number at $.items[0].price`; a value outside a literal type or enum likewise
+(`JSON.parse: expected "percent" | "tier" at $.kind`). Extra fields are ignored. Nesting deeper than 256 levels is a syntax error.
 To handle untrusted input without terminating, use `tryParse` from `e7:json` (section 6.5).
 
 ### 6.5 `e7:json` (non-throwing typed parse)

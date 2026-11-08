@@ -106,16 +106,68 @@ void Checker::expandSpreads(std::vector<Expr*>& args) {
 }
 
 // Check arguments against a function type (user functions / closures)
-void Checker::checkArgs(Expr* call, Type* ft, std::vector<Expr*>& args, size_t skip) {
+static Expr* stripConvs(Expr* e) {
+  while (e && (e->k == EK::Paren || (e->k == EK::Conv && e->conv == ConvKind::None))) e = e->a;
+  return e;
+}
+
+// A copy of a parameter's default value when it is a constant (a literal or an enum member), which a
+// call site can evaluate itself; null otherwise
+Expr* Checker::constDefault(Expr* init) {
+  Expr* x = init;
+  while (x && (x->k == EK::Paren || (x->k == EK::Conv && x->conv == ConvKind::None))) x = x->a;
+  if (!x) return nullptr;
+  bool ok = x->k == EK::Str || x->k == EK::Num || x->k == EK::Bool || (x->k == EK::Template && x->list.empty()) ||
+            (x->k == EK::Unary && x->raw == "-" && x->a && strip(x->a)->k == EK::Num);
+  if (!ok && x->k == EK::Member && x->a && strip(x->a)->k == EK::Ident) {
+    Sym* s = lookup(strip(x->a)->raw);
+    ok = s && s->k == SymK::Enum;
+  }
+  if (!ok) return nullptr;
+  Expr* d = P.arena.expr(x->k, x->loc);
+  *d = *x;
+  d->type = nullptr;
+  return d;
+}
+
+void Checker::checkArgs(Expr* call, Type* ft, std::vector<Expr*>& args, size_t skip, FuncSym* fs) {
   (void)skip;
   if (!ft || ft->t != TT::Func) return;
   expandSpreads(args);
   const char* spreadMsg = "a spread argument must either have a tuple type or be passed to a rest parameter";
+  size_t argIdx = 0;
   auto checkArg = [&](Expr*& a, Type* pt) {
+    size_t i = argIdx++;
     Type* t = a->type ? a->type : check(a, pt);
     // a void call has no value to pass (a parameter of type T instantiated with void)
     if (t->t == TT::Void) {
       err(a->loc, "a void value cannot be passed as an argument (the function returns nothing in E7)");
+      return;
+    }
+    // f(x) with x: T | undefined for `p: T = d`: JavaScript applies the default when the value is
+    // undefined; E7 applies it when the argument is left out, so the call passes x ?? d itself
+    if (hasUndefined(t) && !hasUndefined(pt) && i < ft->optParams.size() && ft->optParams[i] &&
+        (t->t == TT::Undefined || (t->t == TT::Optional && !t->hasNull && assignable(t->elem, pt)))) {
+      Expr* d = fs && fs->params && i < fs->params->size() && (*fs->params)[i].init ? constDefault((*fs->params)[i].init) : nullptr;
+      if (!d) {
+        err(a->loc, "type '" + typeName(t) + "' is not assignable to type '" + typeName(pt) +
+                        "': E7 applies a parameter's default value only when the argument is left out (or when the default "
+                        "is a constant); pass 'value ?? <default>'");
+        return;
+      }
+      Type* dt = check(d, pt);
+      if (!assignable(dt, pt)) { coerce(a, pt); return; }
+      coerce(d, pt);
+      if (t->t == TT::Undefined && (stripConvs(a)->k == EK::Undefined)) {  // f(undefined): the default itself
+        a = d;
+        return;
+      }
+      Expr* q = P.arena.expr(EK::Logical, a->loc);
+      q->raw = "??";
+      q->a = a;
+      q->b = d;
+      q->type = pt;
+      a = q;
       return;
     }
     coerce(a, pt);
@@ -186,7 +238,7 @@ Type* Checker::checkCall(Expr* e, Type* expected) {
     if (!f || !f->isCtor || !f->cls->parent) return errT(e->loc, "'super(...)' is only allowed in a derived class constructor");
     FuncSym* pc = f->cls->parent->ctor;
     resolveSig(pc);
-    checkArgs(e, pc->type, e->list);
+    checkArgs(e, pc->type, e->list, 0, pc);
     e->callee = pc;
     e->intrinsic = IN_SUPER_CTOR;
     Sym* th = lookup("this");
@@ -207,7 +259,7 @@ Type* Checker::checkCall(Expr* e, Type* expected) {
       }
       FuncSym* f = instantiateFunc(g, targs, e->loc);
       if (!f) return T.unknown();
-      checkArgs(e, f->type, e->list);
+      checkArgs(e, f->type, e->list, 0, f);
       if (f->inferRet) {
         if (f->checking) return errT(e->loc, "'" + f->name + "' is called recursively; add an explicit return type");
         checkFunction(f);
@@ -227,7 +279,7 @@ Type* Checker::checkCall(Expr* e, Type* expected) {
     if (s->k == SymK::Func) {
       FuncSym* f = static_cast<FuncSym*>(s);
       resolveSig(f);
-      checkArgs(e, f->type, e->list);
+      checkArgs(e, f->type, e->list, 0, f);
       if (f->inferRet) {
         if (f->checking) return errT(e->loc, "'" + f->name + "' is called recursively; add an explicit return type");
         checkFunction(f);
@@ -288,7 +340,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
         if (!inferCall(g, g->fnParams(), g->fnRet(), e->list, e->typeArgs, expected, e->loc, targs)) return T.unknown();
         FuncSym* f = instantiateFunc(g, targs, e->loc);
         if (!f) return T.unknown();
-        checkArgs(e, f->type, e->list);
+        checkArgs(e, f->type, e->list, 0, f);
         if (f->inferRet) {
           if (f->checking) return errT(e->loc, "'" + name + "' is called recursively; add an explicit return type");
           checkFunction(f);
@@ -311,7 +363,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
       }
       FuncSym* f = it->second;
       resolveSig(f);
-      checkArgs(e, f->type, e->list);
+      checkArgs(e, f->type, e->list, 0, f);
       if (f->inferRet) {
         if (f->checking) return errT(e->loc, "'" + name + "' is called recursively; add an explicit return type");
         checkFunction(f);
@@ -331,7 +383,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
     FuncSym* target = pc->vtable[it->second].fn;
     resolveSig(target);
     if (target->inferRet && !target->checking) checkFunction(target);
-    checkArgs(e, target->type, e->list);
+    checkArgs(e, target->type, e->list, 0, target);
     e->callee = target;
     e->intrinsic = IN_SUPER_METHOD;
     Sym* th = lookup("this");
@@ -363,7 +415,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
         if (!inferCall(gmeth, gmeth->fnParams(), gmeth->fnRet(), e->list, e->typeArgs, expected, e->loc, targs)) return T.unknown();
         FuncSym* f = instantiateFunc(gmeth, targs, e->loc);
         if (!f) return T.unknown();
-        checkArgs(e, f->type, e->list);
+        checkArgs(e, f->type, e->list, 0, f);
         if (f->inferRet) {
           if (f->checking) return errT(e->loc, "method '" + name + "' is called recursively; add an explicit return type");
           checkFunction(f);
@@ -388,7 +440,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
             if (pf->checking) return errT(e->loc, "method '" + name + "' is called recursively; add an explicit return type");
             checkFunction(pf);
           }
-          checkArgs(e, pf->type, e->list);
+          checkArgs(e, pf->type, e->list, 0, pf);
           e->callee = pf;
           e->intrinsic = IN_PRIVATE_METHOD;
           ret = pf->type->ret;

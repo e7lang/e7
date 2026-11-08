@@ -108,7 +108,19 @@ bool Checker::assignable(Type* src, Type* dst) {
   if (src->t == TT::Unknown || dst->t == TT::Unknown || src->t == TT::Never) return true;
   // literal types (D5): a literal type is its base type with fewer values
   if (dst->lit) return src->lit && litSubset(src, dst);
-  if (src->lit) return assignable(src->litBase, dst);
+  // a number to a numeric enum, as in TypeScript (a byte read off the wire: bytes[0] as MsgType, or
+  // const t: MsgType = n); a number literal must be one of the enum's values
+  if (dst->t == TT::Enum && dst->en && !dst->en->isString && src->t == TT::Number) {
+    if (!src->lit) return true;
+    for (double v : src->numLits) {
+      bool found = false;
+      for (auto& m : dst->en->members) found = found || m.num == v;
+      if (!found) return false;
+    }
+    return true;
+  }
+  // "a" to "a" | "b" | undefined: the literal against the optional's literal type
+  if (src->lit) return (dst->t == TT::Optional && dst->elem->lit && litSubset(src, dst->elem)) || assignable(src->litBase, dst);
   switch (dst->t) {
     case TT::Optional: {
       if (src->t == TT::Null) return dst->hasNull;
@@ -116,6 +128,7 @@ bool Checker::assignable(Type* src, Type* dst) {
       if (src->t == TT::Optional) {
         if (src->hasNull && !dst->hasNull) return false;
         if (src->hasUndef && !dst->hasUndef) return false;
+        if (src->elem->lit && dst->elem->lit && kindOf(src->elem) == kindOf(dst->elem)) return litSubset(src->elem, dst->elem);
         if (kindOf(src->elem) != K_R || kindOf(dst->elem) != K_R) return src->elem == dst->elem;
         return assignable(src->elem, dst->elem);
       }
@@ -206,8 +219,20 @@ bool Checker::coerce(Expr*& e, Type* target, const char* ctx) {
   Type* t = e->type;
   if (!t || !target) return true;
   if (t == target) return true;
+  // const unreachable: never = x in the default of an exhaustive switch (x narrowed to never)
+  if (target->t == TT::Never) {
+    Expr* x = e;
+    while (x && (x->k == EK::Paren || (x->k == EK::Conv && x->conv == ConvKind::None))) x = x->a;
+    if (x && x->neverNarrowed) {
+      for (Expr* y = e; y; y = y == x ? nullptr : y->a) y->type = target;
+      return true;
+    }
+  }
   // a constant of a literal type's base: its value decides ("GET" is a "GET" | "POST")
   if (baseOf(target)->lit && !t->lit && (t->t == TT::String || t->t == TT::Number || t->t == TT::Bool))
+    if (Type* c = constLit(e)) t = c;
+  // a number constant for a numeric enum must be one of its values
+  if (baseOf(target)->t == TT::Enum && t->t == TT::Number && !t->lit)
     if (Type* c = constLit(e)) t = c;
   if (target->t == TT::Void && ctx && std::string(ctx) == "return") return false;
   if (!assignable(t, target)) {
@@ -252,6 +277,23 @@ Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
   }
   if (assignable(a, b)) return b;
   if (assignable(b, a)) return a;
+  // two object types without methods ({ v?: number } and { v: number }): their common supertype, the
+  // properties both have with a type each is assignable to
+  if (a->t == TT::Object && b->t == TT::Object && a->shape->methods.empty() && b->shape->methods.empty() &&
+      !a->shape->ownAccessors && !b->shape->ownAccessors) {
+    std::vector<ObjShape::Prop> props;
+    for (auto& p : a->shape->props) {
+      const ObjShape::Prop* q = b->shape->findProp(p.name);
+      if (!q) continue;
+      if (p.type == q->type) props.push_back({p.name, p.type, p.optional || q->optional, p.undefOk || q->undefOk});
+      else if (kindOf(p.type) == K_R && kindOf(q->type) == K_R && !isBoxedOptional(p.type) && !isBoxedOptional(q->type)) {
+        if (assignable(p.type, q->type)) props.push_back({p.name, q->type, p.optional || q->optional, p.undefOk || q->undefOk});
+        else if (assignable(q->type, p.type)) props.push_back({p.name, p.type, p.optional || q->optional, p.undefOk || q->undefOk});
+      }
+    }
+    Type* t = T.anonObject(props);
+    if (assignable(a, t) && assignable(b, t)) return t;
+  }
   return errT(l, std::string("incompatible types in ") + what + ": '" + typeName(a) + "' and '" + typeName(b) + "'");
 }
 
@@ -612,7 +654,20 @@ void Checker::collectAssigned(Stmt* s, std::set<std::string>& out) {
 // branch that assigns too) x is non-null on both paths, as in tsc. A branch that does not assign the path
 // keeps what its condition says about it.
 Type* Checker::branchEndNarrow(Stmt* b, std::string& key) {
-  while (b && b->k == SK::Block && !b->stmts.empty()) b = b->stmts.back();
+  // { x = new X(); m.set(k, x); }: the last assignment of a block, when no later statement of the block
+  // assigns its target again
+  if (b && b->k == SK::Block) {
+    for (size_t i = b->stmts.size(); i-- > 0;) {
+      std::string k;
+      Type* t = branchEndNarrow(b->stmts[i], k);
+      if (!t) continue;
+      for (size_t j = i + 1; j < b->stmts.size(); j++)
+        if (assignsPath(b->stmts[j], k)) return nullptr;
+      key = k;
+      return t;
+    }
+    return nullptr;
+  }
   if (!b || b->k != SK::Expr || !b->expr || b->expr->k != EK::Assign) return nullptr;
   Expr* a = b->expr;
   if (a->raw != "=" && a->raw != "??=") return nullptr;
@@ -1221,6 +1276,14 @@ void Checker::checkStmt(Stmt* s) {
       if (!curFn || curFn->isInit) { err(s->loc, "'return' outside of a function"); break; }
       FuncSym* f = curFn;
       Type* declared = f->inferRet ? nullptr : bodyRet(f);
+      // ({ id }) => log(id) where a void function is expected: the expression body is evaluated for its
+      // effects, as without the destructuring
+      if (s->expr && s->fromExprBody && declared && declared->t == TT::Void) {
+        s->k = SK::Expr;
+        Type* t = check(s->expr, nullptr);
+        (void)t;
+        break;
+      }
       if (s->expr) {
         Type* t = check(s->expr, declared);
         if (f->isAsync && t->t == TT::Promise) {
@@ -1270,10 +1333,14 @@ void Checker::checkStmt(Stmt* s) {
       break;
     }
     case SK::Switch: {
-      Type* dt = check(s->expr, nullptr);
+      Type* dt0 = check(s->expr, nullptr);
+      // a nullable discriminant (switch (op) with op: string | undefined): the clauses compare its value;
+      // `case null:` / `case undefined:` match the absent value
+      bool optDisc = dt0->t == TT::Optional;
+      Type* dt = optDisc ? dt0->elem : dt0;
       if (dt->t != TT::Number && dt->t != TT::String && dt->t != TT::Int && dt->t != TT::Enum && dt->t != TT::Bool &&
           dt->t != TT::Unknown)
-        err(s->expr->loc, "switch requires a number, string, boolean, integer or enum value");
+        err(s->expr->loc, "switch requires a number, string, boolean, integer or enum value (or one of them | null / undefined)");
       pushScope();
       loops.push_back({pendingLabels.empty() ? "" : pendingLabels.back(), false, true});
       pendingLabels.clear();
@@ -1285,15 +1352,22 @@ void Checker::checkStmt(Stmt* s) {
       // literal types (D5): each clause sees the discriminant narrowed to its case values (with the
       // values of the empty clauses that fall into it), the default clause the values left (never when
       // the switch covers them all)
-      std::string dkey = dt->lit || (dt->t == TT::Enum && dt->en) ? pathKey(s->expr) : "";
+      std::string dkey = optDisc || dt->lit || (dt->t == TT::Enum && dt->en) ? pathKey(s->expr) : "";
       Type* group = nullptr;
       bool groupOk = true;
       Type* covered = nullptr;
       for (size_t ci = 0; ci < s->cases.size(); ci++) {
         auto& c = s->cases[ci];
         Type* cv = nullptr;
-        if (c.test) {
+        if (c.test && optDisc && (stripParens(c.test)->k == EK::Null || stripParens(c.test)->k == EK::Undefined)) {
+          check(c.test, dt0);
+          Type* nt = stripParens(c.test)->k == EK::Null ? T.nullT() : T.undef();
+          if (!assignable(nt, dt0)) err(c.test->loc, "case type '" + typeName(nt) + "' is not comparable to '" + typeName(dt0) + "'");
+          groupOk = false;  // the clause sees the discriminant as it is
+        } else if (c.test) {
           Type* ct = check(c.test, dt);
+          if (optDisc && ct->t == TT::Optional)
+            err(c.test->loc, "a case value of a nullable switch must not be nullable itself ('" + typeName(ct) + "'); use null / undefined cases");
           if (dt->lit)
             if (Type* lt = constLit(c.test)) {
               ct = lt;
@@ -1305,13 +1379,21 @@ void Checker::checkStmt(Stmt* s) {
           }
           if (cv && dt->lit) covered = covered ? T.litUnion(covered, cv) : cv;
           if (cv && groupOk) group = group ? T.litUnion(group, cv) : cv;
-          else groupOk = false;
+          else if (!(optDisc && !dt->lit)) groupOk = false;  // (a nullable non-literal one: narrowed to its base)
         } else {
           defaults++;
           groupOk = false;
         }
         pushScope();
-        if (!dkey.empty() && dt->lit) {
+        if (!dkey.empty() && optDisc) {
+          // a clause reached only by its values sees them (not null / undefined); the default clause sees
+          // the values left, or only null / undefined
+          if (c.test && groupOk) setNarrow(dkey, group ? group : dt);
+          else if (!c.test && dt->lit && (ci == 0 || exitsClause(s->cases[ci - 1]))) {
+            Type* rest = litMinus(dt, covered);
+            if (rest) setNarrow(dkey, T.optional(rest, dt0->hasNull, dt0->hasUndef));
+          }
+        } else if (!dkey.empty() && dt->lit) {
           if (c.test && groupOk && group) setNarrow(dkey, group);
           else if (!c.test && (ci == 0 || exitsClause(s->cases[ci - 1]))) {
             Type* rest = litMinus(dt, covered);

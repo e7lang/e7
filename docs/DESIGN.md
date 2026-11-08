@@ -458,6 +458,11 @@ declares.
   is the enum's type (tsc checks the member).
 - **D6.** The back-reference in a JSON descriptor is `@<n>` (the n-th enclosing object descriptor), read by the
   ordinary `JSON.parse` / `JSON.tryParse` natives.
+- **D5 and JSON (0.1.1).** A literal type or an enum in a JSON descriptor is `L<base><count>:<value>;...` (the values
+  a string, number or boolean may have), so `JSON.parse(text) as T` rejects a value outside it instead of giving the
+  field a value its type does not allow. Such descriptors are parsed by the natives `JSON.parse2` /
+  `JSON.tryParse2` (the same code), which have a "since 0.1.1" entry: a 0.1.0 VM rejects a module that uses them with
+  `E7_ERR_VERSION` instead of a "bad JSON descriptor" error, and modules without them still require 0.1.0.
 - **D7.** Records whose type has a property that may hold `undefined` (optional or `| undefined`) carry the mask;
   object literals, spread and `JSON.parse` leave absent properties out, and `Object.has` (a native) tells spread
   whether a source property is present.

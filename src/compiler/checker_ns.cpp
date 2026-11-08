@@ -1079,7 +1079,7 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     if (!cls) return T.unknown();
     if (cls->isAbstract) return errT(l, "cannot create an instance of an abstract class ('" + cls->name + "')");
     resolveSig(cls->ctor);
-    checkArgs(e, cls->ctor->type, args);
+    checkArgs(e, cls->ctor->type, args, 0, cls->ctor);
     e->cls = cls;
     e->callee = cls->ctor;
     return cls->type;
@@ -1090,7 +1090,7 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     if (!e->typeArgs.empty()) return errT(l, "class '" + name + "' is not generic");
     if (cls->isAbstract) return errT(l, "cannot create an instance of an abstract class ('" + name + "')");
     resolveSig(cls->ctor);
-    checkArgs(e, cls->ctor->type, args);
+    checkArgs(e, cls->ctor->type, args, 0, cls->ctor);
     e->cls = cls;
     e->callee = cls->ctor;
     return cls->type;
