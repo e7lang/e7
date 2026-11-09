@@ -222,7 +222,7 @@ struct Stringifier {
     stack.erase(o);
     depth--;
     checkOut();
-    if (out.size() > 0x3FFFFFFF) vm.error("RangeError: invalid string length");
+    if (out.size() > 0x3FFFFFFF) vm.error("RangeError: Invalid string length");
     return true;
   }
 };

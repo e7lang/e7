@@ -423,7 +423,7 @@ E7_NATIVE(bi_cmp) { E7_UNUSED; r->f = bigCmp(Big(vm, a[0]), Big(vm, a[1])); }
 E7_NATIVE(bi_toString) {
   E7_UNUSED;
   double rd = toInteger(a[1].f);
-  if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix must be between 2 and 36");
+  if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix argument must be between 2 and 36");
   r->r = vm.newStringAscii(bigToString(Big(vm, a[0]), (int)rd).c_str());
 }
 E7_NATIVE(bi_toNumber) { E7_UNUSED; r->f = bigToDouble(Big(vm, a[0])); }

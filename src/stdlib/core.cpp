@@ -1013,7 +1013,7 @@ E7_NATIVE(n_isNaN) { E7_UNUSED; r->i = a[0].f != a[0].f; }
 E7_NATIVE(n_toStringRadix) {
   E7_UNUSED;
   double rd = toInteger(a[1].f);
-  if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix must be between 2 and 36");
+  if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix argument must be between 2 and 36");
   r->r = vm.newStringAscii(numberToStringRadix(a[0].f, (int)rd).c_str());
 }
 E7_NATIVE(n_toFixed) {
@@ -1045,7 +1045,7 @@ E7_NATIVE(n_toExponential) {
 E7_NATIVE(n_intToStringRadix) {
   E7_UNUSED;
   double rd = toInteger(a[1].f);
-  if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix must be between 2 and 36");
+  if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix argument must be between 2 and 36");
   uint8_t vt = (uint8_t)immIndex(a[2].f, VT__COUNT);
   std::string s = vt == VT_U64 ? uint64ToString(a[0].u, (int)rd) : int64ToString(a[0].i, (int)rd);
   r->r = vm.newStringAscii(s.c_str());

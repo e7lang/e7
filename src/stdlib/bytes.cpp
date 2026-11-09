@@ -5,8 +5,11 @@
 
 namespace e7 {
 
+// a length argument: ToIndex (2.5 is 2, NaN is 0; negative and infinite lengths are errors)
 static uint32_t checkLen(VM& vm, double d) {
-  if (!(d >= 0) || std::isinf(d) || std::trunc(d) != d) vm.error("RangeError: invalid typed array length: %s", numberToString(d).c_str());
+  if (d != d) d = 0;
+  d = std::trunc(d);
+  if (d < 0 || std::isinf(d)) vm.error("RangeError: Invalid typed array length: %s", numberToString(d).c_str());
   if (d > 0x7FFFFFFF) vm.error("typed array length %s exceeds the e7 limit of 2147483647", numberToString(d).c_str());
   return (uint32_t)d;
 }

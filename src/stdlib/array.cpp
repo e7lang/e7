@@ -157,7 +157,7 @@ E7_NATIVE(a_join) {
     Slot e = arr->data[i];
     if (arr->vt == VT_REF && (!e.r || e.r == vm.undef())) continue;
     out += valueToString(vm, e, arr->vt);
-    if (out.size() > 0x3FFFFFFF) vm.error("RangeError: invalid string length");
+    if (out.size() > 0x3FFFFFFF) vm.error("RangeError: Invalid string length");
   }
   r->r = vm.newString(out);
 }
