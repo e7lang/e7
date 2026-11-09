@@ -325,6 +325,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
   }
   if (M == "Promise") {
     Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : nullptr;
+    if (e->typeArgs.size() == 1) expElem = resolveType(e->typeArgs[0]);  // Promise.resolve<T>(...)
     e->intrinsic = IN_PROMISE_STATIC;
     e->raw = name;
     if (isCall && name == "resolve") {
@@ -834,6 +835,7 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     if (n == "laterReject") {
       if (args.size() != 1) return errT(l, "'laterReject' expects one argument (an Error)");
       Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : T.voidT();
+      if (e->typeArgs.size() == 1) expElem = resolveType(e->typeArgs[0]);  // laterReject<T>(err)
       if (!argsMatch(e, args, {T.error()}, 1, "laterReject")) return T.unknown();
       args.push_back(N((double)(expElem->t == TT::Void ? VT_REF : vtOf(expElem))));
       args.back()->type = T.intT(VT_I64);
@@ -1219,7 +1221,10 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     Type* et = typeArg(0);
     if (!et && exp && exp->t == TT::Array) et = exp->elem;
     // new Array(a, b, ...) and new Array(x) of a non-number x: an array of these elements
-    bool elems = args.size() > 1 || (args.size() == 1 && args[0]->k == EK::Spread);
+    // (new Array(...xs): with one number in xs, JavaScript makes an array of that length)
+    for (Expr* a : args)
+      if (a->k == EK::Spread) return errT(a->loc, "new Array(...xs) is not supported (one number would be a length); use [...xs]");
+    bool elems = args.size() > 1;
     if (args.size() == 1 && !elems) {
       Type* at = check(args[0], et && et != num ? et : num);
       elems = at->t != TT::Number && at->t != TT::Int && at->t != TT::Unknown;

@@ -102,6 +102,19 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
             return valueToString(vm, r, VT_REF);
           }
         }
+        // { toString: () => "..." }: a property holding a function that returns a string
+        auto fi = in->cls->fieldIndex.find("toString");
+        if (fi != in->cls->fieldIndex.end() && in->cls->fieldVT[fi->second] == VT_REF && fieldPresent(in, fi->second)) {
+          Obj* c = in->fields()[fi->second].r;
+          if (c && c->type == OT::Closure) {
+            auto* clo = static_cast<CloObj*>(c);
+            if (clo->fn && clo->fn->retKind == 'R' && clo->fn->nparams == 0) {
+              Slot r = vm.callClosure(clo, nullptr, 0);
+              if (r.r && r.r->type == OT::String) return strU16(static_cast<StrObj*>(r.r));
+              return valueToString(vm, r, VT_REF);
+            }
+          }
+        }
         return u"[object Object]";
       }
       if (joining(o)) return u"";
@@ -1306,10 +1319,22 @@ E7_NATIVE(n_errorErrors) {
 E7_NATIVE(n_errorName) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = nm; }
 E7_NATIVE(n_errorMessage) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = m; }
 // e.message = s / e.name = s (0.1.3): the value assigned
+// The error classes, for instanceof after e.name was changed (the class is kept in Obj::flags bits 8-11,
+// its index + 1, set by the first change of the name)
+static const char16_t* const kErrClasses[] = {u"Error", u"TypeError", u"RangeError", u"SyntaxError", u"URIError",
+                                              u"AggregateError", u"ReferenceError", u"EvalError"};
 static void errSet(VM& vm, Slot* a, Slot* r, int part) {
   StrObj *nm, *m;
   errParts(vm, a[0], &nm, &m);
-  static_cast<ArrObj*>(a[0].r)->data[part].r = S(vm, a[1]);
+  auto* arr = static_cast<ArrObj*>(a[0].r);
+  if (part == 0 && ((arr->flags >> 8) & 0xF) == 0) {
+    std::u16string cur = strU16(nm);
+    uint16_t k = 1;  // (a name that is not a class's: an Error)
+    for (uint16_t i = 0; i < 8; i++)
+      if (cur == kErrClasses[i]) k = (uint16_t)(i + 1);
+    arr->flags = (uint16_t)(arr->flags | (k << 8));
+  }
+  arr->data[part].r = S(vm, a[1]);
   r->r = a[1].r;
 }
 E7_NATIVE(n_errorSetName) { E7_UNUSED; errSet(vm, a, r, 0); }
@@ -1319,6 +1344,7 @@ E7_NATIVE(n_errorToString) {  // String(e): "Name: message", or "Name" when the 
   StrObj *nm, *m;
   errParts(vm, a[0], &nm, &m);
   if (m->len == 0) { r->r = nm; return; }
+  if (nm->len == 0) { r->r = m; return; }  // (an empty name: the message alone)
   std::u16string s = strU16(nm) + u": " + strU16(m);
   r->r = vm.newString(s);
 }
@@ -1326,8 +1352,10 @@ E7_NATIVE(n_errorIs) {  // x instanceof Error / TypeError / ...: false for anyth
   E7_UNUSED;
   StrObj *nm, *m;
   std::u16string want = strU16(S(vm, a[1]));
-  if (!vm.errorParts(a[0].r, &nm, &m)) r->i = 0;
-  else r->i = (want == u"Error" || strU16(nm) == want) ? 1 : 0;
+  if (!vm.errorParts(a[0].r, &nm, &m)) { r->i = 0; return; }
+  uint16_t k = (a[0].r->flags >> 8) & 0xF;  // the class when the name was changed
+  std::u16string cls = k >= 1 && k <= 8 ? std::u16string(kErrClasses[k - 1]) : strU16(nm);
+  r->i = (want == u"Error" || cls == want) ? 1 : 0;
 }
 
 void registerCoreNatives(VM& vm) {

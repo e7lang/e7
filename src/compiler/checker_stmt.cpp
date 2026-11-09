@@ -384,8 +384,11 @@ void Checker::checkBody(FuncSym* f) {
       if (p.init) {
         // default values are evaluated in the callee when the argument is omitted
         Type* base = pt;
-        check(p.init, base);
+        Type* dt = check(p.init, base);
         coerce(p.init, base, "default value");
+        // p: T | undefined = d: undefined is replaced by d (the prologue), so the body sees T
+        if (!f->arrow && pt->t == TT::Optional && pt->hasUndef && dt && !hasUndefined(dt) && dt->t != TT::Unknown)
+          setNarrow(varKey(v), T.optional(pt->elem, pt->hasNull, false));
       }
     }
   }
@@ -432,6 +435,8 @@ void Checker::checkBody(FuncSym* f) {
       if (bare && valued && t->t == TT::Void) continue;
       r = r ? unify(r, t, f->loc, "return statements") : t;
     }
+    // (a literal value returned: its base type, as tsc widens an inferred return type)
+    if (r && r->lit) r = widen(r);
     if (bare && valued && r && r->t != TT::Unknown) {
       r = T.optional(r, false, true);
       // the returned values were checked before the type was known: convert them to it
@@ -508,6 +513,17 @@ void Checker::hoistFunctions(std::vector<Stmt*>& stmts) {
 }
 
 void Checker::checkBlockStmts(std::vector<Stmt*>& stmts) {
+  // the let / const names of the block: a closure before the declaration refers to them (not to an outer
+  // variable of the same name)
+  if (scope && scope != globalScope && !(curFn && curFn->isInit && scope->parent == globalScope)) {
+    std::function<void(VarDecl&)> names = [&](VarDecl& d) {
+      if (!d.isArrayPat && !d.isObjPat) { if (!d.name.empty() && !scope->names.count(d.name)) scope->pending.insert(d.name); }
+      for (auto& sub : d.elems) names(sub);
+    };
+    for (Stmt* s : stmts)
+      if (s->k == SK::Var)
+        for (auto& d : s->decls) names(d);
+  }
   hoistFunctions(stmts);
   // const f = (x: T): R => ... in a function's block: declared on entry, so that the function values
   // before it may call it (const isEven = ... isOdd(k - 1); const isOdd = ...), as in JavaScript
@@ -1206,7 +1222,14 @@ void Checker::checkStmt(Stmt* s) {
   bool topLevel = curFn && curFn->isInit && scope && scope->parent == globalScope;
   switch (s->k) {
     case SK::Var:
-      for (auto& d : s->decls) checkVarDecl(s, d, s->isConst, topLevel);
+      for (auto& d : s->decls) {
+        checkVarDecl(s, d, s->isConst, topLevel);
+        std::function<void(VarDecl&)> mark = [&](VarDecl& x) {
+          if (x.sym && !x.sym->isGlobal) x.sym->blockVar = true;
+          for (auto& sub : x.elems) mark(sub);
+        };
+        mark(d);
+      }
       break;
     case SK::Func:
       if (topLevel) break;  // top-level functions are checked separately
@@ -1255,6 +1278,44 @@ void Checker::checkStmt(Stmt* s) {
     case SK::Import: case SK::Export: case SK::Empty: case SK::Debugger:
       break;
     case SK::Expr: {
+      // x++ / x-- as a statement (its value unused) of a nullable x narrowed to a number, or of x!: x += 1
+      // (compound assignment handles narrowed and non-null targets)
+      if (Expr* u = s->expr; u->k == EK::Update && u->a) {
+        Expr* tgt = stripParens(u->a);
+        bool path = tgt->k == EK::Ident || tgt->k == EK::Member;
+        for (Expr* x = tgt; path && x->k == EK::Member; x = stripParens(x->a))
+          path = !x->optional && x->a && (stripParens(x->a)->k == EK::Ident || stripParens(x->a)->k == EK::This ||
+                                          stripParens(x->a)->k == EK::Member);
+        Type* dt = nullptr;
+        if (tgt->k == EK::NonNull && tgt->a) {
+          dt = check(cloneExpr(tgt), nullptr);  // (a copy: the target itself is checked with the assignment)
+        } else if (path) {
+          Expr* probe = cloneExpr(tgt);
+          dt = check(probe, nullptr);
+          // the declared type of the target (a nullable one only)
+          Type* st = nullptr;
+          if (probe->k == EK::Ident && probe->var) st = probe->var->type;
+          else if (probe->k == EK::Member) {
+            if (probe->var && probe->intrinsic == IN_STATIC_FIELD) st = probe->var->type;
+            else if (probe->cls && probe->field >= 0 && (size_t)probe->field < probe->cls->fields.size())
+              st = probe->cls->fields[(size_t)probe->field].type;
+            else if (Type* ot = probe->a && probe->a->type ? baseOf(probe->a->type) : nullptr; ot && ot->t == TT::Object)
+              if (const ObjShape::Prop* pp = ot->shape->findProp(probe->raw)) st = pp->type;
+          }
+          if (!st || st->t != TT::Optional) dt = nullptr;
+        }
+        if (dt && (dt->t == TT::Number || dt->t == TT::BigInt) && !dt->lit) {
+          bool big = dt->t == TT::BigInt;
+          Expr* one = P.arena.expr(big ? EK::BigLit : EK::Num, u->loc);
+          one->raw = "1";
+          one->num = 1;
+          one->ival = 1;
+          one->isIntLit = !big;
+          u->k = EK::Assign;
+          u->raw = u->raw == "++" ? "+=" : "-=";
+          u->b = one;
+        }
+      }
       Type* t = check(s->expr, nullptr);
       (void)t;
       // an assertion function: the rest of the block sees what it asserts
@@ -1439,12 +1500,9 @@ void Checker::checkStmt(Stmt* s) {
           et = T.unknown();
         } else {
           // a tuple whose elements have one type: over a copy of them as an array
-          if (it->t == TT::Tuple)
-            if (Expr* arr = tupleAsArray(s->expr, it)) {
-              s->expr = arr;
-              it = arr->type;
-            }
-          et = elemTypeForIter(s->expr, it, s->expr->loc);
+          // (a tuple whose elements have one type: its elements, read live by codegen)
+          if (Type* te = it->t == TT::Tuple ? tupleElemType(it) : nullptr) et = te;
+          else et = elemTypeForIter(s->expr, it, s->expr->loc);
         }
       }
       if (s->isAwait && asyncIter) {
@@ -1552,9 +1610,14 @@ void Checker::checkStmt(Stmt* s) {
         checkStmt(s->body);
         pendingLabels.clear();
       } else {
+        // lbl: if (...) { break lbl; } ...: a break out of the statement skips the rest of it, so what is
+        // narrowed in it holds after it only when no break leaves it
         loops.push_back({s->label, false, false});
+        Scope* inner = pushScope();
         checkStmt(s->body);
+        popScope();
         loops.pop_back();
+        if (!containsBreakFor(s->body, s->label, 0)) keepNarrowing(inner);
       }
       break;
     }
@@ -1643,7 +1706,9 @@ void Checker::checkStmt(Stmt* s) {
         popScope();
         if (!c.body.empty()) {
           group = nullptr;
-          groupOk = true;
+          // the next clause is also reached from this one when its body falls through: it is not narrowed
+          // to its own values then (case null: f(); case "x": ... sees null too)
+          groupOk = exitsClause(c);
         }
       }
       if (defaults > 1) err(s->loc, "multiple default clauses");

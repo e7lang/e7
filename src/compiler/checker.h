@@ -32,6 +32,7 @@ struct Scope {
   bool fnBoundary = false;
   std::unordered_map<std::string, Sym*> names;
   std::unordered_map<std::string, Type*> narrow;  // path key -> narrowed type (nullptr = none)
+  std::set<std::string> pending;  // let / const / class names of this block not declared yet (TDZ)
 };
 
 class Checker {
@@ -230,7 +231,8 @@ class Checker {
   void bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc l);
   void narrowDeclInit(VarDecl& d);
   Type* knownFnType(VarDecl& d, Type* declared);
-  std::set<VarDecl*> preBound;  // const f = <arrow> declared when its block was entered
+  std::set<VarDecl*> preBound;
+  std::string pendingHit_;  // the name a lookup found declared later in its block  // const f = <arrow> declared when its block was entered
   void noteConstArrow(VarDecl& d, bool isConst);
   FuncSym* predCallee(Expr* call);
   std::unordered_map<VarSym*, FuncSym*> constArrowFns;  // const f = (...) => ...: the arrow's function

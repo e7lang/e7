@@ -613,6 +613,8 @@ struct Gen {
   std::unordered_map<ClassSym*, uint32_t> tdzClass;  // classes (their static fields share the flag)
   void findTdzGlobals();
   void tdzCheck(VarSym* v);
+  void localTdzCheck(VarSym* v);
+  void markInitialized(VarSym* v);
   void tdzThrowUnless(uint32_t flag, const std::string& name);
   std::vector<int> synthKinds;  // 0..2 resolve I/F/R, 3 resolve void, 4 reject, 5..7 closeIterator I/F/R
   uint32_t synthBase = 0;
@@ -1258,6 +1260,7 @@ void Gen::blockEntry(std::vector<Stmt*>& stmts) {
       // the block capture it before the declaration runs)
       if (!varReg.count(d.sym)) freshCells.insert(d.sym);
       declareLocal(d.sym);
+      if (d.sym->initFlag && d.sym->initFlag->captured) declareLocal(d.sym->initFlag);  // (false until the declaration)
     }
     for (auto& sub : d.elems) pre(sub);
   };
@@ -1399,6 +1402,7 @@ void Gen::genVarDecl(VarDecl& d, bool topLevel) {
         else loadZero(r, K(v->type));
       }
       writeVar(v, r);
+      markInitialized(v);
       release(m0);
     }
     return;
@@ -1422,6 +1426,7 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
     if (!d.sym->isGlobal && d.sym->captured && varReg.count(d.sym) && !freshCells.erase(d.sym))
       emit(OP_NEWCELL, varReg[d.sym], vtOf(d.sym->type));
     bindVar(d.sym, src);
+    markInitialized(d.sym);
     return;
   }
   for (size_t i = 0; i < d.elems.size(); i++) {
@@ -1984,13 +1989,6 @@ void Gen::genForOf(Stmt* s) {
   Type* t = s->expr->type;
   uint16_t coll = temp(K_R);
   genInto(s->expr, coll);
-  if (t->t == TT::TypedArray && s->declareKind != 0) {  // over its elements as an array
-    callNative("TA.toArray", {coll}, coll, 'R');
-    t = T.array(t->vt >= 9 ? T.bigint() : T.number());
-  } else if (t->t == TT::Bytes && s->declareKind != 0) {
-    callNative("Bytes.toArray", {coll}, coll, 'R');
-    t = T.array(T.number());
-  }
   if (s->isAwait && (t->t == TT::AsyncGenerator || (t->t == TT::Class && t->cls->methodIdx.count("[Symbol.asyncIterator]")))) {
     // for await over an async iterable
     Type* gt = nullptr;
@@ -2074,18 +2072,48 @@ void Gen::genForOf(Stmt* s) {
     emit(OP_I2F, fi, i);
     emit(OP_LT_F, c, fi, n);
     jump(OP_JF, c, end);
-    uint16_t v = temp(big ? K_R : K_F);
-    callNative(big ? "TA.getBig" : "TA.get", {coll, fi}, v, big ? 'R' : 'F');
-    bindElem(v, big ? T.bigint() : T.number());
+    Type* et = big ? T.bigint() : T.number();
+    if (mode == 2) {  // keys()
+      bindElem(fi, T.number());
+    } else {
+      uint16_t v = temp(big ? K_R : K_F);
+      callNative(big ? "TA.getBig" : "TA.get", {coll, fi}, v, big ? 'R' : 'F');
+      if (mode == 1) pairBind(fi, T.number(), v, et, T.tuple({T.number(), et}));  // entries()
+      else bindElem(v, et);
+    }
   } else if (t->t == TT::Bytes) {
     uint16_t n = temp(K_I), c = temp(K_I);
     emit(OP_BLENI, n, coll);
     emit(OP_LT_I, c, i, n);
     jump(OP_JF, c, end);
-    uint16_t v = temp(K_I), fv = temp(K_F);
-    emit(OP_BGETI, v, coll, i);
-    emit(OP_I2F, fv, v);
-    bindElem(fv, T.number());
+    uint16_t fi = temp(K_F);
+    emit(OP_I2F, fi, i);
+    if (mode == 2) {
+      bindElem(fi, T.number());
+    } else {
+      uint16_t v = temp(K_I), fv = temp(K_F);
+      emit(OP_BGETI, v, coll, i);
+      emit(OP_I2F, fv, v);
+      if (mode == 1) pairBind(fi, T.number(), fv, T.number(), T.tuple({T.number(), T.number()}));
+      else bindElem(fv, T.number());
+    }
+  } else if (t->t == TT::Tuple) {
+    // a tuple whose elements have one type: its live elements (as an array is iterated)
+    size_t ne = t->elems.size();
+    Type* et = s->decls[0].sym && !d.isArrayPat && !d.isObjPat ? s->decls[0].sym->type : t->elems[0];
+    Kind k = K(t->elems[0]);
+    uint16_t n = temp(K_I), c = temp(K_I);
+    loadInt(n, (int64_t)ne);
+    emit(OP_LT_I, c, i, n);
+    jump(OP_JF, c, end);
+    uint16_t arr = temp(K_R), v = temp(k);
+    emit(OP_NEWARR, arr, vtOf(t->elems[0]), (uint16_t)ne);
+    for (size_t q = 0; q < ne; q++) {
+      emit(op3(k, OP_GETF_I, OP_GETF_F, OP_GETF_R), v, coll, (uint16_t)q);
+      emit(op3(k, OP_APUSH_I, OP_APUSH_F, OP_APUSH_R), arr, v);
+    }
+    emit(op3(k, OP_AGETI_I, OP_AGETI_F, OP_AGETI_R), v, arr, i);
+    bindElem(v, et);
   } else if (t->t == TT::String) {
     uint16_t c = temp(K_I), zero = temp(K_I);
     callNative("String.iterNext", {coll, i}, aux, 'I');
@@ -3231,6 +3259,35 @@ void Gen::tdzThrowUnless(uint32_t flag, const std::string& name) {
   release(m0);
 }
 
+// a local declared by a let / const of a block, read or written by a nested function declaration (which
+// may run before the declaration): its flag says whether the declaration ran
+void Gen::markInitialized(VarSym* v) {
+  if (!v || !v->initFlag || !v->initFlag->captured || !varReg.count(v->initFlag)) return;
+  size_t m0 = mark();
+  uint16_t one = temp(K_I);
+  loadInt(one, 1);
+  writeVar(v->initFlag, one);
+  release(m0);
+}
+
+void Gen::localTdzCheck(VarSym* v) {
+  if (!v->initFlag) return;
+  auto ci = fn->captureIndex.find(v->initFlag);
+  if (ci == fn->captureIndex.end()) return;
+  size_t m0 = mark();
+  uint16_t f = temp(K_I);
+  Label* ok = newLabel();
+  emit(OP_UGET_I, f, (uint16_t)ci->second);
+  jump(OP_JT, f, ok);
+  uint16_t nm = temp(K_R), msg = temp(K_R), er = temp(K_R);
+  loadStr(nm, u"ReferenceError");
+  loadStr(msg, utf8ToUtf16("Cannot access '" + v->name + "' before initialization"));
+  callNative("Error.new", {nm, msg}, er, 'R');
+  emit(OP_THROW, er);
+  place(ok);
+  release(m0);
+}
+
 void Gen::readVar(VarSym* v, uint16_t dst, Type* want) {
   Type* st = v->type;
   if (!want) want = st;
@@ -3257,6 +3314,7 @@ void Gen::readVar(VarSym* v, uint16_t dst, Type* want) {
         err(Loc(), "internal error: variable '" + v->name + "' is not accessible in '" + fn->name + "'");
         return;
       }
+      localTdzCheck(v);
       emit(uget[K(st)], tgt, (uint16_t)ci->second);
     }
     if (v->tdzLocal && v->captured && tgt != kNoReg) {
@@ -3305,6 +3363,7 @@ void Gen::writeVar(VarSym* v, uint16_t src) {
     err(Loc(), "internal error: variable '" + v->name + "' is not writable in '" + fn->name + "'");
     return;
   }
+  localTdzCheck(v);
   emit(uset[K(st)], (uint16_t)ci->second, src);
 }
 
@@ -4690,6 +4749,16 @@ void Gen::genCall(Expr* e, uint16_t dst) {
         readVar(f->selfVar, clo, f->selfVar->type);
         size_t n;
         std::vector<uint16_t> args = genArgs(e->list, f->type, e->bval, &n);
+        if (f->hasDefaults) {
+          // a nested function with default parameters takes the argument count too (its own signature)
+          uint16_t ac = temp(K_I);
+          loadInt(ac, (int64_t)n);
+          args.push_back(ac);
+          emit(OP_CALLV, rk == K_V ? kNoReg : dst, clo, (uint16_t)args.size());
+          emitWord(sig(sigOf(f)));
+          emitRegList(args);
+          return;
+        }
         callClosure(clo, f->type, args, dst);
         return;
       }

@@ -103,6 +103,10 @@ struct VarSym : Sym {
   bool isParam = false;
   bool isThis = false;
   bool tdzLocal = false;  // a local const f = <arrow> declared on entry to its block (null until its declaration runs)
+  bool blockVar = false;  // declared by a let / const statement of a block
+  // a blockVar captured by a nested function declaration (created when the block is entered, so it may run
+  // before the declaration): its "initialized" flag, which the function checks (ReferenceError)
+  VarSym* initFlag = nullptr;
   int paramIndex = -1;
   // lazily typed globals
   VarDecl* decl = nullptr;

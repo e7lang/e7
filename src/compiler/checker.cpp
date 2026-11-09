@@ -41,6 +41,7 @@ void Checker::declare(const std::string& name, Sym* s, Loc l) {
   }
   s->loc = l;
   scope->names[name] = s;
+  scope->pending.erase(name);
 }
 
 Sym* Checker::lookup(const std::string& name, bool* crossedFn) {
@@ -50,6 +51,12 @@ Sym* Checker::lookup(const std::string& name, bool* crossedFn) {
     if (it != s->names.end()) {
       if (crossedFn) *crossedFn = crossed;
       return it->second;
+    }
+    // a let / const declared later in this block: the name means it (not an outer one), before its
+    // declaration ran
+    if (!s->pending.empty() && s->pending.count(name)) {
+      pendingHit_ = name;
+      return nullptr;
     }
     if (s->fnBoundary) crossed = true;
   }
@@ -318,11 +325,22 @@ void Checker::markCapture(VarSym* v) {
     if (f == v->owner) { ancestor = true; break; }
   if (!ancestor) return;
   v->captured = true;
+  bool hoisted = false;  // (read by a nested function declaration)
   for (FuncSym* f = curFn; f && f != v->owner; f = f->parent) {
+    hoisted = hoisted || f->selfVar;
     if (!f->captureIndex.count(v)) {
       f->captureIndex[v] = (int)f->captures.size();
       f->captures.push_back(v);
     }
+  }
+  if (hoisted && v->blockVar && !v->isParam) {
+    if (!v->initFlag) {
+      v->initFlag = P.make<VarSym>();
+      v->initFlag->name = v->name + "$init";
+      v->initFlag->type = T.boolean();
+      v->initFlag->owner = v->owner;
+    }
+    markCapture(v->initFlag);
   }
 }
 
@@ -1719,6 +1737,8 @@ void Checker::resolveClass(ClassSym* c) {
       if (base == ov) continue;
       resolveSig(base);
       resolveSig(ov);
+      if (ov->inferRet && !ov->checked) checkFunction(ov);  // (its return type, inferred from its body)
+      if (base->inferRet && !base->checked) checkFunction(base);
       if (base->type && ov->type && base->type != ov->type && ov->type->ret && base->type->ret) {
         // a compatible override (as TypeScript allows): fewer parameters (the others are passed and
         // ignored) with the same representations, and a return type assignable to the overridden one's

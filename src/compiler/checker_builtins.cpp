@@ -637,6 +637,43 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
                                           "toSpliced", "toString", "flat"};
     bool reader = false;
     for (const char* x : readers) reader = reader || name == x;
+    // (a callback could change a mutable tuple while the method reads its copy)
+    bool callback = name == "map" || name == "filter" || name == "forEach" || name == "some" || name == "every" ||
+                    name == "find" || name == "findIndex" || name == "findLast" || name == "findLastIndex" ||
+                    name == "reduce" || name == "reduceRight" || name == "flatMap";
+    if (reader && callback && !bt->ro && tupleElemType(bt)) {
+      // a callback that writes to the tuple itself would not see its writes in the copy
+      Expr* root = strip(m->a);
+      while (root->k == EK::Member || root->k == EK::Index) root = strip(root->a);
+      bool writes = root->k != EK::Ident && root->k != EK::This;  // (not a variable: be safe)
+      std::function<void(Expr*)> scan;
+      std::function<void(Stmt*)> scanS = [&](Stmt* st) {
+        if (!st || writes) return;
+        scan(st->expr);
+        scan(st->update);
+        for (auto& d : st->decls) scan(d.init);
+        for (Stmt* y : st->stmts) scanS(y);
+        scanS(st->then); scanS(st->els); scanS(st->body); scanS(st->init);
+        for (auto& c : st->cases) { scan(c.test); for (Stmt* y : c.body) scanS(y); }
+      };
+      scan = [&](Expr* x) {
+        if (!x || writes) return;
+        if ((x->k == EK::Assign || x->k == EK::Update) && x->a) {
+          Expr* r = strip(x->a);
+          while (r->k == EK::Member || r->k == EK::Index || r->k == EK::NonNull) r = strip(r->a);
+          if (r->k == root->k && (r->k == EK::This || r->raw == root->raw)) writes = true;
+        }
+        scan(x->a); scan(x->b); scan(x->c);
+        for (Expr* y : x->list) scan(y);
+        for (auto& p : x->props) scan(p.value);
+        scanS(x->body);
+        scan(x->exprBody);
+      };
+      for (Expr* a : args) scan(a);
+      if (writes)
+        return errT(m->loc, "'" + name + "' of a mutable tuple reads a copy of its elements, and this callback may write to the tuple: "
+                            "call it on [...t] (a copy), or use an array");
+    }
     if (reader)
       if (Expr* arr = tupleAsArray(m->a, bt)) {
         m->a = arr;
@@ -1005,6 +1042,17 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
             name == "findLast" || name == "findLastIndex")
           want = boo;
         if (name == "map" && expected && baseOf(expected)->t == TT::Array) want = baseOf(expected)->elem;
+        // a predicate arrow whose value is not a boolean (xs.filter((x) => x)): its truthiness, as in JavaScript
+        if (want == boo)
+          if (Expr* cbx = strip(args[0]); cbx->k == EK::Arrow && cbx->exprBody && !cbx->retType && !cbx->fn) {
+            Expr* n1 = P.arena.expr(EK::Unary, cbx->exprBody->loc);
+            n1->raw = "!";
+            n1->a = cbx->exprBody;
+            Expr* n2 = P.arena.expr(EK::Unary, cbx->exprBody->loc);
+            n2->raw = "!";
+            n2->a = n1;
+            cbx->exprBody = n2;
+          }
         Type* ft = cb(args[0], {et, num, bt}, want);
         if (ft->t != TT::Func) return T.unknown();
         Type* r = ft->ret;
@@ -1095,6 +1143,9 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         Type* rt = bt;
         int levels = 0;
         while (levels < depth && rt->elem->t == TT::Array) { rt = rt->elem; levels++; }
+        if (levels < depth && rt->elem->t == TT::Tuple)
+          return errT(m->loc, "flat() of tuples is not supported (a tuple is not an array in e7): map them to arrays first, "
+                              "e.g. .map((t) => [...t]).flat()");
         e->intrinsic = IN_ARR_FLAT;
         e->ival = levels;
         return rt;
@@ -1380,7 +1431,21 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       if (meth("catch")) {
         if (args.size() != 1) return errT(l, "catch takes one callback");
-        Type* f2 = check(args[0], T.func({T.error()}, vt));
+        // a handler that returns nothing (a block without `return value`, or a call): checked as returning void
+        Type* want = vt;
+        if (Expr* cbx = strip(args[0]); cbx->k == EK::Arrow) {
+          bool valued = false;
+          std::function<void(Stmt*)> scan = [&](Stmt* st) {
+            if (!st || valued) return;
+            if (st->k == SK::Return && st->expr) valued = true;
+            for (Stmt* y : st->stmts) scan(y);
+            scan(st->then); scan(st->els); scan(st->body);
+            for (auto& c : st->cases) for (Stmt* y : c.body) scan(y);
+          };
+          if (cbx->body) { scan(cbx->body); if (!valued) want = T.voidT(); }
+          else if (cbx->exprBody && strip(cbx->exprBody)->k == EK::Call) want = T.unknown();
+        }
+        Type* f2 = check(args[0], T.func({T.error()}, want));
         if (f2->t != TT::Func) return errT(args[0]->loc, "catch expects a function");
         cbOk(args[0], f2, {T.error()});
         Type* u = promiseCallbackRet(args[0], f2->ret, args[0]->loc);

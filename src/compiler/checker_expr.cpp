@@ -246,7 +246,11 @@ Type* Checker::checkTemplate(Expr* e) {
 
 // ------------------------------------------------------------------ identifiers
 Type* Checker::checkIdent(Expr* e, Type* expected) {
+  pendingHit_.clear();
   Sym* s = lookup(e->raw);
+  if (!s && pendingHit_ == e->raw)
+    return errT(e->loc, "'" + e->raw + "' is used before its declaration later in this block; declare it before this use "
+                        "(also before a function that reads it)");
   if (!s && e->a && e->raw.find('.') != std::string::npos) {
     // `ns.C` rewritten by resolveNamespaceRefs, but here `ns` is not the module namespace (a local shadows
     // it): a member access again
@@ -1043,7 +1047,10 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
         continue;
       }
       const ObjShape::Prop* sp = exp && exp->t == TT::Object ? exp->shape->findProp(p.key) : nullptr;
-      Type* t = check(p.value, sp ? sp->type : nullptr);
+      // (an optional property that may not hold undefined: the value against its type without undefined)
+      Type* t = check(p.value, sp ? (sp->optional && !sp->undefOk && sp->type->t == TT::Optional
+                                        ? T.optional(sp->type->elem, sp->type->hasNull, false) : sp->type)
+                                  : nullptr);
       if (sp && sp->optional && !sp->undefOk && hasUndefined(t)) { err(p.loc, exactOptionalError(p.key, sp->type, t)); continue; }
       if (sp && t->t == TT::Void) { err(p.loc, "property value cannot be void: a void function returns no value in E7 (return a value, or make the field optional and leave it out)"); continue; }
       if (sp) coerce(p.value, sp->type);
@@ -1152,7 +1159,10 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
         continue;
       }
       if (sp) {
-        Type* vt = p.method ? checkMethod(p, self, sp->type) : check(p.value, sp->type);
+        // (an optional property that may not hold undefined: the value against its type without undefined)
+        Type* want = !p.method && sp->optional && !sp->undefOk && sp->type->t == TT::Optional
+                         ? T.optional(sp->type->elem, sp->type->hasNull, false) : sp->type;
+        Type* vt = p.method ? checkMethod(p, self, sp->type) : check(p.value, want);
         if (!p.method && sp->optional && !sp->undefOk && hasUndefined(vt)) { err(p.loc, exactOptionalError(p.key, sp->type, vt)); continue; }
         if (p.method) {}
         else if (vt->t == TT::Void) { err(p.loc, "property value cannot be void: a void function returns no value in E7 (return a value, or make the field optional and leave it out)"); continue; }
@@ -1697,7 +1707,12 @@ Type* Checker::checkLogical(Expr* e, Type* expected) {
   if (op == "??") {
     Type* lt = check(e->a, nullptr);
     Type* lb = baseOf(lt);
+    pushScope();  // (b may not run: what it narrows, by assignment, does not hold afterwards)
     Type* rt = check(e->b, lb);
+    popScope();
+    // x ?? "all" with x of a literal type: the constant's literal type (the union of both)
+    if ((lb->lit || (expected && baseOf(expected)->lit)) && !rt->lit)
+      if (Type* c = constLit(e->b)) rt = c;
     if (lt->t == TT::Void || rt->t == TT::Void) return errT(e->loc, "void value in '??' expression");
     if (lt->t != TT::Optional && !isNullish(lt)) {
       // allowed but pointless; result is left type
@@ -1834,8 +1849,11 @@ Type* Checker::checkAssign(Expr* e) {
   }
   std::string key = pathKey(e->a);
   if (op == "=") {
-    Type* rt = check(e->b, lt);
-    if (const char* on = target->k == EK::Member ? exactOptionalTarget(target) : nullptr; on && hasUndefined(rt))
+    const char* on = target->k == EK::Member ? exactOptionalTarget(target) : nullptr;
+    // (an optional property that may not hold undefined: the value is checked against its type without it,
+    // so that c ? "a" : "b" is a string)
+    Type* rt = check(e->b, on && lt->t == TT::Optional ? T.optional(lt->elem, lt->hasNull, false) : lt);
+    if (on && hasUndefined(rt))
       return errT(e->loc, exactOptionalError(on, lt, rt));
     coerce(e->b, lt);
     invalidatePath(key);
@@ -1845,7 +1863,9 @@ Type* Checker::checkAssign(Expr* e) {
   if (op == "||=" || op == "&&=") {
     // a ||= b: assigns when a is falsy; a &&= b: when a is truthy (the target keeps its type)
     if (lt->t == TT::Void) return errT(e->loc, "'" + op + "' requires a value");
+    pushScope();  // (the value may not be evaluated: what it narrows does not hold afterwards)
     Type* rt = check(e->b, lt);
+    popScope();
     coerce(e->b, lt);
     invalidatePath(key);
     // x ||= v with a non-null v: x is non-null afterwards (a truthy old value, or v)
@@ -1855,7 +1875,9 @@ Type* Checker::checkAssign(Expr* e) {
   }
   if (op == "??=") {
     if (lt->t != TT::Optional) return errT(e->loc, "'??=' requires a nullable target");
+    pushScope();  // (the value may not be evaluated: what it narrows does not hold afterwards)
     Type* rt = check(e->b, lt->elem);
+    popScope();
     coerce(e->b, lt);
     invalidatePath(key);
     if (rt->t != TT::Optional && !isNullish(rt) && rt->t != TT::Unknown) {
@@ -1863,6 +1885,24 @@ Type* Checker::checkAssign(Expr* e) {
       return lt->elem;           // (as is the value of x ??= v)
     }
     return lt;
+  }
+  // x += v with x: T | undefined narrowed to T (x = 1; x += 1): x = x + v, for a reference path (evaluated
+  // twice, without side effects)
+  if (lt->t == TT::Optional && !key.empty()) {
+    Type* n = narrowed(key, false);
+    if (n && n->t != TT::Optional && !isNullish(n) && n->t != TT::Never && n->t != TT::Unknown) {
+      Expr* bin = P.arena.expr(EK::Binary, e->loc);
+      bin->raw = op.substr(0, op.size() - 1);
+      bin->a = cloneExpr(target);
+      bin->b = e->b;
+      e->b = bin;
+      e->raw = "=";
+      Type* rt = check(e->b, lt->elem);
+      coerce(e->b, lt);
+      invalidatePath(key);
+      if (rt->t != TT::Optional && !isNullish(rt) && rt->t != TT::Unknown) setNarrow(key, lt->elem);
+      return lt;
+    }
   }
   // compound: lt op rhs
   std::string bop = op.substr(0, op.size() - 1);
@@ -2196,10 +2236,11 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
       if (!pt) continue;
       bool eq = c->raw[0] == '=';
       if (!pt->lit) {
-        // s === "a" with s: string: s is "a" when it is true
-        if (eq != whenTrue || (pt->t != TT::String && pt->t != TT::Number)) continue;
+        // s === "a" with s: string (or string | undefined): s is "a" when it is true
+        Type* pb = baseOf(pt);
+        if (eq != whenTrue || pb->lit || (pb->t != TT::String && pb->t != TT::Number)) continue;
         Type* v = constLit(other);
-        if (!v || !v->lit || baseLit(v) != pt) continue;
+        if (!v || !v->lit || baseLit(v) != pb) continue;
         std::string key = pathKey(path);
         if (key.empty()) continue;
         out.push_back({key, v});
@@ -2427,8 +2468,17 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
                                    "' is not a '" + typeName(pt) + "')");
     }
   }
+  // (a contextual return type that is not known yet, as Promise<T> while T is inferred: from the body)
+  std::function<bool(Type*)> unknownIn = [&](Type* t) -> bool {
+    if (!t) return false;
+    if (t->t == TT::Unknown) return true;
+    if ((t->t == TT::Promise || t->t == TT::Array || t->t == TT::Optional || t->t == TT::Set) && t->elem) return unknownIn(t->elem);
+    if (t->t == TT::Map) return unknownIn(t->key) || unknownIn(t->val);
+    if (t->t == TT::Tuple) { for (Type* x : t->elems) if (unknownIn(x)) return true; }
+    return false;
+  };
   if (!e->retType && exp && exp->ret->t == TT::Void && !e->isGenerator && !e->isAsync) ret = T.voidT();
-  else if (!e->retType && exp && exp->ret->t != TT::Unknown && exp->ret->t != TT::Void) ret = exp->ret;
+  else if (!e->retType && exp && exp->ret->t != TT::Unknown && exp->ret->t != TT::Void && !unknownIn(exp->ret)) ret = exp->ret;
   if (ret) checkCoroutineRet(f, ret, e->loc);
   f->sigResolved = true;
   f->inferRet = ret == nullptr;

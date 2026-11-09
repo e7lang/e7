@@ -48,7 +48,7 @@ class B extends A {}
   const c: number[] = new Array(4);
   const d = Array<number>(2);
   const e = Array("p", "q");
-  const f = new Array<boolean>(...[true, false]);
+  const f = new Array<boolean>(true, false);
   console.log(a, b, c.length, d.length, e, f, Array.of<number>(), Array.of(1, 2));
 }
 {
