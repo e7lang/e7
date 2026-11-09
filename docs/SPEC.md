@@ -672,6 +672,7 @@ or host function that was running (or that called back into the script, like `Ar
 | An optional interface property that a class does not declare, written later through the interface | Added as the last own property of the instance | Kept at the position of the class that implements the interface (before the properties of its subclasses) in `Object.keys`, `JSON.stringify` and `console.log` |
 | `structuredClone` of a class instance held through an interface type | A plain object with its own properties | A catchable `DataCloneError` (class instances cannot be cloned; the compiler rejects it when the static type is the class) |
 | An array of a subclass used as an array of its base class and given a base class instance (TypeScript's unsound array covariance) | Later reads see the base class instance | A run-time error when the element is used as the subclass |
+| `sort(cmp)` with an inconsistent comparator (it returns `NaN`, or contradicts itself) | The order V8's TimSort gives | A stable merge sort's order (the same for consistent comparators) |
 | `JSON.parse(text) as T` | Properties in the order of the text | Properties in the order of `T` (the layout of an object is fixed by its type) |
 | Callbacks of the methods of a typed array other than `Uint8Array` (`forEach`, `map`, `filter`, `reduce`, ...) | See writes made while they run | Get the elements as they were when the method was called (`for...of` sees writes) |
 | `arr.map(f)` where `f` shortens `arr` | The result keeps the original length (holes) | The result has the elements that were mapped |

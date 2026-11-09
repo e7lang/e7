@@ -32,6 +32,11 @@ re-run against Node.js to check that nothing changed for them.
   `entries()` of typed arrays read a snapshot; `e.name = s` changed what `instanceof` sees; an object literal's
   `toString` property holding a function was not used by `String()`; a nested function with default parameters
   that captures variables failed with "function signature mismatch".
+- From a fourth round (about 300 more programs): the clauses of a `switch` did not share one scope (a `let` of one
+  clause written in another wrote an outer variable; a captured variable of a clause failed with "invalid cell
+  access"); a spread or `Object.assign` source property of type `T | undefined` holding undefined did not overwrite
+  the earlier value; a static field of a nullable number type with an initializer was an internal compiler error;
+  `JSON.stringify` of an error ignored an assigned `name`, `structuredClone` of a renamed error kept its name.
 
 ### Added
 - Narrowing as tsc does it: a declaration's initializer, the ends of blocks and of `if` branches (nested ones too),

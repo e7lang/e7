@@ -818,16 +818,33 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
 static void spreadUpsert(const std::vector<ObjProp>& props, const std::vector<std::vector<std::pair<std::string, Type*>>>& entries,
                          std::vector<std::string>& names, std::vector<Type*>& types, std::vector<int>& src,
                          std::vector<std::vector<int>>& cond) {
+  // whether property k of spread source idx may be left out (an optional property `k?: T`); a property of
+  // type T | undefined that is always there overrides the earlier value, also with undefined
+  auto mayBeAbsent = [&](int idx, const std::string& k) -> bool {
+    Expr* v = props[idx].value;
+    Type* vt = v && v->type ? baseOf(v->type) : nullptr;
+    if (!vt) return true;
+    if (vt->t == TT::Object) {
+      const ObjShape::Prop* p = vt->shape->findProp(k);
+      return !p || p->optional;
+    }
+    if (vt->t == TT::Class) {
+      auto it = vt->cls->fieldIdx.find(k);
+      return it == vt->cls->fieldIdx.end() || vt->cls->fields[it->second].optional || vt->cls->fields[it->second].absent;
+    }
+    return true;
+  };
   auto upsert = [&](const std::string& k, Type* t, int idx) {
     for (size_t i = 0; i < names.size(); i++)
       if (names[i] == k) {
         // an optional spread property only overrides when present (TS semantics)
         Type* bt = baseOf(t);
-        if (props[idx].spread && t->t == TT::Optional && t->hasUndef && !t->hasNull && bt == baseOf(types[i])) {
+        if (props[idx].spread && t->t == TT::Optional && t->hasUndef && !t->hasNull && bt == baseOf(types[i]) &&
+            mayBeAbsent(idx, k)) {
           cond[i].push_back(idx);
           return;
         }
-        if (types[i]->t == TT::Optional && types[i]->hasUndef && src[i] >= 0 && props[src[i]].spread) {
+        if (types[i]->t == TT::Optional && types[i]->hasUndef && src[i] >= 0 && props[src[i]].spread && mayBeAbsent(src[i], k)) {
           // possibly-absent key from a spread: JS places a newly added key last (best static approximation)
           names.erase(names.begin() + i); types.erase(types.begin() + i);
           src.erase(src.begin() + i); cond.erase(cond.begin() + i);
@@ -1882,6 +1899,10 @@ Type* Checker::checkAssign(Expr* e) {
     if (rt != lt && !rt->lit && rt->t != TT::Unknown && rt->t != TT::Never && rt->t != TT::Void && kindOf(rt) == kindOf(lt) &&
         isBoxedOptional(rt) == isBoxedOptional(lt) && assignable(rt, lt))
       return rt;
+    // ((n = 21) * 2 with n: number | null: a number; codegen unboxes the value)
+    if (isBoxedOptional(lt) && rt->t != TT::Optional && !isNullish(rt) && rt->t != TT::Unknown && rt->t != TT::Never &&
+        baseLit(rt) == lt->elem)
+      return lt->elem;
     return lt;
   }
   if (op == "||=" || op == "&&=") {

@@ -4203,6 +4203,19 @@ static bool isLeaf(Expr* e) {
 }
 
 void Gen::genAssign(Expr* e, uint16_t dst) {
+  // (n = 21) * 2 with n: number | null: the target holds the value boxed, the expression's value is the
+  // number (its type is the value's)
+  if (dst != kNoReg && e->raw == "=" && e->a->type && e->type && isBoxedOptional(e->a->type) && K(e->type) != K_R) {
+    size_t m1 = mark();
+    Type* saved = e->type;
+    e->type = e->a->type;
+    uint16_t boxed = temp(K_R);
+    genAssign(e, boxed);
+    e->type = saved;
+    emit(K(saved) == K_F ? OP_UNBOX_F : OP_UNBOX_I, dst, boxed);
+    release(m1);
+    return;
+  }
   size_t m0 = mark();
   Expr* target = strip(e->a);
   const std::string& op = e->raw;

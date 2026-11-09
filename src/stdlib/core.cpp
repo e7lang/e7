@@ -59,7 +59,8 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Array: {
       auto* a = static_cast<ArrObj*>(o);
       StrObj *en, *em;
-      if (vm.errorParts(o, &en, &em)) return em->len ? strU16(en) + u": " + strU16(em) : strU16(en);
+      if (vm.errorParts(o, &en, &em))
+        return em->len == 0 ? strU16(en) : en->len == 0 ? strU16(em) : strU16(en) + u": " + strU16(em);
       if (joining(o)) return u"";
       JoinGuard g(vm, o);
       std::u16string out;
@@ -1139,6 +1140,18 @@ struct Cloner {
           c->data[i] = v;
           c->len = i + 1;
         }
+        StrObj *en, *em;
+        if (vm.errorParts(c, &en, &em)) {
+          // an Error's copy is of the class its name says when that is a standard one, else an Error (the
+          // HTML structured clone algorithm), without the properties assigned to the original
+          static const char16_t* const std16[] = {u"Error", u"EvalError", u"RangeError", u"ReferenceError",
+                                                   u"SyntaxError", u"TypeError", u"URIError"};
+          std::u16string nm = strU16(en);
+          bool standard = false;
+          for (const char16_t* x : std16) standard = standard || nm == x;
+          if (!standard) c->data[0].r = vm.newStringAscii("Error");
+          c->flags = kArrFlagError;
+        }
         return c;
       }
       case OT::Instance: {
@@ -1334,6 +1347,9 @@ static void errSet(VM& vm, Slot* a, Slot* r, int part) {
       if (cur == kErrClasses[i]) k = (uint16_t)(i + 1);
     arr->flags = (uint16_t)(arr->flags | (k << 8));
   }
+  // an own (enumerable) property now, as in JavaScript: the name, or a message that the error did not have
+  if (part == 0) arr->flags |= 0x1000;
+  else if (m->len == 0) arr->flags |= 0x2000;
   arr->data[part].r = S(vm, a[1]);
   r->r = a[1].r;
 }

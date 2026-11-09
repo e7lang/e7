@@ -578,6 +578,8 @@ void Checker::checkBlockStmts(std::vector<Stmt*>& stmts) {
 Type* Checker::knownFnType(VarDecl& d, Type* declared) {
   Expr* ai = d.init;
   while (ai && ai->k == EK::Paren) ai = ai->a;
+  // (const off: () => boolean = on(() => { off(); }): an annotated function type, whatever the initializer)
+  if (declared && declared->t == TT::Func && ai && !(ai->k == EK::Arrow && !ai->typeParams.empty())) return declared;
   if (!ai || ai->k != EK::Arrow || !ai->typeParams.empty()) return nullptr;
   if (declared) return declared->t == TT::Func ? declared : nullptr;
   if (!ai->retType) return nullptr;
@@ -1188,6 +1190,8 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
     if (ft) {
       // (declared already when the block was entered: the functions before it may call it)
       if (!preBound.erase(&d)) bindPattern(d, ft, isConst, false, d.loc);
+      // (an initializer that may call a closure reading the variable: null until it is set, a ReferenceError)
+      if (d.sym && stripParens(d.init)->k != EK::Arrow) d.sym->tdzLocal = true;
       check(d.init, ft);
       coerce(d.init, ft);
       noteConstArrow(d, isConst);
