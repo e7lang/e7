@@ -173,6 +173,8 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
         if (a->k == EK::Spread) {
           Type* st = check(a->a, T.array(num));
           iterUse(a->a);
+          if (st->t == TT::Tuple)  // Math.max(...t) of a tuple of numbers
+            if (Expr* arr = tupleAsArray(a->a, st)) { a->a = arr; st = arr->type; }
           // number[] (also readonly, or of numeric literal types: the same values)
           if (st != T.array(num) && !(st->t == TT::Array && st->elem && baseLit(st->elem) == num))
             return errT(a->loc, "spread argument must be number[]");
@@ -527,6 +529,8 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       if (args.size() != 1) return errT(l, "Array.from expects one argument");
       Type* t = check(args[0], nullptr);
       iterUse(args[0]);
+      if (t->t == TT::Tuple)  // Array.from(t) of a tuple whose elements have one type: a copy of them
+        if (Expr* arr = tupleAsArray(args[0], t)) { args[0] = arr; t = arr->type; }
       Type* et = elemTypeForIter(args[0], t, args[0]->loc);
       if (t->t == TT::Map) e->cls = tupleRecord(et);
       e->intrinsic = IN_ARRAY_FROM;
@@ -1200,6 +1204,8 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
       // type; the result may also be a Set (copy constructor)
       Type* at = check(args[0], et ? T.array(et) : nullptr);
       iterUse(args[0]);
+      if (at->t == TT::Tuple)  // new Set(t) of a tuple whose elements have one type
+        if (Expr* arr = tupleAsArray(args[0], at)) { args[0] = arr; at = arr->type; }
       if (at->t == TT::Set) {
         if (et && at->elem != et) return errT(args[0]->loc, "Set type mismatch in copy constructor");
         e->intrinsic = IN_NATIVE_NORECV;

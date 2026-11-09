@@ -41,12 +41,12 @@ E7_NATIVE(b_view) {
   E7_UNUSED;
   BufObj* buf = Buf(vm, a[0]);
   double off = toInteger(a[1].f);
-  if (off < 0 || off > buf->len) vm.error("RangeError: start offset %s is outside the bounds of the buffer", numberToString(a[1].f).c_str());
+  if (off < 0 || off > buf->len) vm.error("RangeError: Start offset %s is outside the bounds of the buffer", numberToString(a[1].f).c_str());
   double len;
   if (a[2].f != a[2].f) len = buf->len - off;
   else {
     len = toInteger(a[2].f);
-    if (len < 0 || off + len > buf->len) vm.error("RangeError: invalid length %s", numberToString(a[2].f).c_str());
+    if (len < 0 || off + len > buf->len) vm.error("RangeError: Invalid DataView length %s", numberToString(a[2].f).c_str());
   }
   r->r = vm.newBytesView(buf, (uint32_t)off, (uint32_t)len);
 }
@@ -139,7 +139,14 @@ E7_NATIVE(b_at) {
   v.f = s->ptr()[(size_t)i];
   r->r = vm.newBox(VT_NUMBER, v);
 }
-E7_NATIVE(buf_new) { E7_UNUSED; r->r = vm.newBuffer(checkLen(vm, a[0].f)); }
+E7_NATIVE(buf_new) {
+  E7_UNUSED;
+  double d = a[0].f;
+  if (d != d) d = 0;
+  d = std::trunc(d);
+  if (d < 0 || std::isinf(d)) vm.error("RangeError: Invalid array buffer length");
+  r->r = vm.newBuffer(checkLen(vm, d));
+}
 E7_NATIVE(buf_byteLength) { E7_UNUSED; r->f = Buf(vm, a[0])->len; }
 E7_NATIVE(buf_slice) {
   E7_UNUSED;
@@ -155,7 +162,7 @@ E7_NATIVE(buf_slice) {
 static const int kSize[8] = {1, 1, 2, 2, 4, 4, 4, 8};
 static uint8_t* dvPtr(VM& vm, BytesObj* v, double off, int size) {
   double o = toInteger(off);
-  if (o < 0 || o + size > v->len) vm.error("RangeError: offset is outside the bounds of the DataView");
+  if (o < 0 || o + size > v->len) vm.error("RangeError: Offset is outside the bounds of the DataView");
   return v->ptr() + (size_t)o;
 }
 static uint64_t loadN(const uint8_t* p, int n, bool le) {

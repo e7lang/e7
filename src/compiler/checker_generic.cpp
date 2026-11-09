@@ -495,14 +495,40 @@ bool Checker::inferCall(GenericSym* g, std::vector<Param>* params, TypeNode* ret
       Type* want = fromRet[i];
       if (!want || want == out[i] || !params || !baseOf(want)->lit || baseLit(baseOf(want)) != baseOf(out[i])) continue;
       bool fits = false, other = false;
+      std::vector<Expr*> recheck;  // array literals of constants, checked again as arrays of the literal type
+      const std::string& tn = (*g->params)[i].name;
+      auto isT = [&](TypeNode* n) { return n && n->k == TNK::Ref && n->name == tn && n->args.empty(); };
       for (size_t k = 0; k < args.size() && k < params->size(); k++) {
         TypeNode* pn = (*params)[k].type;
-        if (!pn || (*params)[k].rest || !mentionsName(pn, (*g->params)[i].name)) continue;
-        Type* c = pn->k == TNK::Ref && pn->name == (*g->params)[i].name && pn->args.empty() ? constLit(args[k]) : nullptr;
-        if (c && assignable(c, want)) fits = true;
+        if (!pn || (*params)[k].rest || !mentionsName(pn, tn)) continue;
+        if (isT(pn)) {
+          Type* c = constLit(args[k]);
+          if (c && assignable(c, want)) fits = true;
+          else other = true;
+          continue;
+        }
+        // first(["s", "n"]) for xs: T[]
+        Expr* lit = strip(args[k]);
+        bool arrT = (pn->k == TNK::Array && isT(pn->elem)) ||
+                    (pn->k == TNK::Ref && (pn->name == "Array" || pn->name == "ReadonlyArray") && pn->args.size() == 1 && isT(pn->args[0]));
+        bool ok = arrT && lit->k == EK::Array && !lit->list.empty();
+        for (Expr* x : arrT ? lit->list : std::vector<Expr*>{}) {
+          Expr* sx = strip(x);
+          Type* c = sx->k == EK::Str || sx->k == EK::Num || sx->k == EK::Bool ? constLit(sx) : nullptr;
+          ok = ok && c && assignable(c, want);
+        }
+        if (ok) { fits = true; recheck.push_back(lit); }
         else other = true;
       }
-      if (fits && !other) out[i] = want;
+      if (fits && !other) {
+        out[i] = want;
+        for (Expr* lit : recheck) {
+          lit->type = nullptr;
+          for (Expr* x : lit->list) x->type = nullptr;
+        }
+        for (size_t k = 0; k < args.size(); k++)
+          if (std::find(recheck.begin(), recheck.end(), strip(args[k])) != recheck.end()) args[k]->type = nullptr;
+      }
     }
   }
   int r = completeTypeArgs(g, out, l);

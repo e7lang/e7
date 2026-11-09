@@ -568,8 +568,10 @@ Type* Checker::knownFnType(VarDecl& d, Type* declared) {
 }
 
 // a switch over an enum value whose cases name every member of the enum (as tsc, exhaustive)
+static Type* nullableCovered(Stmt* s, Type* dt);
+
 bool Checker::switchCoversLits(Stmt* s) {
-  Type* dt = s->expr ? s->expr->type : nullptr;
+  Type* dt = nullableCovered(s, s->expr ? s->expr->type : nullptr);
   if (dt && dt->t == TT::Bool && !dt->lit) {
     // switch (b) { case true: ...; case false: ... }: both values (their union is boolean itself)
     Type* covered = nullptr;
@@ -615,8 +617,22 @@ Type* Checker::litMinus(Type* a, Type* b) {
   return m ? T.boolLit(m) : nullptr;
 }
 
+// a switch over a nullable value: its cases include null / undefined for each it may be (null: not covered)
+static Type* nullableCovered(Stmt* s, Type* dt) {
+  if (!dt || dt->t != TT::Optional) return dt;
+  bool n = false, u = false;
+  for (auto& c : s->cases) {
+    if (!c.test) continue;
+    Expr* x = stripParens(c.test);
+    n = n || x->k == EK::Null;
+    u = u || x->k == EK::Undefined;
+  }
+  if ((dt->hasNull && !n) || (dt->hasUndef && !u)) return nullptr;
+  return dt->elem;
+}
+
 bool Checker::switchCoversEnum(Stmt* s) {
-  Type* dt = s->expr ? s->expr->type : nullptr;
+  Type* dt = nullableCovered(s, s->expr ? s->expr->type : nullptr);
   if (!dt || dt->t != TT::Enum || !dt->en) return false;
   std::vector<double> nums;
   std::vector<std::u16string> strs;
@@ -1467,6 +1483,9 @@ void Checker::checkStmt(Stmt* s) {
         if (ie->k == EK::Call && ie->list.empty() && ie->a->k == EK::Member &&
             (ie->a->raw == "entries" || ie->a->raw == "keys" || ie->a->raw == "values")) {
           Type* ot = check(ie->a->a, nullptr);
+          // t.entries() of a readonly tuple whose elements have one type: of an array of its elements
+          if (ot->t == TT::Tuple && ot->ro)
+            if (Expr* arr = tupleAsArray(ie->a->a, ot)) { ie->a->a = arr; ot = arr->type; }
           const std::string& mn = ie->a->raw;
           if (ot->t == TT::Array) {
             s->declareKind = mn == "entries" ? 1 : mn == "keys" ? 2 : 3;

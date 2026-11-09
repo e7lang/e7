@@ -1219,6 +1219,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
         t = T.unknown();
       }
       if (t->t == TT::Void) { err(p.loc, "property value cannot be void"); t = T.unknown(); }
+      if (t->lit && strip(p.value)->k != EK::As) t = widen(t);  // (as tsc widens a literal-typed value; not "x" as const)
       propT[i] = t;
       sh->props.push_back({p.key, t, false});
     }
@@ -1318,6 +1319,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       t = T.unknown();
     }
     if (t->t == TT::Void) { err(p.loc, "property value cannot be void"); t = T.unknown(); }
+    if (t->lit && strip(p.value)->k != EK::As) t = widen(t);  // { k: N } of a constant N = "n": a string property (as tsc widens it; not "x" as const)
     props.push_back({p.key, t, false});
     fields.push_back({p.key, t});
   }
@@ -2681,7 +2683,8 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
       ClassSym* c = bt->cls;
       resolveClass(c);
       auto it = c->fieldIdx.find(name);
-      if (it != c->fieldIdx.end() && c->fields[it->second].absent) it = c->fieldIdx.end();  // (only through the interface)
+      // (only through the interface; or in a generic instance whose constraint is the interface)
+      if (it != c->fieldIdx.end() && c->fields[it->second].absent && curInstDepth() == 0) it = c->fieldIdx.end();
       if (it != c->fieldIdx.end()) {
         if (name[0] == '#' && !checkPrivateAccess(e->nameLoc, name, c->fields[it->second].owner)) return T.unknown();
         e->field = it->second;

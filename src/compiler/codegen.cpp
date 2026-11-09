@@ -1257,10 +1257,15 @@ void Gen::blockEntry(std::vector<Stmt*>& stmts) {
   std::function<void(VarDecl&)> pre = [&](VarDecl& d) {
     if (d.sym && !d.sym->isGlobal && d.sym->captured) {
       // a new cell each time the block is entered: the declaration keeps it (the hoisted functions of
-      // the block capture it before the declaration runs)
-      if (!varReg.count(d.sym)) freshCells.insert(d.sym);
-      declareLocal(d.sym);
-      if (d.sym->initFlag && d.sym->initFlag->captured) declareLocal(d.sym->initFlag);  // (false until the declaration)
+      // the block capture it before the declaration runs). A block generated again (a finally block on
+      // another path) creates it again.
+      auto fresh = [&](VarSym* v) {
+        if (varReg.count(v)) emit(OP_NEWCELL, varReg[v], vtOf(v->type ? v->type : T.unknown()));
+        else declareLocal(v);
+      };
+      fresh(d.sym);
+      freshCells.insert(d.sym);
+      if (d.sym->initFlag && d.sym->initFlag->captured) fresh(d.sym->initFlag);  // (false until the declaration)
     }
     for (auto& sub : d.elems) pre(sub);
   };

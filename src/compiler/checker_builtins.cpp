@@ -404,6 +404,21 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
   if (obj->k == EK::Super) {
     FuncSym* f = curFn;
     while (f && f->isArrowThis && f->parent && !f->isMethod) f = f->parent;
+    if (f && f->cls && f->isStatic) {
+      // super.m() in a static method: the static method of the nearest base class that has one
+      for (ClassSym* k = f->cls->staticParent; k; k = k->staticParent) {
+        auto it = k->staticMethods.find(name);
+        if (it == k->staticMethods.end()) continue;
+        FuncSym* target = it->second;
+        resolveSig(target);
+        if (target->inferRet && !target->checking) checkFunction(target);
+        checkArgs(e, target->type, e->list, 0, target);
+        e->callee = target;
+        e->intrinsic = IN_DIRECT;
+        return target->type->ret;
+      }
+      return errT(e->loc, "no base class of '" + f->cls->name + "' has a static method '" + name + "'");
+    }
     if (!f || !f->cls || !f->cls->parent || f->isStatic) return errT(e->loc, "'super' method calls are only allowed in methods of derived classes");
     ClassSym* pc = f->cls->parent;
     auto it = pc->methodIdx.find(name);
@@ -854,6 +869,12 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       if (meth("push")) {
         if (args.size() == 1 && args[0]->k == EK::Spread) {
           Type* st = check(args[0]->a, bt);
+          if (st->t == TT::Tuple)  // push(...t) of a tuple whose elements have one type
+            if (Expr* arr = tupleAsArray(args[0]->a, st)) { args[0]->a = arr; st = arr->type; }
+          if (st != bt && st->t == TT::Array && st->elem != et && assignable(st->elem, et)) {
+            coerce(args[0]->a, bt);
+            st = bt;
+          }
           if (st != bt) return errT(args[0]->loc, "spread argument must be of type '" + typeName(bt) + "'");
           args[0] = args[0]->a;
           native("Array.pushArray");

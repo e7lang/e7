@@ -1485,8 +1485,7 @@ void Checker::resolveClass(ClassSym* c) {
       err(l, "private field '" + name + "' is also declared by a base class; e7 needs distinct private names in a class hierarchy");
       return;
     }
-    if (auto fi = c->fieldIdx.find(name); fi != c->fieldIdx.end() && c->fields[fi->second].owner != c &&
-                                           !c->fields[fi->second].absent && name[0] != '#') {
+    if (auto fi = c->fieldIdx.find(name); fi != c->fieldIdx.end() && c->fields[fi->second].owner != c && name[0] != '#') {
       // a field of the base class declared again (class C extends A { name = "C" }): the same property,
       // which C's initializer sets after A's (with the type it has: its representation is fixed)
       auto& f = c->fields[fi->second];
@@ -1498,6 +1497,7 @@ void Checker::resolveClass(ClassSym* c) {
       f.owner = c;
       f.loc = l;
       f.readonly = readonly;
+      f.absent = false;  // (an absent interface property of the base class: declared here)
       return;
     }
     if (c->fieldIdx.count(name) || c->methodIdx.count(name) || c->privateMethods.count(name)) {
