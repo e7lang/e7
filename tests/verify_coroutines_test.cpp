@@ -144,9 +144,14 @@ int main() {
     f.fflags = 0;
     f.code[0] = e7::encode(e7::OP_NOP);
   }, "await outside an async function");
-  expectReject("presence flag on a class that is not a record", [&](e7::Module& m) {
+  // (a class may have a presence mask since 0.1.3: an absent optional property of an interface)
+  expectReject("presence flag on a tuple", [&](e7::Module& m) {
     for (auto& c : m.classes)
-      if (c.isRecord == 1) { c.isRecord = 0; c.cflags = e7::kClassFlagPresence; break; }
+      if (c.isRecord == 1) { c.isRecord = 2; c.cflags = e7::kClassFlagPresence; break; }
+  }, "bad class flags");
+  expectReject("accessor flag on a class that is not a record", [&](e7::Module& m) {
+    for (auto& c : m.classes)
+      if (c.isRecord == 1) { c.isRecord = 0; c.cflags = e7::kClassFlagAccessors; break; }
   }, "bad class flags");
   expectReject("unknown class flag", [&](e7::Module& m) {
     for (auto& c : m.classes)
