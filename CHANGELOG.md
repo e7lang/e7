@@ -23,6 +23,16 @@ re-run against Node.js to check that nothing changed for them.
 - `parseInt` of large values in a radix that is neither 10 nor a power of two differed from Node.js in the last
   digits; typed array and `ArrayBuffer` lengths are converted as JavaScript does (`new Uint8Array(2.5)` has length 2).
 
+- From a third round of testing (five areas, about 1,800 programs, all compared with Node.js): a `switch` clause
+  reached by falling through from the one before it was narrowed by its own values only; `lbl: if (...) { break
+  lbl; }` counted as an exit; assignments on the right of `??`, `??=`, `||=` and `&&=` counted as always run (all
+  three let null values through as non-null); a closure reading a name its block declares later read an outer
+  variable of that name (now a compile error); a nested function declaration called before a `let` / `const` it
+  reads was declared read `0` / `null` (now a `ReferenceError`); `for...of` over tuples and `values()` /
+  `entries()` of typed arrays read a snapshot; `e.name = s` changed what `instanceof` sees; an object literal's
+  `toString` property holding a function was not used by `String()`; a nested function with default parameters
+  that captures variables failed with "function signature mismatch".
+
 ### Added
 - Narrowing as tsc does it: a declaration's initializer, the ends of blocks and of `if` branches (nested ones too),
   `do...while` bodies, `while` conditions when the loop ends and assignments in conditions
@@ -49,6 +59,12 @@ re-run against Node.js to check that nothing changed for them.
   ones declared after them; `x: T | undefined = d` before a required parameter.
 - Clearer errors for a class method implementing an interface's function property, a class field for an optional
   interface property, and a class without an interface's optional property and without `implements`.
+- Also from the third round: `x += v` and `x++` of a nullable `x` narrowed to a number; `c ? a : b` for an optional
+  property; `x ?? "all"` of a literal type; a `switch` over a nullable value with `case null:` as exhaustive; `T`
+  inferred from callbacks returning `Promise<T>` and from array literal arguments; `Promise.resolve<T>`;
+  `.catch` handlers returning nothing; `filter((x) => x)`; `super.m()` in static methods; tuples in `Array.from`,
+  `new Set` and spreads; parameters `x: T | undefined = d` are `T` in function bodies; a structuredClone that
+  cannot copy throws a catchable `DataCloneError`.
 
 ### Changed
 - RangeError messages are worded as in Node.js (`Invalid count value: -1`, `Invalid code point`, `Invalid string

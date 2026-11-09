@@ -116,7 +116,8 @@ User-defined generics are supported (section 2.3).
   (`const d: Dir = id("n")`); `s as Dir` of a `string` is not checked at run time, as in TypeScript.
 - A tuple whose elements have one type (or literal types of one base, as `as const` gives) is iterable, takes
   computed indexes for reading, and has the array methods that do not change it (`map`, `join`, `includes`, ...,
-  on a copy of its elements).
+  on a copy of its elements; a callback that writes to a mutable tuple is a compile error, as is `flat()` of
+  tuples).
 - A recursive function that omits its return type is an error; an explicit annotation is required.
 - Interfaces and object type aliases may be recursive (`interface Tree { children: Tree[] }`, also mutually recursive
   and generic ones); structural compatibility between recursive types is checked coinductively, as in tsc.
@@ -342,7 +343,10 @@ try {
   without its initializer (typed parameters and a return type, or an annotation); so may a named function
   expression through its name (`function f(n: number): number { ... f(n - 1) ... }`). Such function values of a
   block may also call the ones declared after them (`const isEven = ... isOdd(k - 1); const isOdd = ...`); calling one
-  before its declaration ran throws a `ReferenceError`, as in JavaScript.
+  before its declaration ran throws a `ReferenceError`, as in JavaScript. A nested function declaration that reads a
+  `let` / `const` of its block declared before the function may be called before that declaration runs: that also
+  throws a `ReferenceError`. A name used before its declaration later in the same block (also inside a closure
+  there) is a compile error: JavaScript would read the later variable, never an outer one of the same name.
 - Classes: fields (optionally initialized, types can be inferred), constructor parameter properties (`constructor(public x: number)`), methods, static fields/methods,
   single inheritance with `extends` (the first statement of a derived class constructor must be `super(...)`; if the constructor is omitted, the superclass constructor parameters are inherited automatically),
   `super.method()`, `implements` (checked structurally; an optional property of the interface that the class does not
@@ -665,6 +669,9 @@ or host function that was running (or that called back into the script, like `Ar
 | A `declare` field that is never assigned | Not a property | A property with the zero value of its type |
 | `typeof x` where `x` has type `never` (an `assertNever(x)` argument: a number cast to an enum it is not a member of) | The value's type (`"number"`) | `"object"` (the value itself is kept: printing it shows the number) |
 | `Object.freeze(obj)` | Later writes throw a `TypeError` (strict mode) | Writes are not stopped (a frozen array's type is `readonly T[]`, as in TypeScript, so writes through the result do not compile) |
+| An optional interface property that a class does not declare, written later through the interface | Added as the last own property of the instance | Kept at the position of the class that implements the interface (before the properties of its subclasses) in `Object.keys`, `JSON.stringify` and `console.log` |
+| `structuredClone` of a class instance held through an interface type | A plain object with its own properties | A catchable `DataCloneError` (class instances cannot be cloned; the compiler rejects it when the static type is the class) |
+| An array of a subclass used as an array of its base class and given a base class instance (TypeScript's unsound array covariance) | Later reads see the base class instance | A run-time error when the element is used as the subclass |
 | `JSON.parse(text) as T` | Properties in the order of the text | Properties in the order of `T` (the layout of an object is fixed by its type) |
 | Callbacks of the methods of a typed array other than `Uint8Array` (`forEach`, `map`, `filter`, `reduce`, ...) | See writes made while they run | Get the elements as they were when the method was called (`for...of` sees writes) |
 | `arr.map(f)` where `f` shortens `arr` | The result keeps the original length (holes) | The result has the elements that were mapped |
