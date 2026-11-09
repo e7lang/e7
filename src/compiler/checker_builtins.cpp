@@ -52,6 +52,9 @@ bool Checker::argsMatch(Expr* call, std::vector<Expr*>& args, const std::vector<
     Type* pt = params[i];
     Type* t = args[i]->type ? args[i]->type : check(args[i], pt);
     if (pt->t == TT::Unknown) continue;
+    // a constant of a literal type's base: its value decides (m.set("n", 1) for a Map<"n" | "s", number>)
+    if (baseOf(pt)->lit && !t->lit && (t->t == TT::String || t->t == TT::Number || t->t == TT::Bool))
+      if (Type* c = constLit(args[i])) t = c;
     if (t != pt && !assignable(t, pt)) {
       if (report) err(args[i]->loc, "argument of type '" + typeName(t) + "' is not assignable to parameter of type '" + typeName(pt) + "'");
       ok = false;
@@ -395,7 +398,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
   if (ot->t == TT::Unknown) { for (Expr* a : e->list) check(a, nullptr); return T.unknown(); }
   Type* bt = ot;
   if (ot->t == TT::Optional) {
-    if (!m->optional || (m->chained && m->a && m->a->innerType && m->a->innerType->t == TT::Optional))
+    if (!m->optional || (m->chained && m->a && (m->a->optional ? m->a->innerType && m->a->innerType->t == TT::Optional : m->a->type && m->a->type->t == TT::Optional)))
       return errT(m->loc, "object is possibly null or undefined; use '?.' or a check");
     bt = ot->elem;
     e->optional = true;
@@ -710,7 +713,9 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
     case TT::Enum: {
       if (bt->t == TT::Enum && bt->en->isString) {
         if (meth("toString")) { e->intrinsic = IN_TOSTRING; return str; }
-        return noSuch();
+        // a string enum's values are strings: the string methods, on the receiver seen as a string
+        m->a = wrapConv(m->a, ConvKind::None, str);
+        return checkBuiltinMethod(e, m, str, expected);
       }
       if (meth("toString")) {
         if (args.empty()) { e->intrinsic = IN_TOSTRING; return str; }
@@ -922,12 +927,33 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
           e->intrinsic = IN_ARR_MAP;
           return T.array(r);
         }
-        if (name == "filter") { e->intrinsic = IN_ARR_FILTER; return T.array(bt->elem); }
+        // a type predicate callback ((x): x is string => x !== null): the elements found are of its type
+        // (when they are stored the same way: references)
+        Type* pt = nullptr;
+        if (name == "filter" || name == "find" || name == "findLast") {
+          Expr* c = strip(args[0]);
+          while (c->k == EK::Conv) c = strip(c->a);
+          FuncSym* pf = c->k == EK::Arrow ? c->fn : nullptr;
+          if (!pf && c->k == EK::Ident) {
+            Sym* sy = lookup(c->raw);
+            if (sy && sy->k == SymK::Func) pf = static_cast<FuncSym*>(sy);
+            else if (sy && sy->k == SymK::Var) {
+              Expr call;
+              call.k = EK::Call;
+              call.a = c;
+              pf = predCallee(&call);
+            }
+          }
+          if (pf && pf->predParam == 0 && pf->predType && !pf->asserts && kindOf(pf->predType) == kindOf(et) &&
+              kindOf(et) == K_R && assignable(pf->predType, et))
+            pt = pf->predType;
+        }
+        if (name == "filter") { e->intrinsic = IN_ARR_FILTER; return T.array(pt ? pt : bt->elem); }
         if (name == "forEach") { e->intrinsic = IN_ARR_FOREACH; return T.voidT(); }
         if (name == "some") { e->intrinsic = IN_ARR_SOME; return boo; }
         if (name == "every") { e->intrinsic = IN_ARR_EVERY; return boo; }
-        if (name == "find") { e->intrinsic = IN_ARR_FIND; return T.optional(et, false, true); }
-        if (name == "findLast") { e->intrinsic = IN_ARR_FINDLAST; return T.optional(et, false, true); }
+        if (name == "find") { e->intrinsic = IN_ARR_FIND; return T.optional(pt ? pt : et, false, true); }
+        if (name == "findLast") { e->intrinsic = IN_ARR_FINDLAST; return T.optional(pt ? pt : et, false, true); }
         if (name == "findIndex") { e->intrinsic = IN_ARR_FINDINDEX; return num; }
         e->intrinsic = IN_ARR_FINDLASTINDEX;
         return num;

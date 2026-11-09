@@ -173,7 +173,9 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
         if (a->k == EK::Spread) {
           Type* st = check(a->a, T.array(num));
           iterUse(a->a);
-          if (st != T.array(num)) return errT(a->loc, "spread argument must be number[]");
+          // number[] (also readonly, or of numeric literal types: the same values)
+          if (st != T.array(num) && !(st->t == TT::Array && st->elem && baseLit(st->elem) == num))
+            return errT(a->loc, "spread argument must be number[]");
           a->type = st;
           continue;
         }

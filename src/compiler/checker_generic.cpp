@@ -488,8 +488,22 @@ bool Checker::inferCall(GenericSym* g, std::vector<Param>* params, TypeNode* ret
   if (expected && ret) {
     std::vector<Type*> fromRet(np, nullptr);
     inferMatch(g, fromRet, ret, expected);
-    for (size_t i = 0; i < np; i++)
-      if (!out[i]) out[i] = fromRet[i];
+    for (size_t i = 0; i < np; i++) {
+      if (!out[i]) { out[i] = fromRet[i]; continue; }
+      // const d: Dir = id("n"): a literal type the result is expected to have, when every argument
+      // given for a parameter of type T is a constant of it (tsc keeps the literal type "n")
+      Type* want = fromRet[i];
+      if (!want || want == out[i] || !params || !baseOf(want)->lit || baseLit(baseOf(want)) != baseOf(out[i])) continue;
+      bool fits = false, other = false;
+      for (size_t k = 0; k < args.size() && k < params->size(); k++) {
+        TypeNode* pn = (*params)[k].type;
+        if (!pn || (*params)[k].rest || !mentionsName(pn, (*g->params)[i].name)) continue;
+        Type* c = pn->k == TNK::Ref && pn->name == (*g->params)[i].name && pn->args.empty() ? constLit(args[k]) : nullptr;
+        if (c && assignable(c, want)) fits = true;
+        else other = true;
+      }
+      if (fits && !other) out[i] = want;
+    }
   }
   int r = completeTypeArgs(g, out, l);
   if (r >= 0)

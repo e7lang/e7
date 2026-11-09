@@ -228,6 +228,10 @@ class Checker {
   void checkBlockStmts(std::vector<Stmt*>& stmts);
   void checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel);
   void bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc l);
+  void narrowDeclInit(VarDecl& d);
+  void noteConstArrow(VarDecl& d, bool isConst);
+  FuncSym* predCallee(Expr* call);
+  std::unordered_map<VarSym*, FuncSym*> constArrowFns;  // const f = (...) => ...: the arrow's function
   void hoistFunctions(std::vector<Stmt*>& stmts);
   void checkClassBodies(ClassSym* c);
   bool exits(Stmt* s);
@@ -289,7 +293,13 @@ class Checker {
   struct Fact { std::string key; Type* t; };
   void joinBranchNarrowing(Stmt* s, const std::vector<Fact>& tf, const std::vector<Fact>& ff);
   void factsFrom(Expr* cond, bool whenTrue, std::vector<Fact>& out);
+  std::string chainKey(Expr* e);
+  void chainFacts(Expr* p, std::vector<Fact>& out);
   void applyFacts(const std::vector<Fact>& facts);
+  // copies what an inner (popped) scope narrowed into the current scope
+  void keepNarrowing(Scope* inner) {
+    for (auto& kv : inner->narrow) scope->narrow[kv.first] = kv.second;
+  }
 
   // builtin helpers
   bool argsMatch(Expr* call, std::vector<Expr*>& args, const std::vector<Type*>& params, size_t minArgs,

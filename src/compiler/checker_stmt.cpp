@@ -473,6 +473,14 @@ void Checker::checkBlockStmts(std::vector<Stmt*>& stmts) {
 // a switch over an enum value whose cases name every member of the enum (as tsc, exhaustive)
 bool Checker::switchCoversLits(Stmt* s) {
   Type* dt = s->expr ? s->expr->type : nullptr;
+  if (dt && dt->t == TT::Bool && !dt->lit) {
+    // switch (b) { case true: ...; case false: ... }: both values (their union is boolean itself)
+    Type* covered = nullptr;
+    for (auto& c : s->cases)
+      if (c.test)
+        if (Type* lt = constLit(c.test); lt && lt->t == TT::Bool) covered = covered ? T.litUnion(covered, lt) : lt;
+    return covered && !covered->lit;
+  }
   if (!dt || !dt->lit) return false;
   Type* covered = nullptr;
   for (auto& c : s->cases)
@@ -573,6 +581,44 @@ bool Checker::exits(Stmt* s) {
       for (Stmt* x : last.body) if (exits(x)) return true;
       return false;
     }
+    default: return false;
+  }
+}
+
+// a break or continue anywhere in s (also of inner loops: a conservative answer)
+static bool hasJump(Stmt* s) {
+  if (!s) return false;
+  switch (s->k) {
+    case SK::Break: case SK::Continue: return true;
+    case SK::Block:
+      for (Stmt* x : s->stmts) if (hasJump(x)) return true;
+      return false;
+    case SK::If: return hasJump(s->then) || hasJump(s->els);
+    case SK::Try: return hasJump(s->body) || hasJump(s->els) || hasJump(s->then);
+    case SK::While: case SK::DoWhile: case SK::For: case SK::ForOf: case SK::Labeled: return hasJump(s->body);
+    case SK::Switch:
+      for (auto& c : s->cases)
+        for (Stmt* x : c.body) if (hasJump(x)) return true;
+      return false;
+    default: return false;
+  }
+}
+
+// a `break label` anywhere in s
+static bool hasLabeledBreak(Stmt* s) {
+  if (!s) return false;
+  switch (s->k) {
+    case SK::Break: return !s->label.empty();
+    case SK::Block:
+      for (Stmt* x : s->stmts) if (hasLabeledBreak(x)) return true;
+      return false;
+    case SK::If: return hasLabeledBreak(s->then) || hasLabeledBreak(s->els);
+    case SK::Try: return hasLabeledBreak(s->body) || hasLabeledBreak(s->els) || hasLabeledBreak(s->then);
+    case SK::While: case SK::DoWhile: case SK::For: case SK::ForOf: case SK::Labeled: return hasLabeledBreak(s->body);
+    case SK::Switch:
+      for (auto& c : s->cases)
+        for (Stmt* x : c.body) if (hasLabeledBreak(x)) return true;
+      return false;
     default: return false;
   }
 }
@@ -986,6 +1032,8 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
     }
     v->type = declared;
     v->checked = true;
+    narrowDeclInit(d);
+    noteConstArrow(d, isConst);
     return;
   }
   Type* declared = d.type ? resolveType(d.type) : nullptr;
@@ -1017,6 +1065,7 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
       bindPattern(d, ft, isConst, false, d.loc);
       check(d.init, ft);
       coerce(d.init, ft);
+      noteConstArrow(d, isConst);
       return;
     }
   }
@@ -1045,7 +1094,38 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
     if (!simple) err(d.loc, "destructuring declarations must be initialized");
   }
   bindPattern(d, t, isConst, topLevel && !simple ? true : false, d.loc);
+  if (simple) narrowDeclInit(d);
+  noteConstArrow(d, isConst);
   (void)s;
+}
+
+// const isK = (k: string): k is Kind => ...: calls of isK narrow as calls of a function isK do
+void Checker::noteConstArrow(VarDecl& d, bool isConst) {
+  if (!isConst || !d.sym || !d.init) return;
+  Expr* x = d.init;
+  while (x && (x->k == EK::Paren || x->k == EK::Conv)) x = x->a;
+  if (x && x->k == EK::Arrow && x->fn) constArrowFns[d.sym] = x->fn;
+}
+
+FuncSym* Checker::predCallee(Expr* c) {
+  if (c->callee) return c->callee;
+  Expr* f = c->a;
+  while (f && f->k == EK::Paren) f = f->a;
+  if (!f || f->k != EK::Ident || !f->var) return nullptr;
+  auto it = constArrowFns.find(f->var);
+  if (it != constArrowFns.end()) return it->second;
+  VarSym* v = f->var;  // a top-level const (typed lazily)
+  if (!v->isConst || !v->decl || !v->decl->init) return nullptr;
+  Expr* x = v->decl->init;
+  while (x && (x->k == EK::Paren || x->k == EK::Conv)) x = x->a;
+  return x && x->k == EK::Arrow ? x->fn : nullptr;
+}
+
+// let x: T | null = <non-null value>: x is narrowed to T afterwards (as an assignment narrows it)
+void Checker::narrowDeclInit(VarDecl& d) {
+  VarSym* v = d.sym;
+  if (!v || !d.init || !v->type || v->type->t != TT::Optional || !nonNullValue(d.init)) return;
+  setNarrow(varKey(v), v->type->elem);
 }
 
 // ------------------------------------------------------------------ statements
@@ -1107,14 +1187,14 @@ void Checker::checkStmt(Stmt* s) {
       // an assertion function: the rest of the block sees what it asserts
       Expr* c = s->expr;
       while (c->k == EK::Paren) c = c->a;
-      if (c->k == EK::Call && c->callee && c->callee->asserts && c->callee->predParam >= 0 &&
-          (size_t)c->callee->predParam < c->list.size()) {
-        Expr* arg = c->list[(size_t)c->callee->predParam];
+      FuncSym* pf = c->k == EK::Call ? predCallee(c) : nullptr;
+      if (pf && pf->asserts && pf->predParam >= 0 && (size_t)pf->predParam < c->list.size()) {
+        Expr* arg = c->list[(size_t)pf->predParam];
         while (arg->k == EK::Conv || arg->k == EK::Paren) arg = arg->a;
         std::vector<Fact> facts;
-        if (c->callee->predType) {
+        if (pf->predType) {
           std::string key = pathKey(arg);
-          if (!key.empty()) facts.push_back({key, c->callee->predType});
+          if (!key.empty()) facts.push_back({key, pf->predType});
         } else {
           factsFrom(arg, true, facts);
         }
@@ -1122,55 +1202,99 @@ void Checker::checkStmt(Stmt* s) {
       }
       break;
     }
-    case SK::Block:
-      pushScope();
+    case SK::Block: {
+      Scope* inner = pushScope();
       checkBlockStmts(s->stmts);
       popScope();
+      // a block that ends normally: what is narrowed at its end holds after it (a labeled break out of
+      // the block skips its end)
+      if (!hasLabeledBreak(s)) keepNarrowing(inner);
       break;
+    }
     case SK::If: {
+      checkCond(s->expr);
+      std::vector<Fact> tf, ff;
+      factsFrom(s->expr, true, tf);
+      factsFrom(s->expr, false, ff);
+      Scope* thenScope = pushScope();
+      applyFacts(tf);
+      checkStmt(s->then);
+      popScope();
+      Scope* elsScope = nullptr;
+      if (s->els) {
+        elsScope = pushScope();
+        applyFacts(ff);
+        checkStmt(s->els);
+        popScope();
+      }
+      // when one branch always exits, the code after the if runs only after the other branch: what is
+      // narrowed at its end holds (if (a instanceof B) return; else if (a === null) return; a.name)
+      bool te = exits(s->then), ee = s->els && exits(s->els);
+      if (te && !ee) { if (elsScope) keepNarrowing(elsScope); else applyFacts(ff); }
+      else if (ee && !te) keepNarrowing(thenScope);
+      else if (!te && !ee) {
+        joinBranchNarrowing(s, tf, ff);
+        // a path both branches narrow to the same type at their ends (nested ifs that assign it too)
+        std::set<std::string> keys;
+        for (auto& kv : thenScope->narrow) keys.insert(kv.first);
+        if (elsScope) for (auto& kv : elsScope->narrow) keys.insert(kv.first);
+        for (auto& k : keys) {
+          auto at = [&](Scope* sc, const std::vector<Fact>* facts) -> Type* {
+            if (sc) {
+              auto it = sc->narrow.find(k);
+              if (it != sc->narrow.end()) return it->second;
+            } else if (facts) {
+              for (auto& f : *facts) if (f.key == k) return f.t;
+            }
+            return narrowed(k, false);
+          };
+          Type* a = at(thenScope, nullptr);
+          Type* b = elsScope ? at(elsScope, nullptr) : at(nullptr, &ff);
+          if (a && a == b && a->t != TT::Optional && narrowed(k, false) != a) setNarrow(k, a);
+        }
+      }
+      break;
+    }
+    case SK::While: {
+      invalidateAssigned(s->body, s->expr);
       checkCond(s->expr);
       std::vector<Fact> tf, ff;
       factsFrom(s->expr, true, tf);
       factsFrom(s->expr, false, ff);
       pushScope();
       applyFacts(tf);
-      checkStmt(s->then);
-      popScope();
-      if (s->els) {
-        pushScope();
-        applyFacts(ff);
-        checkStmt(s->els);
-        popScope();
-      }
-      bool te = exits(s->then), ee = s->els && exits(s->els);
-      if (te && !ee) applyFacts(ff);
-      else if (ee && !te) applyFacts(tf);
-      else if (!te && !ee) joinBranchNarrowing(s, tf, ff);
-      break;
-    }
-    case SK::While: {
-      invalidateAssigned(s->body, s->expr);
-      checkCond(s->expr);
-      std::vector<Fact> tf;
-      factsFrom(s->expr, true, tf);
-      pushScope();
-      applyFacts(tf);
-      loops.push_back({pendingLabels.empty() ? "" : pendingLabels.back(), true, false});
+      std::string label = pendingLabels.empty() ? "" : pendingLabels.back();
+      loops.push_back({label, true, false});
       pendingLabels.clear();
       checkStmt(s->body);
       loops.pop_back();
       popScope();
+      // the loop ends when its condition is false (unless a break leaves it): while (x === null) x = ...
+      if (!containsBreakFor(s->body, "", 0) && (label.empty() || !containsBreakFor(s->body, label, 0)))
+        applyFacts(ff);
       break;
     }
     case SK::DoWhile: {
       invalidateAssigned(s->body, s->expr);
-      loops.push_back({pendingLabels.empty() ? "" : pendingLabels.back(), true, false});
+      std::string label = pendingLabels.empty() ? "" : pendingLabels.back();
+      loops.push_back({label, true, false});
       pendingLabels.clear();
-      pushScope();
+      Scope* body = pushScope();
       checkStmt(s->body);
       popScope();
       loops.pop_back();
+      // the condition runs after the body's end (unless a continue skips to it)
+      bool jumps = hasJump(s->body);
+      Scope* condScope = pushScope();
+      if (!jumps) keepNarrowing(body);
       checkCond(s->expr);
+      std::vector<Fact> ff;
+      factsFrom(s->expr, false, ff);
+      popScope();
+      if (!jumps) {
+        keepNarrowing(condScope);
+        applyFacts(ff);
+      }
       break;
     }
     case SK::For: {
@@ -1351,16 +1475,20 @@ void Checker::checkStmt(Stmt* s) {
       // literal types (D5): each clause sees the discriminant narrowed to its case values (with the
       // values of the empty clauses that fall into it), the default clause the values left (never when
       // the switch covers them all)
-      std::string dkey = optDisc || dt->lit || (dt->t == TT::Enum && dt->en) ? pathKey(s->expr) : "";
+      // (a string or number discriminant: each clause sees it as its case values, s: "a" | "b")
+      bool plainDisc = !dt->lit && (dt->t == TT::String || dt->t == TT::Number);
+      std::string dkey = optDisc || plainDisc || dt->lit || (dt->t == TT::Enum && dt->en) ? pathKey(s->expr) : "";
       Type* group = nullptr;
       bool groupOk = true;
       Type* covered = nullptr;
+      bool coveredNull = false, coveredUndef = false;  // `case null:` / `case undefined:` clauses seen
       for (size_t ci = 0; ci < s->cases.size(); ci++) {
         auto& c = s->cases[ci];
         Type* cv = nullptr;
         if (c.test && optDisc && (stripParens(c.test)->k == EK::Null || stripParens(c.test)->k == EK::Undefined)) {
           check(c.test, dt0);
           Type* nt = stripParens(c.test)->k == EK::Null ? T.nullT() : T.undef();
+          (nt->t == TT::Null ? coveredNull : coveredUndef) = true;
           if (!assignable(nt, dt0)) err(c.test->loc, "case type '" + typeName(nt) + "' is not comparable to '" + typeName(dt0) + "'");
           groupOk = false;  // the clause sees the discriminant as it is
         } else if (c.test) {
@@ -1372,6 +1500,8 @@ void Checker::checkStmt(Stmt* s) {
               ct = lt;
               cv = lt;
             }
+          if (plainDisc)
+            if (Type* lt = constLit(c.test); lt && lt->lit && baseLit(lt) == dt) cv = lt;
           if (ct != dt && !(dt->t == TT::Unknown || ct->t == TT::Unknown)) {
             bool ok = assignable(ct, dt) || (ct->lit && dt->lit && baseLit(ct) == baseLit(dt));
             if (!ok) err(c.test->loc, "case type '" + typeName(ct) + "' is not comparable to '" + typeName(dt) + "'");
@@ -1388,9 +1518,12 @@ void Checker::checkStmt(Stmt* s) {
           // a clause reached only by its values sees them (not null / undefined); the default clause sees
           // the values left, or only null / undefined
           if (c.test && groupOk) setNarrow(dkey, group ? group : dt);
-          else if (!c.test && dt->lit && (ci == 0 || exitsClause(s->cases[ci - 1]))) {
-            Type* rest = litMinus(dt, covered);
-            if (rest) setNarrow(dkey, T.optional(rest, dt0->hasNull, dt0->hasUndef));
+          else if (!c.test && (ci == 0 || exitsClause(s->cases[ci - 1]))) {
+            // without the values of the clauses before it (case null: return ...; default: x is not null)
+            Type* rest = dt->lit ? litMinus(dt, covered) : dt;
+            bool n = dt0->hasNull && !coveredNull, u = dt0->hasUndef && !coveredUndef;
+            if (rest) setNarrow(dkey, T.optional(rest, n, u));
+            else if (n || u) setNarrow(dkey, T.optional(T.nullT(), n, u));
           }
         } else if (!dkey.empty() && dt->lit) {
           if (c.test && groupOk && group) setNarrow(dkey, group);
@@ -1398,6 +1531,8 @@ void Checker::checkStmt(Stmt* s) {
             Type* rest = litMinus(dt, covered);
             setNarrow(dkey, rest ? rest : T.never());
           }
+        } else if (!dkey.empty() && plainDisc) {
+          if (c.test && groupOk && group) setNarrow(dkey, group);
         } else if (!dkey.empty() && !c.test && switchCoversEnum(s) && (ci == 0 || exitsClause(s->cases[ci - 1]))) {
           setNarrow(dkey, T.never());
         }

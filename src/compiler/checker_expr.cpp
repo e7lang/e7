@@ -1272,7 +1272,7 @@ Type* Checker::checkUnary(Expr* e, Type* expected) {
       return exp;
     }
     Type* t = check(e->a, exp && (exp->t == TT::Number || exp->t == TT::BigInt) ? exp : nullptr);
-    if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown) return t;
+    if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown) return baseLit(t);  // -x of x: 1 | 2 is a number
     if (t->t == TT::Enum && !t->en->isString) return T.number();
     return errT(e->loc, "operator '-' cannot be applied to type '" + typeName(t) + "'");
   }
@@ -1285,7 +1285,8 @@ Type* Checker::checkUnary(Expr* e, Type* expected) {
   }
   if (op == "~") {
     Type* t = check(e->a, nullptr);
-    if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown) return t;
+    if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown) return baseLit(t);
+    if (t->t == TT::Enum && !t->en->isString) return T.number();
     return errT(e->loc, "operator '~' cannot be applied to type '" + typeName(t) + "'");
   }
   return errT(e->loc, "unsupported unary operator '" + op + "'");
@@ -1459,7 +1460,8 @@ Type* Checker::checkUpdate(Expr* e) {
     e->a->type = dt;
   }
   if (st) t = st;
-  if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown) {
+  if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown ||
+      (t->t == TT::Enum && t->en && !t->en->isString)) {  // (i++ of a numeric enum: a number, as in TypeScript)
     std::string key = pathKey(e->a);
     invalidatePath(key);
     return t;
@@ -2019,15 +2021,53 @@ Type* Checker::checkCondExpr(Expr* e, Type* expected) {
 }
 
 // ------------------------------------------------------------------ narrowing facts
+// The key of a reference path read through optional chaining (a?.b.c: the path a.b.c), "" for others
+std::string Checker::chainKey(Expr* e) {
+  e = strip(e);
+  if (e->k == EK::Member && e->intrinsic != IN_STATIC_FIELD) {
+    std::string base = chainKey(e->a);
+    return base.empty() ? "" : base + "." + e->raw;
+  }
+  return pathKey(e);
+}
+
+// p is not undefined (or null): every optional-chaining base of p is not null / undefined (a?.b.c is
+// undefined when a is)
+void Checker::chainFacts(Expr* p, std::vector<Fact>& out) {
+  for (p = strip(p); p && (p->k == EK::Member || p->k == EK::Index || p->k == EK::Call); p = strip(p->a)) {
+    if (!p->a) break;
+    if (p->optional && p->a->type && p->a->type->t == TT::Optional) {
+      std::string key = chainKey(p->a);
+      if (!key.empty()) out.push_back({key, p->a->type->elem});
+    }
+  }
+}
+
 void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
   c = strip(c);
+  // (x = f()) !== undefined, if (x = f()): the condition tests the assigned path
+  if (c->k == EK::Assign && c->raw == "=" && whenTrue && c->a->type && c->a->type->t == TT::Optional) {
+    std::string key = pathKey(c->a);
+    if (!key.empty() && c->type && c->type->t == TT::Optional) out.push_back({key, c->a->type->elem});
+    return;
+  }
   if (c->k == EK::Unary && c->raw == "!") { factsFrom(c->a, !whenTrue, out); return; }
   if (c->k == EK::Logical && c->raw == "&&") {
     if (whenTrue) { factsFrom(c->a, true, out); factsFrom(c->b, true, out); }
     return;
   }
   if (c->k == EK::Logical && c->raw == "||") {
-    if (!whenTrue) { factsFrom(c->a, false, out); factsFrom(c->b, false, out); }
+    if (!whenTrue) { factsFrom(c->a, false, out); factsFrom(c->b, false, out); return; }
+    // s === "a" || s === "b": a path both sides narrow (to literal types of one base: their union)
+    std::vector<Fact> fa, fb;
+    factsFrom(c->a, true, fa);
+    factsFrom(c->b, true, fb);
+    for (auto& a : fa)
+      for (auto& b : fb) {
+        if (a.key != b.key || !a.t || !b.t) continue;
+        if (a.t == b.t) out.push_back(a);
+        else if (a.t->lit && b.t->lit && baseLit(a.t) == baseLit(b.t)) out.push_back({a.key, T.litUnion(a.t, b.t)});
+      }
     return;
   }
   if (c->k == EK::Binary && (c->raw == "===" || c->raw == "!==" || c->raw == "==" || c->raw == "!=")) {
@@ -2038,12 +2078,22 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
       Expr* path = side == 0 ? l : r;
       Expr* other = side == 0 ? r : l;
       Type* pt = path->type;
-      if (!pt || !pt->lit) continue;
+      if (!pt) continue;
+      bool eq = c->raw[0] == '=';
+      if (!pt->lit) {
+        // s === "a" with s: string: s is "a" when it is true
+        if (eq != whenTrue || (pt->t != TT::String && pt->t != TT::Number)) continue;
+        Type* v = constLit(other);
+        if (!v || !v->lit || baseLit(v) != pt) continue;
+        std::string key = pathKey(path);
+        if (key.empty()) continue;
+        out.push_back({key, v});
+        return;
+      }
       Type* v = constLit(other);
       if (!v) continue;
       std::string key = pathKey(path);
       if (key.empty()) continue;
-      bool eq = c->raw[0] == '=';
       if (eq == whenTrue) {
         if (v->lit && baseLit(v) == baseLit(pt) && v->strLits.size() + v->numLits.size() + (v->boolLits ? 1 : 0) == 1) out.push_back({key, v});
       } else if (v->strLits.size() + v->numLits.size() + (v->boolLits == 1 || v->boolLits == 2 ? 1 : 0) == 1) {
@@ -2056,11 +2106,28 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
     Expr* lit = nullptr;
     if (r->k == EK::Null || r->k == EK::Undefined) { path = l; lit = r; }
     else if (l->k == EK::Null || l->k == EK::Undefined) { path = r; lit = l; }
-    if (!path || !path->type || path->type->t != TT::Optional) return;
-    std::string key = pathKey(path);
-    if (key.empty()) return;
     bool eq = c->raw[0] == '=';
+    if (!path) {
+      // x === "a" (a constant that is not null / undefined): x is not null / undefined when it is true
+      for (int side = 0; side < 2 && eq == whenTrue; side++) {
+        Expr* p = side == 0 ? l : r;
+        Expr* other = side == 0 ? r : l;
+        if (!constLit(other) && other->k != EK::Str && other->k != EK::Num && other->k != EK::Bool) continue;
+        if (!p->type || p->type->t != TT::Optional) continue;
+        chainFacts(p, out);
+        std::string key = chainKey(p);
+        if (!key.empty()) out.push_back({key, p->type->elem});
+        return;
+      }
+      return;
+    }
+    if (path->k == EK::Assign && path->raw == "=") path = strip(path->a);  // (x = f()) !== undefined
+    if (!path->type || path->type->t != TT::Optional) return;
     bool loose = c->raw.size() == 2;
+    // a?.b !== undefined: a is not null / undefined either
+    if (eq != whenTrue && (loose || lit->k == EK::Undefined)) chainFacts(path, out);
+    std::string key = chainKey(path);
+    if (key.empty()) return;
     Type* t = path->type;
     // compute type when the comparison is false for '=='/'===' (i.e. value is not the literal)
     Type* notLit;
@@ -2092,23 +2159,24 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
     }
     return;
   }
+  FuncSym* pf = c->k == EK::Call ? predCallee(c) : nullptr;
   // a call of a type predicate `x is T`: true means the argument is a T (false: for a nullable
   // argument and its base type, null / undefined)
-  if (c->k == EK::Call && c->callee && c->callee->predParam == -2 && c->callee->predType && !c->callee->asserts &&
+  if (pf && pf->predParam == -2 && pf->predType && !pf->asserts &&
       strip(c->a)->k == EK::Member) {
     // `this is T`: the receiver
     if (!whenTrue) return;
     std::string key = pathKey(strip(c->a)->a);
-    if (!key.empty()) out.push_back({key, c->callee->predType});
+    if (!key.empty()) out.push_back({key, pf->predType});
     return;
   }
-  if (c->k == EK::Call && c->callee && c->callee->predParam >= 0 && c->callee->predType && !c->callee->asserts &&
-      (size_t)c->callee->predParam < c->list.size()) {
-    Expr* arg = c->list[(size_t)c->callee->predParam];
+  if (pf && pf->predParam >= 0 && pf->predType && !pf->asserts &&
+      (size_t)pf->predParam < c->list.size()) {
+    Expr* arg = c->list[(size_t)pf->predParam];
     while (arg->k == EK::Conv || arg->k == EK::Paren) arg = arg->a;
     std::string key = pathKey(arg);
     Type* at = arg->type;
-    Type* pt = c->callee->predType;
+    Type* pt = pf->predType;
     if (key.empty() || !at) return;
     if (whenTrue) out.push_back({key, pt});
     else if (at->t == TT::Optional && baseOf(pt) == at->elem && pt->t != TT::Optional)
@@ -2120,8 +2188,11 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
   }
   // truthiness of a nullable reference
   if (whenTrue && c->type && c->type->t == TT::Optional) {
-    std::string key = pathKey(c);
+    chainFacts(c, out);
+    std::string key = chainKey(c);
     if (!key.empty()) out.push_back({key, c->type->elem});
+  } else if (whenTrue) {
+    chainFacts(c, out);  // if (a?.ok): a is not null / undefined
   }
 }
 
@@ -2224,8 +2295,24 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
     }
   Type* ret = nullptr;
   if (e->retType) ret = resolveType(e->retType);
-  else if (exp && exp->ret->t == TT::Void && !e->isGenerator && !e->isAsync) ret = T.voidT();
-  else if (exp && exp->ret->t != TT::Unknown && exp->ret->t != TT::Void) ret = exp->ret;
+  if (e->retType && !e->retType->predParam.empty() && e->retType->predParam != "this") {
+    // (k: string): k is Kind => ...: a type predicate (or assertion) of a parameter
+    TypeNode* rn = e->retType;
+    f->asserts = rn->asserts;
+    f->predParam = -1;
+    for (size_t k = 0; k < e->params.size(); k++)
+      if (e->params[k].name == rn->predParam) f->predParam = (int)k;
+    if (f->predParam == -1) err(rn->loc, "cannot find parameter '" + rn->predParam + "'");
+    else if (rn->predType) {
+      f->predType = resolveType(rn->predType);
+      Type* pt = (size_t)f->predParam < ps.size() ? ps[(size_t)f->predParam] : nullptr;
+      if (pt && !assignable(f->predType, pt))
+        err(rn->predType->loc, "a type predicate's type must be assignable to its parameter's type ('" + typeName(f->predType) +
+                                   "' is not a '" + typeName(pt) + "')");
+    }
+  }
+  if (!e->retType && exp && exp->ret->t == TT::Void && !e->isGenerator && !e->isAsync) ret = T.voidT();
+  else if (!e->retType && exp && exp->ret->t != TT::Unknown && exp->ret->t != TT::Void) ret = exp->ret;
   if (ret) checkCoroutineRet(f, ret, e->loc);
   f->sigResolved = true;
   f->inferRet = ret == nullptr;
@@ -2323,7 +2410,10 @@ static bool chainedOnNullable(Expr* e) {
   if (!e->chained || !e->a) return false;
   Expr* x = e->a;
   while (x->k == EK::Paren && x->a) x = x->a;
-  return x->innerType && x->innerType->t == TT::Optional;
+  // the previous link short-circuits (its type is made nullable by '?.'): its own type before that;
+  // otherwise (its '?.' was dropped on a value that is never null) its type
+  if (x->optional) return x->innerType && x->innerType->t == TT::Optional;
+  return x->type && x->type->t == TT::Optional;
 }
 
 Type* Checker::checkMember(Expr* e, Type* expected) {
@@ -2524,26 +2614,31 @@ Type* Checker::checkIndex(Expr* e) {
   return checkIndexOn(e, ot);
 }
 
+// an index: a number, an integer, or a numeric enum member (arr[Color.Red]; its value is a number)
+static bool isNumIndex(Type* it) {
+  return it->t == TT::Number || it->t == TT::Int || it->t == TT::Unknown || (it->t == TT::Enum && it->en && !it->en->isString);
+}
+
 Type* Checker::checkIndexOn(Expr* e, Type* ot) {
   switch (ot->t) {
     case TT::Array: {
       Type* it = check(e->b, nullptr);
-      if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "array index must be a number or integer");
+      if (!isNumIndex(it)) return errT(e->b->loc, "array index must be a number or integer");
       return ot->elem;
     }
     case TT::Bytes: {
       Type* it = check(e->b, nullptr);
-      if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "index must be a number or integer");
+      if (!isNumIndex(it)) return errT(e->b->loc, "index must be a number or integer");
       return T.number();
     }
     case TT::TypedArray: {
       Type* it = check(e->b, nullptr);
-      if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "index must be a number or integer");
+      if (!isNumIndex(it)) return errT(e->b->loc, "index must be a number or integer");
       return taElem(ot);
     }
     case TT::String: {
       Type* it = check(e->b, nullptr);
-      if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "index must be a number");
+      if (!isNumIndex(it)) return errT(e->b->loc, "index must be a number");
       return T.string();
     }
     case TT::Tuple: {
@@ -2556,7 +2651,7 @@ Type* Checker::checkIndexOn(Expr* e, Type* ot) {
         if (e == lvalueTarget && lvalueMode >= 1)
           return errT(e->b->loc, "assigning a tuple element needs an integer literal index; use an array (T[]) for computed indexes");
         Type* it = check(e->b, nullptr);
-        if (it->t != TT::Number && it->t != TT::Int && it->t != TT::Unknown) return errT(e->b->loc, "tuple index must be a number or integer");
+        if (!isNumIndex(it)) return errT(e->b->loc, "tuple index must be a number or integer");
         e->field = -1;
         e->cls = tupleRecord(ot);
         return ot->elems[0];
@@ -2688,6 +2783,23 @@ Type* Checker::checkAs(Expr* e) {
     e->intrinsic = 2;  // non-null assertion
     return target;
   }
+  // a value of a literal type's base as the literal type ("n" as Dir, s as Dir; a constant must be one of
+  // its values): not checked at run time, as in TypeScript (the value is the same)
+  Type* tg = baseOf(target);
+  if (tg->lit && baseLit(tb) == baseLit(tg) && (t->t == TT::Optional) == (target->t == TT::Optional) &&
+      (t->t != TT::Optional || (t->hasNull == target->hasNull && t->hasUndef == target->hasUndef))) {
+    if (Type* c = constLit(e->a); c && !assignable(c, tg))
+      return errT(e->loc, "conversion of type '" + typeName(c) + "' to type '" + typeName(target) + "' is not possible (the value is not one of its values)");
+    return target;
+  }
+  // a nullable value as its base type, or a type its base type is assignable to with the same
+  // representation ((n as 1 | 2 | undefined) as number): a non-null assertion
+  if (t->t == TT::Optional && target->t != TT::Optional && assignable(t->elem, target) && kindOf(t->elem) == kindOf(target)) {
+    e->intrinsic = 2;
+    return target;
+  }
+  // readonly T[] as T[] (TypeScript allows removing readonly; the array is the same)
+  if (t->t == TT::Array && t->ro && target->t == TT::Array && !target->ro && t->elem == target->elem) return target;
   return errT(e->loc, "conversion of type '" + typeName(t) + "' to type '" + typeName(target) + "' is not supported");
 }
 
