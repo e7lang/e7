@@ -8,6 +8,13 @@
 #include <unordered_set>
 
 #include "intrinsics.h"
+
+// a lambda that is not inlined into the function that calls it (its own stack frame)
+#if defined(__GNUC__) || defined(__clang__)
+#define E7_NOINLINE_LAMBDA __attribute__((noinline))
+#else
+#define E7_NOINLINE_LAMBDA
+#endif
 #include "../core/numfmt.h"
 
 namespace e7 {
@@ -3695,22 +3702,26 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
     case EK::Undefined: if (dst != kNoReg) emit(OP_LOADUNDEF, dst); return;
     case EK::TypeOf: if (dst != kNoReg) loadStr(dst, e->str); return;
     case EK::Template: {
-      if (dst == kNoReg) { for (Expr* x : e->list) genDiscard(x); return; }
-      size_t m0 = mark();
-      uint16_t acc = temp(K_R);
-      loadStr(acc, e->quasis[0]);
-      for (size_t i = 0; i < e->list.size(); i++) {
-        uint16_t v = gen(e->list[i]);
-        uint16_t s = toStringReg(v, e->list[i]->type);
-        emit(OP_SCAT, acc, acc, s);
-        if (i + 1 < e->quasis.size() && !e->quasis[i + 1].empty()) {
-          uint16_t q = temp(K_R);
-          loadStr(q, e->quasis[i + 1]);
-          emit(OP_SCAT, acc, acc, q);
+      // (a function of its own: its locals do not enlarge the frame of this recursive one)
+      [&]() E7_NOINLINE_LAMBDA {
+        if (dst == kNoReg) { for (Expr* x : e->list) genDiscard(x); return; }
+        size_t m0 = mark();
+        uint16_t acc = temp(K_R);
+        loadStr(acc, e->quasis[0]);
+        for (size_t i = 0; i < e->list.size(); i++) {
+          uint16_t v = gen(e->list[i]);
+          uint16_t s = toStringReg(v, e->list[i]->type);
+          emit(OP_SCAT, acc, acc, s);
+          if (i + 1 < e->quasis.size() && !e->quasis[i + 1].empty()) {
+            uint16_t q = temp(K_R);
+            loadStr(q, e->quasis[i + 1]);
+            emit(OP_SCAT, acc, acc, q);
+          }
         }
-      }
-      mov(dst, acc, K_R);
-      release(m0);
+        mov(dst, acc, K_R);
+        release(m0);
+        return;
+      }();
       return;
     }
     case EK::Ident: {
@@ -3743,87 +3754,95 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
       return;
     }
     case EK::Unary: {
-      if (e->raw == "void") {
-        size_t m1 = mark();
-        genInto(e->a, kNoReg);
-        release(m1);
-        if (dst != kNoReg) emit(OP_LOADUNDEF, dst);
-        return;
-      }
-      size_t m0 = mark();
-      if (e->intrinsic == IN_CONST_NUM) {
-        if (dst != kNoReg) loadInt(dst, e->ival);
-        return;
-      }
-      const std::string& op = e->raw;
-      uint16_t d = dst == kNoReg ? temp(K(e->type)) : dst;
-      if (op == "!") {
-        uint16_t t = genTruthy(e->a);
-        emit(OP_NOT_B, d, t);
-      } else if (op == "-") {
-        Type* t = e->a->type;
-        uint16_t a = gen(e->a);
-        if (t->t == TT::Int) {
-          emit(OP_NEG_I, d, a);
-          wrapInt(d, d, t);
-        } else if (t->t == TT::BigInt) {
-          callNative("BigInt.neg", {a}, d, 'R');
-        } else {
-          emit(OP_NEG_F, d, a);
+      // (a function of its own: its locals do not enlarge the frame of this recursive one)
+      [&]() E7_NOINLINE_LAMBDA {
+        if (e->raw == "void") {
+          size_t m1 = mark();
+          genInto(e->a, kNoReg);
+          release(m1);
+          if (dst != kNoReg) emit(OP_LOADUNDEF, dst);
+          return;
         }
-      } else if (op == "+") {
-        Type* t = e->a->type;
-        uint16_t a = gen(e->a);
-        if (t->t == TT::String) callNative("Global.Number", {a}, d, 'F');
-        else if (t->t == TT::Bool) emit(OP_I2F, d, a);
-        else mov(d, a, K_F);
-      } else if (op == "~") {
-        Type* t = e->a->type;
-        uint16_t a = gen(e->a);
-        if (t->t == TT::Int) {
-          emit(OP_NOT_I, d, a);
-          wrapInt(d, d, t);
-        } else if (t->t == TT::BigInt) {
-          callNative("BigInt.not", {a}, d, 'R');
-        } else {
-          emit(OP_BNOT_F, d, a);
+        size_t m0 = mark();
+        if (e->intrinsic == IN_CONST_NUM) {
+          if (dst != kNoReg) loadInt(dst, e->ival);
+          return;
         }
-      }
-      release(m0);
+        const std::string& op = e->raw;
+        uint16_t d = dst == kNoReg ? temp(K(e->type)) : dst;
+        if (op == "!") {
+          uint16_t t = genTruthy(e->a);
+          emit(OP_NOT_B, d, t);
+        } else if (op == "-") {
+          Type* t = e->a->type;
+          uint16_t a = gen(e->a);
+          if (t->t == TT::Int) {
+            emit(OP_NEG_I, d, a);
+            wrapInt(d, d, t);
+          } else if (t->t == TT::BigInt) {
+            callNative("BigInt.neg", {a}, d, 'R');
+          } else {
+            emit(OP_NEG_F, d, a);
+          }
+        } else if (op == "+") {
+          Type* t = e->a->type;
+          uint16_t a = gen(e->a);
+          if (t->t == TT::String) callNative("Global.Number", {a}, d, 'F');
+          else if (t->t == TT::Bool) emit(OP_I2F, d, a);
+          else mov(d, a, K_F);
+        } else if (op == "~") {
+          Type* t = e->a->type;
+          uint16_t a = gen(e->a);
+          if (t->t == TT::Int) {
+            emit(OP_NOT_I, d, a);
+            wrapInt(d, d, t);
+          } else if (t->t == TT::BigInt) {
+            callNative("BigInt.not", {a}, d, 'R');
+          } else {
+            emit(OP_BNOT_F, d, a);
+          }
+        }
+        release(m0);
+        return;
+      }();
       return;
     }
     case EK::Update: {
-      size_t m0 = mark();
-      Expr* tg = strip(e->a);
-      Type* t = e->a->type;
-      if (tg->k == EK::Ident && tg->var && !tg->var->isGlobal && !tg->var->captured && !tg->var->initFlag && varReg.count(tg->var)) {
-        uint16_t r = varReg[tg->var];
-        if (dst != kNoReg && !e->prefix) mov(dst, r, K(t));
-        if (t->t == TT::Int) {
-          emit(OP_ADDI_I, r, r, (uint16_t)(int16_t)(e->raw == "++" ? 1 : -1));
-          wrapInt(r, r, t);
-        } else if (t->t == TT::BigInt) {
-          uint16_t one = temp(K_R), s1 = temp(K_R);
-          loadStr(s1, u"1");
-          callNative("BigInt.parseLiteral", {s1}, one, 'R');
-          callNative(e->raw == "++" ? "BigInt.add" : "BigInt.sub", {r, one}, r, 'R');
-        } else {
-          uint16_t one = numConst(1);
-          emit(e->raw == "++" ? OP_ADD_F : OP_SUB_F, r, r, one);
+      // (a function of its own: its locals do not enlarge the frame of this recursive one)
+      [&]() E7_NOINLINE_LAMBDA {
+        size_t m0 = mark();
+        Expr* tg = strip(e->a);
+        Type* t = e->a->type;
+        if (tg->k == EK::Ident && tg->var && !tg->var->isGlobal && !tg->var->captured && !tg->var->initFlag && varReg.count(tg->var)) {
+          uint16_t r = varReg[tg->var];
+          if (dst != kNoReg && !e->prefix) mov(dst, r, K(t));
+          if (t->t == TT::Int) {
+            emit(OP_ADDI_I, r, r, (uint16_t)(int16_t)(e->raw == "++" ? 1 : -1));
+            wrapInt(r, r, t);
+          } else if (t->t == TT::BigInt) {
+            uint16_t one = temp(K_R), s1 = temp(K_R);
+            loadStr(s1, u"1");
+            callNative("BigInt.parseLiteral", {s1}, one, 'R');
+            callNative(e->raw == "++" ? "BigInt.add" : "BigInt.sub", {r, one}, r, 'R');
+          } else {
+            uint16_t one = numConst(1);
+            emit(e->raw == "++" ? OP_ADD_F : OP_SUB_F, r, r, one);
+          }
+          if (dst != kNoReg && e->prefix) mov(dst, r, K(t));
+          release(m0);
+          return;
         }
-        if (dst != kNoReg && e->prefix) mov(dst, r, K(t));
+        // general lvalue: read, modify, write (object/index evaluated once)
+        Expr* one = P.arena.expr(t->t == TT::BigInt ? EK::BigLit : EK::Num, e->loc);
+        one->num = 1;
+        one->isIntLit = true;
+        one->ival = 1;
+        one->raw = "1";
+        one->type = t;
+        genCompound(e->a, e->raw == "++" ? "+" : "-", one, dst, !e->prefix);
         release(m0);
         return;
-      }
-      // general lvalue: read, modify, write (object/index evaluated once)
-      Expr* one = P.arena.expr(t->t == TT::BigInt ? EK::BigLit : EK::Num, e->loc);
-      one->num = 1;
-      one->isIntLit = true;
-      one->ival = 1;
-      one->raw = "1";
-      one->type = t;
-      genCompound(e->a, e->raw == "++" ? "+" : "-", one, dst, !e->prefix);
-      release(m0);
+      }();
       return;
     }
     case EK::Binary: {
@@ -3841,60 +3860,64 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
       return;
     }
     case EK::Logical: {
-      size_t m0 = mark();
-      uint16_t d = dst == kNoReg ? temp(K(e->type)) : dst;
-      const std::string& op = e->raw;
-      if (op == "??") {
-        Type* lt = e->a->type;
-        Expr* la = strip(e->a);
-        // m.get(k) ?? v  ->  Map.getOr
-        if (la->k == EK::Call && la->native.rfind("Map.get", 0) == 0 && lt->t == TT::Optional && e->type == lt->elem) {
-          Expr* mem = strip(la->a);
-          uint16_t mreg = gen(mem->a);
-          uint16_t k = gen(la->list[0]);
-          uint16_t def = gen(e->b);
-          Type* mt = baseOf(mem->a->type);
-          callNative("Map.getOr" + kindSuffixOf(mt->key) + kindSuffixOf(mt->val), {mreg, k, def}, d, kindChar(K(e->type)));
-          release(m0);
-          return;
-        }
-        Label* useB = newLabel();
-        Label* end = newLabel();
-        uint16_t a = gen(e->a);
-        if (lt->t != TT::Optional && !Checker::isNullish(lt)) { mov(d, a, K(e->type)); release(m0); return; }
-        if (Checker::isNullish(lt)) {  // null ?? b: always b
+      // (a function of its own: its locals do not enlarge the frame of this recursive one)
+      [&]() E7_NOINLINE_LAMBDA {
+        size_t m0 = mark();
+        uint16_t d = dst == kNoReg ? temp(K(e->type)) : dst;
+        const std::string& op = e->raw;
+        if (op == "??") {
+          Type* lt = e->a->type;
+          Expr* la = strip(e->a);
+          // m.get(k) ?? v  ->  Map.getOr
+          if (la->k == EK::Call && la->native.rfind("Map.get", 0) == 0 && lt->t == TT::Optional && e->type == lt->elem) {
+            Expr* mem = strip(la->a);
+            uint16_t mreg = gen(mem->a);
+            uint16_t k = gen(la->list[0]);
+            uint16_t def = gen(e->b);
+            Type* mt = baseOf(mem->a->type);
+            callNative("Map.getOr" + kindSuffixOf(mt->key) + kindSuffixOf(mt->val), {mreg, k, def}, d, kindChar(K(e->type)));
+            release(m0);
+            return;
+          }
+          Label* useB = newLabel();
+          Label* end = newLabel();
+          uint16_t a = gen(e->a);
+          if (lt->t != TT::Optional && !Checker::isNullish(lt)) { mov(d, a, K(e->type)); release(m0); return; }
+          if (Checker::isNullish(lt)) {  // null ?? b: always b
+            genInto(e->b, d);
+            release(m0);
+            return;
+          }
+          jump(OP_JNULLISH, a, useB);
+          unboxNarrowed(d, a, lt, e->type);
+          jump(OP_JMP, 0, end);
+          place(useB);
           genInto(e->b, d);
+          place(end);
           release(m0);
           return;
         }
-        jump(OP_JNULLISH, a, useB);
-        unboxNarrowed(d, a, lt, e->type);
-        jump(OP_JMP, 0, end);
-        place(useB);
-        genInto(e->b, d);
-        place(end);
+        if (e->intrinsic == 2) {
+          // value-producing a || b
+          Label* useB = newLabel();
+          Label* end = newLabel();
+          uint16_t a = gen(e->a);
+          uint16_t t = temp(K_I);
+          truthyOf(t, a, e->a->type);
+          jump(OP_JF, t, useB);
+          unboxNarrowed(d, a, e->a->type, e->type);
+          jump(OP_JMP, 0, end);
+          place(useB);
+          genInto(e->b, d);
+          place(end);
+          release(m0);
+          return;
+        }
+        uint16_t t = genTruthy(e);
+        mov(d, t, K_I);
         release(m0);
         return;
-      }
-      if (e->intrinsic == 2) {
-        // value-producing a || b
-        Label* useB = newLabel();
-        Label* end = newLabel();
-        uint16_t a = gen(e->a);
-        uint16_t t = temp(K_I);
-        truthyOf(t, a, e->a->type);
-        jump(OP_JF, t, useB);
-        unboxNarrowed(d, a, e->a->type, e->type);
-        jump(OP_JMP, 0, end);
-        place(useB);
-        genInto(e->b, d);
-        place(end);
-        release(m0);
-        return;
-      }
-      uint16_t t = genTruthy(e);
-      mov(d, t, K_I);
-      release(m0);
+      }();
       return;
     }
     case EK::Assign:
@@ -3941,88 +3964,96 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
       return;
     }
     case EK::NonNull: {
-      size_t m0 = mark();
-      uint16_t d = dst == kNoReg ? temp(K(e->type)) : dst;
-      Expr* in = strip(e->a);
-      // strict variants avoid boxing: arr.pop()!, m.get(k)!
-      if (in->k == EK::Call && (in->native == "Array.pop" || in->native == "Array.shift" || in->native.rfind("Map.get", 0) == 0) &&
-          in->a->k == EK::Member) {
-        Expr* mem = strip(in->a);
-        uint16_t recv = gen(mem->a);
-        std::vector<uint16_t> args{recv};
-        for (Expr* a : in->list) args.push_back(gen(a));
-        std::string nm;
-        if (in->native.rfind("Map.get", 0) == 0) {
-          Type* mt = baseOf(mem->a->type);
-          nm = "Map.getStrict" + kindSuffixOf(mt->key) + kindSuffixOf(mt->val);
-        } else {
-          nm = in->native + "Strict" + kindSuffixOf(e->type);
+      // (a function of its own: its locals do not enlarge the frame of this recursive one)
+      [&]() E7_NOINLINE_LAMBDA {
+        size_t m0 = mark();
+        uint16_t d = dst == kNoReg ? temp(K(e->type)) : dst;
+        Expr* in = strip(e->a);
+        // strict variants avoid boxing: arr.pop()!, m.get(k)!
+        if (in->k == EK::Call && (in->native == "Array.pop" || in->native == "Array.shift" || in->native.rfind("Map.get", 0) == 0) &&
+            in->a->k == EK::Member) {
+          Expr* mem = strip(in->a);
+          uint16_t recv = gen(mem->a);
+          std::vector<uint16_t> args{recv};
+          for (Expr* a : in->list) args.push_back(gen(a));
+          std::string nm;
+          if (in->native.rfind("Map.get", 0) == 0) {
+            Type* mt = baseOf(mem->a->type);
+            nm = "Map.getStrict" + kindSuffixOf(mt->key) + kindSuffixOf(mt->val);
+          } else {
+            nm = in->native + "Strict" + kindSuffixOf(e->type);
+          }
+          callNative(nm, args, d, kindChar(K(e->type)));
+          release(m0);
+          return;
         }
-        callNative(nm, args, d, kindChar(K(e->type)));
+        uint16_t a = gen(e->a);
+        Type* at = e->a->type;
+        if (isBoxedOptional(at) && kindOf(e->type) != K_R) {
+          emit(kindOf(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, d, a);
+        } else {
+          if (at->t == TT::Optional) emit(OP_CHKNN, a);
+          mov(d, a, K(e->type));
+        }
         release(m0);
         return;
-      }
-      uint16_t a = gen(e->a);
-      Type* at = e->a->type;
-      if (isBoxedOptional(at) && kindOf(e->type) != K_R) {
-        emit(kindOf(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, d, a);
-      } else {
-        if (at->t == TT::Optional) emit(OP_CHKNN, a);
-        mov(d, a, K(e->type));
-      }
-      release(m0);
+      }();
       return;
     }
     case EK::As: {
-      size_t m0 = mark();
-      uint16_t d = dst == kNoReg ? temp(K(e->type)) : dst;
-      if (e->intrinsic == IN_JSON_PARSE) {
-        Expr* call = strip(e->a);
-        uint16_t text = gen(call->list[0]);
-        uint16_t desc = temp(K_R);
-        jsonLoc_ = e->loc;
-        jsonLit_ = false;
-        loadStr(desc, utf8ToUtf16(jsonDescriptor(e->type)));
-        uint16_t boxed = temp(K_R);
-        callNative(jsonLit_ ? "JSON.parse2" : "JSON.parse", {text, desc}, boxed, 'R');
-        if (kindOf(e->type) != K_R) emit(kindOf(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, d, boxed);
-        else mov(d, boxed, K_R);
+      // (a function of its own: its locals do not enlarge the frame of this recursive one)
+      [&]() E7_NOINLINE_LAMBDA {
+        size_t m0 = mark();
+        uint16_t d = dst == kNoReg ? temp(K(e->type)) : dst;
+        if (e->intrinsic == IN_JSON_PARSE) {
+          Expr* call = strip(e->a);
+          uint16_t text = gen(call->list[0]);
+          uint16_t desc = temp(K_R);
+          jsonLoc_ = e->loc;
+          jsonLit_ = false;
+          loadStr(desc, utf8ToUtf16(jsonDescriptor(e->type)));
+          uint16_t boxed = temp(K_R);
+          callNative(jsonLit_ ? "JSON.parse2" : "JSON.parse", {text, desc}, boxed, 'R');
+          if (kindOf(e->type) != K_R) emit(kindOf(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, d, boxed);
+          else mov(d, boxed, K_R);
+          release(m0);
+          return;
+        }
+        if (e->intrinsic == IN_JSON_TRY_PARSE) {
+          // e->type is T | null; the document is parsed as T (a JSON null document is a mismatch)
+          Expr* call = strip(e->a);
+          uint16_t text = gen(call->list[0]);
+          uint16_t desc = temp(K_R);
+          jsonLoc_ = e->loc;
+          jsonLit_ = false;
+          loadStr(desc, utf8ToUtf16(jsonDescriptor(T.optional(e->type->elem, false, e->type->hasUndef))));
+          uint16_t res = temp(K_R);
+          callNative(jsonLit_ ? "JSON.tryParse2" : "JSON.tryParse", {text, desc}, res, 'R');
+          mov(d, res, K_R);
+          release(m0);
+          return;
+        }
+        uint16_t a = gen(e->a);
+        if (e->intrinsic == 1) {
+          Label* ok = newLabel();
+          uint16_t c = temp(K_I);
+          emit(OP_INSTOF, c, a, (uint16_t)e->cls->classIdx);
+          jump(OP_JT, c, ok);
+          uint16_t msg = temp(K_R);
+          loadStr(msg, u"invalid cast to " + utf8ToUtf16(e->cls->name));
+          emit(OP_ABORT, msg);
+          place(ok);
+          mov(d, a, K_R);
+        } else if (e->intrinsic == 2) {
+          Type* at = e->a->type;
+          if (isBoxedOptional(at) && kindOf(e->type) != K_R) emit(kindOf(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, d, a);
+          else { emit(OP_CHKNN, a); mov(d, a, K(e->type)); }
+        } else {
+          mov(d, a, K(e->type));
+        }
         release(m0);
         return;
-      }
-      if (e->intrinsic == IN_JSON_TRY_PARSE) {
-        // e->type is T | null; the document is parsed as T (a JSON null document is a mismatch)
-        Expr* call = strip(e->a);
-        uint16_t text = gen(call->list[0]);
-        uint16_t desc = temp(K_R);
-        jsonLoc_ = e->loc;
-        jsonLit_ = false;
-        loadStr(desc, utf8ToUtf16(jsonDescriptor(T.optional(e->type->elem, false, e->type->hasUndef))));
-        uint16_t res = temp(K_R);
-        callNative(jsonLit_ ? "JSON.tryParse2" : "JSON.tryParse", {text, desc}, res, 'R');
-        mov(d, res, K_R);
-        release(m0);
-        return;
-      }
-      uint16_t a = gen(e->a);
-      if (e->intrinsic == 1) {
-        Label* ok = newLabel();
-        uint16_t c = temp(K_I);
-        emit(OP_INSTOF, c, a, (uint16_t)e->cls->classIdx);
-        jump(OP_JT, c, ok);
-        uint16_t msg = temp(K_R);
-        loadStr(msg, u"invalid cast to " + utf8ToUtf16(e->cls->name));
-        emit(OP_ABORT, msg);
-        place(ok);
-        mov(d, a, K_R);
-      } else if (e->intrinsic == 2) {
-        Type* at = e->a->type;
-        if (isBoxedOptional(at) && kindOf(e->type) != K_R) emit(kindOf(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, d, a);
-        else { emit(OP_CHKNN, a); mov(d, a, K(e->type)); }
-      } else {
-        mov(d, a, K(e->type));
-      }
-      release(m0);
+      }();
       return;
     }
     case EK::Arrow:
@@ -4045,34 +4076,38 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
       genInto(e->a, dst);
       return;
     case EK::Conv: {
-      if (e->conv == ConvKind::NumToBox || e->conv == ConvKind::IntToBox) {
-        size_t m0 = mark();
-        uint16_t a = gen(e->a);
-        if (dst != kNoReg) {
-          if (e->conv == ConvKind::NumToBox) emit(OP_BOX_F, dst, a);
-          else emit(OP_BOX_I, dst, a, vtOf(e->a->type));
+      // (a function of its own: its locals do not enlarge the frame of this recursive one)
+      [&]() E7_NOINLINE_LAMBDA {
+        if (e->conv == ConvKind::NumToBox || e->conv == ConvKind::IntToBox) {
+          size_t m0 = mark();
+          uint16_t a = gen(e->a);
+          if (dst != kNoReg) {
+            if (e->conv == ConvKind::NumToBox) emit(OP_BOX_F, dst, a);
+            else emit(OP_BOX_I, dst, a, vtOf(e->a->type));
+          }
+          release(m0);
+          return;
         }
-        release(m0);
+        if (dst == kNoReg) { genDiscard(e->a); return; }
+        if (e->a->type && e->a->type->t == TT::Never && K(e->type) != K_R) {
+          // a value of type never (kept boxed) used as a number / boolean / integer
+          size_t m0 = mark();
+          uint16_t a = gen(e->a);
+          emit(K(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, dst, a);
+          release(m0);
+          return;
+        }
+        if (e->a->type && K(e->a->type) != K(e->type) && kindOf(e->a->type) != K_V) {
+          // Never / unknown -> anything
+          size_t m0 = mark();
+          genDiscard(e->a);
+          loadZero(dst, K(e->type));
+          release(m0);
+          return;
+        }
+        genInto(e->a, dst);
         return;
-      }
-      if (dst == kNoReg) { genDiscard(e->a); return; }
-      if (e->a->type && e->a->type->t == TT::Never && K(e->type) != K_R) {
-        // a value of type never (kept boxed) used as a number / boolean / integer
-        size_t m0 = mark();
-        uint16_t a = gen(e->a);
-        emit(K(e->type) == K_F ? OP_UNBOX_F : OP_UNBOX_I, dst, a);
-        release(m0);
-        return;
-      }
-      if (e->a->type && K(e->a->type) != K(e->type) && kindOf(e->a->type) != K_V) {
-        // Never / unknown -> anything
-        size_t m0 = mark();
-        genDiscard(e->a);
-        loadZero(dst, K(e->type));
-        release(m0);
-        return;
-      }
-      genInto(e->a, dst);
+      }();
       return;
     }
     case EK::Yield:
