@@ -704,6 +704,21 @@ Type* Checker::checkYield(Expr* e) {
   return next->t == TT::Void ? T.undef() : next;
 }
 
+// A "fresh" literal value, whose literal type tsc widens where a mutable location takes it ({ k: "a" }, [a]
+// of const a = "x", return 5): a literal, or a constant whose literal type came from one (not `x as const`,
+// nor a value of a declared literal type)
+bool freshLiteral(Expr* x) {
+  x = strip(x);
+  switch (x->k) {
+    case EK::Str: case EK::Num: case EK::Bool: case EK::BigLit: return true;
+    case EK::Template: return x->list.empty();
+    case EK::Unary: return x->raw == "-" && x->a && strip(x->a)->k == EK::Num;
+    case EK::Cond: return freshLiteral(x->b) && freshLiteral(x->c);
+    case EK::Ident: return x->var && x->var->litInferred;
+    default: return false;
+  }
+}
+
 Type* Checker::checkArray(Expr* e, Type* expected) {
   Type* exp = expected ? baseOf(expected) : nullptr;
   expandSpreads(e->list);  // [...tuple]: one element per tuple element
@@ -760,7 +775,7 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
     } else {
       t = x->type ? x->type : check(x, elemExp);
       if (elemExp) coerce(x, elemExp);
-      else if (t->lit) t = widen(t);  // [a, b] of constants a = "x", b = "y": a string[] (as in tsc)
+      else if (t->lit && freshLiteral(x)) t = widen(t);  // [a, b] of constants a = "x", b = "y": a string[] (as tsc widens them)
     }
     types.push_back(t);
   }
@@ -1219,7 +1234,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
         t = T.unknown();
       }
       if (t->t == TT::Void) { err(p.loc, "property value cannot be void"); t = T.unknown(); }
-      if (t->lit && strip(p.value)->k != EK::As) t = widen(t);  // (as tsc widens a literal-typed value; not "x" as const)
+      if (t->lit && freshLiteral(p.value)) t = widen(t);  // (as tsc widens a fresh literal)
       propT[i] = t;
       sh->props.push_back({p.key, t, false});
     }
@@ -1319,7 +1334,7 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
       t = T.unknown();
     }
     if (t->t == TT::Void) { err(p.loc, "property value cannot be void"); t = T.unknown(); }
-    if (t->lit && strip(p.value)->k != EK::As) t = widen(t);  // { k: N } of a constant N = "n": a string property (as tsc widens it; not "x" as const)
+    if (t->lit && freshLiteral(p.value)) t = widen(t);  // { k: N } of a constant N = "n": a string property (as tsc widens it)
     props.push_back({p.key, t, false});
     fields.push_back({p.key, t});
   }
@@ -1539,6 +1554,8 @@ Type* Checker::checkUpdate(Expr* e) {
     e->a->type = dt;
   }
   if (st) t = st;
+  if (t->lit)  // (n++ of n: 1 | 2 gives a number, not one of its values: tsc rejects it too)
+    return errT(e->loc, "operator '" + e->raw + "' cannot be applied to a value of the literal type '" + typeName(t) + "' (the result is a number)");
   if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown ||
       (t->t == TT::Enum && t->en && !t->en->isString)) {  // (i++ of a numeric enum: a number, as in TypeScript)
     std::string key = pathKey(e->a);
@@ -1860,6 +1877,11 @@ Type* Checker::checkAssign(Expr* e) {
     coerce(e->b, lt);
     invalidatePath(key);
     if (lt->t == TT::Optional && rt->t != TT::Unknown && nonNullValue(e->b)) setNarrow(key, rt == lt->elem ? lt->elem : baseOf(lt));
+    // the value of y = v is v's (g((y = "abc")) with y: string | null passes a string), when it is held
+    // the same way as the target's
+    if (rt != lt && !rt->lit && rt->t != TT::Unknown && rt->t != TT::Never && rt->t != TT::Void && kindOf(rt) == kindOf(lt) &&
+        isBoxedOptional(rt) == isBoxedOptional(lt) && assignable(rt, lt))
+      return rt;
     return lt;
   }
   if (op == "||=" || op == "&&=") {
@@ -1890,7 +1912,11 @@ Type* Checker::checkAssign(Expr* e) {
   }
   // x += v with x: T | undefined narrowed to T (x = 1; x += 1): x = x + v, for a reference path (evaluated
   // twice, without side effects)
-  if (lt->t == TT::Optional && !key.empty()) {
+  // (the objects on the path are plain fields: reading them again runs no getter)
+  bool plainPath = true;
+  for (Expr* x = target->k == EK::Member ? strip(target->a) : nullptr; x && x->k == EK::Member; x = strip(x->a))
+    plainPath = plainPath && (x->intrinsic == 0 || x->intrinsic == IN_STATIC_FIELD);
+  if (lt->t == TT::Optional && !key.empty() && plainPath) {
     Type* n = narrowed(key, false);
     if (n && n->t != TT::Optional && !isNullish(n) && n->t != TT::Never && n->t != TT::Unknown) {
       Expr* bin = P.arena.expr(EK::Binary, e->loc);
@@ -2210,7 +2236,28 @@ void Checker::factsFrom(Expr* c, bool whenTrue, std::vector<Fact>& out) {
   }
   if (c->k == EK::Unary && c->raw == "!") { factsFrom(c->a, !whenTrue, out); return; }
   if (c->k == EK::Logical && c->raw == "&&") {
-    if (whenTrue) { factsFrom(c->a, true, out); factsFrom(c->b, true, out); }
+    if (whenTrue) {
+      // a && b: what a says holds unless b assigns the path again (o.p !== null && (o.p = f()) ...)
+      std::vector<Fact> fa;
+      factsFrom(c->a, true, fa);
+      std::set<std::string> names;
+      collectAssignedExpr(c->b, names);
+      std::set<std::string> assigned;
+      for (auto& n : names) {
+        std::string root = n.substr(0, n.find('.'));
+        Sym* sy = root == "this" ? lookup("this") : lookup(root);
+        if (!sy || sy->k != SymK::Var) continue;
+        std::string k = varKey(static_cast<VarSym*>(sy));
+        if (n.size() > root.size()) k += n.substr(root.size());
+        assigned.insert(k);
+      }
+      for (auto& f : fa) {
+        bool hit = false;
+        for (auto& k : assigned) hit = hit || f.key == k || f.key.compare(0, k.size() + 1, k + ".") == 0;
+        if (!hit) out.push_back(f);
+      }
+      factsFrom(c->b, true, out);
+    }
     return;
   }
   if (c->k == EK::Logical && c->raw == "||") {

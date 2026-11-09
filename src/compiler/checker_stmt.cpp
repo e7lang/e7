@@ -219,8 +219,11 @@ Type* Checker::constLit(Expr* e) {
 
 // a variable's type from its initializer: a const keeps the literal type of a constant ("a"), other
 // variables get the base type (TypeScript's widening)
+bool freshLiteral(Expr* x);  // (checker_expr.cpp)
+
 Type* Checker::inferVarType(Expr* init, Type* t, bool isConst) {
-  if (!isConst) return widen(t);
+  // (let r = d of a d: Dir keeps Dir: tsc widens only fresh literals, let k = "a")
+  if (!isConst) return t->lit && init && !freshLiteral(init) ? t : widen(t);
   if (Type* c = init && (t->t == TT::String || t->t == TT::Number || t->t == TT::Bool) ? constLit(init) : nullptr) return c;
   return t;
 }
@@ -435,8 +438,33 @@ void Checker::checkBody(FuncSym* f) {
       if (bare && valued && t->t == TT::Void) continue;
       r = r ? unify(r, t, f->loc, "return statements") : t;
     }
-    // (a literal value returned: its base type, as tsc widens an inferred return type)
-    if (r && r->lit) r = widen(r);
+    // (a fresh literal returned, return 5: its base type, as tsc widens an inferred return type; not "b" as
+    // const or a value of a declared literal type)
+    if (r && r->lit) {
+      bool fresh = true;
+      std::function<bool(Expr*)> freshLit = [&](Expr* x) -> bool {
+        while (x && (x->k == EK::Paren || (x->k == EK::Conv && x->conv == ConvKind::None))) x = x->a;
+        if (!x) return false;
+        switch (x->k) {
+          case EK::Str: case EK::Num: case EK::Bool: case EK::BigLit: return true;
+          case EK::Template: return x->list.empty();
+          case EK::Unary: return x->raw == "-" && x->a && stripParens(x->a)->k == EK::Num;
+          case EK::Cond: return freshLit(x->b) && freshLit(x->c);
+          case EK::Ident: return x->var && x->var->litInferred;
+          default: return false;
+        }
+      };
+      std::function<void(Stmt*)> scan = [&](Stmt* st) {
+        if (!st || !fresh) return;
+        if (st->k == SK::Return && st->expr) fresh = fresh && freshLit(st->expr);
+        for (Stmt* y : st->stmts) scan(y);
+        scan(st->then); scan(st->els); scan(st->body);
+        for (auto& c : st->cases) for (Stmt* y : c.body) scan(y);
+      };
+      if (f->exprBody) fresh = freshLit(f->exprBody);
+      else scan(f->body);
+      if (fresh) r = widen(r);
+    }
     if (bare && valued && r && r->t != TT::Unknown) {
       r = T.optional(r, false, true);
       // the returned values were checked before the type was known: convert them to it
@@ -910,6 +938,7 @@ Type* Checker::globalVarType(VarSym* v) {
       t = T.unknown();
     }
     v->type = inferVarType(d.init, t, v->isConst);
+    v->litInferred = v->type->lit;
     d.sym = v;
     v->checked = true;  // initializer already checked
   } else {
@@ -1145,6 +1174,7 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
     }
     v->type = declared;
     v->checked = true;
+    v->litInferred = !d.type && declared->lit;
     narrowDeclInit(d);
     noteConstArrow(d, isConst);
     return;
@@ -1199,6 +1229,7 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
     if (!simple) err(d.loc, "destructuring declarations must be initialized");
   }
   bindPattern(d, t, isConst, topLevel && !simple ? true : false, d.loc);
+  if (simple && d.sym) d.sym->litInferred = !declared && t && t->lit;
   if (simple) narrowDeclInit(d);
   noteConstArrow(d, isConst);
   (void)s;
@@ -1332,7 +1363,11 @@ void Checker::checkStmt(Stmt* s) {
           u->b = one;
         }
       }
+      Expr* savedStmtExpr = stmtExpr_;
+      stmtExpr_ = s->expr;  // (its value is not used)
+      while (stmtExpr_->k == EK::Paren) stmtExpr_ = stmtExpr_->a;
       Type* t = check(s->expr, nullptr);
+      stmtExpr_ = savedStmtExpr;
       (void)t;
       // an assertion function: the rest of the block sees what it asserts
       Expr* c = s->expr;
@@ -1656,6 +1691,16 @@ void Checker::checkStmt(Stmt* s) {
       std::vector<Stmt*> all;
       for (auto& c : s->cases)
         for (Stmt* x : c.body) all.push_back(x);
+      // the clauses share one scope (as in JavaScript): their let / const names are pending in it
+      {
+        std::function<void(VarDecl&)> names = [&](VarDecl& d) {
+          if (!d.isArrayPat && !d.isObjPat) { if (!d.name.empty() && !scope->names.count(d.name)) scope->pending.insert(d.name); }
+          for (auto& sub : d.elems) names(sub);
+        };
+        for (Stmt* x : all)
+          if (x->k == SK::Var)
+            for (auto& d : x->decls) names(d);
+      }
       hoistFunctions(all);
       // literal types (D5): each clause sees the discriminant narrowed to its case values (with the
       // values of the empty clauses that fall into it), the default clause the values left (never when
@@ -1699,6 +1744,7 @@ void Checker::checkStmt(Stmt* s) {
           groupOk = false;
         }
         pushScope();
+        scope->declareUp = true;
         if (!dkey.empty() && optDisc) {
           // a clause reached only by its values sees them (not null / undefined); the default clause sees
           // the values left, or only null / undefined
@@ -1709,6 +1755,7 @@ void Checker::checkStmt(Stmt* s) {
             bool n = dt0->hasNull && !coveredNull, u = dt0->hasUndef && !coveredUndef;
             if (rest) setNarrow(dkey, T.optional(rest, n, u));
             else if (n || u) setNarrow(dkey, T.optional(T.nullT(), n, u));
+            else setNarrow(dkey, T.never());  // (every value and null / undefined have a clause)
           }
         } else if (!dkey.empty() && dt->lit) {
           if (c.test && groupOk && group) setNarrow(dkey, group);
@@ -1721,7 +1768,24 @@ void Checker::checkStmt(Stmt* s) {
         } else if (!dkey.empty() && !c.test && switchCoversEnum(s) && (ci == 0 || exitsClause(s->cases[ci - 1]))) {
           setNarrow(dkey, T.never());
         }
-        for (Stmt* x : c.body) checkStmt(x);
+        for (Stmt* x : c.body) {
+          checkStmt(x);
+          // a let / const of a clause: another clause may run without its declaration (a ReferenceError
+          // in JavaScript): its "initialized" flag is checked
+          if (x->k == SK::Var) {
+            std::function<void(VarDecl&)> flag = [&](VarDecl& d) {
+              if (d.sym && !d.sym->isGlobal && !d.sym->initFlag) {
+                d.sym->initFlag = P.make<VarSym>();
+                d.sym->initFlag->name = d.sym->name + "$init";
+                d.sym->initFlag->type = T.boolean();
+                d.sym->initFlag->owner = d.sym->owner;
+                d.sym->initFlag->isGlobal = false;
+              }
+              for (auto& sub : d.elems) flag(sub);
+            };
+            for (auto& d : x->decls) flag(d);
+          }
+        }
         popScope();
         if (!c.body.empty()) {
           group = nullptr;

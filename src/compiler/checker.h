@@ -33,6 +33,7 @@ struct Scope {
   std::unordered_map<std::string, Sym*> names;
   std::unordered_map<std::string, Type*> narrow;  // path key -> narrowed type (nullptr = none)
   std::set<std::string> pending;  // let / const / class names of this block not declared yet (TDZ)
+  bool declareUp = false;  // a switch clause: its declarations belong to the switch's scope
 };
 
 class Checker {
@@ -232,7 +233,8 @@ class Checker {
   void narrowDeclInit(VarDecl& d);
   Type* knownFnType(VarDecl& d, Type* declared);
   std::set<VarDecl*> preBound;
-  std::string pendingHit_;  // the name a lookup found declared later in its block  // const f = <arrow> declared when its block was entered
+  std::string pendingHit_;
+  Expr* stmtExpr_ = nullptr;  // the expression of the expression statement being checked (its value is unused)  // the name a lookup found declared later in its block  // const f = <arrow> declared when its block was entered
   void noteConstArrow(VarDecl& d, bool isConst);
   FuncSym* predCallee(Expr* call);
   std::unordered_map<VarSym*, FuncSym*> constArrowFns;  // const f = (...) => ...: the arrow's function

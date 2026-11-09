@@ -1470,11 +1470,18 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         if (f2->t != TT::Func) return errT(args[0]->loc, "catch expects a function");
         cbOk(args[0], f2, {T.error()});
         Type* u = promiseCallbackRet(args[0], f2->ret, args[0]->loc);
-        // a handler that returns nothing: the promise keeps the type (an e7 limit: undefined is not a T)
         if (u != vt && u->t != TT::Void)
           return errT(args[0]->loc, "the catch callback must return '" + typeName(vt) + "' (the promise's type), not '" + typeName(u) + "'");
         e->intrinsic = IN_PROMISE_THEN;
         e->raw = "catch";
+        // a handler that returns nothing: the value is undefined then (a T | undefined; a promise of a
+        // number, boolean or integer cannot hold undefined in e7)
+        if (u->t == TT::Void && vt->t != TT::Void && e != stmtExpr_) {  // (a statement: the value is not used)
+          if (kindOf(vt) != K_R)
+            return errT(args[0]->loc, "this catch callback returns nothing, so the promise's value may be undefined, which a '" +
+                                          typeName(vt) + "' cannot hold in e7: return a " + typeName(vt) + " from the callback");
+          return T.promise(T.optional(vt, false, true));
+        }
         return T.promise(vt);
       }
       if (meth("finally")) {

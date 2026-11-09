@@ -1688,6 +1688,23 @@ class Parser {
     return ops.count(cur().text) > 0;
   }
 
+  // The return type of an arrow function: (number | string) => ... and (() => T) => ... are a parenthesized
+  // type followed by the arrow (not a function type)
+  TypeNode* parseArrowRetType() {
+    if (isP("(")) {
+      size_t s0 = i;
+      try {
+        i++;
+        TypeNode* tn = parseType();
+        expectP(")");
+        if (isP("=>") && !cur().nl) return tn;
+      } catch (ParseError&) {
+      }
+      i = s0;
+    }
+    return parseRetType();
+  }
+
   // Try parsing an arrow function at the current position.
   Expr* tryArrow() {
     Loc l = loc();
@@ -1722,7 +1739,7 @@ class Parser {
           Expr* f = A.expr(EK::Arrow, l);
           parseTypeParams(f->typeParams);
           parseParams(f->params, false);
-          if (eatP(":")) f->retType = parseRetType();
+          if (eatP(":")) f->retType = parseArrowRetType();
           if (!isP("=>") || cur().nl) { i = save; return nullptr; }
           i++;
           parseArrowBody(f);
@@ -1735,7 +1752,7 @@ class Parser {
       try {
         Expr* f = A.expr(EK::Arrow, l);
         parseParams(f->params, false);
-        if (eatP(":")) f->retType = parseRetType();
+        if (eatP(":")) f->retType = parseArrowRetType();
         if (!isP("=>") || cur().nl) { i = save; return nullptr; }
         i++;
         parseArrowBody(f);

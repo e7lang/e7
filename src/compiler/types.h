@@ -104,6 +104,7 @@ struct VarSym : Sym {
   bool isThis = false;
   bool tdzLocal = false;  // a local const f = <arrow> declared on entry to its block (null until its declaration runs)
   bool blockVar = false;  // declared by a let / const statement of a block
+  bool litInferred = false;  // const k = "a" (a literal type from its initializer: tsc widens it in literals)
   // a blockVar captured by a nested function declaration (created when the block is entered, so it may run
   // before the declaration): its "initialized" flag, which the function checks (ReferenceError)
   VarSym* initFlag = nullptr;
@@ -159,6 +160,7 @@ struct FuncSym : Sym {
   std::string qualName;
   int funcIdx = -1;
   bool inferRet = false;     // return type inferred from body
+  bool retInferred = false;  // (its return type was inferred: an override may take its base method's)
   bool hasDefaults = false;  // has default-valued params (hidden argc parameter)
   bool inheritCtor = false;  // synthesized constructor forwarding to the parent constructor
   bool isAbstract = false;   // abstract method: no body (a stub that is never called)

@@ -1265,7 +1265,17 @@ void Gen::blockEntry(std::vector<Stmt*>& stmts) {
       };
       fresh(d.sym);
       freshCells.insert(d.sym);
-      if (d.sym->initFlag && d.sym->initFlag->captured) fresh(d.sym->initFlag);  // (false until the declaration)
+    }
+    if (d.sym && !d.sym->isGlobal && d.sym->initFlag) {
+      // its "initialized" flag: false on entry, until the declaration runs
+      VarSym* fl = d.sym->initFlag;
+      if (fl->captured) {
+        if (varReg.count(fl)) emit(OP_NEWCELL, varReg[fl], vtOf(fl->type));
+        else declareLocal(fl);
+      } else {
+        declareLocal(fl);
+        loadInt(varReg[fl], 0);
+      }
     }
     for (auto& sub : d.elems) pre(sub);
   };
@@ -1394,6 +1404,7 @@ void Gen::genVarDecl(VarDecl& d, bool topLevel) {
       if (d.init) genInto(d.init, r);
       else if (v->type->t == TT::Optional && v->type->hasUndef) emit(OP_LOADUNDEF, r);
       else loadZero(r, K(v->type));
+      markInitialized(v);
     } else {
       size_t m0 = mark();
       // re-entering a loop body: a fresh binding per iteration, created before the initializer so that a
@@ -1406,8 +1417,8 @@ void Gen::genVarDecl(VarDecl& d, bool topLevel) {
         if (v->type->t == TT::Optional && v->type->hasUndef) emit(OP_LOADUNDEF, r);
         else loadZero(r, K(v->type));
       }
+      markInitialized(v);  // (before the write: the value is computed, the variable exists)
       writeVar(v, r);
-      markInitialized(v);
       release(m0);
     }
     return;
@@ -1430,8 +1441,8 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
     if (!d.sym) return;
     if (!d.sym->isGlobal && d.sym->captured && varReg.count(d.sym) && !freshCells.erase(d.sym))
       emit(OP_NEWCELL, varReg[d.sym], vtOf(d.sym->type));
-    bindVar(d.sym, src);
     markInitialized(d.sym);
+    bindVar(d.sym, src);
     return;
   }
   for (size_t i = 0; i < d.elems.size(); i++) {
@@ -1968,7 +1979,10 @@ void Gen::genStmt(Stmt* s) {
         VarSym* v = it->second;
         size_t m0 = mark();
         uint16_t r;
-        if (m.init) r = gen(m.init);
+        // (the initializer as checked: with its conversion to the field's type, which the checker made in
+        // the field's declaration)
+        Expr* init = v->decl && v->decl->init ? v->decl->init : m.init;
+        if (init) r = gen(init);
         else {
           r = temp(K(v->type));
           if (v->type->t == TT::Optional && v->type->hasUndef) emit(OP_LOADUNDEF, r);
@@ -3101,6 +3115,11 @@ void Gen::genSwitch(Stmt* s) {
   Type* dt = s->expr->type;
   uint16_t disc = temp(K(dt));
   genInto(s->expr, disc);
+  // the clauses' scope: its cells and hoisted functions, before the jump to a clause (which would skip them)
+  std::vector<Stmt*> all;
+  for (auto& c : s->cases)
+    for (Stmt* x : c.body) all.push_back(x);
+  blockEntry(all);
   Label* end = newLabel();
   std::vector<Label*> bodies;
   Label* def = nullptr;
@@ -3149,13 +3168,9 @@ void Gen::genSwitch(Stmt* s) {
   }
   if (nullish) place(nullish);
   jump(OP_JMP, 0, def ? def : end);
-  std::vector<Stmt*> all;
-  for (auto& c : s->cases)
-    for (Stmt* x : c.body) all.push_back(x);
   LoopCtx lc{label, end, nullptr, false};
   lc.isSwitch = true;
   pushLoop(lc);
-  blockEntry(all);
   for (size_t i = 0; i < s->cases.size(); i++) {
     place(bodies[i]);
     for (Stmt* x : s->cases[i].body) genStmt(x);
@@ -3267,7 +3282,7 @@ void Gen::tdzThrowUnless(uint32_t flag, const std::string& name) {
 // a local declared by a let / const of a block, read or written by a nested function declaration (which
 // may run before the declaration): its flag says whether the declaration ran
 void Gen::markInitialized(VarSym* v) {
-  if (!v || !v->initFlag || !v->initFlag->captured || !varReg.count(v->initFlag)) return;
+  if (!v || !v->initFlag || !varReg.count(v->initFlag)) return;
   size_t m0 = mark();
   uint16_t one = temp(K_I);
   loadInt(one, 1);
@@ -3277,12 +3292,19 @@ void Gen::markInitialized(VarSym* v) {
 
 void Gen::localTdzCheck(VarSym* v) {
   if (!v->initFlag) return;
-  auto ci = fn->captureIndex.find(v->initFlag);
-  if (ci == fn->captureIndex.end()) return;
+  VarSym* fl = v->initFlag;
+  auto ci = fn->captureIndex.find(fl);
+  bool own = varReg.count(fl) > 0;
+  if (ci == fn->captureIndex.end() && !own) return;
   size_t m0 = mark();
   uint16_t f = temp(K_I);
   Label* ok = newLabel();
-  emit(OP_UGET_I, f, (uint16_t)ci->second);
+  if (own) {
+    if (fl->captured) emit(OP_CGET_I, f, varReg[fl]);
+    else mov(f, varReg[fl], K_I);
+  } else {
+    emit(OP_UGET_I, f, (uint16_t)ci->second);
+  }
   jump(OP_JT, f, ok);
   uint16_t nm = temp(K_R), msg = temp(K_R), er = temp(K_R);
   loadStr(nm, u"ReferenceError");
@@ -3311,6 +3333,7 @@ void Gen::readVar(VarSym* v, uint16_t dst, Type* want) {
   } else {
     auto it = varReg.find(v);
     if (it != varReg.end()) {
+      if (v->initFlag) localTdzCheck(v);
       if (v->captured) emit(cget[K(st)], tgt, it->second);
       else mov(tgt, it->second, K(st));
     } else {
@@ -3359,6 +3382,7 @@ void Gen::writeVar(VarSym* v, uint16_t src) {
   }
   auto it = varReg.find(v);
   if (it != varReg.end()) {
+    if (v->initFlag) localTdzCheck(v);
     if (v->captured) emit(cset[K(st)], it->second, src);
     else mov(it->second, src, K(st));
     return;
@@ -3404,7 +3428,7 @@ uint16_t Gen::gen(Expr* e) {
   }
   if (x->k == EK::Num && x->type && x->type->t == TT::Number) return numConst(x->num);
   if (x->k == EK::Ident && x->intrinsic == IN_CONST_NUM && x->type && x->type->t == TT::Number) return numConst(x->num);
-  if (x->k == EK::Ident && x->var && !x->var->isGlobal && x->intrinsic == 0 && !x->var->captured) {
+  if (x->k == EK::Ident && x->var && !x->var->isGlobal && x->intrinsic == 0 && !x->var->captured && !x->var->initFlag) {
     auto it = varReg.find(x->var);
     if (it != varReg.end() && (!isBoxedOptional(x->var->type) || x->type == x->var->type)) return it->second;
   }
@@ -3772,7 +3796,7 @@ void Gen::genIntoImpl(Expr* e, uint16_t dst) {
       size_t m0 = mark();
       Expr* tg = strip(e->a);
       Type* t = e->a->type;
-      if (tg->k == EK::Ident && tg->var && !tg->var->isGlobal && !tg->var->captured && varReg.count(tg->var)) {
+      if (tg->k == EK::Ident && tg->var && !tg->var->isGlobal && !tg->var->captured && !tg->var->initFlag && varReg.count(tg->var)) {
         uint16_t r = varReg[tg->var];
         if (dst != kNoReg && !e->prefix) mov(dst, r, K(t));
         if (t->t == TT::Int) {
@@ -4213,7 +4237,7 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
   Type* lt = e->a->type;
   if (op == "=") {
     // direct write into a plain local register when safe
-    if (target->k == EK::Ident && target->var && !target->var->isGlobal && !target->var->captured &&
+    if (target->k == EK::Ident && target->var && !target->var->isGlobal && !target->var->captured && !target->var->initFlag &&
         varReg.count(target->var)) {
       Expr* b = strip(e->b);
       uint16_t r = varReg[target->var];
@@ -4277,7 +4301,7 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
   // compound assignment: evaluate the target location once
   std::string bop = op.substr(0, op.size() - 1);
   Kind k = K(lt);
-  if (target->k == EK::Ident && target->var && !target->var->isGlobal && !target->var->captured &&
+  if (target->k == EK::Ident && target->var && !target->var->isGlobal && !target->var->captured && !target->var->initFlag &&
       varReg.count(target->var) && target->var->type == lt) {
     uint16_t vr = varReg[target->var];
     if (bop == "+" && (lt->t == TT::String || (lt->t == TT::Enum && lt->en->isString))) {

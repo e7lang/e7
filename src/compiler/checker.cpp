@@ -33,6 +33,9 @@ Scope* Checker::pushScope(bool fnBoundary) {
 void Checker::popScope() { scope = scope->parent; }
 
 void Checker::declare(const std::string& name, Sym* s, Loc l) {
+  Scope* saved = scope;
+  while (scope->declareUp && scope->parent) scope = scope->parent;  // (one scope for all clauses of a switch)
+  struct Restore { Scope*& sc; Scope* v; ~Restore() { sc = v; } } restore{scope, saved};
   if (scope->names.count(name)) {
     // only `export default` declares "default" (a reserved word)
     err(l, name == "default" ? std::string("a module cannot have more than one default export")
@@ -333,6 +336,7 @@ void Checker::markCapture(VarSym* v) {
       f->captures.push_back(v);
     }
   }
+  if (v->initFlag && !hoisted) markCapture(v->initFlag);  // (a switch clause variable: checked everywhere)
   if (hoisted && v->blockVar && !v->isParam) {
     if (!v->initFlag) {
       v->initFlag = P.make<VarSym>();
@@ -1737,8 +1741,18 @@ void Checker::resolveClass(ClassSym* c) {
       if (base == ov) continue;
       resolveSig(base);
       resolveSig(ov);
-      if (ov->inferRet && !ov->checked) checkFunction(ov);  // (its return type, inferred from its body)
+      if (ov->inferRet && !ov->checked) { ov->retInferred = true; checkFunction(ov); }  // (its return type, inferred from its body)
       if (base->inferRet && !base->checked) checkFunction(base);
+      // an inferred return type that the overridden method's takes, with the same representation (a
+      // Promise<string> for a Promise<string | null>): the overridden method's (as tsc checks it)
+      if (ov->retInferred && base->type && ov->type && ov->type->ret != base->type->ret) {
+        Type* a = ov->type->ret;
+        Type* b = base->type->ret;
+        bool ok = kindOf(a) == kindOf(b) && isBoxedOptional(a) == isBoxedOptional(b) && assignable(a, b);
+        if (!ok && a->t == TT::Promise && b->t == TT::Promise)
+          ok = kindOf(a->elem) == kindOf(b->elem) && isBoxedOptional(a->elem) == isBoxedOptional(b->elem) && assignable(a->elem, b->elem);
+        if (ok) ov->type = T.func(ov->type->params, b, ov->type->optParams, ov->type->restParam);
+      }
       if (base->type && ov->type && base->type != ov->type && ov->type->ret && base->type->ret) {
         // a compatible override (as TypeScript allows): fewer parameters (the others are passed and
         // ignored) with the same representations, and a return type assignable to the overridden one's
