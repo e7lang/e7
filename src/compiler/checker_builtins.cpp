@@ -122,7 +122,8 @@ Expr* Checker::constDefault(Expr* init) {
   while (x && (x->k == EK::Paren || (x->k == EK::Conv && x->conv == ConvKind::None))) x = x->a;
   if (!x) return nullptr;
   bool ok = x->k == EK::Str || x->k == EK::Num || x->k == EK::Bool || (x->k == EK::Template && x->list.empty()) ||
-            (x->k == EK::Unary && x->raw == "-" && x->a && strip(x->a)->k == EK::Num);
+            x->k == EK::BigLit || x->k == EK::Null ||
+            (x->k == EK::Unary && x->raw == "-" && x->a && (strip(x->a)->k == EK::Num || strip(x->a)->k == EK::BigLit));
   if (!ok && x->k == EK::Member && x->a && strip(x->a)->k == EK::Ident) {
     Sym* s = lookup(strip(x->a)->raw);
     ok = s && s->k == SymK::Enum;
@@ -150,9 +151,13 @@ void Checker::checkArgs(Expr* call, Type* ft, std::vector<Expr*>& args, size_t s
     }
     // f(x) with x: T | undefined for `p: T = d`: JavaScript applies the default when the value is
     // undefined; E7 applies it when the argument is left out, so the call passes x ?? d itself
+    // (x: T | null | undefined for `p: T | null = null`: x ?? null is x with undefined replaced, too)
+    Expr* d0 = fs && fs->params && i < fs->params->size() && (*fs->params)[i].init ? constDefault((*fs->params)[i].init) : nullptr;
+    bool nullDefault = d0 && d0->k == EK::Null;
     if (hasUndefined(t) && !hasUndefined(pt) && i < ft->optParams.size() && ft->optParams[i] &&
-        (t->t == TT::Undefined || (t->t == TT::Optional && !t->hasNull && assignable(t->elem, pt)))) {
-      Expr* d = fs && fs->params && i < fs->params->size() && (*fs->params)[i].init ? constDefault((*fs->params)[i].init) : nullptr;
+        (t->t == TT::Undefined ||
+         (t->t == TT::Optional && (!t->hasNull || nullDefault) && assignable(T.optional(t->elem, t->hasNull, false), pt)))) {
+      Expr* d = d0;
       if (!d) {
         err(a->loc, "type '" + typeName(t) + "' is not assignable to type '" + typeName(pt) +
                         "': E7 applies a parameter's default value only when the argument is left out (or when the default "
@@ -160,7 +165,8 @@ void Checker::checkArgs(Expr* call, Type* ft, std::vector<Expr*>& args, size_t s
         return;
       }
       Type* dt = check(d, pt);
-      if (!assignable(dt, pt)) { coerce(a, pt); return; }
+      Type* dc = constLit(d);  // ("b" for a parameter of type "a" | "b")
+      if (!assignable(dt, pt) && !(dc && assignable(dc, pt))) { coerce(a, pt); return; }
       coerce(d, pt);
       if (t->t == TT::Undefined && (stripConvs(a)->k == EK::Undefined)) {  // f(undefined): the default itself
         a = d;
@@ -471,6 +477,7 @@ Type* Checker::checkMethodCall(Expr* e, Expr* m, Type* expected) {
         break;
       }
       auto fit = c->fieldIdx.find(name);
+      if (fit != c->fieldIdx.end() && c->fields[fit->second].absent) fit = c->fieldIdx.end();  // (only through the interface)
       if (fit != c->fieldIdx.end()) {
         Type* ft = c->fields[fit->second].type;
         if (callOptional && ft->t == TT::Optional && ft->elem->t == TT::Func && !m->optional) {
@@ -592,6 +599,26 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
   };
   auto N = [&](double v) { return mkNum(P, T, v, l); };
   auto S = [&](const std::u16string& v) { return mkStr(P, T, v, l); };
+  // an optional argument i: d when it is left out or undefined (as in JavaScript), `x ?? d` for an x
+  // that may be undefined (allowUndef false: a position where undefined is not the same as leaving
+  // the argument out, as for Array.prototype.lastIndexOf)
+  auto optArg = [&](std::vector<Expr*>& as, size_t i, Expr* d, bool sameAsOmitted = true) {
+    if (as.size() == i) { as.push_back(d); return; }
+    if (as.size() < i) return;
+    // (Array.prototype.lastIndexOf(x, undefined): an index given as undefined is 0)
+    Expr* u = sameAsOmitted ? d : N(0);
+    Expr* a = strip(as[i]);
+    if (a->k == EK::Undefined) { as[i] = u; return; }
+    if (a->k == EK::Spread) return;
+    Type* t = as[i]->type ? as[i]->type : check(as[i], nullptr);
+    if (t->t == TT::Optional && t->hasUndef && !t->hasNull) {
+      Expr* q = P.arena.expr(EK::Logical, as[i]->loc);
+      q->raw = "??";
+      q->a = wrapConv(as[i], ConvKind::None, t);  // (checked already: not checked again)
+      q->b = u;
+      as[i] = q;
+    }
+  };
   auto noSuch = [&]() -> Type* {
     return errT(m->loc, std::string(isCall ? "method" : "property") + " '" + name + "' does not exist on type '" + typeName(bt) + "'" +
                             suggestMember(bt, name));
@@ -633,14 +660,14 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       if (meth("indexOf") || meth("lastIndexOf") || meth("includes") || meth("startsWith") || meth("endsWith")) {
         double def = (name == "lastIndexOf" || name == "endsWith") ? INFINITY : 0;
-        if (args.size() == 1) args.push_back(N(def));
+        optArg(args, 1, N(def));
         if (!argsMatch(e, args, {str, num}, 2, name.c_str())) return T.unknown();
         native("String." + name);
         return (name == "indexOf" || name == "lastIndexOf") ? num : boo;
       }
       if (meth("slice") || meth("substring") || meth("substr")) {
-        if (args.empty()) args.push_back(N(0));
-        if (args.size() == 1) args.push_back(N(INFINITY));
+        optArg(args, 0, N(0));
+        optArg(args, 1, N(INFINITY));
         if (!argsMatch(e, args, {num, num}, 2, name.c_str())) return T.unknown();
         native("String." + name);
         return str;
@@ -657,7 +684,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return str;
       }
       if (meth("padStart") || meth("padEnd")) {
-        if (args.size() == 1) args.push_back(S(u" "));
+        optArg(args, 1, S(u" "));
         if (!argsMatch(e, args, {num, str}, 2, name.c_str())) return T.unknown();
         native("String." + name);
         return str;
@@ -669,7 +696,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       if (meth("split")) {
         if (args.empty()) return errT(e->loc, "split() without a separator is not supported");
-        if (args.size() == 1) args.push_back(N(4294967295.0));
+        optArg(args, 1, N(4294967295.0));
         if (!argsMatch(e, args, {str, num}, 2, "split")) return T.unknown();
         native("String.split");
         return T.array(str);
@@ -718,12 +745,15 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return checkBuiltinMethod(e, m, str, expected);
       }
       if (meth("toString")) {
+        if (args.size() == 1 && strip(args[0])->k == EK::Undefined) args.clear();  // toString(undefined)
         if (args.empty()) { e->intrinsic = IN_TOSTRING; return str; }
+        optArg(args, 0, N(10));
         if (!argsMatch(e, args, {num}, 1, "toString")) return T.unknown();
         native("Number.toStringRadix");
         return str;
       }
       if (meth("toFixed") || meth("toExponential") || meth("toPrecision")) {
+        if (args.size() == 1 && strip(args[0])->k == EK::Undefined) args.clear();  // toFixed(undefined)
         if (args.empty()) {
           if (name == "toPrecision") { e->intrinsic = IN_TOSTRING; return str; }
           args.push_back(N(name == "toFixed" ? 0 : NAN));
@@ -751,7 +781,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
     }
     case TT::BigInt: {
       if (meth("toString")) {
-        if (args.empty()) args.push_back(N(10));
+        optArg(args, 0, N(10));
         if (!argsMatch(e, args, {num}, 1, "toString")) return T.unknown();
         native("BigInt.toString");
         return str;
@@ -771,8 +801,19 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
           return num;
         }
         if (args.empty()) return errT(e->loc, "push requires at least one argument");
+        bool spread = false;
+        for (Expr* a : args) spread = spread || a->k == EK::Spread;
+        if (spread) {
+          // push(x, ...ys, z): the array of the arguments [x, ...ys, z], pushed
+          Expr* items = P.arena.expr(EK::Array, l);
+          items->list = args;
+          check(items, bt);
+          if (!coerce(items, bt)) return T.unknown();
+          args.assign(1, items);
+          native("Array.pushArray");
+          return num;
+        }
         for (Expr*& a : args) {
-          if (a->k == EK::Spread) return errT(a->loc, "spread must be the only argument of push");
           check(a, et);
           coerce(a, et);
         }
@@ -785,6 +826,16 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return T.optional(et, false, true);
       }
       if (meth("unshift")) {
+        if (args.size() != 1 || args[0]->k == EK::Spread) {
+          // unshift(x, y, ...zs): the array of the arguments, inserted at the start
+          Expr* items = P.arena.expr(EK::Array, l);
+          items->list = args;
+          check(items, bt);
+          if (!coerce(items, bt)) return T.unknown();
+          args.assign(1, items);
+          e->intrinsic = IN_ARR_UNSHIFT_MANY;
+          return num;
+        }
         if (!argsMatch(e, args, {et}, 1, "unshift")) return T.unknown();
         native("Array.unshift" + K);
         return num;
@@ -795,8 +846,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return T.optional(et, false, true);
       }
       if (meth("slice")) {
-        if (args.empty()) args.push_back(N(0));
-        if (args.size() == 1) args.push_back(N(INFINITY));
+        optArg(args, 0, N(0));
+        optArg(args, 1, N(INFINITY));
         if (!argsMatch(e, args, {num, num}, 2, "slice")) return T.unknown();
         native("Array.slice");
         return T.array(bt->elem);  // a new (mutable) array, also from a readonly one
@@ -872,19 +923,33 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return T.array(bt->elem);
       }
       if (meth("indexOf") || meth("lastIndexOf")) {
-        if (args.size() == 1) args.push_back(N(name == "indexOf" ? 0 : INFINITY));
+        optArg(args, 1, N(name == "indexOf" ? 0 : INFINITY), name != "lastIndexOf");
         if (!argsMatch(e, args, {et, num}, 2, name.c_str())) return T.unknown();
         native("Array." + name + K);
         return num;
       }
       if (meth("includes")) {
+        if (args.size() == 2 && args[1]->k != EK::Spread) {
+          // includes(x, from): includes(x) of slice(from) (the same elements, from the same index)
+          Expr* mem = P.arena.expr(EK::Member, l);
+          mem->a = m->a;
+          mem->raw = "slice";
+          Expr* call = P.arena.expr(EK::Call, l);
+          call->a = mem;
+          call->list = {args[1]};
+          Type* st = checkBuiltinMethod(call, mem, bt, nullptr);
+          if (st->t == TT::Unknown) return st;
+          call->type = st;
+          m->a = call;
+          args.pop_back();
+        }
         if (!argsMatch(e, args, {et}, 1, "includes")) return T.unknown();
         native("Array.includes" + K);
         return boo;
       }
       if (meth("join") || meth("toString")) {
         if (name == "toString" && !args.empty()) return errT(e->loc, "toString takes no arguments");
-        if (args.empty()) args.push_back(S(u","));
+        optArg(args, 0, S(u","));
         if (!argsMatch(e, args, {str}, 1, "join")) return T.unknown();
         native("Array.join");
         return str;
@@ -895,8 +960,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return bt;
       }
       if (meth("fill")) {
-        if (args.size() == 1) args.push_back(N(0));
-        if (args.size() == 2) args.push_back(N(INFINITY));
+        optArg(args, 1, N(0));
+        optArg(args, 2, N(INFINITY));
         if (!argsMatch(e, args, {et, num, num}, 3, "fill")) return T.unknown();
         native("Array.fill" + K);
         return bt;
@@ -963,6 +1028,12 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         Type* acc = et;
         if (args.size() == 2) {
           Type* exp = expected ? baseOf(expected) : nullptr;
+          // the accumulator's type: a type argument (reduce<string[]>(...)), or the annotation of the
+          // callback's first parameter ((acc: string[], x) => ...), else the initial value's
+          if (e->typeArgs.size() == 1) exp = resolveType(e->typeArgs[0]);
+          else if (Expr* cbx = strip(args[0]); cbx->k == EK::Arrow && !cbx->params.empty() && cbx->params[0].type &&
+                                                !cbx->params[0].rest && !cbx->params[0].optional)
+            exp = resolveType(cbx->params[0].type);
           acc = check(args[1], exp);
           if (exp && acc != exp && assignable(acc, exp)) { coerce(args[1], exp); acc = exp; }
           if (acc->t == TT::Null || acc->t == TT::Undefined) return errT(args[1]->loc, "cannot infer accumulator type from null; add a type annotation");
@@ -1014,7 +1085,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       if (prop("byteOffset")) { native("Bytes.byteOffset"); return num; }
       if (prop("buffer")) { native("Bytes.buffer"); return T.arrayBuffer(); }
       if (meth("set")) {
-        if (args.size() == 1) args.push_back(N(0));
+        optArg(args, 1, N(0));
         if (args.size() != 2) return errT(e->loc, "set expects (source, offset?)");
         Type* st = check(args[0], nullptr);
         if (st->t != TT::Bytes && !(st->t == TT::Array && st->elem == num)) return errT(args[0]->loc, "set source must be a Uint8Array or number[]");
@@ -1023,27 +1094,27 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return T.voidT();
       }
       if (meth("subarray") || meth("slice")) {
-        if (args.empty()) args.push_back(N(0));
-        if (args.size() == 1) args.push_back(N(INFINITY));
+        optArg(args, 0, N(0));
+        optArg(args, 1, N(INFINITY));
         if (!argsMatch(e, args, {num, num}, 2, name.c_str())) return T.unknown();
         native("Bytes." + name);
         return T.bytes();
       }
       if (meth("fill")) {
-        if (args.size() == 1) args.push_back(N(0));
-        if (args.size() == 2) args.push_back(N(INFINITY));
+        optArg(args, 1, N(0));
+        optArg(args, 2, N(INFINITY));
         if (!argsMatch(e, args, {num, num, num}, 3, "fill")) return T.unknown();
         native("Bytes.fill");
         return T.bytes();
       }
       if (meth("indexOf") || meth("lastIndexOf") || meth("includes")) {
-        if (args.size() == 1) args.push_back(N(name == "lastIndexOf" ? INFINITY : 0));
+        optArg(args, 1, N(name == "lastIndexOf" ? INFINITY : 0), name != "lastIndexOf");
         if (!argsMatch(e, args, {num, num}, 2, name.c_str())) return T.unknown();
         native("Bytes." + name);
         return name == "includes" ? boo : num;
       }
       if (meth("join") || meth("toString")) {
-        if (args.empty()) args.push_back(S(u","));
+        optArg(args, 0, S(u","));
         if (!argsMatch(e, args, {str}, 1, "join")) return T.unknown();
         native("Bytes.join");
         return str;
@@ -1070,8 +1141,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
     case TT::ArrayBuffer: {
       if (prop("byteLength")) { native("Buffer.byteLength"); return num; }
       if (meth("slice")) {
-        if (args.empty()) args.push_back(N(0));
-        if (args.size() == 1) args.push_back(N(INFINITY));
+        optArg(args, 0, N(0));
+        optArg(args, 1, N(INFINITY));
         if (!argsMatch(e, args, {num, num}, 2, "slice")) return T.unknown();
         native("Buffer.slice");
         return T.arrayBuffer();
@@ -1086,14 +1157,14 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       for (int k = 0; k < 8; k++) {
         std::string g = std::string("get") + kinds[k], s = std::string("set") + kinds[k];
         if (meth(g.c_str())) {
-          if (args.size() == 1) args.push_back(mkBool(P, T, false, l));
+          optArg(args, 1, mkBool(P, T, false, l));
           if (!argsMatch(e, args, {num, boo}, 2, g.c_str())) return T.unknown();
           args.insert(args.begin() + 1, N(k));
           native("DataView.get");
           return num;
         }
         if (meth(s.c_str())) {
-          if (args.size() == 2) args.push_back(mkBool(P, T, false, l));
+          optArg(args, 2, mkBool(P, T, false, l));
           if (!argsMatch(e, args, {num, num, boo}, 3, s.c_str())) return T.unknown();
           args.insert(args.begin() + 2, N(k));
           native("DataView.set");
@@ -1101,14 +1172,14 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         }
       }
       if (meth("getBigUint64") || meth("getBigInt64")) {
-        if (args.size() == 1) args.push_back(mkBool(P, T, false, l));
+        optArg(args, 1, mkBool(P, T, false, l));
         if (!argsMatch(e, args, {num, boo}, 2, name.c_str())) return T.unknown();
         args.insert(args.begin() + 1, mkBool(P, T, name == "getBigInt64", l));
         native("DataView.getBig");
         return T.bigint();
       }
       if (meth("setBigUint64") || meth("setBigInt64")) {
-        if (args.size() == 2) args.push_back(mkBool(P, T, false, l));
+        optArg(args, 2, mkBool(P, T, false, l));
         if (!argsMatch(e, args, {num, T.bigint(), boo}, 3, name.c_str())) return T.unknown();
         args.insert(args.begin() + 2, mkBool(P, T, name == "setBigInt64", l));
         native("DataView.setBig");
@@ -1130,21 +1201,21 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return num;
       }
       if (meth("subarray") || meth("slice")) {
-        if (args.empty()) args.push_back(N(0));
-        if (args.size() == 1) args.push_back(N(INFINITY));
+        optArg(args, 0, N(0));
+        optArg(args, 1, N(INFINITY));
         if (!argsMatch(e, args, {num, num}, 2, name.c_str())) return T.unknown();
         native(name == "slice" ? "TA.slice" : "TA.subarray");
         return bt;
       }
       if (meth("fill")) {
-        if (args.size() == 1) args.push_back(N(0));
-        if (args.size() == 2) args.push_back(N(INFINITY));
+        optArg(args, 1, N(0));
+        optArg(args, 2, N(INFINITY));
         if (!argsMatch(e, args, {et, num, num}, 3, "fill")) return T.unknown();
         native(big ? "TA.fillBig" : "TA.fill");
         return bt;
       }
       if (meth("set")) {
-        if (args.size() == 1) args.push_back(N(0));
+        optArg(args, 1, N(0));
         if (args.size() != 2) return errT(l, "set takes a source and an offset");
         Type* st = check(args[0], T.array(et));
         if (!(st->t == TT::TypedArray || st->t == TT::Bytes || (st->t == TT::Array && baseLit(st->elem) == et)))
@@ -1157,7 +1228,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         return T.voidT();
       }
       if (!big && (meth("indexOf") || meth("includes"))) {
-        if (name == "indexOf" && args.size() == 1) args.push_back(N(0));
+        if (name == "indexOf") optArg(args, 1, N(0));
         if (!argsMatch(e, args, name == "indexOf" ? std::vector<Type*>{num, num} : std::vector<Type*>{num}, name == "indexOf" ? 2 : 1, name.c_str()))
           return T.unknown();
         native(name == "indexOf" ? "TA.indexOf" : "TA.includes");
@@ -1165,7 +1236,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       if (meth("join") || meth("toString")) {
         if (name == "toString" && !args.empty()) return errT(l, "toString takes no arguments");
-        if (args.empty()) args.push_back(S(u","));
+        optArg(args, 0, S(u","));
         if (!argsMatch(e, args, {str}, 1, "join")) return T.unknown();
         native("TA.join");
         return str;

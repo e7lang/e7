@@ -1305,6 +1305,15 @@ E7_NATIVE(n_errorErrors) {
 }
 E7_NATIVE(n_errorName) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = nm; }
 E7_NATIVE(n_errorMessage) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = m; }
+// e.message = s / e.name = s (0.1.3): the value assigned
+static void errSet(VM& vm, Slot* a, Slot* r, int part) {
+  StrObj *nm, *m;
+  errParts(vm, a[0], &nm, &m);
+  static_cast<ArrObj*>(a[0].r)->data[part].r = S(vm, a[1]);
+  r->r = a[1].r;
+}
+E7_NATIVE(n_errorSetName) { E7_UNUSED; errSet(vm, a, r, 0); }
+E7_NATIVE(n_errorSetMessage) { E7_UNUSED; errSet(vm, a, r, 1); }
 E7_NATIVE(n_errorToString) {  // String(e): "Name: message", or "Name" when the message is empty
   E7_UNUSED;
   StrObj *nm, *m;
@@ -1329,6 +1338,8 @@ void registerCoreNatives(VM& vm) {
   vm.registerNative("Error.errors", "R>R", n_errorErrors);
   vm.registerNative("Error.name", "R>R", n_errorName);
   vm.registerNative("Error.message", "R>R", n_errorMessage);
+  vm.registerNative("Error.setName", "RR>R", n_errorSetName);
+  vm.registerNative("Error.setMessage", "RR>R", n_errorSetMessage);
   vm.registerNative("Error.toString", "R>R", n_errorToString);
   vm.registerNative("Error.is", "RR>I", n_errorIs);
   vm.registerNative("Value.toString", "R>R", n_valueToString);

@@ -90,6 +90,16 @@ std::string Checker::accessorHint(Type* src, Type* dst) {
   if (s->t == TT::Array && d->t == TT::Array) return accessorHint(s->elem, d->elem);
   if (d->t == TT::Object && d->shape->ownAccessors && !(s->t == TT::Object && s->shape->ownAccessors))
     return ": the type of an object literal with accessors only holds such object literals";
+  if (s->t == TT::Class && d->t == TT::Object && !d->shape->name.empty()) {
+    // a class without an optional property of an interface: `implements` gives it one (absent)
+    for (auto& p : d->shape->props)
+      if (!s->cls->fieldIdx.count(p.name) && !s->cls->abstractProp(p.name) && s->cls->getterSlot(p.name) < 0) {
+        if (!p.optional) return "";
+        return ": class '" + s->cls->name + "' does not declare the optional property '" + p.name + "'; write 'class " + s->cls->name +
+               " implements " + d->shape->name + "' (the class then has it, as undefined until it is set)";
+      }
+    return "";
+  }
   if (s->t != TT::Object || d->t != TT::Object) return "";
   ObjShape* ss = s->shape;
   ObjShape* ds = d->shape;
@@ -398,7 +408,11 @@ void Checker::checkBody(FuncSym* f) {
   }
   if (f->exprBody) {
     Type* t = check(f->exprBody, declaredRet);
-    if (declaredRet) {
+    if (declaredRet && f->isAsync && !f->isGenerator && t->t == TT::Promise) {
+      // async (): Promise<T> => p: its promise adopts p (as `return p` does)
+      if (t->elem != declaredRet && !(declaredRet->t == TT::Void && t->elem->t == TT::Void))
+        err(f->exprBody->loc, "type '" + typeName(t) + "' is not assignable to the return type 'Promise<" + typeName(declaredRet) + ">'");
+    } else if (declaredRet) {
       if (declaredRet->t != TT::Void) coerce(f->exprBody, declaredRet, "return");
     } else {
       f->returnTypes.push_back(t);
@@ -408,7 +422,32 @@ void Checker::checkBody(FuncSym* f) {
   }
   if (f->inferRet) {
     Type* r = nullptr;
-    for (Type* t : f->returnTypes) r = r ? unify(r, t, f->loc, "return statements") : t;
+    // `return;` and `return v`: v's type or undefined (as tsc infers)
+    bool bare = false, valued = false;
+    for (Type* t : f->returnTypes) (t->t == TT::Void ? bare : valued) = true;
+    for (Type* t : f->returnTypes) {
+      if (bare && valued && t->t == TT::Void) continue;
+      r = r ? unify(r, t, f->loc, "return statements") : t;
+    }
+    if (bare && valued && r && r->t != TT::Unknown) {
+      r = T.optional(r, false, true);
+      // the returned values were checked before the type was known: convert them to it
+      std::function<void(Stmt*)> conv = [&](Stmt* s) {
+        if (!s) return;
+        switch (s->k) {
+          case SK::Return:
+            if (s->expr && s->expr->type && s->expr->type->t != TT::Promise) coerce(s->expr, f->isAsync ? r : r, "return");
+            break;
+          case SK::Block: for (Stmt* x : s->stmts) conv(x); break;
+          case SK::If: conv(s->then); conv(s->els); break;
+          case SK::While: case SK::DoWhile: case SK::For: case SK::ForOf: case SK::Labeled: conv(s->body); break;
+          case SK::Try: conv(s->body); conv(s->els); conv(s->then); break;
+          case SK::Switch: for (auto& c : s->cases) for (Stmt* x : c.body) conv(x); break;
+          default: break;
+        }
+      };
+      if (f->body) conv(f->body);
+    }
     if (!r) r = T.voidT();
     if ((f->isGenerator || f->isAsync) && r->t == TT::Undefined) r = T.voidT();
     if (r->t == TT::Null || r->t == TT::Undefined) {
@@ -907,7 +946,7 @@ void Checker::bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc 
     if (t->t == TT::Class) {
       auto it = t->cls->fieldIdx.find(key);
       int gs = t->cls->getterSlot(key);
-      if (it != t->cls->fieldIdx.end() && key[0] != '#') {
+      if (it != t->cls->fieldIdx.end() && key[0] != '#' && !t->cls->fields[it->second].absent) {
         ft = t->cls->fields[it->second].type;
       } else if (gs >= 0) {
         // a getter: called while destructuring
@@ -1072,6 +1111,16 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
   Type* t = declared;
   if (d.init) {
     Type* it = !declared && d.isArrayPat ? checkArrayPatInit(d, d.init) : check(d.init, declared);
+    if (d.isArrayPat && !declared && (it->t == TT::Set || it->t == TT::Map || it->t == TT::String ||
+                                      it->t == TT::Bytes || it->t == TT::TypedArray)) {
+      // const [a, b] = new Set(...) / "text": the values it iterates, as an array [...x]
+      Expr* sp = P.arena.expr(EK::Spread, d.init->loc);
+      sp->a = wrapConv(d.init, ConvKind::None, it);  // (checked already: not checked again)
+      Expr* arr = P.arena.expr(EK::Array, d.init->loc);
+      arr->list.push_back(sp);
+      d.init = arr;
+      it = check(d.init, nullptr);
+    }
     if (declared) coerce(d.init, declared);
     else {
       if (it->t == TT::Null || it->t == TT::Undefined) {
@@ -1340,6 +1389,11 @@ void Checker::checkStmt(Stmt* s) {
           } else if (ot->t == TT::Map) {
             s->declareKind = mn == "keys" ? 4 : mn == "values" ? 5 : 6;
             et = mn == "keys" ? ot->key : mn == "values" ? ot->val : T.tuple({ot->key, ot->val});
+          } else if (ot->t == TT::TypedArray || ot->t == TT::Bytes) {
+            // (over its elements as an array: codegen)
+            Type* el = ot->t == TT::Bytes ? T.number() : taElem(ot);
+            s->declareKind = mn == "entries" ? 1 : mn == "keys" ? 2 : 3;
+            et = mn == "entries" ? T.tuple({T.number(), el}) : mn == "keys" ? T.number() : el;
           } else if (ot->t == TT::Set) {
             s->declareKind = 7;
             et = mn == "entries" ? T.tuple({ot->elem, ot->elem}) : ot->elem;
@@ -1443,6 +1497,25 @@ void Checker::checkStmt(Stmt* s) {
       break;
     }
     case SK::Labeled: {
+      // a: b: <statement>: the labels name the same statement; `break a` / `continue a` use b
+      while (s->body->k == SK::Labeled) {
+        std::function<void(Stmt*)> rename = [&](Stmt* x) {
+          if (!x) return;
+          switch (x->k) {
+            case SK::Break: case SK::Continue: if (x->label == s->label) x->label = s->body->label; break;
+            case SK::Block: for (Stmt* y : x->stmts) rename(y); break;
+            case SK::If: rename(x->then); rename(x->els); break;
+            case SK::While: case SK::DoWhile: case SK::For: case SK::ForOf: rename(x->body); break;
+            case SK::Labeled: if (x->label != s->label) rename(x->body); break;
+            case SK::Try: rename(x->body); rename(x->els); rename(x->then); break;
+            case SK::Switch: for (auto& c : x->cases) for (Stmt* y : c.body) rename(y); break;
+            default: break;
+          }
+        };
+        rename(s->body->body);
+        s->label = s->body->label;
+        s->body = s->body->body;
+      }
       bool isLoop = s->body->k == SK::While || s->body->k == SK::DoWhile || s->body->k == SK::For || s->body->k == SK::ForOf;
       if (isLoop) {
         pendingLabels.push_back(s->label);

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <unordered_set>
 
 #include "intrinsics.h"
 #include "../core/numfmt.h"
@@ -200,6 +201,7 @@ struct Gen {
     }
   }
   std::string pendingLabel;
+  std::unordered_set<VarSym*> freshCells;  // captured locals whose cell the entry of their block creates
   uint32_t curLine = 0;
   std::string curFile;
   std::vector<Stmt*> pendingCtorInits;
@@ -854,7 +856,8 @@ bool Gen::run(const std::string& name) {
     cd.name = c->rtName.empty() ? c->name : c->rtName;  // Box<number> is "Box" at run time
     cd.parent = c->parent ? c->parent->classIdx : -1;
     cd.isRecord = c->isTuple ? 2 : c->isRecord ? 1 : 0;
-    cd.cflags = c->presence && cd.isRecord == 1 ? kClassFlagPresence : 0;
+    // (a class with absent fields has a presence mask too: VM 0.1.3)
+    cd.cflags = c->presence && cd.isRecord != 2 ? kClassFlagPresence : 0;
     if (c->hasAccessors && cd.isRecord == 1) cd.cflags |= kClassFlagAccessors;
     for (auto& f : c->fields) cd.fields.push_back(FieldDesc{f.name, vtOf(f.type)});
     for (auto& m : c->vtable) {
@@ -1074,6 +1077,14 @@ void Gen::genCtorFieldInits() {
     if (paramProp) continue;
     Kind k = K(fd.type);
     static const uint16_t ops[3] = {OP_SETF_I, OP_SETF_F, OP_SETF_R};
+    if (fd.absent) {
+      // an optional interface property the class does not declare: undefined, not an own property
+      uint16_t v = temp(K_R);
+      emit(OP_LOADUNDEF, v);
+      emit(OP_SETF_R, th, (uint16_t)fi, v);
+      emit(OP_FIELD_ABSENT, th, (uint16_t)fi);
+      continue;
+    }
     if (fd.init) {
       uint16_t v = temp(k);
       genInto(fd.init, v);
@@ -1242,7 +1253,12 @@ void Gen::declareLocal(VarSym* v) {
 void Gen::blockEntry(std::vector<Stmt*>& stmts) {
   // cells for captured variables declared in this block (closures may be created before the declaration)
   std::function<void(VarDecl&)> pre = [&](VarDecl& d) {
-    if (d.sym && !d.sym->isGlobal && d.sym->captured) declareLocal(d.sym);
+    if (d.sym && !d.sym->isGlobal && d.sym->captured) {
+      // a new cell each time the block is entered: the declaration keeps it (the hoisted functions of
+      // the block capture it before the declaration runs)
+      if (!varReg.count(d.sym)) freshCells.insert(d.sym);
+      declareLocal(d.sym);
+    }
     for (auto& sub : d.elems) pre(sub);
   };
   for (Stmt* s : stmts) {
@@ -1374,7 +1390,7 @@ void Gen::genVarDecl(VarDecl& d, bool topLevel) {
       size_t m0 = mark();
       // re-entering a loop body: a fresh binding per iteration, created before the initializer so that a
       // closure in it that refers to the variable itself (a recursive local function) captures this binding
-      if (existed) emit(OP_NEWCELL, varReg[v], vtOf(v->type));
+      if (existed && !freshCells.erase(v)) emit(OP_NEWCELL, varReg[v], vtOf(v->type));
       uint16_t r;
       if (d.init) r = gen(d.init);
       else {
@@ -1403,7 +1419,8 @@ void Gen::destructure(VarDecl& d, uint16_t src, Type* t) {
   }
   if (!d.isArrayPat && !d.isObjPat) {
     if (!d.sym) return;
-    if (!d.sym->isGlobal && d.sym->captured && varReg.count(d.sym)) emit(OP_NEWCELL, varReg[d.sym], vtOf(d.sym->type));
+    if (!d.sym->isGlobal && d.sym->captured && varReg.count(d.sym) && !freshCells.erase(d.sym))
+      emit(OP_NEWCELL, varReg[d.sym], vtOf(d.sym->type));
     bindVar(d.sym, src);
     return;
   }
@@ -1970,6 +1987,9 @@ void Gen::genForOf(Stmt* s) {
   if (t->t == TT::TypedArray && s->declareKind != 0) {  // over its elements as an array
     callNative("TA.toArray", {coll}, coll, 'R');
     t = T.array(t->vt >= 9 ? T.bigint() : T.number());
+  } else if (t->t == TT::Bytes && s->declareKind != 0) {
+    callNative("Bytes.toArray", {coll}, coll, 'R');
+    t = T.array(T.number());
   }
   if (s->isAwait && (t->t == TT::AsyncGenerator || (t->t == TT::Class && t->cls->methodIdx.count("[Symbol.asyncIterator]")))) {
     // for await over an async iterable
@@ -4168,7 +4188,12 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
     mov(cur, v, k);
     writeLVal(lv, cur);
     place(end);
-    if (dst != kNoReg) mov(dst, cur, k);
+    if (dst != kNoReg) {
+      // the value of x ??= v with a non-null v is not null (its type is x's without null)
+      Kind dk = K(e->type);
+      if (nullish && dk != K_R) emit(dk == K_F ? OP_UNBOX_F : OP_UNBOX_I, dst, cur);
+      else mov(dst, cur, k);
+    }
     release(m0);
     return;
   }
@@ -4901,6 +4926,17 @@ void Gen::genCall(Expr* e, uint16_t dst) {
         emit(op3(K(et), OP_APUSH_I, OP_APUSH_F, OP_APUSH_R), arr, v);
         release(m0);
       }
+      if (dst != kNoReg) emit(OP_ALEN, dst, arr);
+      return;
+    }
+    case IN_ARR_UNSHIFT_MANY: {
+      // a.splice(0, 0, ...items), then a.length
+      uint16_t arr = gen(callee->a);
+      uint16_t items = gen(e->list[0]);
+      uint16_t zero = temp(K_F);
+      loadNum(zero, 0);
+      uint16_t removed = temp(K_R);
+      callNative("Array.splice", {arr, zero, zero, items}, removed, 'R');
       if (dst != kNoReg) emit(OP_ALEN, dst, arr);
       return;
     }

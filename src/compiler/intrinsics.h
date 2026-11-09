@@ -27,6 +27,7 @@ enum Intrinsic : int {
   // arrays
   IN_ARR_PUSH, IN_ARR_LEN, IN_ARR_MAP, IN_ARR_FILTER, IN_ARR_FOREACH, IN_ARR_REDUCE, IN_ARR_REDUCE_RIGHT,
   IN_ARR_SOME, IN_ARR_EVERY, IN_ARR_FIND, IN_ARR_FINDINDEX, IN_ARR_FINDLAST, IN_ARR_FINDLASTINDEX,
+  IN_ARR_UNSHIFT_MANY,    // a.unshift(x, y, ...z): the items array (e->list[0]) inserted at 0
   IN_ARR_FROM_LENGTH,     // Array.from({length: n}, fn)
   IN_ARRAY_FROM,          // Array.from(iterable) / [...x]
   IN_NEW_ARRAY,           // new Array<T>(n)

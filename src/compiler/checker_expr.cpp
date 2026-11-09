@@ -745,7 +745,19 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
     }
   }
   if (!et) {
-    for (Type* t : types) et = et ? unify(et, t, e->loc, "array literal") : t;
+    // [null, undefined, "a"]: the other elements' type, with null and undefined
+    bool hasN = false, hasU = false, other = false;
+    for (Type* t : types) {
+      if (t->t == TT::Null) hasN = true;
+      else if (t->t == TT::Undefined) hasU = true;
+      else {
+        other = true;
+        et = et ? unify(et, t, e->loc, "array literal") : t;
+      }
+    }
+    if (other && (hasN || hasU) && et->t != TT::Unknown) et = T.optional(et, hasN, hasU);
+    else if (!other) et = types.empty() ? nullptr : types[0];
+    if (!et) return errT(e->loc, "cannot infer array element type");
     if (et->t == TT::Null || et->t == TT::Undefined) return errT(e->loc, "cannot infer array element type from null/undefined");
     if (et->t == TT::Void) return errT(e->loc, "array elements cannot be void");
     for (Expr*& x : e->list)
@@ -943,16 +955,44 @@ Type* Checker::checkObject(Expr* e, Type* expected) {
     for (size_t pi = 0; pi < e->props.size(); pi++) {
       ObjProp& p = e->props[pi];
       if (p.spread) {
+        // ...(c ? x : undefined): spreading null / undefined adds nothing, as spreading {} does
+        if (Expr* ce = strip(p.value); ce->k == EK::Cond)
+          for (Expr** br : {&ce->b, &ce->c})
+            if (Expr* bx = strip(*br); bx->k == EK::Undefined || bx->k == EK::Null) *br = P.arena.expr(EK::Object, bx->loc);
         spreadCond_ = strip(p.value)->k == EK::Cond;
         Type* t = check(p.value, nullptr);
         spreadCond_ = false;
+        if (t->t == TT::Optional && (t->elem->t == TT::Object || t->elem->t == TT::Class) && strip(p.value)->k != EK::Cond) {
+          // ...x with x: T | undefined (a reference path): ...(x != null ? x! : {})
+          Expr* v = strip(p.value);
+          bool path = false;
+          for (Expr* x = v;; x = strip(x->a)) {
+            if (x->k == EK::Ident || x->k == EK::This) { path = true; break; }
+            if (x->k != EK::Member || x->optional || !x->a) break;
+          }
+          if (path) {
+            Expr* test = P.arena.expr(EK::Binary, v->loc);
+            test->raw = "!=";
+            test->a = cloneExpr(v);
+            test->b = P.arena.expr(EK::Null, v->loc);
+            Expr* nn = P.arena.expr(EK::NonNull, v->loc);
+            nn->a = cloneExpr(v);
+            Expr* c = P.arena.expr(EK::Cond, v->loc);
+            c->a = test;
+            c->b = nn;
+            c->c = P.arena.expr(EK::Object, v->loc);
+            p.value = c;
+            pi--;
+            continue;
+          }
+        }
         if (t->t == TT::Class) {
           resolveClass(t->cls);
           if (!t->cls->abstractProps.empty())
             return errT(p.loc, "spreading a value of abstract class type '" + t->cls->name +
                                    "' with abstract properties is not supported (their subclass fields are not known)");
           for (auto& f : t->cls->fields)
-            if (f.name[0] != '#') {  // #private fields are not copied
+            if (f.name[0] != '#' && !f.absent) {  // #private fields are not copied (nor absent ones)
               if (!spreadExact(f.name, f.type, f.optional && !f.undefOk, exp, p.loc)) return T.unknown();
               entries[pi].push_back({f.name, f.type});
             }
@@ -1646,6 +1686,50 @@ Type* Checker::checkLogical(Expr* e, Type* expected) {
 }
 
 Type* Checker::checkAssign(Expr* e) {
+  if (Expr* nn = strip(e->a); nn->k == EK::NonNull && nn->a) {
+    // x! = v / x! += v (TypeScript: the target x, read as non-null): x = v / x = x! + v, for a target
+    // that is a plain reference path (evaluated twice, without side effects)
+    Expr* inner = strip(nn->a);
+    bool path = true;  // (not checked yet: decided by its syntax)
+    for (Expr* x = inner; path && x->k == EK::Member; x = strip(x->a))
+      path = !x->optional && (strip(x->a)->k == EK::Ident || strip(x->a)->k == EK::This || strip(x->a)->k == EK::Member);
+    if (inner->k != EK::Ident && inner->k != EK::Member) path = false;
+    if (!path) return errT(e->loc, "invalid assignment target");
+    std::string op0 = e->raw;
+    if (op0 != "=" && op0 != "||=" && op0 != "&&=" && op0 != "??=") {
+      Expr* rd = P.arena.expr(EK::NonNull, nn->loc);
+      rd->a = cloneExpr(inner);
+      Expr* bin = P.arena.expr(EK::Binary, e->loc);
+      bin->raw = op0.substr(0, op0.size() - 1);
+      bin->a = rd;
+      bin->b = e->b;
+      e->b = bin;
+      e->raw = "=";
+    }
+    e->a = inner;
+  }
+  if (Expr* t0 = strip(e->a); e->raw == "=" && t0->k == EK::Member && !t0->optional && (t0->raw == "message" || t0->raw == "name") &&
+                                strip(t0->a)->k == EK::Ident) {
+    // err.message = s / err.name = s of an Error (a variable known to hold one): Error.setMessage(err, s)
+    Sym* sy = lookup(strip(t0->a)->raw);
+    VarSym* v = sy && sy->k == SymK::Var ? static_cast<VarSym*>(sy) : nullptr;
+    Type* vt = v ? narrowed(varKey(v), v->isConst) : nullptr;
+    if (!vt && v) vt = v->type;
+    if (vt && vt->t == TT::Error) {
+      check(t0->a, nullptr);
+      check(e->b, T.string());
+      if (!coerce(e->b, T.string())) return T.unknown();
+      Expr* v0 = e->b;
+      e->k = EK::Call;
+      e->a = t0;
+      e->list = {v0};
+      e->b = nullptr;
+      e->native = t0->raw == "message" ? "Error.setMessage" : "Error.setName";
+      e->intrinsic = IN_NATIVE;
+      e->raw.clear();
+      return T.string();
+    }
+  }
   const std::string& op = e->raw;
   Expr* target = strip(e->a);
   if (target->k == EK::Object)
@@ -1746,7 +1830,10 @@ Type* Checker::checkAssign(Expr* e) {
     Type* rt = check(e->b, lt->elem);
     coerce(e->b, lt);
     invalidatePath(key);
-    if (rt->t != TT::Optional && !isNullish(rt)) setNarrow(key, lt->elem);  // non-null afterwards
+    if (rt->t != TT::Optional && !isNullish(rt) && rt->t != TT::Unknown) {
+      setNarrow(key, lt->elem);  // non-null afterwards
+      return lt->elem;           // (as is the value of x ??= v)
+    }
     return lt;
   }
   // compound: lt op rhs
@@ -1932,7 +2019,7 @@ Type* Checker::spreadCondType(Type* a, Type* b, Loc l) {
       resolveClass(t->cls);
       if (!t->cls->abstractProps.empty()) return false;
       for (auto& f : t->cls->fields)
-        if (f.name[0] != '#') out.push_back({f.name, f.type, f.optional, f.undefOk});
+        if (f.name[0] != '#' && !f.absent) out.push_back({f.name, f.type, f.optional, f.undefOk});
       return true;
     }
     if (t->t != TT::Object || t->shape->ownAccessors) return false;
@@ -2208,6 +2295,7 @@ Type* Checker::checkArrow(Expr* e, Type* expected) {
   if (!f) {
     std::string nm = e->raw.empty() ? "<anonymous>" : e->raw;
     f = newFunc(nm, &e->params, e->retType, e->body, e->exprBody);
+    if (!f->loc.line) f->loc = e->loc;  // (diagnostics about the function point at the arrow)
     f->isGenerator = e->isGenerator;
     f->isAsync = e->isAsync;
     f->arrow = e;
@@ -2510,6 +2598,7 @@ Type* Checker::checkMember(Expr* e, Type* expected) {
       ClassSym* c = bt->cls;
       resolveClass(c);
       auto it = c->fieldIdx.find(name);
+      if (it != c->fieldIdx.end() && c->fields[it->second].absent) it = c->fieldIdx.end();  // (only through the interface)
       if (it != c->fieldIdx.end()) {
         if (name[0] == '#' && !checkPrivateAccess(e->nameLoc, name, c->fields[it->second].owner)) return T.unknown();
         e->field = it->second;

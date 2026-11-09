@@ -1108,7 +1108,9 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   }
   if (name == "TextEncoder") { noArgs(); return T.textEncoder(); }
   if (name == "TextDecoder") { noArgs(); return T.textDecoder(); }
-  if (name == "Error" || name == "AggregateError") { noArgs(); return T.error(); }
+  // (the error classes are one type in e7: an Error, whose name says which)
+  if (name == "Error" || name == "AggregateError" || name == "TypeError" || name == "RangeError" || name == "SyntaxError" ||
+      name == "URIError" || name == "ReferenceError" || name == "EvalError") { noArgs(); return T.error(); }
   if (name == "TemplateStringsArray") { noArgs(); return T.array(T.string(), true); }
   if (name == "Date") { noArgs(); return T.date(); }
   if (name == "RegExp" || name == "RegExpMatchArray" || name == "RegExpExecArray") return errT(l, kNoRegExp);
@@ -1405,6 +1407,7 @@ void Checker::resolveClass(ClassSym* c) {
       resolveClass(pt->cls);
       c->parent = pt->cls;
       c->fields = pt->cls->fields;
+      c->presence = pt->cls->presence;  // (its instances have the base class's absent fields)
       c->vtable = pt->cls->vtable;
       c->fieldIdx = pt->cls->fieldIdx;
       c->methodIdx = pt->cls->methodIdx;
@@ -1757,12 +1760,43 @@ void Checker::resolveClass(ClassSym* c) {
       err(d->loc, "non-abstract class '" + c->name + "' does not implement inherited abstract property '" + ap.first +
                       "' (declare it as a field)");
   }
+  // implements: an optional property of the interface that the class does not declare is an absent
+  // field (class Fish implements Animal { name = "x" } with Animal's legs?: number: read through the
+  // interface, fish.legs is undefined; it is not an own property until it is written)
+  if (!c->isRecord && !holder)
+    for (Type* it : c->implements) {
+      if (it->t != TT::Object || !it->shape) continue;
+      for (auto& p : it->shape->props) {
+        if (!p.optional || c->fieldIdx.count(p.name) || c->methodIdx.count(p.name) || c->getterSlot(p.name) >= 0 ||
+            c->setterSlot(p.name) >= 0 || c->abstractProp(p.name) || p.name[0] == '#')
+          continue;
+        Type* ft = p.type->t == TT::Optional ? p.type : T.optional(p.type, false, true);
+        c->fieldIdx[p.name] = (int)c->fields.size();
+        c->fields.push_back({p.name, ft, nullptr, true, c, d->loc, p.readonly, p.undefOk, true});
+        c->presence = true;
+      }
+    }
   // implements: structural check
   for (Type* it : c->implements) {
     if (!structurallyAssignable(c->type, it)) {
       std::string why;
       for (auto& p : it->shape->props) {
-        if (c->fieldIdx.count(p.name) || c->abstractProp(p.name)) continue;
+        if (auto fi = c->fieldIdx.find(p.name); fi != c->fieldIdx.end()) {
+          Type* ft = c->fields[fi->second].type;
+          if (ft != p.type && p.type->t == TT::Optional && baseOf(p.type) == baseOf(ft) && ft->t != TT::Optional) {
+            why = ": property '" + p.name + "' is optional in the interface; e7 stores it the way the interface reads it, so declare it as '" +
+                  p.name + "?: " + typeName(ft) + "' in the class";
+            break;
+          }
+          continue;
+        }
+        if (c->abstractProp(p.name)) continue;
+        if (c->methodIdx.count(p.name) && baseOf(p.type)->t == TT::Func) {
+          why = ": '" + p.name + "' is a method of the class, and the interface's '" + p.name + "' is " +
+                (p.optional ? "an optional method (a property that may hold a function)" : "a property holding a function") +
+                "; e7 reads it as a property: declare it in the class as '" + p.name + " = (...) => ...'";
+          break;
+        }
         if (c->getterSlot(p.name) >= 0)
           why = ": property '" + p.name + "' is an accessor in the class; e7 reads interface properties as fields, so declare it in the interface as 'get " +
                 p.name + "(): " + typeName(p.type) + "'";
