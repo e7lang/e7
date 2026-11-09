@@ -708,12 +708,14 @@ Type* Checker::checkYield(Expr* e) {
 // of const a = "x", return 5): a literal, or a constant whose literal type came from one (not `x as const`,
 // nor a value of a declared literal type)
 bool freshLiteral(Expr* x) {
-  x = strip(x);
+  while (x && (x->k == EK::Paren || x->k == EK::Conv)) x = x->a;  // (the conversions to the union of the branches)
+  if (!x) return false;
   switch (x->k) {
     case EK::Str: case EK::Num: case EK::Bool: case EK::BigLit: return true;
     case EK::Template: return x->list.empty();
     case EK::Unary: return x->raw == "-" && x->a && strip(x->a)->k == EK::Num;
-    case EK::Cond: return freshLiteral(x->b) && freshLiteral(x->c);
+    case EK::Cond: return freshLiteral(x->b) || freshLiteral(x->c);
+    case EK::Logical: return freshLiteral(x->a) || freshLiteral(x->b);  // (d ?? "x": "x" widens)
     case EK::Ident: return x->var && x->var->litInferred;
     default: return false;
   }
@@ -1571,8 +1573,14 @@ Type* Checker::checkUpdate(Expr* e) {
     e->a->type = dt;
   }
   if (st) t = st;
-  if (t->lit)  // (n++ of n: 1 | 2 gives a number, not one of its values: tsc rejects it too)
-    return errT(e->loc, "operator '" + e->raw + "' cannot be applied to a value of the literal type '" + typeName(t) + "' (the result is a number)");
+  if (t->lit && t->t == TT::Number) {
+    // n++ of n: 1 | 2: a number afterwards (as tsc sees it: const z: 1 | 2 = n is an error then)
+    std::string key = pathKey(e->a);
+    invalidatePath(key);
+    setNarrow(key, T.number());
+    return T.number();
+  }
+  if (t->lit) return errT(e->loc, "operator '" + e->raw + "' cannot be applied to type '" + typeName(t) + "'");
   if (t->t == TT::Number || t->t == TT::Int || t->t == TT::BigInt || t->t == TT::Unknown ||
       (t->t == TT::Enum && t->en && !t->en->isString)) {  // (i++ of a numeric enum: a number, as in TypeScript)
     std::string key = pathKey(e->a);
@@ -1896,7 +1904,7 @@ Type* Checker::checkAssign(Expr* e) {
     if (lt->t == TT::Optional && rt->t != TT::Unknown && nonNullValue(e->b)) setNarrow(key, rt == lt->elem ? lt->elem : baseOf(lt));
     // the value of y = v is v's (g((y = "abc")) with y: string | null passes a string), when it is held
     // the same way as the target's
-    if (rt != lt && !rt->lit && rt->t != TT::Unknown && rt->t != TT::Never && rt->t != TT::Void && kindOf(rt) == kindOf(lt) &&
+    if (rt != lt && !rt->lit && !isNullish(rt) && rt->t != TT::Unknown && rt->t != TT::Never && rt->t != TT::Void && kindOf(rt) == kindOf(lt) &&
         isBoxedOptional(rt) == isBoxedOptional(lt) && assignable(rt, lt))
       return rt;
     // ((n = 21) * 2 with n: number | null: a number; codegen unboxes the value)
@@ -1974,6 +1982,12 @@ Type* Checker::checkAssign(Expr* e) {
     res = lt;
   }
   if (res != lt && !(lt->t == TT::Enum)) {
+    if (lt->lit && baseLit(lt) == res && res->t == TT::Number) {
+      // i += 4 of i: 0 | 1 | 2: a number afterwards (as tsc sees it)
+      invalidatePath(key);
+      setNarrow(key, res);
+      return res;
+    }
     if (!assignable(res, lt)) return errT(e->loc, "result of '" + op + "' is not assignable to '" + typeName(lt) + "'");
   }
   invalidatePath(key);

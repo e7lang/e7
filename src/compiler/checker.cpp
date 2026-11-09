@@ -1743,16 +1743,7 @@ void Checker::resolveClass(ClassSym* c) {
       resolveSig(ov);
       if (ov->inferRet && !ov->checked) { ov->retInferred = true; checkFunction(ov); }  // (its return type, inferred from its body)
       if (base->inferRet && !base->checked) checkFunction(base);
-      // an inferred return type that the overridden method's takes, with the same representation (a
-      // Promise<string> for a Promise<string | null>): the overridden method's (as tsc checks it)
-      if (ov->retInferred && base->type && ov->type && ov->type->ret != base->type->ret) {
-        Type* a = ov->type->ret;
-        Type* b = base->type->ret;
-        bool ok = kindOf(a) == kindOf(b) && isBoxedOptional(a) == isBoxedOptional(b) && assignable(a, b);
-        if (!ok && a->t == TT::Promise && b->t == TT::Promise)
-          ok = kindOf(a->elem) == kindOf(b->elem) && isBoxedOptional(a->elem) == isBoxedOptional(b->elem) && assignable(a->elem, b->elem);
-        if (ok) ov->type = T.func(ov->type->params, b, ov->type->optParams, ov->type->restParam);
-      }
+
       if (base->type && ov->type && base->type != ov->type && ov->type->ret && base->type->ret) {
         // a compatible override (as TypeScript allows): fewer parameters (the others are passed and
         // ignored) with the same representations, and a return type assignable to the overridden one's
@@ -1761,7 +1752,11 @@ void Checker::resolveClass(ClassSym* c) {
         if (ot->ret->t == TT::Class) resolveClass(ot->ret->cls);  // its parents decide the assignability
         bool ok = !base->hasDefaults && !ov->hasDefaults && !ot->restParam && !bt->restParam &&
                   ot->params.size() <= bt->params.size() + 0 && kindOf(ot->ret) == kindOf(bt->ret) &&
-                  isBoxedOptional(ot->ret) == isBoxedOptional(bt->ret) && assignable(ot->ret, bt->ret);
+                  isBoxedOptional(ot->ret) == isBoxedOptional(bt->ret) &&
+                  (assignable(ot->ret, bt->ret) ||
+                   // (a Promise<string> for a Promise<string | null>: the values are held the same way)
+                   (ot->ret->t == TT::Promise && bt->ret->t == TT::Promise && kindOf(ot->ret->elem) == kindOf(bt->ret->elem) &&
+                    isBoxedOptional(ot->ret->elem) == isBoxedOptional(bt->ret->elem) && assignable(ot->ret->elem, bt->ret->elem)));
         for (size_t i = 0; ok && i < ot->params.size(); i++) {
           Type* a = ot->params[i];
           Type* b = bt->params[i];
