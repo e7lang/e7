@@ -1,4 +1,5 @@
 // Checker: expressions.
+#include <algorithm>
 #include <cmath>
 
 #include "../core/numfmt.h"

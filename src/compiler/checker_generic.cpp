@@ -5,6 +5,7 @@
 // arguments gets an instance: a copy of the declaration's syntax tree, checked in a scope where the
 // type parameters are aliases of the concrete types. Instances are ordinary functions, classes and
 // types, so the code generator and the VM need nothing new.
+#include <algorithm>
 #include <cstdio>
 
 #include "checker.h"

@@ -1,4 +1,5 @@
 // Checker: calls, `new`, builtin library members.
+#include <algorithm>
 #include <cmath>
 
 #include "checker.h"

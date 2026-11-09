@@ -1,4 +1,5 @@
 // Checker: builtin namespaces (Math, JSON, ...), global builtin functions, `new`.
+#include <algorithm>
 #include <set>
 #include <cmath>
 
