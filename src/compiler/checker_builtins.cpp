@@ -117,6 +117,24 @@ static Expr* stripConvs(Expr* e) {
 
 // A copy of a parameter's default value when it is a constant (a literal or an enum member), which a
 // call site can evaluate itself; null otherwise
+// an optional argument i of a built-in function: d when it is left out; u (what undefined means there)
+// when it is undefined, `x ?? u` for an x that may be undefined
+void Checker::optionalArg(std::vector<Expr*>& as, size_t i, Expr* d, Expr* u) {
+  if (as.size() == i) { as.push_back(d); return; }
+  if (as.size() < i) return;
+  Expr* a = strip(as[i]);
+  if (a->k == EK::Undefined) { as[i] = u; return; }
+  if (a->k == EK::Spread) return;
+  Type* t = as[i]->type ? as[i]->type : check(as[i], nullptr);
+  if (t->t == TT::Optional && t->hasUndef && !t->hasNull) {
+    Expr* q = P.arena.expr(EK::Logical, as[i]->loc);
+    q->raw = "??";
+    q->a = wrapConv(as[i], ConvKind::None, t);  // (checked already: not checked again)
+    q->b = u;
+    as[i] = q;
+  }
+}
+
 Expr* Checker::constDefault(Expr* init) {
   Expr* x = init;
   while (x && (x->k == EK::Paren || (x->k == EK::Conv && x->conv == ConvKind::None))) x = x->a;
@@ -603,21 +621,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
   // that may be undefined (allowUndef false: a position where undefined is not the same as leaving
   // the argument out, as for Array.prototype.lastIndexOf)
   auto optArg = [&](std::vector<Expr*>& as, size_t i, Expr* d, bool sameAsOmitted = true) {
-    if (as.size() == i) { as.push_back(d); return; }
-    if (as.size() < i) return;
     // (Array.prototype.lastIndexOf(x, undefined): an index given as undefined is 0)
-    Expr* u = sameAsOmitted ? d : N(0);
-    Expr* a = strip(as[i]);
-    if (a->k == EK::Undefined) { as[i] = u; return; }
-    if (a->k == EK::Spread) return;
-    Type* t = as[i]->type ? as[i]->type : check(as[i], nullptr);
-    if (t->t == TT::Optional && t->hasUndef && !t->hasNull) {
-      Expr* q = P.arena.expr(EK::Logical, as[i]->loc);
-      q->raw = "??";
-      q->a = wrapConv(as[i], ConvKind::None, t);  // (checked already: not checked again)
-      q->b = u;
-      as[i] = q;
-    }
+    optionalArg(as, i, d, sameAsOmitted ? d : N(0));
   };
   auto noSuch = [&]() -> Type* {
     return errT(m->loc, std::string(isCall ? "method" : "property") + " '" + name + "' does not exist on type '" + typeName(bt) + "'" +
@@ -772,6 +777,8 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
         if (args.empty()) {
           if (name == "toPrecision") { e->intrinsic = IN_TOSTRING; return str; }
           args.push_back(N(name == "toFixed" ? 0 : NAN));
+        } else if (name != "toPrecision") {
+          optArg(args, 0, N(name == "toFixed" ? 0 : NAN));  // (toFixed(d) with d undefined: 0 digits)
         }
         if (!argsMatch(e, args, {num}, 1, name.c_str())) return T.unknown();
         native("Number." + name);
@@ -890,7 +897,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       if (meth("toSpliced")) {
         // (a start is required, as in TypeScript's declaration; JavaScript's toSpliced() copies the array)
         if (args.empty()) return errT(l, "toSpliced expects a start index (use slice() for a copy)");
-        if (args.size() == 1) args.push_back(N(INFINITY));
+        optArg(args, 1, N(INFINITY), false);  // (a deleteCount given as undefined is 0)
         Expr* items;
         if (args.size() > 2) {
           items = P.arena.expr(EK::Array, l);
@@ -908,7 +915,7 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
       }
       if (meth("splice")) {
         if (args.empty()) return errT(e->loc, "splice requires a start index");
-        if (args.size() == 1) args.push_back(N(INFINITY));
+        optArg(args, 1, N(INFINITY), false);  // (a deleteCount given as undefined is 0)
         if (args.size() > 2) {
           Expr* items = P.arena.expr(EK::Array, l);
           for (size_t i = 2; i < args.size(); i++) items->list.push_back(args[i]);

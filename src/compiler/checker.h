@@ -282,6 +282,7 @@ class Checker {
   bool spreadExact(const std::string& name, Type* t, bool absentIfUndef, Type* exp, Loc loc);
   void checkArgs(Expr* call, Type* fnType, std::vector<Expr*>& args, size_t skip = 0, FuncSym* fs = nullptr);
   Expr* constDefault(Expr* init);
+  void optionalArg(std::vector<Expr*>& as, size_t i, Expr* d, Expr* u);
   void expandSpreads(std::vector<Expr*>& args);
   Type* checkBuiltinCall(Expr* e, const std::string& id, Type* expected);
   Type* checkMethodCall(Expr* e, Expr* member, Type* expected);

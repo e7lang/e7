@@ -70,3 +70,15 @@ class B extends A {}
   const m3 = new Map([["k", { a: 1 }]]);
   console.log(m, m2, m3.get("k")?.a);
 }
+{
+  function run(u: number | undefined, f: string | undefined): void {
+    const s = "abcabc";
+    console.log(s.slice(u), s.slice(1, u), s.substring(2, u), s.padStart(8, f), s.padEnd(8, f), s.split("b", u));
+    console.log(s.indexOf("c", u), s.lastIndexOf("a", u), s.includes("a", u), s.startsWith("b", u), s.endsWith("c", u));
+    console.log((123.456).toFixed(u), (123.456).toExponential(u), parseInt("ff", u), parseInt("10", u));
+    console.log([1, 2, 3, 4].slice(1, u), [1, 2, 3].indexOf(3, u), [1, 2, 3].lastIndexOf(1, u), [1, 2, 3].includes(1, u));
+    console.log([1, 2, 3, 4].fill(0, 2, u), [1, 2, 3, 4].splice(1, u), [1, 2, 3, 4].toSpliced(1, u));
+  }
+  run(undefined, undefined);
+  run(1, "-");
+}

@@ -205,7 +205,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       return num;
     }
     if (name == "parseInt") {
-      if (args.size() == 1) args.push_back(N(0));
+      optionalArg(args, 1, N(0), N(0));
       if (!argsMatch(e, args, {str, num}, 2, name.c_str())) return T.unknown();
       nat("Global.parseInt");
       return num;
@@ -679,7 +679,7 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     return t0;
   }
   if (id == "parseInt") {
-    if (args.size() == 1) args.push_back(N(0));
+    optionalArg(args, 1, N(0), N(0));  // (a radix that is undefined: 0, decided by the text)
     if (!argsMatch(e, args, {str, num}, 2, "parseInt")) return T.unknown();
     nat("Global.parseInt");
     return num;
