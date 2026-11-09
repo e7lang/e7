@@ -1,0 +1,1 @@
+{"id": "e01-request-signing", "group": "extend", "title": "Add SHA-512 and request verification to request signing", "file": "solution.ts"}

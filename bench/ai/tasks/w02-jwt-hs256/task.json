@@ -1,0 +1,1 @@
+{"id": "w02-jwt-hs256", "group": "write", "title": "Sign and verify HS256 JWTs", "file": "solution.ts"}

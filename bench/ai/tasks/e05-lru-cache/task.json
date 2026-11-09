@@ -1,0 +1,1 @@
+{"id": "e05-lru-cache", "group": "extend", "title": "Add weights, peek and eviction callbacks to a generic LRU cache", "file": "solution.ts"}
