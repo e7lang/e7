@@ -42,6 +42,7 @@ struct TypeNode {
   bool asserts = false;
   bool numLiteral = false;           // Literal: a numeric literal type (value in `num`)
   double num = 0;
+  bool unsupported = false;          // Object: had an index signature (reported by the parser)
 };
 
 // A type parameter <T extends C = D>
@@ -62,6 +63,9 @@ enum class EK {
 };
 
 // the error for a regular expression literal, RegExp and the String methods that take one
+// the name of a placeholder (a type or an expression) for unsupported syntax the parser reported and parsed past:
+// the checker reads it as 'unknown' without another error (not a valid identifier, so no program can name it)
+inline constexpr const char* kUnsupportedName = "#unsupported";
 inline constexpr const char* kNoRegExp = "regular expressions are not supported in E7; use string methods (indexOf, includes, startsWith, endsWith, split, replaceAll)";
 
 struct Stmt;

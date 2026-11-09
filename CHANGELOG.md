@@ -10,6 +10,31 @@ VM rejects a module it cannot run at load time rather than running it incorrectl
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-09
+
+From the first runs of the new AI benchmark (`bench/ai`: 40 tasks graded by hidden tests, see its README) and the
+issues found while writing its tasks.
+
+### Fixed
+- `new C(...)` in another module than `C`'s: the constructor's parameter types were looked up in the calling module
+  (`unknown type 'Def'` unless the caller imported the type too, or the caller's own type of that name).
+
+### Changed
+- One compile reports all the unsupported syntax of a file: index signatures, `keyof` / `typeof` / indexed access /
+  intersection / conditional types, regular expressions, `for...in`, `in`, `delete` and `var` are reported and parsed
+  past, and the other errors of the file are reported too (before, the first of them stopped the compile). Errors are
+  listed in source order.
+- The `e7:encoding` decoders (`hexDecode`, `base64Decode`, `base64UrlDecode`, `base32Decode`, `pemDecode`) throw a
+  catchable `SyntaxError` on invalid input; they ended the call before (and still do on earlier VMs). The Node.js
+  shim checks the input the same way.
+- TypeScript that tsc accepts and E7 rejected: `catch (e) { (e as Error).message }` (a caught value is always an
+  Error in E7); a variable narrowed to a non-nullable type before a loop stays narrowed when every assignment in the
+  loop stores a non-nullable value (`for (...) v = v + "!"`, `v = v.trim()`); `new Uint8Array([])` (and the other typed
+  arrays); `Promise.resolve<void>(undefined)` and `later<void>(undefined)`.
+- `Iterable<T>` / `ArrayLike<T>` give an error that names what to write instead (`T[]`, or `IterableIterator<T>`).
+- A missing export of `e7:crypto`, `e7:encoding`, `e7:json` or `e7:test` without a close name lists the module's
+  exports.
+
 ## [0.1.3] - 2026-11-08
 
 TypeScript that tsc accepts and E7 rejected: the third batch of the second round of testing (about 120 such programs;
@@ -233,7 +258,8 @@ delivered from a server, signed, verified at load time and run in a sandbox.
 - Seven independent security reviews (bytecode loading, natives and the C API, crypto, release sign-off,
   `try` / `catch`, the GC and formatter, coroutines and promises), every finding fixed with a regression test.
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/e7lang/e7/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/e7lang/e7/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/e7lang/e7/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/e7lang/e7/compare/v0.1.0...v0.1.1

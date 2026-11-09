@@ -93,4 +93,17 @@ inline const std::vector<std::string>& builtinModuleNames() {
   return names;
 }
 
+// The error suffix for a missing export of a builtin module: a correction, else the list of its exports (an
+// agent that guesses names one compile at a time gets them all at once).
+inline std::string builtinExportHint(const std::string& module, const std::string& name) {
+  std::string hint = removedBuiltinHint(module, name);
+  if (!hint.empty()) return hint;
+  const auto& names = builtinModuleExports(module);
+  std::string d = didYouMean(name, names);
+  if (!d.empty()) return d;
+  std::string all;
+  for (auto& n : names) all += (all.empty() ? "" : ", ") + n;
+  return "; it exports " + all;
+}
+
 }  // namespace e7

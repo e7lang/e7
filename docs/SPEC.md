@@ -691,6 +691,7 @@ or host function that was running (or that called back into the script, like `Ar
 | `JSON.parse` | Returns `any` | Requires `as T`, validated against the type |
 | JSON of the wrong shape | Accepted (no validation) | `JSON.parse(text) as T` ends the call (not catchable); `tryParse(text) as T \| null` from `e7:json` returns `null`. Syntax errors are a catchable `SyntaxError` in both |
 | `localeCompare` | Locale-aware | Code-unit comparison |
+| `Date.parse` / `new Date(s)` of a string that is neither ISO 8601 nor RFC 1123 (`"2024-3-1"`, `"03/01/2024"`) | V8's legacy formats, in local time | `NaN` (an invalid date) |
 | Exceptions | Every error is catchable | `try`/`catch` catches the errors Node.js also throws; E7-specific checks and resource limits end the call (section 3.1) |
 | E7's own runtime checks (out of bounds, failed `as`, limits) | — | Not catchable; `finally` blocks do not run |
 | `Object.values` / `entries` of an object with more properties than its type | All own properties | E7 error (the extra property's type is unknown) |

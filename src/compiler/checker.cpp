@@ -783,9 +783,7 @@ Sym* Checker::importedSym(Stmt* s, FileInfo* tfi, const std::string& name, const
     if (std::find(names.begin(), names.end(), name) == names.end()) {
       if (name == "default") err(s->loc, "module '" + s->from + "' has no default export");
       else {
-        std::string hint = removedBuiltinHint(s->from, name);
-        err(s->loc, "module '" + s->from + "' has no exported member '" + name + "'" +
-                        (hint.empty() ? didYouMean(name, names) : hint));
+        err(s->loc, "module '" + s->from + "' has no exported member '" + name + "'" + builtinExportHint(s->from, name));
       }
       return nullptr;
     }
@@ -893,6 +891,7 @@ Type* Checker::resolveType(TypeNode* n) {
       return T.func(ps, resolveType(n->ret), opt, rest);
     }
     case TNK::Object: {
+      if (n->unsupported) return T.unknown();  // an index signature (reported by the parser)
       std::vector<ObjShape::Prop> props;
       bool hasMethods = false;
       for (auto& m : n->members) if (m.method) hasMethods = true;
@@ -957,6 +956,7 @@ Type* Checker::resolveType(TypeNode* n) {
 }
 
 Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeNode*>& args, Loc l) {
+  if (name == kUnsupportedName) return T.unknown();  // (reported by the parser)
   auto noArgs = [&]() {
     if (!args.empty()) err(l, "type '" + name + "' is not generic");
   };
@@ -975,6 +975,7 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
       case SymK::Interface: {
         noArgs();
         auto* is = static_cast<InterfaceSym*>(s);
+        if (is->decl && is->decl->typeBody && is->decl->typeBody->unsupported) return T.unknown();  // (reported)
         resolveInterface(is);
         return is->type ? is->type : T.unknown();
       }
@@ -1138,6 +1139,9 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   if (name == "RegExp" || name == "RegExpMatchArray" || name == "RegExpExecArray") return errT(l, kNoRegExp);
   if (name == "Record" || name == "Partial" || name == "Required" || name == "Pick" || name == "Omit" || name == "Readonly")
     return errT(l, "utility type '" + name + "' is not supported; use Map<K, V> or an interface");
+  if (name == "Iterable" || name == "ArrayLike")
+    return errT(l, "'" + name + "<T>' is not supported (arrays, Sets, Maps, strings and generators have no common type in "
+                     "E7): take 'T[]' (pass a Set or Map as [...s]), or 'IterableIterator<T>' for a generator");
   if (name == "Generator" || name == "Iterator" || name == "IterableIterator" || name == "IteratorObject" ||
       name == "Generator" || name == "IterableIterator") {
     uint8_t gk = name == "Generator" ? 0 : name == "Iterator" ? 1 : name == "IterableIterator" ? 2 : 3;
@@ -1862,7 +1866,14 @@ void Checker::resolveSig(FuncSym* f) {
   std::string savedFile = curFile;
   curFile = f->file.empty() ? curFile : f->file;
   Scope* savedSigScope = scope;
-  if (f->defScope) scope = f->defScope;  // e.g. the type parameters of a generic instance
+  if (f->defScope) {
+    scope = f->defScope;  // e.g. the type parameters of a generic instance
+  } else if (f->isTopLevel && !f->file.empty()) {
+    // a declaration at the top level of its module (a constructor whose signature is resolved when another
+    // module first calls `new C(...)`): its types are named in that module
+    auto it = fileInfo.find(f->file);
+    if (it != fileInfo.end()) scope = it->second->scope;
+  }
   std::vector<Type*> ps;
   std::vector<bool> opt;
   bool rest = false;

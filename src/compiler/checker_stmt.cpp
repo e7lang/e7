@@ -892,7 +892,110 @@ void Checker::joinBranchNarrowing(Stmt* s, const std::vector<Fact>& tf, const st
   }
 }
 
-void Checker::invalidateAssigned(Stmt* body, Expr* extra) {
+// Every assignment to the variable `name` in e (outside nested functions) stores a value that is never null or
+// undefined, judged from the syntax alone (the code is not checked yet) and assuming the variable itself is not
+// null or undefined (induction over the loop's iterations); false for any other assignment form.
+bool Checker::assignsOnlyNonNull(Expr* e, const std::string& name, Type* narrowedT, bool inFn) {
+  if (!e) return true;
+  auto isVar = [&](Expr* t) {
+    while (t && t->k == EK::Paren) t = t->a;
+    return t && t->k == EK::Ident && t->raw == name;
+  };
+  if (e->k == EK::Arrow) return assignsOnlyNonNull(e->exprBody, name, narrowedT, true) &&
+                                assignsOnlyNonNullStmt(e->body, name, narrowedT, true);
+  if (e->k == EK::Update && isVar(e->a)) {
+    if (inFn) return false;
+  } else if (e->k == EK::Assign && e->a) {
+    Expr* t = e->a;
+    while (t->k == EK::Paren) t = t->a;
+    if (t->k == EK::Array || t->k == EK::Object) {
+      std::set<std::string> names;
+      collectAssignedExpr(e, names);
+      if (names.count(name)) return false;  // [x, y] = ...: not judged
+    } else if (isVar(t)) {
+      if (inFn) return false;
+      if (e->raw != "&&=" && e->raw != "||=" && e->raw != "??=" && e->raw != "=") {
+        // x += ..., x *= ...: a number, string or bigint
+      } else if (e->raw == "||=" || e->raw == "&&=" || !nonNullSyntax(e->b, name, narrowedT)) {
+        return false;
+      }
+    }
+  }
+  if (!assignsOnlyNonNull(e->a, name, narrowedT, inFn) || !assignsOnlyNonNull(e->b, name, narrowedT, inFn) ||
+      !assignsOnlyNonNull(e->c, name, narrowedT, inFn))
+    return false;
+  for (Expr* x : e->list)
+    if (!assignsOnlyNonNull(x, name, narrowedT, inFn)) return false;
+  for (auto& p : e->props)
+    if (!assignsOnlyNonNull(p.value, name, narrowedT, inFn)) return false;
+  return true;
+}
+
+bool Checker::assignsOnlyNonNullStmt(Stmt* s, const std::string& name, Type* narrowedT, bool inFn) {
+  if (!s) return true;
+  if (s->k == SK::Func || s->k == SK::Class) {
+    std::set<std::string> names;
+    collectAssigned(s, names);
+    return !names.count(name);
+  }
+  if (!assignsOnlyNonNull(s->expr, name, narrowedT, inFn) || !assignsOnlyNonNull(s->update, name, narrowedT, inFn))
+    return false;
+  for (auto& d : s->decls)
+    if (!assignsOnlyNonNull(d.init, name, narrowedT, inFn)) return false;
+  for (Stmt* x : {s->then, s->els, s->body, s->init})
+    if (!assignsOnlyNonNullStmt(x, name, narrowedT, inFn)) return false;
+  for (Stmt* x : s->stmts)
+    if (!assignsOnlyNonNullStmt(x, name, narrowedT, inFn)) return false;
+  for (auto& c : s->cases) {
+    if (!assignsOnlyNonNull(c.test, name, narrowedT, inFn)) return false;
+    for (Stmt* x : c.body)
+      if (!assignsOnlyNonNullStmt(x, name, narrowedT, inFn)) return false;
+  }
+  return true;
+}
+
+// A value that is never null or undefined, from its syntax: literals, operators whose result is a number,
+// string, bigint or boolean, conditionals of such values, the variable itself, or a method of the variable (of
+// type narrowedT) that returns a string or an array. (Other names are not judged: the code is not checked yet,
+// and a name declared in the loop could hide an outer one.)
+bool Checker::nonNullSyntax(Expr* x, const std::string& self, Type* selfT) {
+  while (x && x->k == EK::Paren) x = x->a;
+  if (!x) return false;
+  switch (x->k) {
+    case EK::Array: case EK::Object: case EK::Num: case EK::Str: case EK::Template: case EK::New: case EK::Arrow:
+    case EK::Bool: case EK::BigLit: case EK::Update: case EK::TypeOf:
+      return true;
+    case EK::Unary: return x->raw != "void" && x->raw != "delete";
+    case EK::Binary: return true;  // arithmetic, string concatenation, comparisons, bitwise operators
+    case EK::Cond: return nonNullSyntax(x->b, self, selfT) && nonNullSyntax(x->c, self, selfT);
+    case EK::Logical: return (x->raw == "??" || x->raw == "||") && nonNullSyntax(x->b, self, selfT);
+    case EK::Assign: return x->raw != "=" && x->raw != "&&=" && x->raw != "||=" && x->raw != "??="
+                                ? true : x->raw == "=" && nonNullSyntax(x->b, self, selfT);
+    case EK::Ident: return x->raw == self;
+    case EK::Call: {
+      Expr* c = x->a;
+      while (c && c->k == EK::Paren) c = c->a;
+      if (!c) return false;
+      if (c->k == EK::Member && c->a && c->a->k == EK::Ident && c->a->raw == self && selfT) {
+        static const std::set<std::string> strM = {
+            "toUpperCase", "toLowerCase", "trim", "trimStart", "trimEnd", "slice", "substring", "substr",
+            "padStart", "padEnd", "repeat", "replace", "replaceAll", "concat", "charAt", "toString", "normalize",
+            "toLocaleUpperCase", "toLocaleLowerCase", "split"};
+        static const std::set<std::string> arrM = {"concat", "slice", "map", "filter", "flat", "flatMap", "toSorted",
+                                                   "toReversed", "toSpliced", "with", "reverse", "sort", "fill",
+                                                   "splice", "copyWithin"};
+        if (selfT->t == TT::String) return strM.count(c->raw) > 0;
+        if (selfT->t == TT::Array) return arrM.count(c->raw) > 0;
+        return false;
+      }
+      return false;
+    }
+    default: return false;
+  }
+}
+
+std::vector<std::pair<std::string, Type*>> Checker::invalidateAssigned(Stmt* body, Expr* extra) {
+  std::vector<std::pair<std::string, Type*>> kept;
   std::set<std::string> names;
   collectAssigned(body, names);
   collectAssignedExpr(extra, names);
@@ -902,9 +1005,25 @@ void Checker::invalidateAssigned(Stmt* body, Expr* extra) {
     Sym* s = lookup(root);
     if (!s || s->k != SymK::Var) continue;
     std::string key = varKey(static_cast<VarSym*>(s));
-    if (n.size() > root.size()) key += n.substr(root.size());
+    if (n.size() > root.size()) {
+      key += n.substr(root.size());
+    } else if (Type* nt = narrowed(key, false)) {
+      // `let v = m.get(k); if (v === undefined) v = "x"; for (...) v = v + "!";`: a variable narrowed to a
+      // non-nullable type stays narrowed when every assignment here stores a non-nullable value
+      Type* vt = static_cast<VarSym*>(s)->type;
+      if (vt && vt->t == TT::Optional && nt->t != TT::Optional && !isNullish(nt) &&
+          assignsOnlyNonNullStmt(body, root, nt, false) && assignsOnlyNonNull(extra, root, nt, false)) {
+        kept.push_back({key, nt});  // (the assignments clear it everywhere: the loop sets it again after its end)
+        continue;
+      }
+    }
     invalidatePath(key);
   }
+  return kept;
+}
+
+void Checker::restoreNarrowing(const std::vector<std::pair<std::string, Type*>>& kept) {
+  for (auto& k : kept) setNarrow(k.first, k.second);
 }
 
 // ------------------------------------------------------------------ variables
@@ -1445,7 +1564,7 @@ void Checker::checkStmt(Stmt* s) {
       break;
     }
     case SK::While: {
-      invalidateAssigned(s->body, s->expr);
+      auto kept = invalidateAssigned(s->body, s->expr);
       checkCond(s->expr);
       std::vector<Fact> tf, ff;
       factsFrom(s->expr, true, tf);
@@ -1458,13 +1577,14 @@ void Checker::checkStmt(Stmt* s) {
       checkStmt(s->body);
       loops.pop_back();
       popScope();
+      restoreNarrowing(kept);
       // the loop ends when its condition is false (unless a break leaves it): while (x === null) x = ...
       if (!containsBreakFor(s->body, "", 0) && (label.empty() || !containsBreakFor(s->body, label, 0)))
         applyFacts(ff);
       break;
     }
     case SK::DoWhile: {
-      invalidateAssigned(s->body, s->expr);
+      auto kept = invalidateAssigned(s->body, s->expr);
       std::string label = pendingLabels.empty() ? "" : pendingLabels.back();
       loops.push_back({label, true, false});
       pendingLabels.clear();
@@ -1480,6 +1600,7 @@ void Checker::checkStmt(Stmt* s) {
       std::vector<Fact> ff;
       factsFrom(s->expr, false, ff);
       popScope();
+      restoreNarrowing(kept);
       if (!jumps) {
         keepNarrowing(condScope);
         applyFacts(ff);
@@ -1495,7 +1616,7 @@ void Checker::checkStmt(Stmt* s) {
           for (auto& d : s->init->decls) checkVarDecl(s->init, d, s->init->isConst, false);
         else checkStmt(s->init);
       }
-      invalidateAssigned(s->body, s->update);
+      auto kept = invalidateAssigned(s->body, s->update);
       std::vector<Fact> tf;
       if (s->expr) {
         checkCond(s->expr);
@@ -1509,6 +1630,7 @@ void Checker::checkStmt(Stmt* s) {
       if (s->update) check(s->update, nullptr);
       popScope();
       popScope();
+      restoreNarrowing(kept);
       break;
     }
     case SK::ForOf: {
@@ -1586,13 +1708,14 @@ void Checker::checkStmt(Stmt* s) {
       VarDecl& d = s->decls[0];
       // [k, v] of map: bind directly without allocating tuples
       bindPattern(d, et, s->isConst, false, d.loc);
-      invalidateAssigned(s->body);
+      auto kept = invalidateAssigned(s->body);
       loops.push_back({label, true, false});
       pushScope();
       checkStmt(s->body);
       popScope();
       loops.pop_back();
       popScope();
+      restoreNarrowing(kept);
       break;
     }
     case SK::Return: {

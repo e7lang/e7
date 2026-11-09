@@ -460,6 +460,42 @@ class Parser {
   [[noreturn]] void fail(const std::string& m) { throw ParseError{loc(), m}; }
   [[noreturn]] void failAt(Loc l, const std::string& m) { throw ParseError{l, m}; }
 
+ public:
+  // Unsupported TypeScript that parses: reported, then parsed past (as a placeholder the checker reads as
+  // 'unknown' without further errors), so one compile reports all of it. Errors recorded in a speculative
+  // parse that is abandoned are dropped with it (rewind).
+  struct Soft { size_t tok; Loc loc; std::string msg; };
+  std::vector<Soft> soft;
+
+ private:
+  void softFail(const std::string& m) { soft.push_back({i, loc(), m}); }
+  void rewind(size_t to) {
+    i = to;
+    while (!soft.empty() && soft.back().tok >= to) soft.pop_back();
+  }
+  TypeNode* unsupportedType(Loc l) {
+    TypeNode* t = A.type(TNK::Ref, l);
+    t->name = kUnsupportedName;
+    return t;
+  }
+  Expr* unsupportedExpr(Loc l) {
+    Expr* e = A.expr(EK::Ident, l);
+    e->raw = kUnsupportedName;
+    return e;
+  }
+  // [key: K]: V (an index signature, already reported): parsed past
+  void skipIndexSignature() {
+    expectP("[");
+    i++;  // the key name
+    expectP(":");
+    parseType();
+    expectP("]");
+    eatP("?");
+    expectP(":");
+    parseType();
+    if (!eatP(";") && !eatP(",") && !isP("}") && !cur().nl) fail("expected ';'");
+  }
+
   bool is(const char* p) const { return (cur().k == TK::Punct || cur().k == TK::Ident) && cur().text == p; }
   bool isP(const char* p) const { return cur().k == TK::Punct && cur().text == p; }
   bool isKw(const char* k) const { return cur().k == TK::Ident && cur().text == k; }
@@ -539,7 +575,16 @@ class Parser {
     Loc l = loc();
     eatP("|");
     TypeNode* first = parseTypeNoUnion();
-    if (isKw("extends") && !cur().nl) fail("conditional types (T extends U ? X : Y) are not supported; E7 types are concrete");
+    if (isKw("extends") && !cur().nl) {
+      softFail("conditional types (T extends U ? X : Y) are not supported; E7 types are concrete");
+      i++;
+      parseTypeNoUnion();
+      expectP("?");
+      parseType();
+      expectP(":");
+      parseType();
+      return unsupportedType(l);
+    }
     if (!isP("|")) return first;
     TypeNode* u = A.type(TNK::Union, l);
     u->args.push_back(first);
@@ -555,8 +600,21 @@ class Parser {
       arr->elem = ty;
       ty = arr;
     }
-    if (isP("[") && !cur().nl) fail("indexed access types (T[\"key\"]) are not supported; name the property type directly");
-    if (isP("&")) fail("intersection types are not supported");
+    if (isP("[") && !cur().nl) {
+      Loc l = loc();
+      softFail("indexed access types (T[\"key\"]) are not supported; name the property type directly");
+      while (isP("[") && !cur().nl) {
+        i++;
+        if (!isP("]")) parseType();
+        expectP("]");
+      }
+      ty = unsupportedType(l);
+    }
+    if (isP("&")) {
+      softFail("intersection types are not supported; declare one interface with all the properties");
+      while (eatP("&")) parseTypeNoUnion();
+      ty = unsupportedType(ty->loc);
+    }
     return ty;
   }
   // a return type: type predicates and assertion signatures are reported by name
@@ -608,8 +666,20 @@ class Parser {
       t->readonly = true;
       return t;
     }
-    if (isKw("keyof") || isKw("typeof") || isKw("infer") || isKw("unique"))
-      fail("'" + cur().text + "' types are not supported");
+    if (isKw("keyof") || isKw("typeof") || isKw("infer") || isKw("unique")) {
+      std::string w = cur().text;
+      softFail("'" + w + "' types are not supported" +
+               (w == "keyof" ? std::string("; use a union of string literals, or Map<K, V>") : std::string()));
+      i++;
+      if (w == "keyof" || w == "unique") {
+        parseTypeNoUnion();
+      } else {
+        if (cur().k != TK::Ident) fail("expected a name");
+        i++;
+        while (isP(".") && peek().k == TK::Ident) i += 2;  // typeof a.b / infer U
+      }
+      return unsupportedType(l);
+    }
     if (isP("(")) {
       if (looksLikeFunctionType()) {
         TypeNode* f = A.type(TNK::Func, l);
@@ -712,7 +782,12 @@ class Parser {
         if (!eatP(";") && !eatP(",") && !isP("}") && !cur().nl) fail("expected ';'");
         continue;
       }
-      if (isP("[")) fail("index signatures are not supported; use Map<K, V>");
+      if (isP("[")) {
+        softFail("index signatures are not supported; use Map<K, V>");
+        skipIndexSignature();
+        o->unsupported = true;
+        continue;
+      }
       if ((isKw("get") || isKw("set")) && (peek().k == TK::Ident || peek().k == TK::Str || peek().k == TK::Num) &&
           peek(2).k == TK::Punct && peek(2).text == "(") {
         // accessor signature: get name(): T / set name(v: T)
@@ -884,7 +959,7 @@ class Parser {
           e->isConstEnum = true;
           return e;
         }
-        if (w == "var") fail("'var' is not supported; use 'let' or 'const'");
+        if (w == "var") softFail("'var' is not supported; use 'let' or 'const'");
         Stmt* s = parseVarDecl();
         semi();
         return s;
@@ -1382,7 +1457,11 @@ class Parser {
         computedName = parseAssign();
         expectP("]");
       }
-      if (isP("[")) fail("index signatures are not supported; use Map<K, V>");
+      if (isP("[")) {
+        softFail("index signatures are not supported; use Map<K, V>");
+        skipIndexSignature();
+        continue;
+      }
       if (!m.accessor && isKw("constructor") && peek().k == TK::Punct && peek().text == "(") {
         i++;
         m.kind = ClassMember::Ctor;
@@ -1598,7 +1677,7 @@ class Parser {
     expectP("(");
     Stmt* init = nullptr;
     if (isKw("let") || isKw("const") || isKw("var")) {
-      if (isKw("var")) fail("'var' is not supported; use 'let' or 'const'");
+      if (isKw("var")) softFail("'var' is not supported; use 'let' or 'const'");
       bool isConst = isKw("const");
       size_t save = i;
       i++;
@@ -1606,17 +1685,18 @@ class Parser {
       if (isKw("of") || isKw("in")) {
         bool isIn = isKw("in");
         i++;
-        if (isIn) fail("for...in is not supported; use for...of over an array, a Map (for (const [k, v] of map)) or Object.keys(obj)");
+        if (isIn) softFail("for...in is not supported; use for...of over an array, a Map (for (const [k, v] of map)) or Object.keys(obj)");
         Stmt* s = A.stmt(SK::ForOf, l);
         s->isConst = isConst;
         s->isAwait = isAwait;
         s->decls.push_back(d);
         s->expr = parseAssign();
+        if (isIn) s->expr = unsupportedExpr(s->expr->loc);  // (reported: the loop variable is 'unknown')
         expectP(")");
         s->body = parseStatement(false);
         return s;
       }
-      i = save;
+      rewind(save);
       noIn++;
       init = parseVarDecl();
       noIn--;
@@ -1700,7 +1780,7 @@ class Parser {
         if (isP("=>") && !cur().nl) return tn;
       } catch (ParseError&) {
       }
-      i = s0;
+      rewind(s0);
     }
     return parseRetType();
   }
@@ -1718,7 +1798,7 @@ class Parser {
         e->isAsync = true;
         return e;
       }
-      i = save;
+      rewind(save);
       return nullptr;
     }
     if (cur().k == TK::Ident && !isReserved(cur().text) && peek().k == TK::Punct && peek().text == "=>" && !peek().nl) {
@@ -1740,12 +1820,12 @@ class Parser {
           parseTypeParams(f->typeParams);
           parseParams(f->params, false);
           if (eatP(":")) f->retType = parseArrowRetType();
-          if (!isP("=>") || cur().nl) { i = save; return nullptr; }
+          if (!isP("=>") || cur().nl) { rewind(save); return nullptr; }
           i++;
           parseArrowBody(f);
           return f;
         } catch (ParseError&) {
-          i = save;
+          rewind(save);
           return nullptr;
         }
       }
@@ -1753,13 +1833,13 @@ class Parser {
         Expr* f = A.expr(EK::Arrow, l);
         parseParams(f->params, false);
         if (eatP(":")) f->retType = parseArrowRetType();
-        if (!isP("=>") || cur().nl) { i = save; return nullptr; }
+        if (!isP("=>") || cur().nl) { rewind(save); return nullptr; }
         i++;
         parseArrowBody(f);
         return f;
       } catch (ParseError&) {
         // decide: if the matching ')' is followed by '=>' this was really an arrow -> rethrow
-        i = save;
+        rewind(save);
         if (looksLikeFunctionType()) throw;
         return nullptr;
       }
@@ -1912,7 +1992,13 @@ class Parser {
         lhs = e;
         continue;
       }
-      if (op.k == TK::Ident && op.text == "in") fail("the 'in' operator is not supported");
+      if (op.k == TK::Ident && op.text == "in") {
+        softFail("the 'in' operator is not supported; use a Map (map.has(k)) or a check of an optional property");
+        i++;
+        parseBinary(p + 1);
+        lhs = unsupportedExpr(l);
+        continue;
+      }
       i++;
       bool rightAssoc = op.text == "**";
       Expr* rhs = parseBinary(rightAssoc ? p : p + 1);
@@ -1967,7 +2053,12 @@ class Parser {
         e->a = parseUnary();
         return e;
       }
-      if (w == "delete") fail("'delete' is not supported; use Map for dynamic keys");
+      if (w == "delete") {
+        softFail("'delete' is not supported; use Map for dynamic keys (map.delete(k))");
+        i++;
+        parseUnary();
+        return unsupportedExpr(l);
+      }
       if (w == "await") {
         i++;
         Expr* e = A.expr(EK::Await, l);
@@ -2031,13 +2122,13 @@ class Parser {
         args.push_back(parseType());
         if (!eatP(",")) break;
       }
-      if (!isP(">")) { i = save; return false; }
+      if (!isP(">")) { rewind(save); return false; }
       i++;
-      if (!isP("(")) { i = save; return false; }
+      if (!isP("(")) { rewind(save); return false; }
       out = args;
       return true;
     } catch (ParseError&) {
-      i = save;
+      rewind(save);
       return false;
     }
   }
@@ -2209,7 +2300,11 @@ class Parser {
       case TK::TmplFull:
       case TK::TmplHead:
         return parseTemplate();
-      case TK::Regex: fail(kNoRegExp);
+      case TK::Regex: {
+        softFail(kNoRegExp);
+        i++;
+        return unsupportedExpr(l);
+      }
       case TK::Ident: {
         const std::string& w = tk.text;
         if (w == "true" || w == "false") { Expr* e = A.expr(EK::Bool, l); e->bval = w == "true"; i++; return e; }
@@ -2483,14 +2578,26 @@ static bool checkDepth(SourceFile& file, std::vector<CompileError>& errs) {
   return true;
 }
 
-bool parseSource(SourceFile& file, Arena& arena, std::vector<CompileError>& errs) {
+bool parseSource(SourceFile& file, Arena& arena, std::vector<CompileError>& errs, std::vector<CompileError>* softErrs) {
+  std::vector<Parser::Soft> soft;
+  auto flush = [&](std::vector<CompileError>& to) {
+    for (auto& s : soft) to.push_back(CompileError{file.path, s.loc, s.msg});
+  };
   try {
     Lexer lx(file.text);
     std::vector<Tok> toks = lx.run();
     Parser p(file, arena, std::move(toks));
-    p.parseProgram();
-    return checkDepth(file, errs);
+    try {
+      p.parseProgram();
+    } catch (ParseError&) {
+      soft = std::move(p.soft);
+      throw;
+    }
+    soft = std::move(p.soft);
+    flush(softErrs ? *softErrs : errs);
+    return checkDepth(file, errs) && (softErrs || soft.empty());
   } catch (ParseError& e) {
+    flush(errs);
     errs.push_back(CompileError{file.path, e.loc, e.msg});
     return false;
   }
