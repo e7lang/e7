@@ -157,7 +157,7 @@ E7_NATIVE(a_join) {
     Slot e = arr->data[i];
     if (arr->vt == VT_REF && (!e.r || e.r == vm.undef())) continue;
     out += valueToString(vm, e, arr->vt);
-    if (out.size() > 0x3FFFFFFF) vm.error("RangeError: invalid string length");
+    if (out.size() > 0x3FFFFFFF) vm.error("RangeError: Invalid string length");
   }
   r->r = vm.newString(out);
 }
@@ -258,7 +258,7 @@ void arraySortCmp(VM& vm, ArrObj* arr, CloObj* c) {
 // JavaScript rejects lengths that are not integers in [0, 2^32 - 1] with a RangeError; e7 also
 // limits arrays to 2^27 - 1 elements, which is its own limit and therefore not catchable.
 static void checkArrayLength(VM& vm, double d) {
-  if (!(d >= 0 && d <= 4294967295.0) || std::trunc(d) != d) vm.error("RangeError: invalid array length");
+  if (!(d >= 0 && d <= 4294967295.0) || std::trunc(d) != d) vm.error("RangeError: Invalid array length");
   if (d > 0x7FFFFFF) vm.error("array length %s exceeds the e7 limit of 134217727", numberToString(d).c_str());
 }
 

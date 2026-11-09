@@ -59,7 +59,8 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
     case OT::Array: {
       auto* a = static_cast<ArrObj*>(o);
       StrObj *en, *em;
-      if (vm.errorParts(o, &en, &em)) return em->len ? strU16(en) + u": " + strU16(em) : strU16(en);
+      if (vm.errorParts(o, &en, &em))
+        return em->len == 0 ? strU16(en) : en->len == 0 ? strU16(em) : strU16(en) + u": " + strU16(em);
       if (joining(o)) return u"";
       JoinGuard g(vm, o);
       std::u16string out;
@@ -100,6 +101,19 @@ std::u16string valueToString(VM& vm, Slot v, uint8_t vt) {
             Slot r = vm.callMethod(f, &self, 1);
             if (r.r && r.r->type == OT::String) return strU16(static_cast<StrObj*>(r.r));
             return valueToString(vm, r, VT_REF);
+          }
+        }
+        // { toString: () => "..." }: a property holding a function that returns a string
+        auto fi = in->cls->fieldIndex.find("toString");
+        if (fi != in->cls->fieldIndex.end() && in->cls->fieldVT[fi->second] == VT_REF && fieldPresent(in, fi->second)) {
+          Obj* c = in->fields()[fi->second].r;
+          if (c && c->type == OT::Closure) {
+            auto* clo = static_cast<CloObj*>(c);
+            if (clo->fn && clo->fn->retKind == 'R' && clo->fn->nparams == 0) {
+              Slot r = vm.callClosure(clo, nullptr, 0);
+              if (r.r && r.r->type == OT::String) return strU16(static_cast<StrObj*>(r.r));
+              return valueToString(vm, r, VT_REF);
+            }
           }
         }
         return u"[object Object]";
@@ -1013,7 +1027,7 @@ E7_NATIVE(n_isNaN) { E7_UNUSED; r->i = a[0].f != a[0].f; }
 E7_NATIVE(n_toStringRadix) {
   E7_UNUSED;
   double rd = toInteger(a[1].f);
-  if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix must be between 2 and 36");
+  if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix argument must be between 2 and 36");
   r->r = vm.newStringAscii(numberToStringRadix(a[0].f, (int)rd).c_str());
 }
 E7_NATIVE(n_toFixed) {
@@ -1045,7 +1059,7 @@ E7_NATIVE(n_toExponential) {
 E7_NATIVE(n_intToStringRadix) {
   E7_UNUSED;
   double rd = toInteger(a[1].f);
-  if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix must be between 2 and 36");
+  if (rd < 2 || rd > 36) vm.error("RangeError: toString() radix argument must be between 2 and 36");
   uint8_t vt = (uint8_t)immIndex(a[2].f, VT__COUNT);
   std::string s = vt == VT_U64 ? uint64ToString(a[0].u, (int)rd) : int64ToString(a[0].i, (int)rd);
   r->r = vm.newStringAscii(s.c_str());
@@ -1125,6 +1139,18 @@ struct Cloner {
           if (a->vt == VT_REF) v.r = copy(v.r);
           c->data[i] = v;
           c->len = i + 1;
+        }
+        StrObj *en, *em;
+        if (vm.errorParts(c, &en, &em)) {
+          // an Error's copy is of the class its name says when that is a standard one, else an Error (the
+          // HTML structured clone algorithm), without the properties assigned to the original
+          static const char16_t* const std16[] = {u"Error", u"EvalError", u"RangeError", u"ReferenceError",
+                                                   u"SyntaxError", u"TypeError", u"URIError"};
+          std::u16string nm = strU16(en);
+          bool standard = false;
+          for (const char16_t* x : std16) standard = standard || nm == x;
+          if (!standard) c->data[0].r = vm.newStringAscii("Error");
+          c->flags = kArrFlagError;
         }
         return c;
       }
@@ -1305,11 +1331,36 @@ E7_NATIVE(n_errorErrors) {
 }
 E7_NATIVE(n_errorName) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = nm; }
 E7_NATIVE(n_errorMessage) { E7_UNUSED; StrObj *nm, *m; errParts(vm, a[0], &nm, &m); r->r = m; }
+// e.message = s / e.name = s (0.1.3): the value assigned
+// The error classes, for instanceof after e.name was changed (the class is kept in Obj::flags bits 8-11,
+// its index + 1, set by the first change of the name)
+static const char16_t* const kErrClasses[] = {u"Error", u"TypeError", u"RangeError", u"SyntaxError", u"URIError",
+                                              u"AggregateError", u"ReferenceError", u"EvalError"};
+static void errSet(VM& vm, Slot* a, Slot* r, int part) {
+  StrObj *nm, *m;
+  errParts(vm, a[0], &nm, &m);
+  auto* arr = static_cast<ArrObj*>(a[0].r);
+  if (part == 0 && ((arr->flags >> 8) & 0xF) == 0) {
+    std::u16string cur = strU16(nm);
+    uint16_t k = 1;  // (a name that is not a class's: an Error)
+    for (uint16_t i = 0; i < 8; i++)
+      if (cur == kErrClasses[i]) k = (uint16_t)(i + 1);
+    arr->flags = (uint16_t)(arr->flags | (k << 8));
+  }
+  // an own (enumerable) property now, as in JavaScript: the name, or a message that the error did not have
+  if (part == 0) arr->flags |= 0x1000;
+  else if (m->len == 0) arr->flags |= 0x2000;
+  arr->data[part].r = S(vm, a[1]);
+  r->r = a[1].r;
+}
+E7_NATIVE(n_errorSetName) { E7_UNUSED; errSet(vm, a, r, 0); }
+E7_NATIVE(n_errorSetMessage) { E7_UNUSED; errSet(vm, a, r, 1); }
 E7_NATIVE(n_errorToString) {  // String(e): "Name: message", or "Name" when the message is empty
   E7_UNUSED;
   StrObj *nm, *m;
   errParts(vm, a[0], &nm, &m);
   if (m->len == 0) { r->r = nm; return; }
+  if (nm->len == 0) { r->r = m; return; }  // (an empty name: the message alone)
   std::u16string s = strU16(nm) + u": " + strU16(m);
   r->r = vm.newString(s);
 }
@@ -1317,8 +1368,10 @@ E7_NATIVE(n_errorIs) {  // x instanceof Error / TypeError / ...: false for anyth
   E7_UNUSED;
   StrObj *nm, *m;
   std::u16string want = strU16(S(vm, a[1]));
-  if (!vm.errorParts(a[0].r, &nm, &m)) r->i = 0;
-  else r->i = (want == u"Error" || strU16(nm) == want) ? 1 : 0;
+  if (!vm.errorParts(a[0].r, &nm, &m)) { r->i = 0; return; }
+  uint16_t k = (a[0].r->flags >> 8) & 0xF;  // the class when the name was changed
+  std::u16string cls = k >= 1 && k <= 8 ? std::u16string(kErrClasses[k - 1]) : strU16(nm);
+  r->i = (want == u"Error" || cls == want) ? 1 : 0;
 }
 
 void registerCoreNatives(VM& vm) {
@@ -1329,6 +1382,8 @@ void registerCoreNatives(VM& vm) {
   vm.registerNative("Error.errors", "R>R", n_errorErrors);
   vm.registerNative("Error.name", "R>R", n_errorName);
   vm.registerNative("Error.message", "R>R", n_errorMessage);
+  vm.registerNative("Error.setName", "RR>R", n_errorSetName);
+  vm.registerNative("Error.setMessage", "RR>R", n_errorSetMessage);
   vm.registerNative("Error.toString", "R>R", n_errorToString);
   vm.registerNative("Error.is", "RR>I", n_errorIs);
   vm.registerNative("Value.toString", "R>R", n_valueToString);

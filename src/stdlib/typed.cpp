@@ -94,7 +94,9 @@ static uint8_t kindArg(VM& vm, Slot s) {
   return (uint8_t)s.i;
 }
 static BytesObj* newTA(VM& vm, uint8_t k, double len) {
-  if (!(len >= 0) || len != std::trunc(len) || len * taSize(k) > 2147483647.0) vm.error("RangeError: Invalid typed array length: %s", numberToString(len).c_str());
+  if (len != len) len = 0;  // (ToIndex: NaN is 0, 2.5 is 2)
+  len = std::trunc(len);
+  if (!(len >= 0) || len * taSize(k) > 2147483647.0) vm.error("RangeError: Invalid typed array length: %s", numberToString(len).c_str());
   BytesObj* b = vm.newBytes((uint32_t)len * taSize(k));
   b->flags = (uint16_t)((b->flags & ~0xF) | k);
   return b;

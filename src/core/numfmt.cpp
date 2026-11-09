@@ -498,7 +498,9 @@ double parseIntJS(const std::u16string& s, int radix) {
         multiplier = m;
         if (++k == n) { done = true; break; }
       }
-      v = v * multiplier + part;
+      // (fused: one rounding, as V8 computes result * multiplier + part where the C++ compiler fuses it,
+      // e.g. Node.js on arm64; the same on every platform here)
+      v = std::fma(v, (double)multiplier, (double)part);
     }
   }
   return neg ? -v : v;

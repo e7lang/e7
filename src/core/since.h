@@ -43,6 +43,8 @@ inline const NativeSince* nativeSinceTable(size_t& n) {
       {"JSON.parse2", makeVersion(0, 1, 1)},     // typed JSON.parse with literal types / enums ('L' descriptors)
       {"JSON.tryParse2", makeVersion(0, 1, 1)},
       {"TA.sortCmp", makeVersion(0, 1, 2)},      // typedArray.sort(cmp) in place
+      {"Error.setName", makeVersion(0, 1, 3)},   // e.name = s
+      {"Error.setMessage", makeVersion(0, 1, 3)},  // e.message = s
       {nullptr, 0},  // placeholder (C++ has no empty arrays); not an entry
   };
   n = sizeof kTable / sizeof kTable[0] - 1;
@@ -69,6 +71,11 @@ inline uint32_t moduleRequires(const Module& m, std::string* why = nullptr) {
     uint32_t s = nativeSince(n.name);
     if (s > req) { req = s; if (why) *why = "native function " + n.name; }
   }
+  for (const ClassDesc& c : m.classes)
+    if ((c.cflags & kClassFlagPresence) && c.isRecord == 0 && makeVersion(0, 1, 3) > req) {
+      req = makeVersion(0, 1, 3);
+      if (why) *why = "class " + c.name + " with an absent optional property";
+    }
   for (const FuncDesc& f : m.funcs)
     for (size_t pc = 0; pc < f.code.size(); pc += instructionWords(f.code[pc])) {
       uint16_t op = insOp(f.code[pc]);

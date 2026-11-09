@@ -129,7 +129,9 @@ bool verifyModule(const Module& m, std::string& err) {
     if (c.parent >= (int32_t)ci || c.parent < -1) return F("class %zu: invalid parent", ci);
     if (c.fields.size() > 65535) return F("class %zu: too many fields", ci);
     if (c.isRecord > 2) return F("class %zu: bad kind", ci);
-    if ((c.cflags & ~(kClassFlagPresence | kClassFlagAccessors)) || (c.cflags && c.isRecord != 1))
+    // (a presence mask: records, and classes with absent fields since 0.1.3; accessor pairs: records)
+    if ((c.cflags & ~(kClassFlagPresence | kClassFlagAccessors)) || ((c.cflags & kClassFlagAccessors) && c.isRecord != 1) ||
+        ((c.cflags & kClassFlagPresence) && c.isRecord == 2))
       return F("class %zu: bad class flags", ci);
     if (c.cflags & kClassFlagAccessors) {
       // an accessor property's field holds its accessor pair (a reference)

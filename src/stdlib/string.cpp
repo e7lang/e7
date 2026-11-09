@@ -298,7 +298,7 @@ static void padImpl(VM& vm, Slot* a, Slot* r, bool start) {
   StrObj* f = S(vm, a[2]);
   double target = toInteger(a[1].f);
   if (target <= s->len || f->len == 0) { r->r = s; return; }
-  if (target > 0x3FFFFFFF) vm.error("RangeError: invalid string length");
+  if (target > 0x3FFFFFFF) vm.error("RangeError: Invalid string length");
   size_t fill = (size_t)target - s->len;
   std::u16string pad;
   pad.reserve(fill);
@@ -312,9 +312,9 @@ E7_NATIVE(s_repeat) {
   E7_UNUSED;
   StrObj* s = S(vm, a[0]);
   double c = toInteger(a[1].f);
-  if (c < 0 || std::isinf(c)) vm.error("RangeError: invalid count value: %s", numberToString(a[1].f).c_str());
+  if (c < 0 || std::isinf(c)) vm.error("RangeError: Invalid count value: %s", numberToString(a[1].f).c_str());
   if (s->len == 0 || c == 0) { r->r = vm.newString(u"", 0); return; }
-  if (c * s->len > 0x3FFFFFFF) vm.error("RangeError: invalid string length");
+  if (c * s->len > 0x3FFFFFFF) vm.error("RangeError: Invalid string length");
   size_t total = (size_t)c * s->len;
   StrObj* o = vm.allocString(total);
   for (size_t i = 0; i < (size_t)c; i++) memcpy(o->chars() + i * s->len, s->chars(), (size_t)s->len * 2);
@@ -413,7 +413,7 @@ E7_NATIVE(s_fromCodePoints) {
   std::u16string out;
   for (uint32_t i = 0; i < arr->len; i++) {
     double d = arr->data[i].f;
-    if (!(d >= 0 && d <= 0x10FFFF) || std::trunc(d) != d) vm.error("RangeError: invalid code point %s", numberToString(d).c_str());
+    if (!(d >= 0 && d <= 0x10FFFF) || std::trunc(d) != d) vm.error("RangeError: Invalid code point %s", numberToString(d).c_str());
     uint32_t cp = (uint32_t)d;
     if (cp >= 0x10000) {
       cp -= 0x10000;

@@ -102,6 +102,12 @@ struct VarSym : Sym {
   bool captured = false;
   bool isParam = false;
   bool isThis = false;
+  bool tdzLocal = false;  // a local const f = <arrow> declared on entry to its block (null until its declaration runs)
+  bool blockVar = false;  // declared by a let / const statement of a block
+  bool litInferred = false;  // const k = "a" (a literal type from its initializer: tsc widens it in literals)
+  // a blockVar captured by a nested function declaration (created when the block is entered, so it may run
+  // before the declaration): its "initialized" flag, which the function checks (ReferenceError)
+  VarSym* initFlag = nullptr;
   int paramIndex = -1;
   // lazily typed globals
   VarDecl* decl = nullptr;
@@ -154,6 +160,7 @@ struct FuncSym : Sym {
   std::string qualName;
   int funcIdx = -1;
   bool inferRet = false;     // return type inferred from body
+  bool retInferred = false;  // (its return type was inferred: an override may take its base method's)
   bool hasDefaults = false;  // has default-valued params (hidden argc parameter)
   bool inheritCtor = false;  // synthesized constructor forwarding to the parent constructor
   bool isAbstract = false;   // abstract method: no body (a stub that is never called)
@@ -172,7 +179,9 @@ struct ClassSym : Sym {
   ClassSym() : Sym(SymK::Class) {}
   Stmt* decl = nullptr;
   ClassSym* parent = nullptr;
-  struct Field { std::string name; Type* type; Expr* init; bool optional; ClassSym* owner; Loc loc; bool readonly = false; bool undefOk = false; };
+  // absent: an optional property of an implemented interface that the class does not declare: a slot
+  // (read through the interface as undefined) that is not an own property until it is written
+  struct Field { std::string name; Type* type; Expr* init; bool optional; ClassSym* owner; Loc loc; bool readonly = false; bool undefOk = false; bool absent = false; };
   std::vector<Field> fields;  // full layout, inherited first
   struct Method { std::string name; FuncSym* fn; };
   std::vector<Method> vtable;
@@ -200,7 +209,7 @@ struct ClassSym : Sym {
   // vtable entries "get x" / "set x" call them (kClassFlagAccessors)
   bool hasAccessors = false;
   bool isAbstract = false;
-  bool presence = false;  // record whose fields may be absent or hold undefined: a presence mask (D7)
+  bool presence = false;  // record whose fields may be absent or hold undefined, or class with absent fields: a presence mask (D7)
   // generics: 1 = holder of the static members of a generic class (one per template),
   // 2 = an instance (Box<number>: the instance members, with the type parameters bound)
   int genericRole = 0;
@@ -379,7 +388,7 @@ inline std::vector<std::pair<std::string, Type*>> enumerableProps(Type* t) {
   std::vector<std::pair<std::string, Type*>> out;
   if (t->t == TT::Class) {
     for (auto& f : t->cls->fields)
-      if (f.name.empty() || f.name[0] != '#') out.push_back({f.name, f.type});
+      if ((f.name.empty() || f.name[0] != '#') && !f.absent) out.push_back({f.name, f.type});
     for (auto& ap : t->cls->abstractProps) out.push_back({ap.first, ap.second});
   } else if (t->t == TT::Object && t->shape->ownAccessors) {
     // an object literal with accessors: its properties and getters (own properties) in the literal's order

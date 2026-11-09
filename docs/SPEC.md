@@ -109,7 +109,15 @@ User-defined generics are supported (section 2.3).
   (`const [n, s] = [1, "x"]` binds a `number` and a `string`; nested patterns and literals likewise); with elements of
   compatible types it is an array. `x as const` gives literal types, readonly tuples and objects with readonly
   properties (for literals and arrays and objects of literals). A `const` initialized with a literal has the
-  literal's type (`const k = "a"` is a `"a"`); a `let` has its base type, as in tsc.
+  literal's type (`const k = "a"` is a `"a"`); a `let` has its base type, as in tsc. An array literal of such
+  constants is an array of their base type (`[a, b]` is a `string[]`), and `[null, undefined, "a"]` is a
+  `(string | null | undefined)[]`. A constant is accepted where a literal type is expected (`m.set("n", 1)` for a
+  `Map<"n" | "s", number>`, `"n" as Dir`); a type argument is inferred from the expected result
+  (`const d: Dir = id("n")`); `s as Dir` of a `string` is not checked at run time, as in TypeScript.
+- A tuple whose elements have one type (or literal types of one base, as `as const` gives) is iterable, takes
+  computed indexes for reading, and has the array methods that do not change it (`map`, `join`, `includes`, ...,
+  on a copy of its elements; a callback that writes to a mutable tuple is a compile error, as is `flat()` of
+  tuples).
 - A recursive function that omits its return type is an error; an explicit annotation is required.
 - Interfaces and object type aliases may be recursive (`interface Tree { children: Tree[] }`, also mutually recursive
   and generic ones); structural compatibility between recursive types is checked coinductively, as in tsc.
@@ -123,11 +131,19 @@ User-defined generics are supported (section 2.3).
   normalizes it: `c ? { badge: "VIP" } : {}` is a `{ badge?: string }`, so `{ ...(c ? { badge: "VIP" } : {}) }`
   keeps `badge`.
 - Type predicates `(x: T): x is U` and `this is U`, and assertion functions `asserts x is U` / `asserts x`, narrow
-  at their calls (nullable values, literal types, classes); the function's check is trusted, as in TypeScript.
+  at their calls (nullable values, literal types, classes; also of arrow functions assigned to a `const`); the
+  function's check is trusted, as in TypeScript. `filter`, `find` and `findLast` with a type predicate give its type
+  (`xs.filter((x): x is string => x !== null)` is a `string[]`) when the elements are references.
 - Narrowing: `x === null`, `x !== undefined`, `x == null`, truthiness checks `if (x)`, `instanceof`, combinations with `&&`/`||`/`!`,
   early `return/throw/break/continue`, `x ??= v`, and assignment (also an assignment that ends an `if` branch, when the
   other path is narrowed to the same type: `if (x === null) x = [];`, and a conditional expression whose branches are
   both non-null: `x = x === null ? [] : x`). Property paths, including static fields (`C.#instance`), are supported (after `this.head !== null`, `this.head.next` can be used directly).
+  Also: a declaration's initializer (`let s: string | null = "a"`), what holds at the end of a block, of both
+  branches of an `if` (nested ones too) and of a branch whose other branch exits, the body of a `do...while`, the
+  condition of a `while` loop when it ends (`while (x === null) x = ...`) and an assignment in a condition
+  (`while ((x = pop()) !== undefined)`), optional chains (`a?.b !== undefined`, `a?.b === "x"` and `if (a?.b)` make
+  `a` non-null), comparisons of a `string` with constants (`s === "a" || s === "b"` and `case "a":` make it a
+  `"a" | "b"`), and a `switch` default after `case null:` / `case undefined:`.
   Variables reassigned inside a loop are re-checked at the loop condition; inside closures, narrowing is kept only for `const` variables (same as TS).
 
 ### 2.3 Generics
@@ -207,8 +223,9 @@ try {
 
 - `catch (e)` and `catch` without a binding. The catch variable has type `unknown` (as with TypeScript `--strict`);
   the annotation `catch (e: unknown)` is allowed. Narrow it with `e instanceof Error` (or `TypeError`, `RangeError`,
-  `SyntaxError`, `URIError`) to read `e.message` and `e.name`; `String(e)` and `` `${e}` `` give `"Name: message"`
-  (just `"Name"` when the message is empty). Compare caught values with `===`, rethrow them with `throw e`.
+  `SyntaxError`, `URIError`, `ReferenceError`, `EvalError`) to read `e.message` and `e.name`; `String(e)` and `` `${e}` `` give `"Name: message"`
+  (just `"Name"` when the message is empty). The error classes are all one type, `Error` (`const t: TypeError` is an
+  `Error`); `e.message = s` and `e.name = s` of a variable holding an Error change it (VM 0.1.3). Compare caught values with `===`, rethrow them with `throw e`.
   `console.log(e)` is rejected (Node.js prints a stack trace there); `e.stack` is not supported.
 - `try { } finally { }` and `try { } catch { } finally { }`: the finally block runs when the try block (and the
   catch block) completes normally, by `return`, `break` or `continue`, and when a catchable error leaves it (the
@@ -324,10 +341,19 @@ try {
   other parameters is a compile error (as in TypeScript). A default value may refer to earlier parameters.
 - A local function value may call itself (`const f = (n: number): number => ... f(n - 1)`) when its type is known
   without its initializer (typed parameters and a return type, or an annotation); so may a named function
-  expression through its name (`function f(n: number): number { ... f(n - 1) ... }`).
+  expression through its name (`function f(n: number): number { ... f(n - 1) ... }`). Such function values of a
+  block may also call the ones declared after them (`const isEven = ... isOdd(k - 1); const isOdd = ...`); calling one
+  before its declaration ran throws a `ReferenceError`, as in JavaScript. A nested function declaration that reads a
+  `let` / `const` of its block declared before the function may be called before that declaration runs: that also
+  throws a `ReferenceError`. A name used before its declaration later in the same block (also inside a closure
+  there) is a compile error: JavaScript would read the later variable, never an outer one of the same name.
 - Classes: fields (optionally initialized, types can be inferred), constructor parameter properties (`constructor(public x: number)`), methods, static fields/methods,
   single inheritance with `extends` (the first statement of a derived class constructor must be `super(...)`; if the constructor is omitted, the superclass constructor parameters are inherited automatically),
-  `super.method()`, `implements` (checked structurally), `instanceof`. A method override may have fewer parameters
+  `super.method()`, `implements` (checked structurally; an optional property of the interface that the class does not
+  declare is undefined through the interface and not an own property until it is set: VM 0.1.3), `instanceof`. An
+  interface property holding a function (also an optional method `m?(): T`) is implemented by a class property
+  (`m = () => ...`), not a method. A subclass may declare a field of its base class again, with its type (its
+  initializer runs after the base class's). A method override may have fewer parameters
   and a return type assignable to the overridden method's (a subclass of its class), with the same representations
   (the overridden method's other parameters are passed and ignored). A method returning `this` gives the receiver's
   class at a call. `declare x: T` declares a field set elsewhere (also an inherited field, with its type).
@@ -459,7 +485,10 @@ The following behave the same as JavaScript (verified by differential testing ag
 - **Array**: `length push pop shift unshift at slice splice concat indexOf lastIndexOf includes join reverse fill sort
   map filter forEach reduce reduceRight some every find findIndex findLast findLastIndex flatMap flat`
   (`flat(depth)` with a constant depth, an integer literal or `Infinity`), `Array.from` (an iterable or
-  `{ length: n }, fn`), `Array.of`, `new Array<T>(n)`, writable `length`. The default `sort()` sorts as strings (same as JS); sorting is stable.
+  `{ length: n }, fn`), `Array.of`, `new Array<T>(n)` (also `Array<T>(n)`, and `new Array(a, b)` / `new Array("x")`
+  for an array of these elements), writable `length`. The default `sort()` sorts as strings (same as JS); sorting is stable.
+  `push` and `unshift` take several and spread arguments, `includes` a start index; an optional argument of a
+  built-in method may be `undefined` (or a value that may be undefined), meaning what it means in JavaScript.
   **Out-of-bounds reads are runtime errors** (JS returns `undefined`); writing at index `length` appends.
 - **Map / Set**: `size get set has delete clear forEach keys values entries`, iteration, spread, copy construction.
   `keys()`, `values()` and `entries()` give a copy of the elements (not a live iterator), so they are accepted only
@@ -640,6 +669,11 @@ or host function that was running (or that called back into the script, like `Ar
 | A `declare` field that is never assigned | Not a property | A property with the zero value of its type |
 | `typeof x` where `x` has type `never` (an `assertNever(x)` argument: a number cast to an enum it is not a member of) | The value's type (`"number"`) | `"object"` (the value itself is kept: printing it shows the number) |
 | `Object.freeze(obj)` | Later writes throw a `TypeError` (strict mode) | Writes are not stopped (a frozen array's type is `readonly T[]`, as in TypeScript, so writes through the result do not compile) |
+| An optional interface property that a class does not declare, written later through the interface | Added as the last own property of the instance | Kept at the position of the class that implements the interface (before the properties of its subclasses) in `Object.keys`, `JSON.stringify` and `console.log` |
+| `structuredClone` of a class instance held through an interface type | A plain object with its own properties | A catchable `DataCloneError` (class instances cannot be cloned; the compiler rejects it when the static type is the class) |
+| An array of a subclass used as an array of its base class and given a base class instance (TypeScript's unsound array covariance) | Later reads see the base class instance | A run-time error when the element is used as the subclass |
+| `sort(cmp)` with an inconsistent comparator (it returns `NaN`, or contradicts itself) | The order V8's TimSort gives | A stable merge sort's order (the same for consistent comparators) |
+| `parseInt` of a value above 2^53 in a radix that is not 10 or a power of two | V8 combines 32-bit chunks with `result * multiplier + part`, which the C++ compiler fuses on arm64 but not on x64: the last digits depend on the platform | One rounding (fused), on every platform: the results of Node.js on arm64 |
 | `JSON.parse(text) as T` | Properties in the order of the text | Properties in the order of `T` (the layout of an object is fixed by its type) |
 | Callbacks of the methods of a typed array other than `Uint8Array` (`forEach`, `map`, `filter`, `reduce`, ...) | See writes made while they run | Get the elements as they were when the method was called (`for...of` sees writes) |
 | `arr.map(f)` where `f` shortens `arr` | The result keeps the original length (holes) | The result has the elements that were mapped |

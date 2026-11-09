@@ -140,8 +140,25 @@ struct Stringifier {
     VM::TempRoot keep(vm, o);  // a getter (script code) may make it unreachable while it is written
     std::u16string inner = indent + gap;
     StrObj *en, *em;
-    if (vm.errorParts(o, &en, &em)) {  // an Error has no enumerable properties: "{}" as in JavaScript
-      out += u"{}";
+    if (vm.errorParts(o, &en, &em)) {
+      // an Error has no enumerable properties ("{}" as in JavaScript), except a name assigned to it, or a
+      // message assigned when it had none (own properties then: Obj::flags bits 12 / 13)
+      out += u'{';
+      bool any = false;
+      auto prop = [&](const char16_t* k, StrObj* v) {
+        if (any) out += u',';
+        nl(inner);
+        std::u16string key(k);
+        quoteJson(out, key.data(), key.size());
+        out += gap.empty() ? u":" : u": ";
+        std::u16string sv = strU16(v);
+        quoteJson(out, sv.data(), sv.size());
+        any = true;
+      };
+      if (o->flags & 0x1000) prop(u"name", en);
+      if (o->flags & 0x2000) prop(u"message", em);
+      if (any) nl(indent);
+      out += u'}';
       stack.erase(o);
       depth--;
       return true;
@@ -222,7 +239,7 @@ struct Stringifier {
     stack.erase(o);
     depth--;
     checkOut();
-    if (out.size() > 0x3FFFFFFF) vm.error("RangeError: invalid string length");
+    if (out.size() > 0x3FFFFFFF) vm.error("RangeError: Invalid string length");
     return true;
   }
 };

@@ -170,9 +170,10 @@ double VM::randomDouble() {
 
 // ------------------------------------------------------------------ errors
 // Errors that Node.js throws as catchable exceptions carry the JavaScript error name as a message
-// prefix ("RangeError: invalid count value: -1"); see docs/SPEC.md (try/catch).
+// prefix ("RangeError: Invalid count value: -1"); see docs/SPEC.md (try/catch).
 static bool jsErrorName(const std::string& msg, std::string& name, std::string& text) {
-  static const char* const kNames[] = {"Error", "TypeError", "RangeError", "SyntaxError", "URIError", "AggregateError"};
+  static const char* const kNames[] = {"Error", "TypeError", "RangeError", "SyntaxError", "URIError", "AggregateError",
+                                      "DataCloneError"};
   for (const char* n : kNames) {
     size_t l = strlen(n);
     if (msg.size() > l + 1 && msg.compare(0, l, n) == 0 && msg[l] == ':' && msg[l + 1] == ' ') {

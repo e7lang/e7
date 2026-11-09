@@ -5,6 +5,7 @@
 // arguments gets an instance: a copy of the declaration's syntax tree, checked in a scope where the
 // type parameters are aliases of the concrete types. Instances are ordinary functions, classes and
 // types, so the code generator and the VM need nothing new.
+#include <algorithm>
 #include <cstdio>
 
 #include "checker.h"
@@ -488,8 +489,48 @@ bool Checker::inferCall(GenericSym* g, std::vector<Param>* params, TypeNode* ret
   if (expected && ret) {
     std::vector<Type*> fromRet(np, nullptr);
     inferMatch(g, fromRet, ret, expected);
-    for (size_t i = 0; i < np; i++)
-      if (!out[i]) out[i] = fromRet[i];
+    for (size_t i = 0; i < np; i++) {
+      if (!out[i]) { out[i] = fromRet[i]; continue; }
+      // const d: Dir = id("n"): a literal type the result is expected to have, when every argument
+      // given for a parameter of type T is a constant of it (tsc keeps the literal type "n")
+      Type* want = fromRet[i];
+      if (!want || want == out[i] || !params || !baseOf(want)->lit || baseLit(baseOf(want)) != baseOf(out[i])) continue;
+      bool fits = false, other = false;
+      std::vector<Expr*> recheck;  // array literals of constants, checked again as arrays of the literal type
+      const std::string& tn = (*g->params)[i].name;
+      auto isT = [&](TypeNode* n) { return n && n->k == TNK::Ref && n->name == tn && n->args.empty(); };
+      for (size_t k = 0; k < args.size() && k < params->size(); k++) {
+        TypeNode* pn = (*params)[k].type;
+        if (!pn || (*params)[k].rest || !mentionsName(pn, tn)) continue;
+        if (isT(pn)) {
+          Type* c = constLit(args[k]);
+          if (c && assignable(c, want)) fits = true;
+          else other = true;
+          continue;
+        }
+        // first(["s", "n"]) for xs: T[]
+        Expr* lit = strip(args[k]);
+        bool arrT = (pn->k == TNK::Array && isT(pn->elem)) ||
+                    (pn->k == TNK::Ref && (pn->name == "Array" || pn->name == "ReadonlyArray") && pn->args.size() == 1 && isT(pn->args[0]));
+        bool ok = arrT && lit->k == EK::Array && !lit->list.empty();
+        for (Expr* x : arrT ? lit->list : std::vector<Expr*>{}) {
+          Expr* sx = strip(x);
+          Type* c = sx->k == EK::Str || sx->k == EK::Num || sx->k == EK::Bool ? constLit(sx) : nullptr;
+          ok = ok && c && assignable(c, want);
+        }
+        if (ok) { fits = true; recheck.push_back(lit); }
+        else other = true;
+      }
+      if (fits && !other) {
+        out[i] = want;
+        for (Expr* lit : recheck) {
+          lit->type = nullptr;
+          for (Expr* x : lit->list) x->type = nullptr;
+        }
+        for (size_t k = 0; k < args.size(); k++)
+          if (std::find(recheck.begin(), recheck.end(), strip(args[k])) != recheck.end()) args[k]->type = nullptr;
+      }
+    }
   }
   int r = completeTypeArgs(g, out, l);
   if (r >= 0)

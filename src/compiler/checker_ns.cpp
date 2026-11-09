@@ -1,4 +1,5 @@
 // Checker: builtin namespaces (Math, JSON, ...), global builtin functions, `new`.
+#include <algorithm>
 #include <set>
 #include <cmath>
 
@@ -173,7 +174,11 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
         if (a->k == EK::Spread) {
           Type* st = check(a->a, T.array(num));
           iterUse(a->a);
-          if (st != T.array(num)) return errT(a->loc, "spread argument must be number[]");
+          if (st->t == TT::Tuple)  // Math.max(...t) of a tuple of numbers
+            if (Expr* arr = tupleAsArray(a->a, st)) { a->a = arr; st = arr->type; }
+          // number[] (also readonly, or of numeric literal types: the same values)
+          if (st != T.array(num) && !(st->t == TT::Array && st->elem && baseLit(st->elem) == num))
+            return errT(a->loc, "spread argument must be number[]");
           a->type = st;
           continue;
         }
@@ -203,7 +208,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       return num;
     }
     if (name == "parseInt") {
-      if (args.size() == 1) args.push_back(N(0));
+      optionalArg(args, 1, N(0), N(0));
       if (!argsMatch(e, args, {str, num}, 2, name.c_str())) return T.unknown();
       nat("Global.parseInt");
       return num;
@@ -323,6 +328,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
   }
   if (M == "Promise") {
     Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : nullptr;
+    if (e->typeArgs.size() == 1) expElem = resolveType(e->typeArgs[0]);  // Promise.resolve<T>(...)
     e->intrinsic = IN_PROMISE_STATIC;
     e->raw = name;
     if (isCall && name == "resolve") {
@@ -343,6 +349,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       if (!argsMatch(e, args, {T.error()}, 1, "Promise.reject")) return T.unknown();
       e->intrinsic = IN_PROMISE_STATIC;
       e->raw = name;
+      if (e->typeArgs.size() == 1) return T.promise(resolveType(e->typeArgs[0]));  // Promise.reject<T>(err)
       return T.promise(expElem ? expElem : T.voidT());
     }
     if (isCall && (name == "all" || name == "allSettled" || name == "any" || name == "race")) {
@@ -523,6 +530,8 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       if (args.size() != 1) return errT(l, "Array.from expects one argument");
       Type* t = check(args[0], nullptr);
       iterUse(args[0]);
+      if (t->t == TT::Tuple)  // Array.from(t) of a tuple whose elements have one type: a copy of them
+        if (Expr* arr = tupleAsArray(args[0], t)) { args[0] = arr; t = arr->type; }
       Type* et = elemTypeForIter(args[0], t, args[0]->loc);
       if (t->t == TT::Map) e->cls = tupleRecord(et);
       e->intrinsic = IN_ARRAY_FROM;
@@ -531,7 +540,8 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
     if (isCall && name == "of") {
       Expr* arr = P.arena.expr(EK::Array, l);
       arr->list = args;
-      Type* t = check(arr, expected);
+      // Array.of<T>(...): an array of T
+      Type* t = check(arr, e->typeArgs.size() == 1 ? T.array(resolveType(e->typeArgs[0])) : expected);
       args.clear();
       args.push_back(arr);
       e->intrinsic = IN_NUMBER;
@@ -675,7 +685,7 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     return t0;
   }
   if (id == "parseInt") {
-    if (args.size() == 1) args.push_back(N(0));
+    optionalArg(args, 1, N(0), N(0));  // (a radix that is undefined: 0, decided by the text)
     if (!argsMatch(e, args, {str, num}, 2, "parseInt")) return T.unknown();
     nat("Global.parseInt");
     return num;
@@ -782,6 +792,11 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     e->intrinsic = IN_BIGINT;
     return T.bigint();
   }
+  if (id == "Array()" && strip(e->a)->k == EK::Ident) {
+    // Array<T>(n) / Array(a, b): the same as new Array(...)
+    e->k = EK::New;
+    return checkNew(e, expected);
+  }
   if (id == "Array()" || id == "Map()" || id == "Set()" || id == "Uint8Array()" || id == "Error()")
     return errT(l, "'" + id.substr(0, id.size() - 2) + "' must be called with 'new'");
   // ------------------------------------------------------------ e7:test
@@ -825,6 +840,7 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
     if (n == "laterReject") {
       if (args.size() != 1) return errT(l, "'laterReject' expects one argument (an Error)");
       Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : T.voidT();
+      if (e->typeArgs.size() == 1) expElem = resolveType(e->typeArgs[0]);  // laterReject<T>(err)
       if (!argsMatch(e, args, {T.error()}, 1, "laterReject")) return T.unknown();
       args.push_back(N((double)(expElem->t == TT::Void ? VT_REF : vtOf(expElem))));
       args.back()->type = T.intT(VT_I64);
@@ -1124,6 +1140,36 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
       // checked once (checking an expression again is not idempotent), with the entries array as the
       // contextual type; the result may also be a Map (copy constructor)
       Type* want = kt ? T.array(T.tuple({kt, vt})) : nullptr;
+      Expr* lit = strip(args[0]);
+      if (!kt && lit->k == EK::Array && !lit->list.empty()) {
+        // new Map([["a", 1], ["b", 2]]): the key and value types of the entry literals
+        bool pairs = true;
+        for (Expr* x : lit->list) {
+          Expr* p2 = strip(x);
+          pairs = pairs && x->k != EK::Spread && p2->k == EK::Array && p2->list.size() == 2 &&
+                  p2->list[0]->k != EK::Spread && p2->list[1]->k != EK::Spread;
+        }
+        if (pairs) {
+          Type *k0 = nullptr, *v0 = nullptr;
+          for (Expr* x : lit->list) {
+            Expr* p2 = strip(x);
+            Type* a = widen(check(p2->list[0], nullptr));
+            p2->list[0] = wrapConv(p2->list[0], ConvKind::None, a);  // (checked already: not checked again)
+            k0 = k0 ? unify(k0, a, p2->list[0]->loc, "Map keys") : a;
+            Expr* vx = strip(p2->list[1]);
+            if (vx->k == EK::Array && vx->list.empty()) continue;  // [] takes the other values' type
+            Type* b = widen(check(p2->list[1], nullptr));
+            p2->list[1] = wrapConv(p2->list[1], ConvKind::None, b);
+            v0 = v0 ? unify(v0, b, p2->list[1]->loc, "Map values") : b;
+          }
+          if (k0 && v0 && k0->t != TT::Unknown && v0->t != TT::Unknown && k0->t != TT::Null && k0->t != TT::Undefined &&
+              v0->t != TT::Null && v0->t != TT::Undefined) {
+            kt = k0;
+            vt = v0;
+            want = T.array(T.tuple({kt, vt}));
+          }
+        }
+      }
       Type* at = check(args[0], want);
       iterUse(args[0]);
       if (at->t == TT::Map) {
@@ -1159,6 +1205,8 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
       // type; the result may also be a Set (copy constructor)
       Type* at = check(args[0], et ? T.array(et) : nullptr);
       iterUse(args[0]);
+      if (at->t == TT::Tuple)  // new Set(t) of a tuple whose elements have one type
+        if (Expr* arr = tupleAsArray(args[0], at)) { args[0] = arr; at = arr->type; }
       if (at->t == TT::Set) {
         if (et && at->elem != et) return errT(args[0]->loc, "Set type mismatch in copy constructor");
         e->intrinsic = IN_NATIVE_NORECV;
@@ -1179,8 +1227,23 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
   if (name == "Array") {
     Type* et = typeArg(0);
     if (!et && exp && exp->t == TT::Array) et = exp->elem;
+    // new Array(a, b, ...) and new Array(x) of a non-number x: an array of these elements
+    // (new Array(...xs): with one number in xs, JavaScript makes an array of that length)
+    for (Expr* a : args)
+      if (a->k == EK::Spread) return errT(a->loc, "new Array(...xs) is not supported (one number would be a length); use [...xs]");
+    bool elems = args.size() > 1;
+    if (args.size() == 1 && !elems) {
+      Type* at = check(args[0], et && et != num ? et : num);
+      elems = at->t != TT::Number && at->t != TT::Int && at->t != TT::Unknown;
+      if (elems) args[0] = wrapConv(args[0], ConvKind::None, at);  // (checked already: not checked again)
+    }
+    if (elems) {
+      e->k = EK::Array;
+      e->a = nullptr;
+      e->typeArgs.clear();
+      return check(e, et ? T.array(et) : expected);
+    }
     if (!et) return errT(l, "cannot infer Array element type; write new Array<T>(n)");
-    if (args.size() > 1) return errT(l, "use an array literal instead of new Array(a, b, ...)");
     if (args.size() == 1) {
       check(args[0], num);
       if (!coerce(args[0], num)) return T.unknown();
@@ -1254,7 +1317,8 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     nat("Error.newAggregate");
     return T.error();
   }
-  if (name == "Error" || name == "TypeError" || name == "RangeError" || name == "SyntaxError" || name == "URIError") {
+  if (name == "Error" || name == "TypeError" || name == "RangeError" || name == "SyntaxError" || name == "URIError" ||
+      name == "ReferenceError" || name == "EvalError") {
     Expr* cause = nullptr;
     if (args.size() == 2) {
       // new Error(message, { cause })

@@ -31,7 +31,9 @@ struct StrObj : Obj {
   const char16_t* chars() const { return reinterpret_cast<const char16_t*>(this + 1); }
 };
 
-// Obj::flags of an Array: an Error object, [name, message] (created only by the VM and the Error natives)
+// Obj::flags of an Array: an Error object, [name, message] (created only by the VM and the Error natives).
+// Bits 8-11: the error's class (index + 1) once its name was changed; bit 12: a name assigned (an own
+// enumerable property); bit 13: a message assigned to an error without one.
 constexpr uint16_t kArrFlagError = 2;
 
 struct ArrObj : Obj {

@@ -33,6 +33,9 @@ Scope* Checker::pushScope(bool fnBoundary) {
 void Checker::popScope() { scope = scope->parent; }
 
 void Checker::declare(const std::string& name, Sym* s, Loc l) {
+  Scope* saved = scope;
+  while (scope->declareUp && scope->parent) scope = scope->parent;  // (one scope for all clauses of a switch)
+  struct Restore { Scope*& sc; Scope* v; ~Restore() { sc = v; } } restore{scope, saved};
   if (scope->names.count(name)) {
     // only `export default` declares "default" (a reserved word)
     err(l, name == "default" ? std::string("a module cannot have more than one default export")
@@ -41,6 +44,7 @@ void Checker::declare(const std::string& name, Sym* s, Loc l) {
   }
   s->loc = l;
   scope->names[name] = s;
+  scope->pending.erase(name);
 }
 
 Sym* Checker::lookup(const std::string& name, bool* crossedFn) {
@@ -50,6 +54,12 @@ Sym* Checker::lookup(const std::string& name, bool* crossedFn) {
     if (it != s->names.end()) {
       if (crossedFn) *crossedFn = crossed;
       return it->second;
+    }
+    // a let / const declared later in this block: the name means it (not an outer one), before its
+    // declaration ran
+    if (!s->pending.empty() && s->pending.count(name)) {
+      pendingHit_ = name;
+      return nullptr;
     }
     if (s->fnBoundary) crossed = true;
   }
@@ -318,11 +328,23 @@ void Checker::markCapture(VarSym* v) {
     if (f == v->owner) { ancestor = true; break; }
   if (!ancestor) return;
   v->captured = true;
+  bool hoisted = false;  // (read by a nested function declaration)
   for (FuncSym* f = curFn; f && f != v->owner; f = f->parent) {
+    hoisted = hoisted || f->selfVar;
     if (!f->captureIndex.count(v)) {
       f->captureIndex[v] = (int)f->captures.size();
       f->captures.push_back(v);
     }
+  }
+  if (v->initFlag && !hoisted) markCapture(v->initFlag);  // (a switch clause variable: checked everywhere)
+  if (hoisted && v->blockVar && !v->isParam) {
+    if (!v->initFlag) {
+      v->initFlag = P.make<VarSym>();
+      v->initFlag->name = v->name + "$init";
+      v->initFlag->type = T.boolean();
+      v->initFlag->owner = v->owner;
+    }
+    markCapture(v->initFlag);
   }
 }
 
@@ -1108,7 +1130,9 @@ Type* Checker::resolveNamedType(const std::string& name, const std::vector<TypeN
   }
   if (name == "TextEncoder") { noArgs(); return T.textEncoder(); }
   if (name == "TextDecoder") { noArgs(); return T.textDecoder(); }
-  if (name == "Error" || name == "AggregateError") { noArgs(); return T.error(); }
+  // (the error classes are one type in e7: an Error, whose name says which)
+  if (name == "Error" || name == "AggregateError" || name == "TypeError" || name == "RangeError" || name == "SyntaxError" ||
+      name == "URIError" || name == "ReferenceError" || name == "EvalError") { noArgs(); return T.error(); }
   if (name == "TemplateStringsArray") { noArgs(); return T.array(T.string(), true); }
   if (name == "Date") { noArgs(); return T.date(); }
   if (name == "RegExp" || name == "RegExpMatchArray" || name == "RegExpExecArray") return errT(l, kNoRegExp);
@@ -1405,6 +1429,7 @@ void Checker::resolveClass(ClassSym* c) {
       resolveClass(pt->cls);
       c->parent = pt->cls;
       c->fields = pt->cls->fields;
+      c->presence = pt->cls->presence;  // (its instances have the base class's absent fields)
       c->vtable = pt->cls->vtable;
       c->fieldIdx = pt->cls->fieldIdx;
       c->methodIdx = pt->cls->methodIdx;
@@ -1462,6 +1487,21 @@ void Checker::resolveClass(ClassSym* c) {
   auto addField = [&](const std::string& name, Type* t, Expr* init, bool optional, Loc l, bool readonly, bool undefOk) {
     if (name[0] == '#' && c->fieldIdx.count(name) && c->fields[c->fieldIdx[name]].owner != c) {
       err(l, "private field '" + name + "' is also declared by a base class; e7 needs distinct private names in a class hierarchy");
+      return;
+    }
+    if (auto fi = c->fieldIdx.find(name); fi != c->fieldIdx.end() && c->fields[fi->second].owner != c && name[0] != '#') {
+      // a field of the base class declared again (class C extends A { name = "C" }): the same property,
+      // which C's initializer sets after A's (with the type it has: its representation is fixed)
+      auto& f = c->fields[fi->second];
+      if (t != f.type) {
+        err(l, "field '" + name + "' must have the type of the inherited field ('" + typeName(f.type) + "') in e7 (the field's representation is fixed)");
+        return;
+      }
+      f.init = init;
+      f.owner = c;
+      f.loc = l;
+      f.readonly = readonly;
+      f.absent = false;  // (an absent interface property of the base class: declared here)
       return;
     }
     if (c->fieldIdx.count(name) || c->methodIdx.count(name) || c->privateMethods.count(name)) {
@@ -1701,6 +1741,9 @@ void Checker::resolveClass(ClassSym* c) {
       if (base == ov) continue;
       resolveSig(base);
       resolveSig(ov);
+      if (ov->inferRet && !ov->checked) { ov->retInferred = true; checkFunction(ov); }  // (its return type, inferred from its body)
+      if (base->inferRet && !base->checked) checkFunction(base);
+
       if (base->type && ov->type && base->type != ov->type && ov->type->ret && base->type->ret) {
         // a compatible override (as TypeScript allows): fewer parameters (the others are passed and
         // ignored) with the same representations, and a return type assignable to the overridden one's
@@ -1709,7 +1752,11 @@ void Checker::resolveClass(ClassSym* c) {
         if (ot->ret->t == TT::Class) resolveClass(ot->ret->cls);  // its parents decide the assignability
         bool ok = !base->hasDefaults && !ov->hasDefaults && !ot->restParam && !bt->restParam &&
                   ot->params.size() <= bt->params.size() + 0 && kindOf(ot->ret) == kindOf(bt->ret) &&
-                  isBoxedOptional(ot->ret) == isBoxedOptional(bt->ret) && assignable(ot->ret, bt->ret);
+                  isBoxedOptional(ot->ret) == isBoxedOptional(bt->ret) &&
+                  (assignable(ot->ret, bt->ret) ||
+                   // (a Promise<string> for a Promise<string | null>: the values are held the same way)
+                   (ot->ret->t == TT::Promise && bt->ret->t == TT::Promise && kindOf(ot->ret->elem) == kindOf(bt->ret->elem) &&
+                    isBoxedOptional(ot->ret->elem) == isBoxedOptional(bt->ret->elem) && assignable(ot->ret->elem, bt->ret->elem)));
         for (size_t i = 0; ok && i < ot->params.size(); i++) {
           Type* a = ot->params[i];
           Type* b = bt->params[i];
@@ -1757,12 +1804,43 @@ void Checker::resolveClass(ClassSym* c) {
       err(d->loc, "non-abstract class '" + c->name + "' does not implement inherited abstract property '" + ap.first +
                       "' (declare it as a field)");
   }
+  // implements: an optional property of the interface that the class does not declare is an absent
+  // field (class Fish implements Animal { name = "x" } with Animal's legs?: number: read through the
+  // interface, fish.legs is undefined; it is not an own property until it is written)
+  if (!c->isRecord && !holder)
+    for (Type* it : c->implements) {
+      if (it->t != TT::Object || !it->shape) continue;
+      for (auto& p : it->shape->props) {
+        if (!p.optional || c->fieldIdx.count(p.name) || c->methodIdx.count(p.name) || c->getterSlot(p.name) >= 0 ||
+            c->setterSlot(p.name) >= 0 || c->abstractProp(p.name) || p.name[0] == '#')
+          continue;
+        Type* ft = p.type->t == TT::Optional ? p.type : T.optional(p.type, false, true);
+        c->fieldIdx[p.name] = (int)c->fields.size();
+        c->fields.push_back({p.name, ft, nullptr, true, c, d->loc, p.readonly, p.undefOk, true});
+        c->presence = true;
+      }
+    }
   // implements: structural check
   for (Type* it : c->implements) {
     if (!structurallyAssignable(c->type, it)) {
       std::string why;
       for (auto& p : it->shape->props) {
-        if (c->fieldIdx.count(p.name) || c->abstractProp(p.name)) continue;
+        if (auto fi = c->fieldIdx.find(p.name); fi != c->fieldIdx.end()) {
+          Type* ft = c->fields[fi->second].type;
+          if (ft != p.type && p.type->t == TT::Optional && baseOf(p.type) == baseOf(ft) && ft->t != TT::Optional) {
+            why = ": property '" + p.name + "' is optional in the interface; e7 stores it the way the interface reads it, so declare it as '" +
+                  p.name + "?: " + typeName(ft) + "' in the class";
+            break;
+          }
+          continue;
+        }
+        if (c->abstractProp(p.name)) continue;
+        if (c->methodIdx.count(p.name) && baseOf(p.type)->t == TT::Func) {
+          why = ": '" + p.name + "' is a method of the class, and the interface's '" + p.name + "' is " +
+                (p.optional ? "an optional method (a property that may hold a function)" : "a property holding a function") +
+                "; e7 reads it as a property: declare it in the class as '" + p.name + " = (...) => ...'";
+          break;
+        }
         if (c->getterSlot(p.name) >= 0)
           why = ": property '" + p.name + "' is an accessor in the class; e7 reads interface properties as fields, so declare it in the interface as 'get " +
                 p.name + "(): " + typeName(p.type) + "'";
@@ -1821,11 +1899,19 @@ void Checker::resolveSig(FuncSym* f) {
         rest = true;
       }
       bool isOpt = p.optional || p.init;
+      if (p.init && !p.optional && t && t->t == TT::Optional && t->hasUndef) {
+        // f(x: T | undefined = d, y: U): an argument is needed for x (it may be undefined: then d)
+        bool laterRequired = false;
+        for (size_t k = i + 1; k < params->size(); k++)
+          laterRequired = laterRequired || (!(*params)[k].optional && !(*params)[k].init && !(*params)[k].rest);
+        if (laterRequired) isOpt = false;
+      }
       if (p.init) f->hasDefaults = true;
       if (p.optional && p.init) err(p.loc, "parameter cannot be optional and have an initializer");
       if (p.optional && t) t = T.optional(t, false, true);
       if (isOpt) seenOptional = true;
       else if (seenOptional && !p.rest) err(p.loc, "a required parameter cannot follow an optional parameter");
+      if (!isOpt && p.init) seenOptional = false;  // (x: T | undefined = d before a required parameter)
       ps.push_back(t);
       opt.push_back(isOpt);
     }

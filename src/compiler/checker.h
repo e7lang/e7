@@ -32,6 +32,8 @@ struct Scope {
   bool fnBoundary = false;
   std::unordered_map<std::string, Sym*> names;
   std::unordered_map<std::string, Type*> narrow;  // path key -> narrowed type (nullptr = none)
+  std::set<std::string> pending;  // let / const / class names of this block not declared yet (TDZ)
+  bool declareUp = false;  // a switch clause: its declarations belong to the switch's scope
 };
 
 class Checker {
@@ -228,6 +230,14 @@ class Checker {
   void checkBlockStmts(std::vector<Stmt*>& stmts);
   void checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel);
   void bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc l);
+  void narrowDeclInit(VarDecl& d);
+  Type* knownFnType(VarDecl& d, Type* declared);
+  std::set<VarDecl*> preBound;
+  std::string pendingHit_;
+  Expr* stmtExpr_ = nullptr;  // the expression of the expression statement being checked (its value is unused)  // the name a lookup found declared later in its block  // const f = <arrow> declared when its block was entered
+  void noteConstArrow(VarDecl& d, bool isConst);
+  FuncSym* predCallee(Expr* call);
+  std::unordered_map<VarSym*, FuncSym*> constArrowFns;  // const f = (...) => ...: the arrow's function
   void hoistFunctions(std::vector<Stmt*>& stmts);
   void checkClassBodies(ClassSym* c);
   bool exits(Stmt* s);
@@ -276,6 +286,7 @@ class Checker {
   bool spreadExact(const std::string& name, Type* t, bool absentIfUndef, Type* exp, Loc loc);
   void checkArgs(Expr* call, Type* fnType, std::vector<Expr*>& args, size_t skip = 0, FuncSym* fs = nullptr);
   Expr* constDefault(Expr* init);
+  void optionalArg(std::vector<Expr*>& as, size_t i, Expr* d, Expr* u);
   void expandSpreads(std::vector<Expr*>& args);
   Type* checkBuiltinCall(Expr* e, const std::string& id, Type* expected);
   Type* checkMethodCall(Expr* e, Expr* member, Type* expected);
@@ -289,13 +300,21 @@ class Checker {
   struct Fact { std::string key; Type* t; };
   void joinBranchNarrowing(Stmt* s, const std::vector<Fact>& tf, const std::vector<Fact>& ff);
   void factsFrom(Expr* cond, bool whenTrue, std::vector<Fact>& out);
+  std::string chainKey(Expr* e);
+  void chainFacts(Expr* p, std::vector<Fact>& out);
   void applyFacts(const std::vector<Fact>& facts);
+  // copies what an inner (popped) scope narrowed into the current scope
+  void keepNarrowing(Scope* inner) {
+    for (auto& kv : inner->narrow) scope->narrow[kv.first] = kv.second;
+  }
 
   // builtin helpers
   bool argsMatch(Expr* call, std::vector<Expr*>& args, const std::vector<Type*>& params, size_t minArgs,
                  const char* fname, bool report = true);
   std::string kindSuffix(Type* t);
   Type* elemTypeForIter(Expr* e, Type* t, Loc l);
+  Type* tupleElemType(Type* t);
+  Expr* tupleAsArray(Expr* x, Type* t);
 
  public:
   std::vector<ClassSym*> recordClasses;
