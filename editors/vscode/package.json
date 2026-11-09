@@ -2,7 +2,7 @@
   "name": "e7",
   "displayName": "E7 Language",
   "description": "E7 (strict TypeScript subset) diagnostics, debugger, run and bytecode commands, powered by the E7 compiler and VM on WebAssembly",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "e7lang",
   "license": "MIT",
   "icon": "images/icon.png",
