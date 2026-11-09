@@ -293,6 +293,9 @@ Type* Checker::unify(Type* a, Type* b, Loc l, const char* what) {
   }
   if (assignable(a, b)) return b;
   if (assignable(b, a)) return a;
+  // literal types of one base ("red" and "green" of an `as const` tuple): their union
+  if (a->lit && b->lit && a->litBase == b->litBase)
+    if (Type* u = T.litUnion(a, b)) return u;
   return errT(l, std::string("incompatible types in ") + what + ": '" + typeName(a) + "' and '" + typeName(b) + "'");
 }
 
@@ -506,7 +509,46 @@ void Checker::hoistFunctions(std::vector<Stmt*>& stmts) {
 
 void Checker::checkBlockStmts(std::vector<Stmt*>& stmts) {
   hoistFunctions(stmts);
+  // const f = (x: T): R => ... in a function's block: declared on entry, so that the function values
+  // before it may call it (const isEven = ... isOdd(k - 1); const isOdd = ...), as in JavaScript
+  bool topLevel = curFn && curFn->isInit && scope && scope->parent == globalScope;
+  if (curFn && !topLevel)
+    for (Stmt* s : stmts)
+      if (s->k == SK::Var && s->isConst)
+        for (auto& d : s->decls) {
+          if (d.isArrayPat || d.isObjPat || !d.init || d.name.empty() || d.generic || scope->names.count(d.name)) continue;
+          Expr* ai = d.init;
+          while (ai->k == EK::Paren) ai = ai->a;
+          if (ai->k != EK::Arrow || !ai->typeParams.empty()) continue;
+          Type* ft = knownFnType(d, d.type ? resolveType(d.type) : nullptr);
+          if (!ft) continue;
+          bindPattern(d, ft, true, false, d.loc);
+          if (d.sym) d.sym->tdzLocal = true;
+          preBound.insert(&d);
+        }
   for (Stmt* s : stmts) checkStmt(s);
+}
+
+// the type of `const f = <arrow>` known without checking the arrow: an annotation, or typed parameters
+// and a return type (null otherwise)
+Type* Checker::knownFnType(VarDecl& d, Type* declared) {
+  Expr* ai = d.init;
+  while (ai && ai->k == EK::Paren) ai = ai->a;
+  if (!ai || ai->k != EK::Arrow || !ai->typeParams.empty()) return nullptr;
+  if (declared) return declared->t == TT::Func ? declared : nullptr;
+  if (!ai->retType) return nullptr;
+  std::vector<Type*> ps;
+  std::vector<bool> opt;
+  bool rest = false;
+  for (auto& p : ai->params) {
+    if (!p.type || p.init || p.pattern) return nullptr;
+    Type* pt = resolveType(p.type);
+    if (p.optional) pt = T.optional(pt, false, true);
+    ps.push_back(pt);
+    opt.push_back(p.optional);
+    rest = rest || p.rest;
+  }
+  return T.func(ps, resolveType(ai->retType), opt, rest);
 }
 
 // a switch over an enum value whose cases name every member of the enum (as tsc, exhaustive)
@@ -1080,28 +1122,10 @@ void Checker::checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel) {
   // is known without checking the initializer (an annotation, or an arrow with typed parameters and a return
   // type), the variable is in scope in the initializer; the closure captures it in a cell, as in JavaScript
   if (simple && !topLevel && d.init && !d.name.empty()) {
-    Expr* ai = d.init;
-    while (ai->k == EK::Paren) ai = ai->a;
-    Type* ft = nullptr;
-    if (ai->k == EK::Arrow && ai->typeParams.empty()) {
-      if (declared) ft = declared->t == TT::Func ? declared : nullptr;
-      else if (ai->retType) {
-        std::vector<Type*> ps;
-        std::vector<bool> opt;
-        bool rest = false, ok = true;
-        for (auto& p : ai->params) {
-          if (!p.type || p.init || p.pattern) { ok = false; break; }
-          Type* pt = resolveType(p.type);
-          if (p.optional) pt = T.optional(pt, false, true);
-          ps.push_back(pt);
-          opt.push_back(p.optional);
-          rest = rest || p.rest;
-        }
-        if (ok) ft = T.func(ps, resolveType(ai->retType), opt, rest);
-      }
-    }
+    Type* ft = knownFnType(d, declared);
     if (ft) {
-      bindPattern(d, ft, isConst, false, d.loc);
+      // (declared already when the block was entered: the functions before it may call it)
+      if (!preBound.erase(&d)) bindPattern(d, ft, isConst, false, d.loc);
       check(d.init, ft);
       coerce(d.init, ft);
       noteConstArrow(d, isConst);
@@ -1414,6 +1438,12 @@ void Checker::checkStmt(Stmt* s) {
           err(s->expr->loc, "type '" + typeName(it) + "' is an async iterable: use 'for await'");
           et = T.unknown();
         } else {
+          // a tuple whose elements have one type: over a copy of them as an array
+          if (it->t == TT::Tuple)
+            if (Expr* arr = tupleAsArray(s->expr, it)) {
+              s->expr = arr;
+              it = arr->type;
+            }
           et = elemTypeForIter(s->expr, it, s->expr->loc);
         }
       }

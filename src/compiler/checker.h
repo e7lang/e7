@@ -229,6 +229,8 @@ class Checker {
   void checkVarDecl(Stmt* s, VarDecl& d, bool isConst, bool topLevel);
   void bindPattern(VarDecl& d, Type* t, bool isConst, bool topLevel, Loc l);
   void narrowDeclInit(VarDecl& d);
+  Type* knownFnType(VarDecl& d, Type* declared);
+  std::set<VarDecl*> preBound;  // const f = <arrow> declared when its block was entered
   void noteConstArrow(VarDecl& d, bool isConst);
   FuncSym* predCallee(Expr* call);
   std::unordered_map<VarSym*, FuncSym*> constArrowFns;  // const f = (...) => ...: the arrow's function
@@ -306,6 +308,8 @@ class Checker {
                  const char* fname, bool report = true);
   std::string kindSuffix(Type* t);
   Type* elemTypeForIter(Expr* e, Type* t, Loc l);
+  Type* tupleElemType(Type* t);
+  Expr* tupleAsArray(Expr* x, Type* t);
 
  public:
   std::vector<ClassSym*> recordClasses;

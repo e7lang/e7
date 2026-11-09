@@ -1467,6 +1467,21 @@ void Checker::resolveClass(ClassSym* c) {
       err(l, "private field '" + name + "' is also declared by a base class; e7 needs distinct private names in a class hierarchy");
       return;
     }
+    if (auto fi = c->fieldIdx.find(name); fi != c->fieldIdx.end() && c->fields[fi->second].owner != c &&
+                                           !c->fields[fi->second].absent && name[0] != '#') {
+      // a field of the base class declared again (class C extends A { name = "C" }): the same property,
+      // which C's initializer sets after A's (with the type it has: its representation is fixed)
+      auto& f = c->fields[fi->second];
+      if (t != f.type) {
+        err(l, "field '" + name + "' must have the type of the inherited field ('" + typeName(f.type) + "') in e7 (the field's representation is fixed)");
+        return;
+      }
+      f.init = init;
+      f.owner = c;
+      f.loc = l;
+      f.readonly = readonly;
+      return;
+    }
     if (c->fieldIdx.count(name) || c->methodIdx.count(name) || c->privateMethods.count(name)) {
       err(l, "duplicate member '" + name + "' in class '" + c->name + "'");
       return;
@@ -1855,11 +1870,19 @@ void Checker::resolveSig(FuncSym* f) {
         rest = true;
       }
       bool isOpt = p.optional || p.init;
+      if (p.init && !p.optional && t && t->t == TT::Optional && t->hasUndef) {
+        // f(x: T | undefined = d, y: U): an argument is needed for x (it may be undefined: then d)
+        bool laterRequired = false;
+        for (size_t k = i + 1; k < params->size(); k++)
+          laterRequired = laterRequired || (!(*params)[k].optional && !(*params)[k].init && !(*params)[k].rest);
+        if (laterRequired) isOpt = false;
+      }
       if (p.init) f->hasDefaults = true;
       if (p.optional && p.init) err(p.loc, "parameter cannot be optional and have an initializer");
       if (p.optional && t) t = T.optional(t, false, true);
       if (isOpt) seenOptional = true;
       else if (seenOptional && !p.rest) err(p.loc, "a required parameter cannot follow an optional parameter");
+      if (!isOpt && p.init) seenOptional = false;  // (x: T | undefined = d before a required parameter)
       ps.push_back(t);
       opt.push_back(isOpt);
     }

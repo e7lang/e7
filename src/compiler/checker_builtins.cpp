@@ -623,6 +623,21 @@ Type* Checker::checkBuiltinMethod(Expr* e, Expr* m, Type* bt, Type* expected) {
     return errT(m->loc, std::string(isCall ? "method" : "property") + " '" + name + "' does not exist on type '" + typeName(bt) + "'" +
                             suggestMember(bt, name));
   };
+  // the array methods that do not change the array, on a tuple whose elements have one type: on a
+  // copy of its elements (v.map(f), COLORS.includes(c), pair.join("-"))
+  if (bt->t == TT::Tuple && isCall) {
+    static const char* const readers[] = {"map", "filter", "forEach", "some", "every", "find", "findIndex", "findLast",
+                                          "findLastIndex", "reduce", "reduceRight", "includes", "indexOf", "lastIndexOf",
+                                          "join", "slice", "at", "concat", "flatMap", "toSorted", "toReversed", "with",
+                                          "toSpliced", "toString", "flat"};
+    bool reader = false;
+    for (const char* x : readers) reader = reader || name == x;
+    if (reader)
+      if (Expr* arr = tupleAsArray(m->a, bt)) {
+        m->a = arr;
+        return checkBuiltinMethod(e, m, arr->type, expected);
+      }
+  }
   // readonly T[] / ReadonlyMap / ReadonlySet have no mutating methods (as in TypeScript)
   if (bt->ro && isCall) {
     static const char* const arrMut[] = {"push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin"};

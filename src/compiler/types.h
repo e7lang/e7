@@ -102,6 +102,7 @@ struct VarSym : Sym {
   bool captured = false;
   bool isParam = false;
   bool isThis = false;
+  bool tdzLocal = false;  // a local const f = <arrow> declared on entry to its block (null until its declaration runs)
   int paramIndex = -1;
   // lazily typed globals
   VarDecl* decl = nullptr;

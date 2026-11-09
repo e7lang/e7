@@ -1305,7 +1305,8 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     nat("Error.newAggregate");
     return T.error();
   }
-  if (name == "Error" || name == "TypeError" || name == "RangeError" || name == "SyntaxError" || name == "URIError") {
+  if (name == "Error" || name == "TypeError" || name == "RangeError" || name == "SyntaxError" || name == "URIError" ||
+      name == "ReferenceError" || name == "EvalError") {
     Expr* cause = nullptr;
     if (args.size() == 2) {
       // new Error(message, { cause })

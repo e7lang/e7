@@ -3259,6 +3259,19 @@ void Gen::readVar(VarSym* v, uint16_t dst, Type* want) {
       }
       emit(uget[K(st)], tgt, (uint16_t)ci->second);
     }
+    if (v->tdzLocal && v->captured && tgt != kNoReg) {
+      // a function value of the block called before its declaration ran: a ReferenceError, as in JavaScript
+      size_t m0 = mark();
+      Label* ok = newLabel();
+      jump(OP_JNOTNULLISH, tgt, ok);
+      uint16_t nm = temp(K_R), msg = temp(K_R), er = temp(K_R);
+      loadStr(nm, u"ReferenceError");
+      loadStr(msg, utf8ToUtf16("Cannot access '" + v->name + "' before initialization"));
+      callNative("Error.new", {nm, msg}, er, 'R');
+      emit(OP_THROW, er);
+      place(ok);
+      release(m0);
+    }
   }
   if (needUnbox) emit(kindOf(want) == K_F ? OP_UNBOX_F : OP_UNBOX_I, dst, tgt);
 }

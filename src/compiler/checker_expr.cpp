@@ -418,6 +418,32 @@ ClassSym* Checker::tupleRecord(Type* tt) {
 }
 
 // ------------------------------------------------------------------ arrays & objects
+// The one type of a tuple's elements: theirs when they all have it, or the union of their literal
+// types of one base (["n", "s"] as const: "n" | "s"); null otherwise
+Type* Checker::tupleElemType(Type* t) {
+  if (t->t != TT::Tuple || t->elems.empty()) return nullptr;
+  Type* r = t->elems[0];
+  for (Type* x : t->elems) {
+    if (x == r) continue;
+    if (!(x->lit && r->lit && x->litBase == r->litBase)) return nullptr;
+    r = T.litUnion(r, x);
+    if (!r) return nullptr;
+  }
+  return r;
+}
+
+// [...x] of a tuple x (checked already) whose elements have one type: an array of them (a copy)
+Expr* Checker::tupleAsArray(Expr* x, Type* t) {
+  Type* et = tupleElemType(t);
+  if (!et) return nullptr;
+  Expr* sp = P.arena.expr(EK::Spread, x->loc);
+  sp->a = wrapConv(x, ConvKind::None, t);
+  Expr* arr = P.arena.expr(EK::Array, x->loc);
+  arr->list.push_back(sp);
+  check(arr, T.array(et));
+  return arr;
+}
+
 Type* Checker::elemTypeForIter(Expr* e, Type* t, Loc l) {
   (void)e;
   switch (t->t) {
@@ -730,6 +756,7 @@ Type* Checker::checkArray(Expr* e, Type* expected) {
     } else {
       t = x->type ? x->type : check(x, elemExp);
       if (elemExp) coerce(x, elemExp);
+      else if (t->lit) t = widen(t);  // [a, b] of constants a = "x", b = "y": a string[] (as in tsc)
     }
     types.push_back(t);
   }
@@ -1523,7 +1550,8 @@ Type* Checker::checkBinary(Expr* e, Type* expected) {
     Expr* r = strip(e->b);
     if (r->k != EK::Ident) return errT(e->b->loc, "right side of 'instanceof' must be a class name");
     if ((r->raw == "Error" || r->raw == "TypeError" || r->raw == "RangeError" || r->raw == "SyntaxError" ||
-         r->raw == "URIError" || r->raw == "AggregateError") && (!lookup(r->raw) || lookup(r->raw)->k == SymK::Namespace)) {
+         r->raw == "URIError" || r->raw == "AggregateError" || r->raw == "ReferenceError" || r->raw == "EvalError") &&
+        (!lookup(r->raw) || lookup(r->raw)->k == SymK::Namespace)) {
       if (lt->t != TT::Caught && lt->t != TT::Error && lt->t != TT::Unknown && !(lt->t == TT::Optional && lt->elem->t == TT::Error))
         return errT(e->a->loc, "'instanceof " + r->raw + "' applies to a caught value or an Error");
       e->intrinsic = IN_ERROR_IS;
@@ -2423,7 +2451,12 @@ ClassSym* Checker::lexicalClass() {
 
 // #x can only be used inside the body of the class that declares it
 bool Checker::checkPrivateAccess(Loc l, const std::string& name, ClassSym* owner) {
-  if (lexicalClass() == owner) return true;
+  ClassSym* lc = lexicalClass();
+  if (lc == owner) return true;
+  // the code of a generic class: its instances (Box<number>) and the holder of its static members
+  // are the same class
+  if (lc && lc->origin && (lc->origin->holder == owner || lc->origin == owner->origin)) return true;
+  if (lc && owner->origin && owner->origin->holder == lc) return true;
   err(l, "property '" + name + "' is not accessible outside class '" + owner->name + "' because it has a private identifier");
   return false;
 }
@@ -2734,8 +2767,8 @@ Type* Checker::checkIndexOn(Expr* e, Type* ot) {
       Expr* ix = strip(e->b);
       // t[i] with an index computed at run time: a tuple whose elements all have one type reads like an
       // array (field -1: codegen copies the elements into one)
-      bool same = !ot->elems.empty();
-      for (Type* x : ot->elems) same = same && x == ot->elems[0];
+      Type* common = tupleElemType(ot);  // (also literal types of one base: DIRS[i] of ["n", "s"] as const)
+      bool same = common != nullptr;
       if (ix->k != EK::Num && same) {
         if (e == lvalueTarget && lvalueMode >= 1)
           return errT(e->b->loc, "assigning a tuple element needs an integer literal index; use an array (T[]) for computed indexes");
@@ -2743,7 +2776,7 @@ Type* Checker::checkIndexOn(Expr* e, Type* ot) {
         if (!isNumIndex(it)) return errT(e->b->loc, "tuple index must be a number or integer");
         e->field = -1;
         e->cls = tupleRecord(ot);
-        return ot->elems[0];
+        return common;
       }
       if (ix->k != EK::Num || !ix->isIntLit || ix->num >= (double)ot->elems.size())
         return errT(e->b->loc, same ? "tuple index must be an integer in range"
