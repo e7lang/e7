@@ -305,8 +305,10 @@ string/byte types) are checked by the interpreter at runtime. So even maliciousl
 - `requires` is the oldest e7vm that can run the module. The compiler computes it from the instructions and native
   functions the module uses: each has a "since" version in `src/core/since.h` (`opSince`, `nativeSinceTable`), and
   everything without an entry counts as the baseline, 0.1.0. The entries so far: the natives `JSON.parse2` /
-  `JSON.tryParse2` (0.1.1, typed parse into literal types and enums) and `TA.sortCmp` (0.1.2, `sort(cmp)` of a typed
-  array), so a module requires 0.1.1 or 0.1.2 only when it uses one of them, and 0.1.0 otherwise. A VM older than `requires` rejects the module with `E7_ERR_VERSION` ("the module requires e7vm X; this is
+  `JSON.tryParse2` (0.1.1, typed parse into literal types and enums), `TA.sortCmp` (0.1.2, `sort(cmp)` of a typed
+  array) and `Error.setName` / `Error.setMessage` (0.1.3, `e.name = s` / `e.message = s`), and a class (kind 0) with
+  cflags bit 0 (0.1.3, a class with an absent optional property of an interface it implements), so a module
+  requires a later version only when it uses one of them, and 0.1.0 otherwise. A VM older than `requires` rejects the module with `E7_ERR_VERSION` ("the module requires e7vm X; this is
   e7vm Y") instead of failing verification.
 - `e7_inspect()` (and `e7c --info`) read the format, `requires`, the debug flag and the signature trailer without
   loading a module, so a host can tell whether it can run a module before loading it.
@@ -323,7 +325,8 @@ Generators, `async` functions and async generators ([DESIGN.md](DESIGN.md), D1-D
 ### 6.1 Class flags and function flags
 
 - **cflags**, bit 0: the instances carry a presence mask (D7): one bit per field after the fields, all set by `NEW`;
-  allowed for records only (`kind` 1). Records whose properties can never be absent or hold `undefined` have no
+  allowed for records (`kind` 1) and, since 0.1.3, classes (`kind` 0: a class with an absent optional property of
+  an interface it implements, and its subclasses). Records whose properties can never be absent or hold `undefined` have no
   mask, and all their fields are own properties. Bit 1: a record with accessor properties (section 6.4). Other bits
   are 0.
 - **fflags**: bits 0-1 the function kind (0 plain, 1 generator, 2 `async`, 3 `async` generator); bits 2-3 the kind
@@ -402,7 +405,8 @@ own.
    check of `CALLV`.
 4. `RET_*` in a coroutine has the fflags' return kind (also `RET_R` in an `async` function, checked at run time).
 5. `FIELD_ABSENT`: `A` is `R`; the class's presence flag and the field index are checked at run time.
-6. cflags: only the bits of section 6.1, and only on records (`kind` 1).
+6. cflags: only the bits of section 6.1; bit 1 only on records (`kind` 1), bit 0 on records and (since 0.1.3)
+   classes (`kind` 0), not on tuples.
 7. Handler tables, jump targets and register kinds are checked as in section 3; a resumption continues after the
    `YIELD` / `AWAIT` with the same register kinds, so no extra data-flow rules are needed.
 

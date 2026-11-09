@@ -10,6 +10,52 @@ VM rejects a module it cannot run at load time rather than running it incorrectl
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-08
+
+TypeScript that tsc accepts and E7 rejected: the third batch of the second round of testing (about 120 such programs;
+70 now compile and match Node.js, most of the rest are documented E7 rules), with the programs of the earlier rounds
+re-run against Node.js to check that nothing changed for them.
+
+### Fixed
+- A nested function declaration read a variable of its block declared after it through a stale binding
+  (`let z = 5; function q() { return z; } z = 6; q()` gave `0`; a `const` read as `null`).
+- `i?.o.x` with `i` never null and `o` optional printed `undefined` (Node.js throws); it is a compile error, as in tsc.
+- `parseInt` of large values in a radix that is neither 10 nor a power of two differed from Node.js in the last
+  digits; typed array and `ArrayBuffer` lengths are converted as JavaScript does (`new Uint8Array(2.5)` has length 2).
+
+### Added
+- Narrowing as tsc does it: a declaration's initializer, the ends of blocks and of `if` branches (nested ones too),
+  `do...while` bodies, `while` conditions when the loop ends and assignments in conditions
+  (`while ((x = pop()) !== undefined)`), optional chains (`if (a?.b !== undefined) a.b`), `s === "a"` and
+  `case "a":` on a `string` (to the literal type), the `default` of a `switch` after `case null:`, type predicates of
+  arrow functions, and `filter` / `find` with a type predicate.
+- Literal types: constants where a literal type is expected by built-in methods (`m.set("n", 1)`), `"n" as Dir` and
+  `s as Dir`, a type argument inferred from the expected result (`const d: Dir = id("n")`), `switch` over a boolean
+  with `case true:` / `case false:` as exhaustive, `Math.max(...literals)`, string enums with the string methods and
+  numeric enums as indexes, with `~` and `++`.
+- Classes: an optional property of an implemented interface that the class does not declare (undefined through the
+  interface; needs VM 0.1.3); a subclass declaring a base class field again; the private static members of a
+  generic class used by its instances.
+- Built-ins: `undefined` or a possibly undefined value for optional arguments; `push` / `unshift` with several and
+  spread arguments; `includes(x, from)`; `reduce<T>(..., [])` and an annotated accumulator; `Array<T>(n)`,
+  `new Array(a, b)`, `Array.of<T>()`; `new Map([["a", 1]])` without type arguments; destructuring a `Set`, `Map`,
+  string or typed array; `entries()` / `keys()` / `values()` of typed arrays in `for...of`; `Promise.reject<T>`;
+  `e.message = s` and `e.name = s` (VM 0.1.3); `TypeError`, `RangeError`, ... as types; `ReferenceError` and
+  `EvalError`.
+- Tuples whose elements have one type are iterable and have the array methods that do not change them.
+- `x ??= v` has the non-null type; `x! += 1`; constant defaults (`5n`, `null`, a literal) for possibly undefined
+  arguments; `[null, undefined, "a"]`; spreading a possibly undefined object; `async (): Promise<T> => p`;
+  `return;` next to `return v`; stacked labels (`a: b: for`); the `const` function values of a block calling the
+  ones declared after them; `x: T | undefined = d` before a required parameter.
+- Clearer errors for a class method implementing an interface's function property, a class field for an optional
+  interface property, and a class without an interface's optional property and without `implements`.
+
+### Changed
+- RangeError messages are worded as in Node.js (`Invalid count value: -1`, `Invalid code point`, `Invalid string
+  length`, `toString() radix argument must be between 2 and 36`).
+- A module requires VM 0.1.3 only when it has a class with an absent interface property or assigns `e.message` /
+  `e.name`; other modules still run on 0.1.0.
+
 ## [0.1.2] - 2026-11-08
 
 Fixes found by a second round of testing: about 330 programs in six areas (classes and generics, numbers and
@@ -166,7 +212,8 @@ delivered from a server, signed, verified at load time and run in a sandbox.
 - Seven independent security reviews (bytecode loading, natives and the C API, crypto, release sign-off,
   `try` / `catch`, the GC and formatter, coroutines and promises), every finding fixed with a regression test.
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/e7lang/e7/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/e7lang/e7/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/e7lang/e7/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/e7lang/e7/releases/tag/v0.1.0
