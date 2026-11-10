@@ -1,4 +1,5 @@
-// e7:encoding natives: hex, base64, base64url, base32, utf8, PEM, CRC-32, byte helpers.
+// e7:encoding natives: hex, base64, base64url, base32, utf8, PEM, CRC-32, byte helpers. Invalid encoded input
+// is a catchable SyntaxError (the input usually comes from outside).
 #include "util.h"
 
 namespace e7 {
@@ -10,7 +11,7 @@ static std::string asciiOf(VM& vm, StrObj* s) {
   std::string out;
   out.reserve(s->len);
   for (uint32_t i = 0; i < s->len; i++) {
-    if (s->chars()[i] > 127) vm.error("invalid character in encoded input");
+    if (s->chars()[i] > 127) vm.error("SyntaxError: invalid character in encoded input");
     out.push_back((char)s->chars()[i]);
   }
   return out;
@@ -30,12 +31,12 @@ E7_NATIVE(e_hexEncode) {
 E7_NATIVE(e_hexDecode) {
   E7_UNUSED;
   std::string s = asciiOf(vm, S(vm, a[0]));
-  if (s.size() % 2) vm.error("hexDecode: odd-length input");
+  if (s.size() % 2) vm.error("SyntaxError: hexDecode: odd-length input");
   auto hv = [&](char c) -> int {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    vm.error("hexDecode: invalid hex character");
+    vm.error("SyntaxError: hexDecode: invalid hex character");
   };
   BytesObj* b = vm.newBytes((uint32_t)(s.size() / 2));
   for (size_t i = 0; i < s.size() / 2; i++) b->ptr()[i] = (uint8_t)(hv(s[2 * i]) * 16 + hv(s[2 * i + 1]));
@@ -99,7 +100,7 @@ E7_NATIVE(e_b64UrlEncode) { E7_UNUSED; BytesObj* b = B(vm, a[0]); r->r = vm.newS
 E7_NATIVE(e_b64Decode) {
   E7_UNUSED;
   std::vector<uint8_t> out;
-  if (!b64dec(asciiOf(vm, S(vm, a[0])), out)) vm.error("base64Decode: invalid input");
+  if (!b64dec(asciiOf(vm, S(vm, a[0])), out)) vm.error("SyntaxError: base64Decode: invalid input");
   r->r = vm.newBytesFrom(out.data(), out.size());
 }
 static const char* kB32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -130,9 +131,9 @@ E7_NATIVE(e_b32Decode) {
   bool pad = false;
   for (char c : s) {
     if (c == '=') { pad = true; continue; }
-    if (pad) vm.error("base32Decode: invalid input");
+    if (pad) vm.error("SyntaxError: base32Decode: invalid input");
     const char* p = strchr(kB32, toupper((unsigned char)c));
-    if (!p || !c) vm.error("base32Decode: invalid character");
+    if (!p || !c) vm.error("SyntaxError: base32Decode: invalid character");
     acc = (acc << 5) | (uint64_t)(p - kB32);
     bits += 5;
     if (bits >= 8) {
@@ -161,18 +162,18 @@ E7_NATIVE(e_pemDecode) {
   size_t p = 0;
   while (true) {
     size_t b = s.find("-----BEGIN ", p);
-    if (b == std::string::npos) vm.error("pemDecode: no PEM block%s%s found", want.empty() ? "" : " labeled ", want.c_str());
+    if (b == std::string::npos) vm.error("SyntaxError: pemDecode: no PEM block%s%s found", want.empty() ? "" : " labeled ", want.c_str());
     size_t le = s.find("-----", b + 11);
-    if (le == std::string::npos) vm.error("pemDecode: malformed header");
+    if (le == std::string::npos) vm.error("SyntaxError: pemDecode: malformed header");
     std::string label = s.substr(b + 11, le - b - 11);
     size_t bodyStart = le + 5;
     std::string endMark = "-----END " + label + "-----";
     size_t e = s.find(endMark, bodyStart);
-    if (e == std::string::npos) vm.error("pemDecode: missing END line");
+    if (e == std::string::npos) vm.error("SyntaxError: pemDecode: missing END line");
     if (!want.empty() && label != want) { p = e + endMark.size(); continue; }
     std::string body = s.substr(bodyStart, e - bodyStart);
     std::vector<uint8_t> out;
-    if (!b64dec(body, out)) vm.error("pemDecode: invalid base64 body");
+    if (!b64dec(body, out)) vm.error("SyntaxError: pemDecode: invalid base64 body");
     r->r = vm.newBytesFrom(out.data(), out.size());
     return;
   }

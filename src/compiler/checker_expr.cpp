@@ -247,6 +247,7 @@ Type* Checker::checkTemplate(Expr* e) {
 
 // ------------------------------------------------------------------ identifiers
 Type* Checker::checkIdent(Expr* e, Type* expected) {
+  if (e->raw == kUnsupportedName) return T.unknown();  // (reported by the parser)
   pendingHit_.clear();
   Sym* s = lookup(e->raw);
   if (!s && pendingHit_ == e->raw)
@@ -3058,6 +3059,9 @@ Type* Checker::checkAs(Expr* e) {
   }
   // readonly T[] as T[] (TypeScript allows removing readonly; the array is the same)
   if (t->t == TT::Array && t->ro && target->t == TT::Array && !target->ro && t->elem == target->elem) return target;
+  // catch (e) { (e as Error).message }: only Errors can be thrown, so a caught value is always one (the value is
+  // the same; TypeError, RangeError ... are the type Error too)
+  if (t->t == TT::Caught && target->t == TT::Error) return target;
   return errT(e->loc, "conversion of type '" + typeName(t) + "' to type '" + typeName(target) + "' is not supported");
 }
 

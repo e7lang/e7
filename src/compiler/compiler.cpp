@@ -3,6 +3,7 @@
 
 #include <fstream>
 #include <memory>
+#include <algorithm>
 #include <set>
 #include <sstream>
 #include <unordered_map>
@@ -65,6 +66,7 @@ struct Loader {
   std::unordered_map<std::string, SourceFile*> byPath;
   std::set<std::string> visiting;
   std::vector<CompileError>& errs;
+  std::vector<CompileError> softErrors;  // unsupported syntax the parser parsed past (the checker still runs)
 
   std::string resolvePath(const std::string& spec, const std::string& from, std::string* content) {
     if (spec.empty() || (spec[0] != '.' && spec[0] != '/')) return "";
@@ -106,7 +108,7 @@ struct Loader {
     auto sf = std::make_unique<SourceFile>();
     sf->path = path;
     sf->text = text;
-    if (!parseSource(*sf, P.arena, errs)) {
+    if (!parseSource(*sf, P.arena, errs, &softErrors)) {
       visiting.erase(path);
       return nullptr;
     }
@@ -145,7 +147,18 @@ CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& rea
   }
   Loader L{P, readFile, {}, {}, out.errors};
   L.load(entry, text);
-  if (!out.errors.empty()) return out;
+  // errors in source order (by file, line and column)
+  auto finish = [&](std::vector<CompileError> errs) {
+    errs.insert(errs.begin(), L.softErrors.begin(), L.softErrors.end());
+    std::stable_sort(errs.begin(), errs.end(), [](const CompileError& a, const CompileError& b) {
+      if (a.file != b.file) return a.file < b.file;
+      if (a.loc.line != b.loc.line) return a.loc.line < b.loc.line;
+      return a.loc.col < b.loc.col;
+    });
+    out.errors = std::move(errs);
+    return out;
+  };
+  if (!out.errors.empty()) return finish(std::move(out.errors));
   // modules reached only through `import type` / `export type ... from` are erased by TypeScript and never run:
   // they are checked (their types are used) but not initialized
   {
@@ -172,10 +185,7 @@ CompileOutput compileProgram(const std::string& entryPath, const ReadFileFn& rea
     return it == L.byPath.end() ? nullptr : it->second;
   });
   C.run();
-  if (!P.errors.empty()) {
-    out.errors = P.errors;
-    return out;
-  }
+  if (!P.errors.empty() || !L.softErrors.empty()) return finish(P.errors);
   std::string modName = entry;
   size_t sl = modName.find_last_of('/');
   if (sl != std::string::npos) modName = modName.substr(sl + 1);

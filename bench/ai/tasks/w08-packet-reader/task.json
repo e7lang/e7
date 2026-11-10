@@ -1,0 +1,1 @@
+{"id": "w08-packet-reader", "group": "write", "title": "Encode and lazily parse framed binary packets with CRC32", "file": "solution.ts"}

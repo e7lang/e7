@@ -1,0 +1,1 @@
+{"id": "e07-telemetry-packets", "group": "extend", "title": "Add a version 2 format with flags and a CRC to binary telemetry packets", "file": "solution.ts"}

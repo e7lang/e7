@@ -93,8 +93,9 @@ console.log(area({ kind: ShapeKind.Rect, w: 2, h: 3 }));
 ### Exceptions: `try` / `catch` / `finally`
 
 `try`/`catch` catches errors that Node.js also throws (with the same name): `throw`, `JSON.parse` syntax errors,
-standard-library `RangeError` / `TypeError` / `URIError`s. The catch variable is `unknown` (narrow it with
-`instanceof Error` before reading `.message`) and only Errors can be thrown:
+standard-library `RangeError` / `TypeError` / `URIError`s, and invalid input to the `e7:encoding` decoders (a
+`SyntaxError`). The catch variable is `unknown`: narrow it with `instanceof Error` or write `(e as Error).message`
+(only Errors can be thrown, so a caught value always is one):
 
 ```ts
 function parse(text: string): number {
@@ -109,7 +110,7 @@ console.log(parse("41") + 1, parse("{"));
 ```
 
 ```ts e7-reject
-try { console.log(1); } catch (e) { console.log(e.message); } // narrow first: if (e instanceof Error)
+try { console.log(1); } catch (e) { console.log(e.message); } // (e as Error).message, or if (e instanceof Error)
 ```
 
 ```ts e7-reject

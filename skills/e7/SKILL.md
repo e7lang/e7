@@ -21,7 +21,7 @@ Write it the E7 way from the start; each left-hand construct is a compile error.
 | TypeScript habit | Write in E7 |
 |---|---|
 | `any`, `unknown`, `object` | a concrete type, an `interface`, or `T \| null` |
-| `throw "text"`, `catch (e) { e.message }` | `throw new Error("text")`; narrow first: `if (e instanceof Error) e.message` (`finally` works) |
+| `throw "text"`, `catch (e) { e.message }` | `throw new Error("text")`; `(e as Error).message`, or narrow: `if (e instanceof Error) e.message` (`finally` works) |
 | generic methods in interfaces, `<K extends keyof T>`, `x instanceof Box` (generic class) | generic functions, classes, interfaces and aliases work (compiled per type argument list); use a generic class or function instead |
 | `string \| number`, discriminated unions | one interface with a `kind` field (string or enum) and optional fields |
 | `{ [key: string]: V }`, `Record<K, V>`, `Partial`, `Pick` | `Map<string, V>`, or write the interface out |
@@ -122,7 +122,9 @@ playground at https://e7lang.github.io/playground to verify the code.
 `try`/`catch` exists, but it only catches errors that Node.js also throws: `throw`, `JSON.parse`
 syntax errors, `RangeError`s and the like from the standard library. E7's own checks — out-of-bounds reads,
 `as T` / `JSON.parse(...) as T` shape mismatches, integer division by zero — and budget / memory limits still end
-the call. The catch variable is `unknown`; narrow it before use:
+the call. The catch variable is `unknown`; narrow it (`instanceof`) or assert it (`e as Error`: only Errors can be
+thrown, so a caught value always is one) before reading `.message`. The `e7:encoding` decoders throw a catchable
+`SyntaxError` on invalid input.
 
 ```ts
 function safeDiv(a: bigint, b: bigint): string {

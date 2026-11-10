@@ -1,7 +1,7 @@
 // @feature: `try` / `catch` / `finally`, optional catch binding
 // @category: JavaScript: Syntax
 // @status: supported
-// @note: catches the errors Node.js also throws; E7's own checks (out-of-bounds reads, failed `as`) are not catchable
+// @note: catches the errors Node.js also throws; E7's own checks (out-of-bounds reads, failed `as`) are not catchable. The caught value is `unknown`: narrow it (`instanceof Error`) or write `e as Error` (only Errors can be thrown)
 function parse(text: string): number {
   try {
     return JSON.parse(text) as number;

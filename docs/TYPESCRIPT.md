@@ -28,7 +28,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 
 ## Summary
 
-250 features: **154 supported**, **16 partial**, **80 unsupported** (266 sample programs).
+251 features: **154 supported**, **16 partial**, **81 unsupported** (267 sample programs).
 
 | Category | Supported | Partial | Unsupported |
 |---|---:|---:|---:|
@@ -44,7 +44,7 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Utility Types](#utility-types) | 4 | 0 | 9 |
 | [Decorators](#decorators) | 0 | 0 | 3 |
 | [Declaration Merging](#declaration-merging) | 1 | 0 | 3 |
-| [Iterators and Generators](#iterators-and-generators) | 6 | 1 | 0 |
+| [Iterators and Generators](#iterators-and-generators) | 6 | 1 | 1 |
 | [Symbols](#symbols) | 0 | 0 | 3 |
 | [Mixins](#mixins) | 0 | 0 | 1 |
 | [Triple-Slash Directives](#triple-slash-directives) | 2 | 0 | 0 |
@@ -54,9 +54,9 @@ Out of scope: features that do not type-check under these options, such as Commo
 | [Variable Declaration](#variable-declaration) | 3 | 0 | 1 |
 | [JavaScript: Syntax](#javascript-syntax) | 24 | 1 | 6 |
 | [JavaScript: Standard Library](#javascript-standard-library) | 11 | 6 | 9 |
-| **Total** | **154** | **16** | **80** |
+| **Total** | **154** | **16** | **81** |
 
-Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 54, verifiable bytecode 16, JavaScript-identical behaviour 5, small runtime 2, not implemented yet 19.
+Reasons for the unsupported features and the unsupported parts of partial ones: types known at compile time 55, verifiable bytecode 16, JavaScript-identical behaviour 5, small runtime 2, not implemented yet 19.
 
 Within each category, supported features come first, then partial and unsupported ones.
 
@@ -298,6 +298,7 @@ Within each category, supported features come first, then partial and unsupporte
 | Generator functions (`function*`, `yield`, `yield*`) | supported | `next()` on a finished generator whose return type is a primitive gives NaN / 0 instead of undefined (the value's representation is fixed) | [generators.ts](../tests/ts-features/iterators/generators.ts) |
 | Spreading iterables and `Array.from` | supported |  | [spread-iterables.ts](../tests/ts-features/iterators/spread-iterables.ts) |
 | Custom iterables (`[Symbol.iterator]()`) | **partial** | **Works:** a class whose `[Symbol.iterator]()` method returns a generator works with `for...of`, spread, `Array.from` and destructuring. **Not supported:** an iterator written by hand (an object with a `next()` method); iterators are generators at run time (*not implemented yet*). **Instead:** a generator: `*[Symbol.iterator]() { ... yield v; }` | [iterator-protocol.ok.ts](../tests/ts-features/iterators/iterator-protocol.ok.ts), [iterator-protocol.no.ts](../tests/ts-features/iterators/iterator-protocol.no.ts) |
+| `Iterable<T>` and `ArrayLike<T>` types | **unsupported** | **Why:** arrays, Sets, Maps, strings and generators have no common run-time representation, so one parameter cannot take all of them (*types known at compile time*). **Instead:** `T[]` (pass a Set or Map as `[...s]`), or `IterableIterator<T>` / `Generator<T>` for a generator | [iterable-type.ts](../tests/ts-features/iterators/iterable-type.ts) |
 
 ## Symbols
 
@@ -379,7 +380,7 @@ Within each category, supported features come first, then partial and unsupporte
 | `switch` with fall-through | supported |  | [switch.ts](../tests/ts-features/js-syntax/switch.ts) |
 | Tagged templates and `String.raw` | supported | The tag gets the parts as a `readonly string[]` (TypeScript's `TemplateStringsArray`; its `raw` property is not available) and the values | [tagged-templates.ts](../tests/ts-features/js-syntax/tagged-templates.ts) |
 | Template literals (multi-line, nested) | supported |  | [template-literals.ts](../tests/ts-features/js-syntax/template-literals.ts) |
-| `try` / `catch` / `finally`, optional catch binding | supported | Catches the errors Node.js also throws; E7's own checks (out-of-bounds reads, failed `as`) are not catchable | [try-catch-finally.ts](../tests/ts-features/js-syntax/try-catch-finally.ts) |
+| `try` / `catch` / `finally`, optional catch binding | supported | Catches the errors Node.js also throws; E7's own checks (out-of-bounds reads, failed `as`) are not catchable. The caught value is `unknown`: narrow it (`instanceof Error`) or write `e as Error` (only Errors can be thrown) | [try-catch-finally.ts](../tests/ts-features/js-syntax/try-catch-finally.ts) |
 | The `void` operator | supported | The value is `undefined`; as for `undefined` itself, a variable holding it needs a type annotation | [void-operator.ts](../tests/ts-features/js-syntax/void-operator.ts) |
 | Loose equality `==` / `!=` | **partial** | **Works:** only `== null` / `!= null` (null or undefined). **Not supported:** with static types, `==` is either `===` or a hidden type conversion (*types known at compile time*). **Instead:** `===` / `!==` | [loose-equality.ok.ts](../tests/ts-features/js-syntax/loose-equality.ok.ts), [loose-equality.no.ts](../tests/ts-features/js-syntax/loose-equality.no.ts) |
 | The `delete` operator | **unsupported** | **Why:** object layouts are fixed (*types known at compile time*). **Instead:** an optional property set to `undefined`, or `Map.delete` | [delete-operator.ts](../tests/ts-features/js-syntax/delete-operator.ts) |

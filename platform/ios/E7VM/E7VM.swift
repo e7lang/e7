@@ -44,7 +44,7 @@ public struct E7ModuleInfo: Equatable {
   public let keyId: Data
   public let hasDebugInfo: Bool
   public var canRun: Bool { status == Int32(E7_OK.rawValue) }
-  /// `requiresVersion` as text, e.g. "0.1.3".
+  /// `requiresVersion` as text, e.g. "0.1.4".
   public var requiresVersionString: String { E7VM.versionString(requiresVersion) }
 }
 
@@ -164,7 +164,7 @@ public final class E7VM {
     clearKeyBuffer()
   }
 
-  /// Library version, e.g. "0.1.3".
+  /// Library version, e.g. "0.1.4".
   public static var version: String { String(cString: e7_version()) }
 
   /// Library version as major << 16 | minor << 8 | patch (compare with `E7ModuleInfo.requiresVersion`).

@@ -247,7 +247,11 @@ class Checker {
   bool assignsPath(Stmt* b, const std::string& key);
   void collectAssigned(Stmt* s, std::set<std::string>& out);
   void collectAssignedExpr(Expr* e, std::set<std::string>& out);
-  void invalidateAssigned(Stmt* body, Expr* extra = nullptr);
+  std::vector<std::pair<std::string, Type*>> invalidateAssigned(Stmt* body, Expr* extra = nullptr);
+  void restoreNarrowing(const std::vector<std::pair<std::string, Type*>>& kept);
+  bool assignsOnlyNonNull(Expr* e, const std::string& name, Type* narrowedT, bool inFn);
+  bool assignsOnlyNonNullStmt(Stmt* s, const std::string& name, Type* narrowedT, bool inFn);
+  bool nonNullSyntax(Expr* x, const std::string& self, Type* selfT);
 
   // ---- expressions
   Type* check(Expr* e, Type* expected = nullptr);

@@ -337,6 +337,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
       Type* t = check(args[0], expElem);
       if (t->t == TT::Promise) return t;  // the promise itself
       if (t->t == TT::Void) return errT(args[0]->loc, "cannot resolve a promise with a void value");
+      if (expElem && expElem->t == TT::Void && t->t == TT::Undefined) return T.promise(T.voidT());  // <void>(undefined)
       if (expElem && t != expElem) {
         coerce(args[0], expElem, "Promise.resolve");
         t = expElem;
@@ -606,8 +607,7 @@ Type* Checker::checkNamespaceMember(Expr* e, NamespaceSym* ns, const std::string
     std::string id = M + "." + name;
     const auto& names = builtinModuleExports(M);
     if (std::find(names.begin(), names.end(), name) == names.end()) {
-      std::string hint = removedBuiltinHint(M, name);
-      return errT(l, "module '" + M + "' has no exported member '" + name + "'" + (hint.empty() ? didYouMean(name, names) : hint));
+      return errT(l, "module '" + M + "' has no exported member '" + name + "'" + builtinExportHint(M, name));
     }
     if (!isCall) return errT(l, "'" + name + "' cannot be used as a value");
     return checkBuiltinCall(e, id, expected);
@@ -826,7 +826,10 @@ Type* Checker::checkBuiltinCall(Expr* e, const std::string& id, Type* expected) 
       if (args.size() != 1) return errT(l, "'later' expects one argument");
       Type* expElem = expected && baseOf(expected)->t == TT::Promise ? baseOf(expected)->elem : nullptr;
       Type* t = check(args[0], expElem);
-      if (expElem && t != expElem) { coerce(args[0], expElem, "later"); t = expElem; }
+      if (expElem && t != expElem && !(expElem->t == TT::Void && t->t == TT::Undefined)) {
+        coerce(args[0], expElem, "later");
+        t = expElem;
+      }
       if (t->t == TT::Void || t->t == TT::Promise) return errT(args[0]->loc, "'later' needs a value");
       Type* vt = t->t == TT::Undefined ? T.voidT() : t;
       args.push_back(N((double)(t->t == TT::Undefined ? VT_REF : vtOf(t))));
@@ -1253,7 +1256,8 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
   }
   if (name == "Uint8Array") {
     if (args.empty()) { args.push_back(mkNum(P, T, 0, l)); nat("Bytes.new"); return T.bytes(); }
-    Type* t = check(args[0], nullptr);
+    // (an array literal is checked as number[]: new Uint8Array([]))
+    Type* t = check(args[0], strip(args[0])->k == EK::Array ? T.array(num) : nullptr);
     if (t->t == TT::Number || (t->t == TT::Int)) {
       if (args.size() != 1) return errT(l, "new Uint8Array(length) takes one argument");
       coerce(args[0], num);
@@ -1373,7 +1377,7 @@ Type* Checker::checkNew(Expr* e, Type* expected) {
     Type* et = taElem(tat);
     if (args.empty()) args.push_back(mkNum(P, T, 0, l));
     if (args.size() == 1) {
-      Type* t = check(args[0], nullptr);
+      Type* t = check(args[0], strip(args[0])->k == EK::Array ? T.array(et) : nullptr);
       if (t->t == TT::Number || t->t == TT::Int) {
         if (!coerce(args[0], num)) return T.unknown();
         nat("TA.new");

@@ -1,11 +1,25 @@
 const B = (u8) => Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength);
 const U = (buf) => new Uint8Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
 export const hexEncode = (b) => B(b).toString("hex");
-export const hexDecode = (s) => { if (s.length % 2 || /[^0-9a-fA-F]/.test(s)) throw new Error("hexDecode"); return U(Buffer.from(s, "hex")); };
+const bad = (msg) => { throw new SyntaxError(msg); };
+const ascii = (s) => { if (/[^\x00-\x7f]/.test(s)) bad("invalid character in encoded input"); return s; };
+export const hexDecode = (s) => {
+  ascii(s);
+  if (s.length % 2) bad("hexDecode: odd-length input");
+  if (/[^0-9a-fA-F]/.test(s)) bad("hexDecode: invalid hex character");
+  return U(Buffer.from(s, "hex"));
+};
+// as e7vm: both alphabets, optional padding, whitespace ignored; anything else is a SyntaxError
+const b64 = (s, what) => {
+  const t = ascii(s).replace(/[ \n\r\t]/g, "");
+  const m = /^([A-Za-z0-9+/_-]*)(=*)$/.exec(t);
+  if (!m || m[1].length % 4 === 1 || m[2].length > 2 || (m[2].length && t.length % 4 !== 0)) bad(what);
+  return U(Buffer.from(m[1].replace(/-/g, "+").replace(/_/g, "/"), "base64"));
+};
 export const base64Encode = (b) => B(b).toString("base64");
-export const base64Decode = (s) => U(Buffer.from(s, "base64"));
+export const base64Decode = (s) => b64(s, "base64Decode: invalid input");
 export const base64UrlEncode = (b) => B(b).toString("base64url");
-export const base64UrlDecode = (s) => U(Buffer.from(s, "base64url"));
+export const base64UrlDecode = (s) => b64(s, "base64Decode: invalid input");
 const A32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 export const base32Encode = (b) => {
   let bits = 0, acc = 0, out = "";
@@ -16,7 +30,13 @@ export const base32Encode = (b) => {
 };
 export const base32Decode = (s) => {
   let bits = 0, acc = 0; const out = [];
-  for (const c of s.replace(/=+$/, "")) { acc = (acc << 5) | A32.indexOf(c.toUpperCase()); bits += 5; if (bits >= 8) { bits -= 8; out.push((acc >>> bits) & 255); } acc &= (1 << bits) - 1; }
+  ascii(s);
+  const body = s.replace(/=+$/, "");
+  if (body.includes("=")) bad("base32Decode: invalid input");
+  for (const c of body) {
+    const v = A32.indexOf(c.toUpperCase());
+    if (v < 0) bad("base32Decode: invalid character");
+    acc = (acc << 5) | v; bits += 5; if (bits >= 8) { bits -= 8; out.push((acc >>> bits) & 255); } acc &= (1 << bits) - 1; }
   return new Uint8Array(out);
 };
 export const utf8Encode = (s) => new TextEncoder().encode(s);
@@ -24,8 +44,8 @@ export const utf8Decode = (b) => new TextDecoder().decode(b);
 export const pemDecode = (text, label) => {
   const re = /-----BEGIN ([^-]+)-----([\s\S]*?)-----END \1-----/g;
   let m;
-  while ((m = re.exec(text))) if (!label || m[1] === label) return base64Decode(m[2].replace(/\s+/g, ""));
-  throw new Error("pemDecode: no PEM block");
+  while ((m = re.exec(text))) if (!label || m[1] === label) return b64(m[2].replace(/\s+/g, ""), "pemDecode: invalid base64 body");
+  bad(`pemDecode: no PEM block${label ? " labeled " + label : ""} found`);
 };
 export const pemEncode = (b, label) => {
   const body = base64Encode(b).match(/.{1,64}/g) ?? [];
