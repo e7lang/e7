@@ -39,8 +39,8 @@ export function sign(msg: string, key: string): string {
 - **Secrets stay in the host.** A `KeyHandle` lets scripts use a key held in the Keychain or Keystore without ever seeing the key bytes.
 - **TypeScript you already know.** The same JS semantics, checked by `tsc --strict`, and differential-tested against Node.js.
 - **Small and fast.**
-  - About 860 KB for the runtime only (about 360 KB compressed), or about 2.3 MB with the on-device compiler
-    (Android arm64, crypto included). On iOS it adds about 600 KB to an app (1.4 MB with the compiler).
+  - About 1.0 MB for the runtime only (about 400 KB compressed), or about 2.7 MB with the on-device compiler
+    (Android arm64, crypto included). On iOS it adds about 610 KB to an app (1.5 MB with the compiler).
   - Interpreter speed comparable to or faster than V8's interpreter (`--jitless`).
   - Standard crypto runs as native code.
 

@@ -38,7 +38,7 @@ export function sign(msg: string, key: string): string {
 - **密钥留在宿主。** 通过 `KeyHandle`，脚本可以使用 Keychain / Keystore 里的密钥，但拿不到密钥本身。
 - **就是你熟悉的 TypeScript。** 语义与 JS 一致，能通过 `tsc --strict`，并与 Node.js 做差分测试。
 - **体积小、速度快。**
-  - 仅运行时约 860 KB（压缩后约 360 KB），含端上编译器约 2.3 MB（Android arm64，含全部加密算法）。在 iOS 上给 App 增加约 600 KB（含编译器约 1.4 MB）。
+  - 仅运行时约 1.0 MB（压缩后约 400 KB），含端上编译器约 2.7 MB（Android arm64，含全部加密算法）。在 iOS 上给 App 增加约 610 KB（含编译器约 1.5 MB）。
   - 解释器速度与 V8 的解释器（`--jitless`）相当或更快。
   - 标准密码算法由原生代码执行。
 
