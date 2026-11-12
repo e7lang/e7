@@ -9,27 +9,27 @@
     "loops": {
       "gc_collections": 0,
       "peak_heap_bytes": 212,
-      "ticks": 240000002
+      "ticks": 180000002
     },
     "objects_bench": {
       "gc_collections": 183,
       "peak_heap_bytes": 1048586,
-      "ticks": 56000003
+      "ticks": 48000003
     },
     "sha256_script": {
       "gc_collections": 2,
       "peak_heap_bytes": 2101079,
-      "ticks": 121321220
+      "ticks": 117847516
     },
     "sieve": {
       "gc_collections": 1,
       "peak_heap_bytes": 40000262,
-      "ticks": 228419286
+      "ticks": 198929376
     },
     "strings_bench": {
       "gc_collections": 16,
       "peak_heap_bytes": 53787990,
-      "ticks": 28166695
+      "ticks": 27766695
     }
   },
   "cachegrind": {
