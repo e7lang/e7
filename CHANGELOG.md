@@ -10,6 +10,11 @@ VM rejects a module it cannot run at load time rather than running it incorrectl
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-11
+
+A faster interpreter loop in Clang builds, a comparison with QuickJS, Hermes and Lua, and two CI gates that
+could not fail. The language, the C API and the bytecode format are unchanged.
+
 ### Fixed
 - Clang builds: loops in a function that add to a variable and then count, such as
   `for (let i = 0; i < n; i++) s += i % 7`, ran up to 4 times slower than the same loop at the top level (measured
@@ -289,7 +294,8 @@ delivered from a server, signed, verified at load time and run in a sandbox.
 - Seven independent security reviews (bytecode loading, natives and the C API, crypto, release sign-off,
   `try` / `catch`, the GC and formatter, coroutines and promises), every finding fixed with a regression test.
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/e7lang/e7/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/e7lang/e7/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/e7lang/e7/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/e7lang/e7/compare/v0.1.1...v0.1.2

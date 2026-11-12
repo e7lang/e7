@@ -1,7 +1,7 @@
 {
   "name": "e7",
   "displayName": "E7 language",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Write, fix and review E7 scripts: what E7 supports and rejects compared with TypeScript, the standard library, and the compile-check workflow",
   "author": { "name": "e7lang", "url": "https://github.com/e7lang" },
   "homepage": "https://e7lang.github.io/docs/ai",
