@@ -24,7 +24,7 @@
     <RepositoryUrl>https://github.com/e7lang/e7.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Copyright>Copyright (c) 2026 Everett</Copyright>
+    <Copyright>Copyright (c) 2026 AtomSprout</Copyright>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
