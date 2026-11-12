@@ -10,6 +10,21 @@ VM rejects a module it cannot run at load time rather than running it incorrectl
 
 ## [Unreleased]
 
+### Fixed
+- Two slowdowns that came with the correctness fixes of 0.1.2 and were not seen because the performance gate
+  could not fail (see 0.1.5). The instruction ticks of `loops`, `objects_bench`, `sieve`, `sha256_script` and
+  `strings_bench` are those of 0.1.1 again (`loops` 240 to 180 million, `sieve` 228 to 199 million):
+  - Top-level code set a `let` / `const` variable's "declaration has run" flag again at every assignment to it
+    (two extra instructions per assignment). Only the declaration sets it.
+  - `a[i] = v`, `o.f = v` and compound assignments copied the object and the index to temporary registers before
+    evaluating the right-hand side. The copy is needed only when the right-hand side assigns to a variable
+    (`a[i] = i++`); otherwise the registers are used directly.
+- Swift Package Manager builds used switch dispatch for the interpreter. With Xcode 17 and later they now use
+  computed goto, like the CMake builds (Xcode 15 and 16 keep switch dispatch), and they get the loop fix of 0.1.5:
+  a numbered assembler label before every handler's jump keeps Clang from merging the ends of the handlers, in
+  any build system. On the benchmarks this is up to 1.8 times faster than switch dispatch (`sha256_script`), and
+  3 times for the loop of 0.1.5.
+
 ## [0.1.5] - 2026-11-11
 
 A faster interpreter loop in Clang builds, a comparison with QuickJS, Hermes and Lua, and two CI gates that

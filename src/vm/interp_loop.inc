@@ -73,11 +73,13 @@ int VM::E7_INTERP_NAME() {
 #undef E7_X
   };
 #define CASE(name) L_##name:
-#define DISPATCH()                 \
-  do {                             \
-    DBG_HOOK();                    \
-    ins = *ip++;                   \
-    goto* labels[(uint16_t)ins];   \
+#define DISPATCH()                          \
+  do {                                      \
+    DBG_HOOK();                             \
+    ins = *ip++;                            \
+    void* target_ = labels[(uint16_t)ins];  \
+    E7_OWN_TAIL();                          \
+    goto* target_;                          \
   } while (0)
 #else
 #define CASE(name) case OP_##name:
