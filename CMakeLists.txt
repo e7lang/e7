@@ -144,6 +144,19 @@ elseif((CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VE
     COMPILE_OPTIONS "-mllvm;-addr-sink-using-gep=false"
     COMPILE_DEFINITIONS "E7_LLVM_CGP_WORKAROUND=1")
 endif()
+# Clang's tail merging folds the identical ends of the instruction handlers ("store the result, fetch
+# the next instruction, jump to its handler") into shared blocks. Many handlers then share one store
+# and one indirect jump, and the processor's predictors see unrelated instructions as one: a loop such as
+# `for (...; i++) s += i % 7` in a function ran 4 times slower (Apple clang 21, arm64). Keep every
+# handler's own tail in interp.cpp.
+if(NOT E7_NO_COMPUTED_GOTO AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT EMSCRIPTEN AND
+   NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  include(CheckCXXCompilerFlag)
+  check_cxx_compiler_flag("-mllvm -enable-tail-merge=false" E7_HAVE_NO_TAIL_MERGE)
+  if(E7_HAVE_NO_TAIL_MERGE)
+    set_property(SOURCE src/vm/interp.cpp APPEND PROPERTY COMPILE_OPTIONS -mllvm -enable-tail-merge=false)
+  endif()
+endif()
 if(E7_BUILD_SHARED)
   target_compile_definitions(e7vm_objs PUBLIC E7_SHARED PRIVATE E7_BUILDING)
   set_target_properties(e7vm_objs PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)
