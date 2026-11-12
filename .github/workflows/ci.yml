@@ -105,6 +105,7 @@ jobs:
         run: cmake --build build
       - name: Ticks, peak heap and instruction counts vs bench/baseline.json
         run: |
+          set -o pipefail  # without it the step has tee's exit status and a failed check passes
           valgrind --version
           python3 scripts/bench.py --check --cachegrind --output build/bench-baseline.json | tee build/bench.txt
       - name: GC pause benchmark (report only)

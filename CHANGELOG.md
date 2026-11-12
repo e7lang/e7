@@ -10,6 +10,26 @@ VM rejects a module it cannot run at load time rather than running it incorrectl
 
 ## [Unreleased]
 
+### Fixed
+- Clang builds: loops in a function that add to a variable and then count, such as
+  `for (let i = 0; i < n; i++) s += i % 7`, ran up to 4 times slower than the same loop at the top level (measured
+  with Apple clang 21 on arm64: 310 ms, now 85 ms for 30 million iterations). Clang's tail merging made the
+  instruction handlers of the interpreter share one "store the result and jump to the next instruction" block;
+  the CMake build now turns it off for `src/vm/interp.cpp`. The Android arm64 runtime grows by 10 KB. Builds with
+  Swift Package Manager do not get the flag yet.
+- CI: the performance gate (`perf` job) and the nightly differential fuzzer piped their output through `tee`, so
+  the step had `tee`'s exit status and passed when the check failed. Both steps now use `set -o pipefail`.
+  - `bench/baseline.json` was still the one of 2026-11-05 and the gate had failed, unseen, since before 0.1.0. It is
+    now the one measured by CI for the current code. What it had hidden: since 0.1.2 `loops` takes 33% more
+    instruction ticks, `objects_bench` 17%, `sieve` 15% and `sha256_script` 3% (the 0.1.2 correctness fixes), and
+    against the old baseline the machine instructions grew by 21% (`loops`), 8% (`objects_bench`, `sieve`), 5% (`fib`)
+    and 3% (`strings_bench`, `sha256_script`).
+  - The fuzzer reported mismatches with Node.js on 2026-11-09 (seed 4, program 4070) and 2026-11-10 (seed 5, two
+    programs, one of them 4500) in runs marked as passed. They are not investigated yet.
+
+### Added
+- `docs/COMPARISON.md` and `bench/compare`: speed and size compared with QuickJS, Hermes and Lua.
+
 ## [0.1.4] - 2026-11-09
 
 From the first runs of the new AI benchmark (`bench/ai`: 40 tasks graded by hidden tests, see its README) and the
