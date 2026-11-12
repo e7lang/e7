@@ -28,6 +28,21 @@
 #define E7_COMPUTED_GOTO 0
 #endif
 
+// Clang's tail merging folds the identical ends of the instruction handlers ("store the result, fetch
+// the next instruction, jump to its handler") into shared blocks. Many handlers then share one store
+// and one indirect jump and the processor's predictors see unrelated instructions as one (a loop
+// `for (...; i++) s += i % 7` in a function ran 4 times slower). E7_OWN_TAIL() puts a numbered assembler
+// label, which emits no code and differs at each use, before a handler's jump, so that no two
+// handlers end in the same instructions. (The CMake build also passes -mllvm -enable-tail-merge=false
+// for this file; builds that cannot pass compiler flags, such as Swift Package Manager, rely on this.)
+#if E7_COMPUTED_GOTO && defined(__clang__) && (defined(__aarch64__) || defined(__x86_64__)) && !defined(__EMSCRIPTEN__)
+#define E7_OWN_TAIL_STR2(n) #n
+#define E7_OWN_TAIL_STR(n) E7_OWN_TAIL_STR2(n)
+#define E7_OWN_TAIL() __asm__ volatile(E7_OWN_TAIL_STR(__COUNTER__) ":")
+#else
+#define E7_OWN_TAIL() ((void)0)
+#endif
+
 namespace e7 {
 
 const OpInfo kOpInfo[OP__COUNT] = {

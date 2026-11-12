@@ -657,7 +657,7 @@ struct Gen {
     int mode = 0;
     uint16_t obj = 0xFFFF, idx = 0xFFFF;
   };
-  LVal prepareLVal(Expr* target, bool forRead);
+  LVal prepareLVal(Expr* target, bool forRead, Expr* rhs);
   void readLVal(LVal& lv, uint16_t dst);
   void writeLVal(LVal& lv, uint16_t v);
   void genCompound(Expr* lhs, const std::string& bop, Expr* rhs, uint16_t dst, bool postfix);
@@ -3377,14 +3377,6 @@ void Gen::writeVar(VarSym* v, uint16_t src) {
   if (v->isGlobal) {
     tdzCheck(v);
     emitBx(gset[K(st)], src, (uint32_t)v->globalIdx);
-    auto tf = tdzFlag.find(v);
-    if (tf != tdzFlag.end() && fn->isInit) {  // (a pattern's names) the declaration has run
-      size_t m0 = mark();
-      uint16_t one = temp(K_I);
-      loadInt(one, 1);
-      emitBx(OP_GSET_I, one, tf->second);
-      release(m0);
-    }
     return;
   }
   auto it = varReg.find(v);
@@ -4307,7 +4299,7 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
       return;
     }
     // object and index first, then the value (JS order)
-    LVal lv = prepareLVal(e->a, false);
+    LVal lv = prepareLVal(e->a, false, e->b);
     uint16_t v = gen(e->b);
     // preserve the value: gen() may return a variable register
     uint16_t vt = temp(K(lt));
@@ -4323,7 +4315,7 @@ void Gen::genAssign(Expr* e, uint16_t dst) {
     bool nullish = op == "??=";
     Kind k = nullish ? K_R : K(lt);
     Label* end = newLabel();
-    LVal lv = prepareLVal(e->a, true);
+    LVal lv = prepareLVal(e->a, true, e->b);
     uint16_t cur = temp(k);
     readLVal(lv, cur);
     if (nullish) {
@@ -4373,7 +4365,7 @@ void Gen::genCompound(Expr* lhs, const std::string& bop, Expr* rhs, uint16_t dst
   size_t m0 = mark();
   Type* lt = lhs->type;
   Kind k = K(lt);
-  LVal lv = prepareLVal(lhs, true);
+  LVal lv = prepareLVal(lhs, true, rhs);
   uint16_t cur = temp(k);
   readLVal(lv, cur);
   if (postfix && dst != kNoReg) mov(dst, cur, k);
@@ -4391,7 +4383,30 @@ void Gen::genCompound(Expr* lhs, const std::string& bop, Expr* rhs, uint16_t dst
   release(m0);
 }
 
-Gen::LVal Gen::prepareLVal(Expr* target, bool forRead) {
+// True when evaluating e assigns to no variable: no assignment, ++ or --, and nothing that suspends or
+// creates a function. A call may still write a global or a captured variable, but those are read into a
+// temporary register; a variable that lives in a register can only be written by an assignment in e.
+static bool assignsNoVariable(Expr* e) {
+  if (!e) return true;
+  switch (e->k) {
+    case EK::Assign: case EK::Update: case EK::Arrow: case EK::Yield: case EK::Await:
+      return false;
+    default:
+      break;
+  }
+  if (!assignsNoVariable(e->a) || !assignsNoVariable(e->b) || !assignsNoVariable(e->c)) return false;
+  for (Expr* x : e->list)
+    if (!assignsNoVariable(x)) return false;
+  for (auto& p : e->props)
+    if (p.computed || !assignsNoVariable(p.value)) return false;
+  return true;
+}
+
+// rhs: the expression evaluated after the target (the assigned value, or the operand of a compound
+// assignment); when it assigns to no variable, the object and the index need no copy (gen() may return a
+// variable's own register).
+Gen::LVal Gen::prepareLVal(Expr* target, bool forRead, Expr* rhs) {
+  bool noCopy = assignsNoVariable(rhs);
   LVal lv;
   lv.e = target;
   lv.t = strip(target);
@@ -4417,18 +4432,27 @@ Gen::LVal Gen::prepareLVal(Expr* target, bool forRead) {
         return lv;
       lv.mode = 2;
     }
-    lv.obj = temp(K_R);
-    genInto(t->a, lv.obj);
+    if (noCopy) lv.obj = gen(t->a);
+    else {
+      lv.obj = temp(K_R);
+      genInto(t->a, lv.obj);
+    }
     return lv;
   }
   if (t->k == EK::Index) {
     Type* ot = baseOf(t->a->type);
     lv.mode = 3;
-    lv.obj = temp(K_R);
-    genInto(t->a, lv.obj);
+    if (noCopy) lv.obj = gen(t->a);
+    else {
+      lv.obj = temp(K_R);
+      genInto(t->a, lv.obj);
+    }
     if (ot->t != TT::Tuple) {
-      lv.idx = temp(K(t->b->type));
-      genInto(t->b, lv.idx);
+      if (noCopy) lv.idx = gen(t->b);
+      else {
+        lv.idx = temp(K(t->b->type));
+        genInto(t->b, lv.idx);
+      }
     }
     return lv;
   }

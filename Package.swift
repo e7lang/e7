@@ -46,8 +46,8 @@ let package = Package(
         .headerSearchPath("third_party/bearssl/inc"),
         .headerSearchPath("third_party/monocypher"),
         .define("E7_WITH_COMPILER", to: "1"),
-        // switch dispatch: the computed-goto loop needs a CMake-only per-file LLVM flag on Xcode 15/16
-        .define("E7_NO_COMPUTED_GOTO", to: "1"),
+        // (the interpreter uses computed goto with Xcode 17 and later, and switch dispatch with Xcode 15/16:
+        // see src/vm/interp.cpp)
       ]
     ),
     .target(

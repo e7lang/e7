@@ -9,37 +9,37 @@
     "loops": {
       "gc_collections": 0,
       "peak_heap_bytes": 212,
-      "ticks": 240000002
+      "ticks": 180000002
     },
     "objects_bench": {
       "gc_collections": 183,
       "peak_heap_bytes": 1048586,
-      "ticks": 56000003
+      "ticks": 48000003
     },
     "sha256_script": {
       "gc_collections": 2,
       "peak_heap_bytes": 2101079,
-      "ticks": 121321220
+      "ticks": 117847516
     },
     "sieve": {
       "gc_collections": 1,
       "peak_heap_bytes": 40000262,
-      "ticks": 228419286
+      "ticks": 198929376
     },
     "strings_bench": {
       "gc_collections": 16,
       "peak_heap_bytes": 53787990,
-      "ticks": 28166695
+      "ticks": 27766695
     }
   },
   "cachegrind": {
     "ir": {
-      "fib": 580150401,
-      "loops": 4922594122,
-      "objects_bench": 4568200346,
-      "sha256_script": 2163007935,
-      "sieve": 3080771144,
-      "strings_bench": 1882996694
+      "fib": 580150438,
+      "loops": 4112593554,
+      "objects_bench": 4460199413,
+      "sha256_script": 2118561204,
+      "sieve": 2882991508,
+      "strings_bench": 1876432076
     },
     "platform": "Linux x86_64",
     "tolerance_percent": 3.0
