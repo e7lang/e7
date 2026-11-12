@@ -34,12 +34,12 @@
   },
   "cachegrind": {
     "ir": {
-      "fib": 580150401,
-      "loops": 4922594122,
-      "objects_bench": 4568200346,
-      "sha256_script": 2163007935,
-      "sieve": 3080771144,
-      "strings_bench": 1882996694
+      "fib": 580150438,
+      "loops": 4112593554,
+      "objects_bench": 4460199413,
+      "sha256_script": 2118561204,
+      "sieve": 2882991508,
+      "strings_bench": 1876432076
     },
     "platform": "Linux x86_64",
     "tolerance_percent": 3.0
