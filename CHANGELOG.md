@@ -24,8 +24,19 @@ VM rejects a module it cannot run at load time rather than running it incorrectl
     instruction ticks, `objects_bench` 17%, `sieve` 15% and `sha256_script` 3% (the 0.1.2 correctness fixes), and
     against the old baseline the machine instructions grew by 21% (`loops`), 8% (`objects_bench`, `sieve`), 5% (`fib`)
     and 3% (`strings_bench`, `sha256_script`).
-  - The fuzzer reported mismatches with Node.js on 2026-11-09 (seed 4, program 4070) and 2026-11-10 (seed 5, two
-    programs, one of them 4500) in runs marked as passed. They are not investigated yet.
+  - The fuzzer reported three mismatches with Node.js on 2026-11-09 and 2026-11-10 in runs marked as passed. None
+    is a wrong result of e7vm: the generator (`tests/difffuzz/gen.py`) produced programs with documented differences
+    (SPEC section 9). It now avoids them:
+    - an indexed read or write whose index expression calls a function that shortens the array (an out-of-bounds
+      read is an error in E7): the generated `numAt()`, `setNumAt()` and `charAt()` read the length after their
+      arguments are evaluated;
+    - `parseInt(s, 36)` of a value above 2^53, where Node.js on x64 (the CI runner) and on arm64 give different
+      last digits and e7vm gives those of arm64: at most 10 digits are parsed.
+  - Three generated programs were rejected by `tsc` 5.6 ("'>' expected") although they are valid JavaScript and
+    run on Node.js: `a << f((x > (y)))` and `a << (new Array<number>(n))`, where `tsc` tries `<...> (` as type
+    arguments. The generator writes `a << +b`.
+- SPEC section 9 had two rows for `parseInt` of large values that contradicted each other; the outdated one
+  ("correctly rounded") is removed.
 
 ### Added
 - `docs/COMPARISON.md` and `bench/compare`: speed and size compared with QuickJS, Hermes and Lua.

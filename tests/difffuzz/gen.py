@@ -6,7 +6,8 @@ Every generated program is meant to be:
   * inside the E7 subset (docs/SPEC.md),
   * deterministic (no Math.random, no current date; dates are UTC),
   * free of the documented differences of SPEC section 9: no out-of-bounds reads (indexes go through
-    `ix()` and a length check, or `at()` / `?? default`), no holes, fixed-width integer operations are
+    `numAt()` / `charAt()` / `setNumAt()`, which check the length after their arguments are evaluated, or
+    `at()` / `?? default`), no holes, fixed-width integer operations are
     always wrapped in their conversion function (`u32(a + b)`, same result on both, section 4.2) and
     never overflow 2^53 before the conversion, no localeCompare / non-Latin case conversion, and
     console.log only prints primitives (structures go through JSON.stringify).
@@ -195,7 +196,9 @@ class Gen:
             return f"({a} {op} {b})"
         if k == 6:
             op = self.pick(["&", "|", "^", "<<", ">>", ">>>"])
-            return f"({self.num(d - 1)} {op} {self.num(d - 1)})"
+            # `a << +b`: tsc 5.6 rejects `a << f((x > (y)))` and `a << (new Array<number>(n))` ("'>' expected":
+            # it tries `<...> (` as type arguments), although they are valid JavaScript
+            return f"({self.num(d - 1)} {'<< +' if op == '<<' else op} {self.num(d - 1)})"
         if k == 7:
             return self.pick([f"(-{self.num(d - 1)})", f"(~{self.num(d - 1)})"])
         if k in (8, 9):
@@ -223,7 +226,7 @@ class Gen:
         if k == 14:
             s = self.string(d - 1)
             return self.pick([f"parseInt({s})", f"parseFloat({s})", f"Number({s})",
-                              f"parseInt({s}, {self.pick(['2', '8', '10', '16', '36', '0', '37'])})",
+                              self.parse_int_radix(s),
                               f"Number.parseFloat({s})", f"Number({self.boolean(d - 1)})"])
         if k == 15:
             a = self.narr(d - 1)
@@ -239,7 +242,7 @@ class Gen:
         if k == 16:
             a = self.var(NARR)
             if a:
-                return f"({a}.length > 0 ? {a}[ix({self.num(d - 1)}, {a}.length)] : 0)"
+                return f"numAt({a}, {self.num(d - 1)})"
         if k == 17:
             m = self.var(MSN)
             if m:
@@ -306,6 +309,12 @@ class Gen:
 
     def math(self, f, call):
         return call if self.exact_math or f in MATH_EXACT else f"approx({call})"
+
+    def parse_int_radix(self, s):
+        radix = self.pick(['2', '8', '10', '16', '36', '0', '37'])
+        # radix 36: at most 10 digits, so that the value stays below 2^53 (beyond it Node.js on x64 and on
+        # arm64 give different last digits, SPEC section 9)
+        return f"parseInt({s}.slice(0, 10), 36)" if radix == '36' else f"parseInt({s}, {radix})"
 
     def small(self):
         return self.pick(SMALL_INTS + ["-3", "8", "NaN", "1.7"])
@@ -405,7 +414,7 @@ class Gen:
             if not re.fullmatch(r"[A-Za-z_]\w*", s):  # indexed below: evaluated more than once
                 return f"({s}.at({self.small()}) ?? \"?\")"
             return self.pick([f"({s}.at({self.small()}) ?? \"?\")",
-                              f"({s}.length > 0 ? {s}[ix({self.num(d - 1)}, {s}.length)] : \"\")"])
+                              f"charAt({s}, {self.num(d - 1)})"])
         if k == 11:
             return f"{self.narr(d - 1)}.join({tslit(self.pick(SEP_LITS))})"
         if k == 12:
@@ -914,7 +923,7 @@ class Gen:
                            f"{nm}.sort();", f"{nm}.splice({self.small()}, {self.small()});",
                            f"{nm}.splice({self.small()}, {self.small()}, {self.num(d)}, {self.num(0)});",
                            f"{nm}.fill({self.num(d)}, {self.small()});",
-                           f"if ({nm}.length > 0) {nm}[ix({self.num(d)}, {nm}.length)] = {self.num(d)};",
+                           f"setNumAt({nm}, {self.num(d)}, {self.num(d)});",
                            f"{nm}[{nm}.length] = {self.num(d)};",
                            f"{nm}.length = Math.min({nm}.length, {r.randrange(0, 6)});",
                            f"console.log({nm}.splice({self.small()}, {self.small()}).join(\",\"));",
@@ -1463,6 +1472,17 @@ class Gen:
             "  const k = Math.trunc(i);",
             "  if (!Number.isFinite(k)) return 0;",
             "  return ((k % n) + n) % n;",
+            "}",
+            # indexed reads and writes: the index and the value are evaluated before the length is read (an
+            # argument may call a function that shortens the array; out-of-bounds reads are errors in E7)
+            "function numAt(a: number[], i: number): number {",
+            "  return a.length > 0 ? a[ix(i, a.length)] : 0;",
+            "}",
+            "function setNumAt(a: number[], i: number, v: number): void {",
+            "  if (a.length > 0) a[ix(i, a.length)] = v;",
+            "}",
+            "function charAt(s: string, i: number): string {",
+            "  return s.length > 0 ? s[ix(i, s.length)] : \"\";",
             "}",
             "function cmpNum(a: number, b: number): number {",
             "  if (Number.isNaN(a)) return Number.isNaN(b) ? 0 : 1;",

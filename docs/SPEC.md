@@ -678,7 +678,6 @@ or host function that was running (or that called back into the script, like `Ar
 | Callbacks of the methods of a typed array other than `Uint8Array` (`forEach`, `map`, `filter`, `reduce`, ...) | See writes made while they run | Get the elements as they were when the method was called (`for...of` sees writes) |
 | `arr.map(f)` where `f` shortens `arr` | The result keeps the original length (holes) | The result has the elements that were mapped |
 | `"" + obj` where only a subclass of `obj`'s static type defines `valueOf()` | Calls it | Calls `toString()` (`valueOf` is found from the static type) |
-| `parseInt(s, radix)` of more than about 15 digits with a radix that is not a power of 2 | V8's rounding | Correctly rounded (may differ in the last bit) |
 | `JSON.stringify` of a `DataView`; `structuredClone` of a typed array that views part of a buffer | `{}`; a copy of the whole buffer (same `byteOffset`) | The bytes as a `Uint8Array`; a copy of the viewed bytes only (`byteOffset` 0) |
 | `console.log` of functions | `[Function: f]` (name inferred from the variable or property) | `[Function (anonymous)]` for arrow functions and function expressions; `%o` does not list their hidden properties |
 | `console.log` of a few other values | `DataView {...}`, `[Map Iterator] {...}`, `{ encoding: 'utf-8' }` | A `DataView` prints as a `Uint8Array`, `map.keys()` (and the other iterators) as an array, `TextEncoder`/`TextDecoder` as `null` |
