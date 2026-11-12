@@ -3,7 +3,7 @@
 import createE7 from "./wasm/e7wasm.js";
 
 /** Version of this npm package. */
-export const version = "0.1.4";
+export const version = "0.1.5";
 
 const STATUS = [
   "ok", "suspended", "runtime_error", "budget_exceeded", "out_of_memory", "stack_overflow", "load_error",
