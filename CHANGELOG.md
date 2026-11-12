@@ -10,6 +10,11 @@ VM rejects a module it cannot run at load time rather than running it incorrectl
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-11-12
+
+The slowdowns of 0.1.2 are won back, and Swift Package Manager builds get the faster interpreter loop. The
+language, the C API and the bytecode format are unchanged.
+
 ### Fixed
 - Two slowdowns that came with the correctness fixes of 0.1.2 and were not seen because the performance gate
   could not fail (see 0.1.5). The instruction ticks of `loops`, `objects_bench`, `sieve`, `sha256_script` and
@@ -309,7 +314,8 @@ delivered from a server, signed, verified at load time and run in a sandbox.
 - Seven independent security reviews (bytecode loading, natives and the C API, crypto, release sign-off,
   `try` / `catch`, the GC and formatter, coroutines and promises), every finding fixed with a regression test.
 
-[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/e7lang/e7/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/e7lang/e7/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/e7lang/e7/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/e7lang/e7/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/e7lang/e7/compare/v0.1.2...v0.1.3

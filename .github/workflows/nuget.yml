@@ -5,7 +5,7 @@ name: NuGet
 # and tested on a maintainer's Mac (scripts/macos.sh); for a release it is taken from the draft release
 # v<version> (e7-<version>-macos-natives.tar.gz, uploaded by scripts/macos.sh release), and CI packs
 # without publishing leave it out.
-# Release integration: call it with `uses: ./.github/workflows/nuget.yml`, `with: { version: 0.1.5, publish: true }`
+# Release integration: call it with `uses: ./.github/workflows/nuget.yml`, `with: { version: 0.1.6, publish: true }`
 # and `secrets: inherit`; the caller must grant `contents: write`, `packages: write`, `id-token: write` and
 # `attestations: write` (build provenance attestation of the .nupkg).
 # Publishing uploads the .nupkg to the GitHub release v<version>, pushes it to GitHub Packages and,
@@ -17,7 +17,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Package version (e.g. 0.1.5); the release tag is v<version>"
+        description: "Package version (e.g. 0.1.6); the release tag is v<version>"
         required: true
         type: string
       publish:
