@@ -39,6 +39,7 @@ jobs:
           COUNT: ${{ inputs.count || '5000' }}
           SEED: ${{ inputs.seed || github.run_number }}
         run: |
+          set -o pipefail  # without it the step has tee's exit status and mismatches pass
           echo "seed $SEED, $COUNT programs"
           python3 tests/difffuzz/run.py --seed "$SEED" --count "$COUNT" --jobs 4 \
             --tsc "$RUNNER_TEMP/ts/node_modules/.bin/tsc" --out build/difffuzz | tee build/difffuzz.txt

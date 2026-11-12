@@ -398,6 +398,11 @@ build/e7 test examples/tests   # 用 e7:test 编写的单元测试
 | 纯脚本 SHA-256（u32）1 MiB | 168 | 1159 | 41 |
 | 字符串拼接/拆分/Map | 384 | 293 | 243 |
 
+**与其他可嵌入引擎对比。** [docs/COMPARISON.md](docs/COMPARISON.md) 用同一组基准（Apple M6）和库体积（Android arm64）
+对比了 e7vm 与 QuickJS、Hermes、Lua。e7vm 在全部六项基准上都快于 QuickJS。对比 Hermes：递归调用持平，对象分配慢 14%，
+其余快 2 到 3 倍。Lua 在递归调用和简单循环上更快，e7vm 在对象、整数运算和字符串上更快。e7vm 运行时（933 KB）与
+QuickJS（827 KB）相当，约为 Hermes（2.7 MB）的三分之一，是 Lua（260 KB）的 3.5 倍。
+
 在签名类脚本中，标准算法（HMAC、Ed25519、AES-GCM 等）由原生代码执行，单次调用通常远低于 1 毫秒。
 
 `e7 --stats script.ts` 会打印一次运行消耗的指令数（`e7_ticks_used()`，与指令预算同一单位，在任何机器上都相同）、
@@ -443,6 +448,7 @@ tests/ bench/ docs/                            third_party/     BearSSL（MIT）
 - [docs/DESIGN.md](docs/DESIGN.md)：设计决策
 - [docs/ROADMAP.md](docs/ROADMAP.md)：0.1.4 包含的内容与后续计划（生产试点、1.0）
 - [docs/PRODUCTION.md](docs/PRODUCTION.md)：验证记录（测试、审查与证据）
+- [docs/COMPARISON.md](docs/COMPARISON.md)：与 QuickJS、Hermes、Lua 的速度和体积对比
 
 ## 许可
 

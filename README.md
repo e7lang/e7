@@ -419,6 +419,13 @@ only option on iOS) and the full JIT.
 | SHA-256 in pure script (u32), 1 MiB | 168 | 1159 | 41 |
 | String concat/split/Map | 384 | 293 | 243 |
 
+**Other embeddable engines.** [docs/COMPARISON.md](docs/COMPARISON.md) compares e7vm with QuickJS, Hermes and Lua
+on the same benchmarks (Apple M6) and by library size (Android arm64). e7vm is faster than QuickJS on all six
+benchmarks. Against Hermes it is level on recursive calls, 14% slower on object allocation and 2 to 3 times faster
+on the rest. Lua is faster on recursive calls and plain loops, and e7vm is faster on objects, integer arithmetic and
+strings. The e7vm runtime (933 KB) is about the size of QuickJS (827 KB), a third of Hermes (2.7 MB) and 3.5 times
+Lua (260 KB).
+
 In signing scripts, standard algorithms (HMAC, Ed25519, AES-GCM, …) run natively, so a typical call takes
 well under a millisecond.
 
@@ -473,6 +480,7 @@ tests/ bench/ docs/                            third_party/     BearSSL (MIT), M
 - [docs/DESIGN.md](docs/DESIGN.md): design decisions
 - [docs/ROADMAP.md](docs/ROADMAP.md): what 0.1.4 contains and what comes next (production pilot, 1.0)
 - [docs/PRODUCTION.md](docs/PRODUCTION.md): verification record (tests, reviews and evidence)
+- [docs/COMPARISON.md](docs/COMPARISON.md): speed and size compared with QuickJS, Hermes and Lua
 
 ## License
 
